@@ -11,10 +11,15 @@ published.
 
 ## Working tree — not committed
 
-* **Design notes in `docs/`** (untracked), including `tx-audio-gain-plan-implementace.md`,
-  `tx-auto-gain-implementace.md`, `js8-skupiny-implementace.md`, `msgbox-implementace.md`,
-  `js8-signal-stripe-plan.md`, `js8-rx-partial-display-plan.md`, `wifilt-rename-plan.md`,
-  `aprsis-*.md`, `wspr-*.md`, the `js8call-*` guides and `docs/agents/`.
+* **Design notes in `docs/`** (untracked), including `first-run-plan.md`,
+  `tx-audio-gain-plan-implementace.md`, `tx-auto-gain-implementace.md`,
+  `js8-skupiny-implementace.md`, `msgbox-implementace.md`, `js8-signal-stripe-plan.md`,
+  `js8-rx-partial-display-plan.md`, `js8-llm-implementace.md`, `find-device-ip.md`,
+  `wifilt-rename-plan.md`, `aprsis-*.md`, `wspr-*.md`, the `js8call-*` guides, `docs/agents/` and
+  the radio CI-V manuals in PDF.
+* **Agreed but not implemented:** the JS8 LLM chat (`docs/js8-llm-implementace.md`) — budget
+  `clamp(frames_rx − 1, 1, 4)`, the timer initiates and the model may only veto, key in
+  `localStorage` because `crypto.subtle` does not exist on an insecure origin.
 * **Untracked test harnesses** in `tools/`: `js8-modem-failure-smoke.js`, `js8-groups-smoke.js`,
   `js8-data-frames-smoke.js`, `js8-aprs-smoke.js`, `js8-txqueue-smoke.js`, `civread-smoke.js`,
   `check-page-scripts.js`, `fixtures/`, plus most of `prototype/js8-core-prototype/`.
@@ -22,6 +27,67 @@ published.
   WSPR; the WASM build exists and passes a loopback test (~230 kB Brotli). Airtime, not flash, is the
   limiting factor. Notes in `docs/mercury-implementace.md`.
 * `backups/` and `AGENTS.md`.
+
+---
+
+## REV 20260808 — 2026-08-09
+
+### `d667a4a` startup
+
+40 files, ~3 800 insertions. The first-run path, and the settings that path depends on.
+
+* **SETUP became a five-step spine whose state is derived, never stored** (`data/setup-spine.js`,
+  1 064 lines). No saved cursor: each step asks its own question of the facts — is this slot set up
+  at all (deliberately stricter for LAN than for the others), has a radio ever answered, is there a
+  callsign — so a device that was configured from another browser, or half-configured and left, is
+  read correctly instead of resuming a fiction. A step's button is the one place where *saved* and
+  *did not save* both appear, and the panels moved bodily into steps 1–2. **The transmit check
+  cannot live on SETUP** (decision 8 of the plan): SETUP is where the station is described, not
+  where it goes on the air. An unfinished spine is still a home page you can walk away from into
+  DATA or LOGSYNC.
+* **Callsign and locator now have exactly one source** (`data/station-identity.js` + a firmware
+  `GET /identity`). They are a fact about the *station*, not about a browser, so they are editable
+  only in SETUP → Identity and every other page displays them and re-reads after a minute — chosen
+  against what the poll costs, not against how fast anyone types. A value that cannot be normalised
+  is **refused, never sent as empty**: clearing on purpose is allowed, garbage is not. This is what
+  uncovered that a half-typed locator on the JS8 page had been wiping the station's locator.
+* **The JS8 profile moved from the browser to the device** (`data/station-profile.js`) as a blob
+  endpoint, exactly like the calibration table — the browser owns the schema, the device just
+  stores it. An empty answer rather than a 404: "this station has no profile yet" is a state, not a
+  fault. It is deliberately its own endpoint instead of a corner of `/setup/save`.
+* **Radio discovery split out** into `data/icom-discovery.js`: finding the radio on the network and
+  proving the credentials work are two separate questions, and **an empty sweep is a diagnosis, not
+  a failure**. A fresh device defaults to TRX1 on ICOM-LAN with no address and no model; the model
+  a radio reports is kept in RAM as standing proof that a login once succeeded.
+* **CW IP announcement is now off by default** — it keys the sidetone on every first connect, which
+  is not what a new operator expects to hear.
+* **Calibration: a ceiling is a finding, not a failure.** A search that stopped because it ran out
+  of headroom used to be reported as a bare failure, which made the MOD-level correction behind it
+  dead code. The flags are dropped when false rather than written as `"reachedCeiling":false` —
+  measured at 195 B per record with them against 110 B without, which is 44 cells' worth of space.
+* **WSPR now matches transmit errors by `txId`.** Every firmware frame carries the id it is about,
+  and a `tx-error` was being applied to whatever was current — so a stale error aborted the *next*
+  cell as a "client abort" — while `fail()` sent a wildcard `txId=0` abort that could stop a
+  transmission it knew nothing about. WSPR also gained the red TX frame it had never had.
+* **LOGSYNC says Done only when both halves are finished.** `pendingReqIds` counted requests *I*
+  made, so it only ever measured what this side was still receiving: the remote finishing said
+  nothing about this side, which is how one transfer could report Done mid-flight and another
+  Failed after completing. Sending is now part of the completion rule, and the rule is stated where
+  it can be checked rather than implied by the flow.
+* **Information-text audit** across the app (`trx-help.js`, `lan-gate.js`, `js8-autoreply.js`,
+  `js8-restrictions.js`, DATA and WSPR): advice is phrased as advice — without it JS8 and WSPR still
+  transmit, just worse — and banners that can be dismissed are dismissed for that page view only,
+  never stored.
+* **Installer and partitions**: `partitions.csv` reworked (No OTA, coredump dropped, separate asset
+  filesystem) and `tools/gh-pages.sh` (+316) now derives the filesystem geometry from the partition
+  table and writes the installer page's hardware table from it — a hand-typed "2.56 MB" beside a
+  table that can change is a number nobody re-checks. A section that was present but too big used to
+  be skipped in silence.
+* `tools/data-browser-smoke.js` +120.
+
+### `438f0a6` changelog
+
+* Documentation only.
 
 ---
 
