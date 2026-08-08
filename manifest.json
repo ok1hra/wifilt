@@ -1,6 +1,6 @@
 {
   "name": "WIFILT",
-  "version": "20260807",
+  "version": "20260808",
   "new_install_prompt_erase": true,
   "new_install_improv_wait_time": 0,
   "builds": [
@@ -11,7 +11,7 @@
         { "path": "partitions.bin",  "offset": 32768 },
         { "path": "boot_app0.bin",   "offset": 57344 },
         { "path": "firmware.bin",    "offset": 65536 },
-        { "path": "spiffs.bin",      "offset": 1507328 }
+        { "path": "spiffs.bin",      "offset": 1638400 }
       ]
     }
   ]
