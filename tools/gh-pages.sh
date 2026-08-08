@@ -10,8 +10,9 @@ DATA_DIR="${ROOT_DIR}/data"
 SKETCH_FILE="${ROOT_DIR}/wifilt.ino"
 GZIP_ASSETS_SCRIPT="${ROOT_DIR}/tools/gzip-assets.sh"
 
-# Custom sketch-local partition layout (No OTA — 1.375MB APP / 2.56MB SPIFFS,
-# coredump dropped). Located via SKETCH_PARTITIONS_CSV below, not the core tree.
+# Custom sketch-local partition layout (No OTA, coredump dropped, and a separate
+# `cfg` partition the installer never writes). Geometry is read from
+# partitions.csv further down, not repeated here.
 PARTITIONS_CSV_NAME="custom"
 # IMPORTANT: DIO, not QIO. These WIFILT interface boards ship a Zbit (0x5e) clone
 # flash chip whose QIO reads are unreliable — a QIO bootloader makes the ROM loader
@@ -27,8 +28,13 @@ BOOTLOADER_OFFSET=0x1000
 PARTITIONS_OFFSET=0x8000
 BOOT_APP0_OFFSET=0xe000
 APP_OFFSET=0x10000
-SPIFFS_OFFSET=0x170000
-SPIFFS_SIZE_DEC=$((0x290000))   # 2686976; exact partitions.csv spiffs size
+# The asset filesystem's offset and size are DERIVED from partitions.csv below,
+# never written down here. tools/upload-firmware-spiffs.sh and
+# tools/upload-spiffs.sh already read them from the same file, so a copy in this
+# script was the one place a layout change could go unnoticed -- and the failure
+# it produced was an image written at the wrong address, not an error.
+SPIFFS_OFFSET=""
+SPIFFS_SIZE_DEC=""
 
 ESP32_CORE_ROOT="${ESP32_CORE_ROOT:-}"
 BOOTLOADER_BIN="${BOOTLOADER_BIN:-}"
@@ -42,6 +48,20 @@ DO_PUBLISH=0
 PUBLISH_BRANCH="gh-pages"
 PUBLISH_REMOTE="origin"
 PUBLISH_MESSAGE=""
+
+# There used to be a --config-on-flash switch here, with three variants of "what
+# this release does to your configuration", picked by hand at release time. It is
+# gone, and nothing replaced it, because esp-web-tools already asks the operator
+# the only question that decides the answer.
+#
+# With `new_install_improv_wait_time: 0` the dialog never runs improv, so it can
+# never tell what is already on the board and always shows "Install WIFILT" ->
+# an "Erase device" screen with the checkbox UNTICKED. Leaving it untied writes
+# bootloader, partition table, firmware and the asset filesystem and touches
+# neither `cfg` nor NVS; ticking it erases the whole chip. So the fate of the
+# configuration is not a property of the release at all -- it is one checkbox,
+# in front of the one person who knows which they want. The page explains that
+# checkbox instead of guessing on their behalf.
 
 usage() {
   cat <<'EOF'
@@ -243,6 +263,53 @@ if [[ ! -f "$PARTITIONS_CSV" ]]; then
   exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# Derive the asset filesystem geometry from the partition table
+# ---------------------------------------------------------------------------
+
+partition_field() {
+  local name="$1" column="$2"
+  awk -F, -v wanted="$name" -v column="$column" '
+    $1 ~ "^[[:space:]]*" wanted "[[:space:]]*$" {
+      gsub(/[[:space:]]/, "", $column); print $column; exit
+    }' "$PARTITIONS_CSV"
+}
+
+SPIFFS_OFFSET="$(partition_field spiffs 4)"
+SPIFFS_SIZE_HEX="$(partition_field spiffs 5)"
+[[ -n "$SPIFFS_OFFSET" && -n "$SPIFFS_SIZE_HEX" ]] || {
+  echo "ERROR: no 'spiffs' partition in $PARTITIONS_CSV" >&2
+  exit 1
+}
+SPIFFS_SIZE_DEC=$((SPIFFS_SIZE_HEX))
+# For the installer page's hardware table. Written out because a hand-typed "2.56
+# MB" beside a partition table that can change is a number nobody re-checks.
+# Rounded to two decimals in integer arithmetic: +5000 is half of the 10 000 the
+# division discards.
+SPIFFS_SIZE_MB="$(( (SPIFFS_SIZE_DEC + 5000) / 1000000 )).$(printf '%02d' "$(( ((SPIFFS_SIZE_DEC + 5000) / 10000) % 100 ))")"
+
+# The image is written at SPIFFS_OFFSET and is exactly SPIFFS_SIZE_DEC long, so
+# an offset and a size that disagree with the flash chip do not fail loudly --
+# they produce a bundle that bricks the board. Refuse instead.
+FLASH_BYTES=$((4 * 1024 * 1024))
+if (( SPIFFS_OFFSET + SPIFFS_SIZE_DEC > FLASH_BYTES )); then
+  printf 'ERROR: asset filesystem runs past the end of a %s MB flash\n' \
+    "$((FLASH_BYTES / 1024 / 1024))" >&2
+  printf '       offset 0x%X + size 0x%X = 0x%X, chip ends at 0x%X\n' \
+    "$SPIFFS_OFFSET" "$SPIFFS_SIZE_DEC" \
+    "$((SPIFFS_OFFSET + SPIFFS_SIZE_DEC))" "$FLASH_BYTES" >&2
+  exit 1
+fi
+
+# The configuration partition is NEVER part of a release bundle -- that is the
+# whole point of it. Say so out loud, so adding it here has to be deliberate.
+CFG_OFFSET="$(partition_field cfg 4)"
+CFG_SIZE_KB=""
+if [[ -n "$CFG_OFFSET" ]]; then
+  CFG_SIZE_KB=$(( $(partition_field cfg 5) / 1024 ))
+  printf '==> Configuration partition at %s is deliberately NOT flashed\n' "$CFG_OFFSET"
+fi
+
 OUTPUT_DIR="$(realpath -m "$OUTPUT_DIR")"
 ROOT_REAL="$(realpath "$ROOT_DIR")"
 case "${OUTPUT_DIR}/" in
@@ -365,6 +432,16 @@ EOF
 # Generate index.html
 # ---------------------------------------------------------------------------
 
+# The AP join QR needs an encoder. The device already ships one for the WiFi
+# handoff screen, so this reuses that exact file instead of adding a dependency
+# or pulling a CDN into a page whose whole job is to work on a strange computer.
+QR_SRC="${DATA_DIR}/qrcode.min.js"
+if [[ -f "$QR_SRC" ]]; then
+  cp "$QR_SRC" "${OUTPUT_DIR}/qrcode.min.js"
+else
+  echo "WARNING: ${QR_SRC} not found - the AP join QR will be missing" >&2
+fi
+
 echo "==> Generating index.html"
 
 cat > "${OUTPUT_DIR}/index.html" <<EOF
@@ -485,6 +562,37 @@ cat > "${OUTPUT_DIR}/index.html" <<EOF
     @media (max-width: 34rem) {
       .hardware-grid { grid-template-columns: 1fr; }
     }
+    [hidden] { display: none !important; }
+    /* The five steps the device itself will ask for, shown greyed before the
+       device exists. The operator meets the whole road first and then
+       recognises the same list on the device's own screen. */
+    .road { list-style: none; display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.9rem 0 0; padding: 0; }
+    .road li { display: flex; align-items: center; gap: 0.45rem; margin: 0;
+      padding: 0.35rem 0.75rem 0.35rem 0.4rem; border: 1px solid rgba(96, 165, 250, 0.18);
+      border-radius: 999px; background: rgba(30, 41, 59, 0.4); color: #64748b; font-size: 0.85rem; }
+    .road .road-n { display: grid; place-items: center; width: 1.35rem; height: 1.35rem;
+      border-radius: 50%; background: rgba(148, 163, 184, 0.16); color: #94a3b8;
+      font-size: 0.75rem; font-weight: 700; }
+    .road .road-now { border-color: var(--accent); background: var(--accent-glow); color: #e2e8f0; }
+    .road .road-now .road-n { background: var(--accent); color: #fff; }
+    .choice { display: flex; flex-wrap: wrap; gap: 0.6rem; margin: 0.9rem 0 0; }
+    .choice button { flex: 1 1 14rem; padding: 0.8rem 1rem; border: 1px solid rgba(96, 165, 250, 0.35);
+      border-radius: 0.75rem; background: rgba(30, 41, 59, 0.6); color: #e2e8f0; font: inherit;
+      font-size: 0.95rem; text-align: left; cursor: pointer; }
+    .choice button:hover, .choice button:focus-visible { border-color: var(--accent);
+      background: var(--accent-glow); outline: none; }
+    .choice button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-glow); color: #fff; }
+    .choice button span { display: block; margin-top: 0.2rem; color: #94a3b8; font-size: 0.82rem; }
+    .choice button[aria-pressed="true"] span { color: #cbd5e1; }
+    .fate dl { margin: 0.7rem 0 0; }
+    .fate dt { color: #fecaca; font-weight: 700; font-size: 0.88rem; }
+    .fate dd { margin: 0.15rem 0 0.7rem; color: #fca5a5; font-size: 0.92rem; line-height: 1.55; }
+    .fate dd:last-child { margin-bottom: 0; }
+    .gate[data-locked="1"] { opacity: 0.4; pointer-events: none; }
+    .gate-note { margin: 0.6rem 0 0; color: #fbbf24; font-size: 0.88rem; }
+    .qr-box { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin: 0.6rem 0 0; }
+    .qr-box .qr { background: #fff; padding: 0.45rem; border-radius: 0.5rem; line-height: 0; }
+    .qr-box p { margin: 0; flex: 1 1 12rem; }
     code {
       background: rgba(148, 163, 184, 0.15);
       padding: 0.1rem 0.35rem;
@@ -523,15 +631,24 @@ cat > "${OUTPUT_DIR}/index.html" <<EOF
 
       <hr class="divider">
 
-      <div class="warn-box">
-        <p><strong>⚠ Back up your configuration before upgrading firmware!</strong></p>
+      <section aria-labelledby="road-title">
+        <h2 id="road-title">The whole road, before you start</h2>
         <p>
-          Flashing new firmware <strong>erases your entire configuration</strong> — all radio settings,
-          TRX addresses, contest logs, and setup options will be lost.
-          Before proceeding, open the <strong>Setup page</strong> on your device and
-          download a configuration backup.
+          Flashing is step zero. Everything after it happens on the device's own
+          <strong>SETUP</strong> page, in this order — each step only needs what the
+          device cannot work out for itself.
         </p>
-      </div>
+        <ol class="road">
+          <li class="road-now"><span class="road-n">0</span> Flash firmware</li>
+          <li><span class="road-n">1</span> Network</li>
+          <li><span class="road-n">2</span> Identity</li>
+          <li><span class="road-n">3</span> Radio</li>
+          <li><span class="road-n">4</span> Transmit check</li>
+          <li><span class="road-n">5</span> This browser</li>
+        </ol>
+      </section>
+
+      <hr class="divider">
 
       <section aria-labelledby="hardware-title">
         <h2 id="hardware-title">Required hardware</h2>
@@ -550,7 +667,8 @@ cat > "${OUTPUT_DIR}/index.html" <<EOF
           </div>
           <div class="hardware-item">
             <dt>Flash layout</dt>
-            <dd>No OTA: 2 MB application and approximately 2 MB LittleFS filesystem.</dd>
+            <dd>No OTA: 1.375 MB application and ${SPIFFS_SIZE_MB} MB LittleFS web assets$(if [[ -n "$CFG_OFFSET" ]]; then echo ", plus a
+                separate ${CFG_SIZE_KB} kB configuration partition the installer never writes"; fi).</dd>
           </div>
         </dl>
         <p class="muted compatibility-note">
@@ -565,32 +683,128 @@ cat > "${OUTPUT_DIR}/index.html" <<EOF
       <p>
         Open this page in <strong>Google Chrome</strong> or <strong>Microsoft Edge</strong>
         (Web Serial is not supported in Firefox or Safari).
-        Connect the ESP32 to your computer via USB, then click the button below.
+        Connect the ESP32 to your computer via USB.
       </p>
-      <ul>
+
+      <p><strong>Is this a new device, or one that is already working?</strong>
+        This page cannot tell, and the answer decides one checkbox further on.</p>
+      <div class="choice">
+        <button type="button" id="choiceNew" aria-pressed="false">
+          New device
+          <span>Nothing on it yet — go straight to flashing.</span>
+        </button>
+        <button type="button" id="choiceUpgrade" aria-pressed="false">
+          Upgrading a working device
+          <span>It keeps its settings — as long as you leave one box unticked.</span>
+        </button>
+      </div>
+
+      <div class="warn-box fate" id="backupPanel" hidden>
+        <p><strong>Your configuration survives this — do not tick "Erase device".</strong>
+          The installer asks <em>Do you want to erase the device before installing WIFILT?</em>
+          with the box already unticked. That is the answer you want: leaving it alone writes
+          the firmware and the web pages only.</p>
+        <dl>
+          <dt>Leave "Erase device" unticked</dt>
+          <dd>The normal update. WiFi networks and passwords, callsign and locator, radio
+              connections and credentials, LOG and JS8 settings,
+              <strong>every TX audio gain calibration</strong>, CW and frequency memories, MSG BOX
+              and band decoder rows all stay$(if [[ -n "$CFG_OFFSET" ]]; then echo " — they live in NVS and in the
+              configuration partition at <code>${CFG_OFFSET}</code>, and the installer writes
+              neither"; fi).</dd>
+          <dt>Tick it only to start clean</dt>
+          <dd>It erases the <strong>whole chip</strong>: everything above goes, including the
+              WiFi credentials that let you reach the device at all. Use it for a board that will
+              not boot, or when you are deliberately starting over — then restore from a backup
+              file.</dd>
+          <dt>Not affected either way</dt>
+          <dd>Your <strong>QSO log</strong>. It is stored in your browser, not on the device,
+              so flashing cannot touch it.</dd>
+        </dl>
+        <p style="margin-top:0.7rem">
+          <strong>Coming from a release older than 20260808?</strong> Those builds kept the
+          configuration inside the web-asset filesystem that this flash replaces, so it is lost
+          whichever way you answer. Save a backup first and restore it afterwards:
+          <a href="http://wifilt.local/config/download">download it now</a>, or open your
+          device's address and use <strong>SETUP &rarr; Download config</strong>. This page
+          cannot fetch it for you — it is served over HTTPS and your device over HTTP, so the
+          browser blocks the request.
+        </p>
+        <p style="margin-top:0.5rem">
+          One thing a backup file never carries: the <strong>MSG BOX</strong>. Stored messages
+          cannot be exported, so anything still waiting there is lost by an erase — read or
+          forward it first.
+        </p>
+      </div>
+
+      <ul id="flashHints" hidden>
         <li>After connecting, select the correct <code>CP210x</code> / <code>CH340</code> / <code>JTAG</code> serial device.</li>
-        <li>Choose <strong>Install WIFILT</strong> and follow the prompts.</li>
+        <li>Choose <strong>Install WIFILT</strong>.</li>
+        <li>The next screen asks <em>Do you want to erase the device before installing WIFILT?</em>
+            — the <strong>Erase device</strong> box starts unticked. Leave it that way unless you
+            mean to wipe the whole chip, then press <strong>Next</strong>.</li>
       </ul>
 
-      <div class="cta">
+      <div class="cta gate" id="flashGate" data-locked="1">
         <esp-web-install-button manifest="manifest.json?v=${FW_REV}" baudrate="9600"></esp-web-install-button>
       </div>
+      <p class="gate-note" id="gateNote">Answer the question above to continue.</p>
 
       <hr class="divider">
 
       <h2>Open the interface after flashing</h2>
+      <!-- These steps assume a device with no WiFi credentials. An update that
+           left NVS alone has them, so it rejoins the network by itself and never
+           shows the hotspot -- sending that operator hunting for WIFILT-AP would
+           be the page's own fault. -->
+      <p class="muted" style="margin-top:0">
+        <strong>Updated a working device without erasing it?</strong> It keeps its WiFi
+        credentials, rejoins your network on its own and is back at the same address as before.
+        Nothing below applies — the steps are for a device that has no WiFi yet: brand new, or
+        just erased.
+      </p>
       <ol>
-        <li>On its first boot, the device creates the WiFi network <code>WIFILT-AP</code>. Connect to it using password <code>remoteqth</code>.</li>
-        <li>Open <code>http://192.168.4.1/setup</code> in your browser. You can also try <code>http://wifilt.local/setup</code>; some phones open the setup portal automatically.</li>
-        <li>Configure your normal WiFi and the radio's <strong>TRX1 LAN</strong> address, username, and password. Select <strong>Save &amp; Restart</strong>, then reconnect your phone or computer to the normal WiFi.</li>
-        <li>Find the interface's new IP address in your router's DHCP client list, or open the installer serial console at <code>9600 baud</code> and press <strong>Reset Device</strong> to read it from the boot log.</li>
-        <li>Open <code>http://&lt;assigned-IP&gt;/</code> or try <code>http://wifilt.local/</code>. Bookmark the working address.</li>
+        <li>
+          <strong>Join the device's own WiFi.</strong> On its first boot it creates the network
+          <code>WIFILT-AP</code>, password <code>remoteqth</code>. Scan this with a phone to join
+          without typing either:
+          <div class="qr-box">
+            <div class="qr" id="apQr"></div>
+            <p class="muted" style="margin:0">If the camera app does not offer to join,
+               pick <code>WIFILT-AP</code> from the WiFi list and type the password.</p>
+          </div>
+        </li>
+        <li><strong>Open <code>http://192.168.4.1</code>.</strong> The setup page appears;
+            some phones open it by themselves.</li>
+        <li id="restoreStep" hidden><strong>Erased the device, or came from a release older
+            than 20260808? Restore your backup first</strong> — <strong>Upload config</strong> at
+            the bottom of the setup page — before setting anything by hand. Anything you type
+            before restoring will be overwritten by the file.</li>
+        <li><strong>Enter your WiFi network and password</strong>, then save. The device joins
+            your network while its hotspot is still running and <strong>shows the address it was
+            given, with a QR code</strong>. Scan or write it down: the hotspot closes when it restarts.</li>
+        <li><strong>Set up the radio.</strong> Reconnect your phone or computer to your normal WiFi,
+            open that address, and go to <strong>SETUP &rarr; Radio</strong>: set TRX1 to
+            <code>ICOM-LAN</code>, enter the radio's address, network user and password, then press
+            <strong>Test &amp; identify radio</strong>. The radio needs
+            <strong>Network Control</strong> switched on in its own menu first.</li>
       </ol>
+      <p class="muted">
+        Lost the address? Try <code>http://wifilt.local/</code>, look in your router's DHCP client
+        list, or open the serial console above at <code>9600 baud</code> and press
+        <strong>Reset Device</strong> to read it from the boot log.
+      </p>
 
       <p class="muted">
-        Flashes: bootloader, partition table, boot_app0, firmware$(if [[ -n "$SPIFFS_BIN" ]]; then echo ", LittleFS filesystem"; fi).
-        For manual flashing use <code>wifilt-${FW_REV}-full.bin</code> at offset <code>0x0</code>
-        with <code>esptool.py</code>.
+        The button above flashes: bootloader, partition table, boot_app0, firmware$(if [[ -n "$SPIFFS_BIN" ]]; then echo ", web assets"; fi).$(if [[ -n "$CFG_OFFSET" ]]; then echo "
+        It does <strong>not</strong> write the configuration partition at <code>${CFG_OFFSET}</code>, which is what
+        lets your settings survive an update."; fi)
+      </p>
+      <p class="muted">
+        For manual flashing there is <code>wifilt-${FW_REV}-full.bin</code> at offset <code>0x0</code>
+        with <code>esptool.py</code>. <strong>That one erases everything</strong> — it is a whole-chip
+        image, so it overwrites the WiFi credentials in NVS$(if [[ -n "$CFG_OFFSET" ]]; then echo " and the configuration partition"; fi)
+        as well. Use it to recover a board that will not boot, not to update a working one.
       </p>
       <p class="muted legal">
         Icom is a registered trademark of Icom Incorporated. WIFILT is an independent software
@@ -598,6 +812,55 @@ cat > "${OUTPUT_DIR}/index.html" <<EOF
       </p>
     </div>
   </main>
+  <script src="qrcode.min.js"></script>
+  <script>
+    (function () {
+      // The AP name and password are compiled into the firmware (ssidAP /
+      // passwordAP in wifilt.ino), so they are a constant of this release --
+      // there is no device to ask yet when this page is on screen.
+      var AP_JOIN = "WIFI:S:WIFILT-AP;T:WPA;P:remoteqth;;";
+      var qr = document.getElementById("apQr");
+      if (qr && window.QRCode) {
+        new window.QRCode(qr, { text: AP_JOIN, width: 132, height: 132 });
+      } else if (qr && qr.parentNode) {
+        // No encoder, no white square: the written instructions stand alone.
+        qr.parentNode.removeChild(qr);
+      }
+
+      // Whether there is anything to back up is the one thing this page cannot
+      // work out for itself -- so it asks once, and a new device is never
+      // nagged about saving a configuration that does not exist.
+      var asNew = document.getElementById("choiceNew");
+      var asUpgrade = document.getElementById("choiceUpgrade");
+      var panel = document.getElementById("backupPanel");
+      var gate = document.getElementById("flashGate");
+      var note = document.getElementById("gateNote");
+      var hints = document.getElementById("flashHints");
+      var restore = document.getElementById("restoreStep");
+      var mode = null;
+
+      // There used to be a second gate here -- a checkbox saying the backup was
+      // saved -- because a flash really did destroy the configuration. It no
+      // longer does, so demanding the acknowledgement every time would be
+      // crying wolf, and a warning nobody believes is worse than none. The only
+      // gate left is the question the page genuinely cannot answer for itself.
+      function apply() {
+        var locked = mode === null;
+        gate.setAttribute("data-locked", locked ? "1" : "0");
+        hints.hidden = locked;
+        note.hidden = !locked;
+        note.textContent = "Answer the question above to continue.";
+        panel.hidden = mode !== "upgrade";
+        restore.hidden = mode !== "upgrade";
+        asNew.setAttribute("aria-pressed", mode === "new" ? "true" : "false");
+        asUpgrade.setAttribute("aria-pressed", mode === "upgrade" ? "true" : "false");
+      }
+
+      asNew.addEventListener("click", function () { mode = "new"; apply(); });
+      asUpgrade.addEventListener("click", function () { mode = "upgrade"; apply(); });
+      apply();
+    }());
+  </script>
 </body>
 </html>
 EOF
@@ -607,7 +870,10 @@ touch "${OUTPUT_DIR}/.nojekyll"
 echo ""
 echo "==> Build complete: ${OUTPUT_DIR}"
 echo "    Firmware REV : ${FW_REV}"
-echo "    Partitions   : ${PARTITIONS_CSV_NAME} (no OTA — 1.375MB APP / 2.56MB SPIFFS)"
+echo "    Partitions   : ${PARTITIONS_CSV_NAME} (no OTA); assets $((SPIFFS_SIZE_DEC / 1024)) kB at ${SPIFFS_OFFSET}"
+if [[ -n "$CFG_OFFSET" ]]; then
+  echo "    Config       : kept at ${CFG_OFFSET} — a flash does not touch it"
+fi
   echo "    Flash mode   : ${FLASH_MODE} ${FLASH_FREQ} (DIO required — Zbit clone flash)"
 if [[ -n "$SPIFFS_BIN" ]]; then
   echo "    LittleFS     : included"

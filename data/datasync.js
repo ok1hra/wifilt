@@ -1,5 +1,31 @@
 'use strict';
 
+// When a sync is over, as one pure rule.
+//
+// It lives out here, above the page, because getting it wrong is invisible from
+// the inside: both sides showed "Done ✓" while 16 000 QSOs were still going down
+// the channel, and a completed transfer turned into "Failed" when the other end
+// closed the connection afterwards. Two mistakes, one cause -- "finished" was
+// being read off half the evidence.
+//
+//   * pendingRequests counts what I am still RECEIVING. A side that had nothing
+//     to ask for started at zero, so on its own it means "finished" only for the
+//     side that happens to be the receiver.
+//   * outboundSends counts what I am still SENDING. That was never looked at.
+//   * doneReceived is the other side saying the same about itself. Until it
+//     arrives, this side is finished but the SYNC is not -- and only the sync
+//     being over makes a closing connection an ending rather than a failure.
+function datasyncCompletion(s) {
+  var localDone = !!s.helloReceived && s.pendingRequests === 0 && s.outboundSends === 0;
+  return {
+    localDone: localDone,
+    announce: localDone && !s.doneSent,   // send sync_done exactly once
+    finished: localDone && !!s.doneReceived
+  };
+}
+
+if (typeof module === 'object' && module.exports) module.exports = {datasyncCompletion: datasyncCompletion};
+
 (function () {
 
   // ── Config ───────────────────────────────────────────────────────────────────
@@ -23,7 +49,14 @@
   let phase      = 'idle';
   let helloReceived = false;
   let doneSent      = false;
+  let doneReceived  = false;
+  // Requests I MADE, so this only ever measured what I am still receiving. A
+  // side with nothing to ask for had an empty set from the first message and
+  // declared the sync finished while it was still pumping 16 000 QSOs down the
+  // channel to the other one.
   let pendingReqIds = new Set();
+  // ...which is what this counts: sendBatches() calls still running.
+  let outboundSends = 0;
   let stats = { sent: 0, received: 0, batches: 0, errors: 0 };
 
   // ── Device ID ────────────────────────────────────────────────────────────────
@@ -302,6 +335,16 @@
     pc = new RTCPeerConnection({ iceServers: [] });
     pc.oniceconnectionstatechange = () => {
       log('ICE: ' + pc.iceConnectionState);
+      // A finished sync ends with somebody closing the connection, and that is
+      // not a failure -- it is the normal last event. Without this guard the
+      // other side pressing Cancel after everything had been transferred
+      // repainted a completed sync as "Failed".
+      if (phase === 'done') {
+        if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
+          log('Connection closed after a completed sync.');
+        }
+        return;
+      }
       if (pc.iceConnectionState === 'failed')       setPhase('failed');
       if (pc.iceConnectionState === 'disconnected') { setPhase('idle'); log('Disconnected.'); }
     };
@@ -495,6 +538,8 @@
       resetStats();
       helloReceived = false;
       doneSent      = false;
+      doneReceived  = false;
+      outboundSends = 0;
       pendingReqIds = new Set();
       sendHello();
     };
@@ -569,8 +614,16 @@
 
   async function onRequestLogs(msg) {
     log('Remote requests ' + msg.source_device_id.slice(0, 8) + '… seq ' + msg.from_seq + '–' + msg.to_seq);
-    await sendBatches(msg.source_device_id, msg.from_seq, msg.to_seq,
-                      msg.request_id, msg.max_items || MAX_ITEMS);
+    outboundSends++;
+    try {
+      await sendBatches(msg.source_device_id, msg.from_seq, msg.to_seq,
+                        msg.request_id, msg.max_items || MAX_ITEMS);
+    } finally {
+      outboundSends--;
+      // Sending was the only thing left on this side, so finishing it is what
+      // completes the sync -- nothing else will call this.
+      checkDone();
+    }
   }
 
   async function sendBatches(devId, fromSeq, toSeq, requestId, maxItems) {
@@ -632,15 +685,28 @@
 
   function onSyncDone(msg) {
     log('Remote done: received=' + msg.received_count + ' sent=' + msg.sent_count);
-    setPhase('done');
-    refreshInfo();
+    doneReceived = true;
+    // The remote being finished says nothing about this side. It used to set the
+    // phase here regardless, so a side still writing thousands of received QSOs
+    // showed "Done" the moment the other one ran out of things to ask for.
+    checkDone();
   }
 
   function checkDone() {
-    if (helloReceived && pendingReqIds.size === 0 && !doneSent) {
+    const state = datasyncCompletion({
+      helloReceived, doneSent, doneReceived,
+      pendingRequests: pendingReqIds.size, outboundSends,
+    });
+    if (!state.localDone) return;
+    if (state.announce) {
       doneSent = true;
       sendMsg({ type: 'sync_done', device_id: deviceId(),
                 received_count: stats.received, sent_count: stats.sent, errors: [] });
+      log('Nothing left on this side. Received=' + stats.received + ' Sent=' + stats.sent);
+      refreshInfo();
+      if (!state.finished) log('Waiting for the other side to finish…');
+    }
+    if (state.finished) {
       setPhase('done');
       log('Sync complete! Received=' + stats.received + ' Sent=' + stats.sent);
       refreshInfo();
@@ -1375,6 +1441,8 @@
     }
   }
 
-  document.addEventListener('DOMContentLoaded', init);
+  // Guarded so the completion rule above can be required and checked in plain
+  // Node. Nothing else in here runs at load time.
+  if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', init);
 
 }());

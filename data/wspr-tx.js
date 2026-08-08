@@ -116,7 +116,12 @@
       // the activity grid: one missed a slot, the other put a truncated signal
       // on the air.
       this.emit("failed", {reason: this.error, afterKeying: wasKeyed});
-      try { this.sink.abort(this.txId, this.error); } catch (_error) {}
+      // Only ever about OUR transmission. The firmware reads a tx.abort with
+      // txId 0 as "abort whatever is in flight" (aud1HandleControl: `!txId ||
+      // txId == aud1TxId`), so a driver that never queued anything -- the
+      // beacon's, while the calibration is keying on the same socket -- would
+      // kill somebody else's carrier by reporting its own idle fault.
+      if (this.txId) { try { this.sink.abort(this.txId, this.error); } catch (_error) {} }
       this.ptt = false;
     }
 
@@ -187,13 +192,30 @@
 
     // ---- inbound control ---------------------------------------------------
 
+    // Every frame the firmware sends carries the txId it is about (tx-ready,
+    // tx-state, tx-level, tx-drained and tx-error alike), and a frame about
+    // another transmission is not news about this one. It used to be read as if
+    // it were, which the calibration turns from a theoretical race into a
+    // routine one: it keys a carrier per cell and ends every one of them with a
+    // tx.abort, and the firmware answers that abort with a tx-error. Let that
+    // answer arrive late -- the LittleFS write of /txgain.json between cells is
+    // enough -- and the PREVIOUS cell's acknowledgement failed the NEXT cell,
+    // which reached the operator as "client abort: calibration finished" on a
+    // cell that had barely started.
+    aboutUs(message) {
+      const txId = Number(message.txId);
+      if (!Number.isFinite(txId) || !txId) return true;   // no id: cannot rule it out
+      return txId === this.txId;
+    }
+
     onControl(message, nowUtcMs = this.wallNow()) {
       if (!message || typeof message !== "object") return this.snapshot();
       switch (message.type) {
         case "tx-ready":
-          this.markReady();
+          if (this.aboutUs(message)) this.markReady();
           break;
         case "tx-state":
+          if (!this.aboutUs(message)) break;
           this.ptt = Boolean(message.ptt);
           if (this.ptt && this.state === "prebuffering") {
             this.state = "streaming";
@@ -220,6 +242,12 @@
           }
           return this.snapshot();
         case "tx-error":
+          // Nothing armed means nothing to fault. An idle driver that "fails"
+          // still emits, still gets read as a fault by the page, and -- before
+          // the guard in fail() -- aborted whatever the other driver was doing.
+          if (!this.aboutUs(message) ||
+              ["idle", "completed", "failed"].includes(this.state))
+            return this.snapshot();
           this.fail(message.reason || "remote TX error");
           return this.snapshot();
         default:

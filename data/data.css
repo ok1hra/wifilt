@@ -136,6 +136,10 @@ button { color: inherit; cursor: pointer; }
 .frequency-menu header { display: flex; align-items: baseline; gap: 10px; margin: 0 2px 9px; }
 .frequency-menu header strong { color: var(--cyan); }
 .frequency-menu header small, .frequency-menu footer { color: var(--muted); font-size: 10px; }
+/* CLOSE sits where it does in the CAL PLAN and TIMETABLE panels: pushed to the
+   right of the panel's own title row. Same .tt-clear button, so the three
+   pop-outs in this bar are dismissed by the same control in the same place. */
+.frequency-menu header .tt-actions { margin-left: auto; align-self: center; }
 .frequency-menu footer { margin: 8px 2px 0; }
 .frequency-presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
 .frequency-preset {
@@ -654,6 +658,16 @@ button { color: inherit; cursor: pointer; }
 .settings { padding: 10px; display: grid; grid-template-columns: repeat(2, minmax(260px, 1fr)); gap: 8px 18px; }
 .settings label { display: grid; grid-template-columns: 130px minmax(0, 1fr) auto; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
 .settings input:disabled { opacity: .5; }
+/* The station's identity: shown here, edited in SETUP. Deliberately NOT styled
+   as a disabled input -- a greyed-out box reads as "this field is broken", while
+   a plain value with a link beside it reads as what it is: somebody else's
+   setting, and where to go and change it. */
+/* The padding matches the input boxes above and below it, so a row that is a
+   value does not sit two pixels off from the rows that are fields. */
+.settings label.identity-field .identity-value { padding: 6px 0; }
+.identity-value { color: var(--text); font-weight: 700; letter-spacing: .04em; }
+.identity-note { grid-column: 1 / -1; margin: -2px 0 4px; color: var(--muted); font-size: 11px; }
+.identity-note a { color: var(--cyan); }
 .settings input[type="checkbox"] { width:20px; justify-self:start; accent-color:var(--cyan); }
 /* RF power. The label grid above is three fixed columns, which a control with
    a unit, a readout and a button does not fit -- so this row spans the value
@@ -744,6 +758,9 @@ button { color: inherit; cursor: pointer; }
   .trx-power b { display: none; }
   .frequency-menu { position: fixed; top: 51px; left: 5px; right: 5px; width: auto; }
   .frequency-menu header { align-items: flex-start; flex-direction: column; gap: 1px; }
+  /* The header stacks here, so "push it right" has nothing to push against;
+     put CLOSE back on the right edge of the column instead of under the title. */
+  .frequency-menu header .tt-actions { margin: 3px 0 0; align-self: flex-end; }
   .frequency-presets { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .frequency-preset { display: block; padding: 7px; }
   .frequency-preset strong, .frequency-preset span { display: block; }
@@ -877,3 +894,15 @@ button { color: inherit; cursor: pointer; }
 .modem-settings label > .cal-resolved,
 .modem-settings label > .cal-hint,
 label > .cal-resolved, label > .cal-hint { grid-column: 1 / -1; width: 100%; }
+
+/* Offered once, into an interface that has no operating profile yet. Amber
+   rather than red: nothing is broken, there is just a copy of the settings that
+   only this browser can see. */
+.settings-promote{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;
+  margin:8px 0 0;padding:9px 11px;border:1px solid #674a30;border-radius:5px;
+  background:#1d1609;color:#e8d9bf;font-size:12px;line-height:1.5}
+.settings-promote[hidden]{display:none}
+.settings-promote button{padding:5px 10px;border:1px solid #8a572b;border-radius:4px;
+  background:#352311;color:#ffd49a;font:inherit;font-size:11px;font-weight:850;cursor:pointer}
+.settings-promote button:hover:not(:disabled){border-color:#e0a020;color:#fff}
+.settings-promote button:disabled{opacity:.5;cursor:default}

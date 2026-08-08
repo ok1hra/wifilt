@@ -90,7 +90,7 @@ const dom = {
   trxPowerSegments:Array.from(document.querySelectorAll("#trxPower .pwr-bar i")),
   trxHelpButton:$("trxHelpButton"), trxHelpDialog:$("trxHelpDialog"),
   trxHelpModeWarning:$("trxHelpModeWarning"),
-  frequencyMenu:$("frequencyMenu"), linkState:$("linkState"), operatorState:$("operatorState"),
+  frequencyMenu:$("frequencyMenu"), freqTimetableClose:$("freqTimetableClose"), linkState:$("linkState"), operatorState:$("operatorState"),
   freqTimetableButton:$("freqTimetableButton"), freqTimetableValue:$("freqTimetableValue"),
   freqTimetablePanel:$("freqTimetablePanel"), freqTimetableEnable:$("freqTimetableEnable"),
   freqTimetableClear:$("freqTimetableClear"), freqTimetableGrid:$("freqTimetableGrid"),
@@ -158,6 +158,7 @@ const dom = {
   stationMap:$("stationMap"), stationMapSummary:$("stationMapSummary"), stationMapLinks:$("stationMapLinks"),
   stationHead:document.querySelector(".traffic-table thead"), reply:document.querySelector('[data-section="reply"]'),
   stationSummary:$("stationSummary"), myCall:$("myCall"), myGrid:$("myGrid"),
+  promoteRow:$("promoteRow"), promoteSettings:$("promoteSettings"), promoteState:$("promoteState"),
   followSpeed:$("followSpeed"), clockCorrection:$("clockCorrection"), autoTiming:$("autoTiming"),
   txGain:$("txGain"), calResolved:$("calResolved"), calField:$("calField"),
   planField:$("planField"), planButton:$("planButton"),
@@ -309,7 +310,7 @@ const state = {
   ownCallAttention:{call:"", messages:new Set(), stations:new Set()},
   activeOutgoing:null, lastOutgoing:null, outgoingLog:[],
   blockedDxccList:[],
-  settingsDraft:{myCall:null,grid:null,txGain:null}, reconnectPending:false,
+  settingsDraft:{txGain:null}, reconnectPending:false,
   js8Log:null, loggedCalls:new Set(), autoLogInFlight:new Set(),
   autoExpiryAt:null, // epoch ms when unattended arming lapses (null = unknown/disarmed)
 };
@@ -562,6 +563,10 @@ function createGainCal() {
       body:JSON.stringify({type:"setMode", mode})}),
     onRunChange:running => { state.calRunning = running; renderControls(); },
     modLevel:() => (gainPlan ? gainPlan.modLevel() : 0),
+    // The plan panel owns the CI-V client that can read it; without this a
+    // calibration started from this settings section alone files its knee under
+    // an unknown MOD level, which nothing can ever call stale.
+    refreshModLevel:() => (gainPlan ? gainPlan.refreshModLevel() : null),
   });
   gainCal.arm(true);
   createGainPlan();
@@ -832,12 +837,20 @@ function selectedMode() {
 }
 
 function settingsSnapshot() { return settings; }
+
+// How the station operates belongs to the station, not to this browser: the
+// heartbeat interval, the groups, the band schedule and the RF power are the
+// same facts whichever screen is looking. Debounced because the settings panel
+// saves on every keystroke, and the far end is flash.
+const pushStationProfile = window.StationProfile ? window.StationProfile.writer("js8", 1500) : null;
+
 function persistSettings(label = true) {
   settings.activeModem = state.activeMode;
   const saved = Js8Settings.save(localStorage, settingsSnapshot());
   settings = saved.settings;
   if (label) dom.storageState.textContent = saved.label;
   applySettingsToRuntime();
+  if (pushStationProfile) pushStationProfile(settings);
 }
 
 function applyHeartbeatSettings() {
@@ -1227,9 +1240,23 @@ function offDialFrequency() {
   return !Js8TrxPresets.PRESETS.some(item => item.frequencyHz===hz);
 }
 
+// Closing a pop-out is three statements, and it was written out at every place
+// that needed it -- which is how the Escape key ended up leaving `aria-expanded`
+// on the frequency button set to "true" on one of the paths.
+function closeFrequencyMenu() {
+  dom.frequencyMenu.hidden=true;
+  dom.trxFrequency.setAttribute("aria-expanded","false");
+}
+
+function closeTimetablePanel() {
+  dom.freqTimetablePanel.hidden=true;
+  dom.freqTimetableButton.setAttribute("aria-expanded","false");
+  closeTimetablePopover();
+}
+
 function renderFrequencyMenu() {
   const selected=state.pendingFrequency || state.radio.frequency;
-  dom.frequencyMenu.innerHTML = `<header><strong>JS8 dial frequencies</strong><small>Choose a band to tune the TRX</small></header><div class="frequency-presets">${Js8TrxPresets.PRESETS.map(item =>
+  dom.frequencyMenu.innerHTML = `<header><strong>JS8 dial frequencies</strong><small>Choose a band to tune the TRX</small><span class="tt-actions"><button class="tt-clear" type="button" data-menu-close title="Close">CLOSE</button></span></header><div class="frequency-presets">${Js8TrxPresets.PRESETS.map(item =>
     `<button class="frequency-preset${item.frequencyHz===selected?" current":""}" data-frequency="${item.frequencyHz}" type="button"><strong>${item.band}</strong><span>${formatFrequency(item.frequencyHz)}</span></button>`).join("")}</div><footer>Dial frequencies from the bundled JS8Call source</footer>`;
   frequencyMenuKey=String(selected);
 }
@@ -1929,8 +1956,10 @@ function renderControls() {
   dom.txSpeedResolved.textContent=js8.speed==="AUTO" ? `→ ${speedDetail(mode)}` : `${MODE_PERIOD_SECONDS[mode]} s`;
   if(document.activeElement!==dom.txOffset)dom.txOffset.value=js8.txOffsetHz;
   dom.spectrumSummary.textContent=`RX ${RX_LOW}–${RX_HIGH} Hz · TX ${js8.txOffsetHz} Hz · ${speedDetail(mode)}`;
-  if(document.activeElement!==dom.myCall)dom.myCall.value=state.settingsDraft.myCall===null?js8.myCall:state.settingsDraft.myCall;
-  if(document.activeElement!==dom.myGrid)dom.myGrid.value=state.settingsDraft.grid===null?js8.grid:state.settingsDraft.grid;
+  // No focus guard and no draft: these are displays now, not fields, so there is
+  // nothing half-typed to protect and no reason for this page to hold an opinion.
+  dom.myCall.textContent=js8.myCall||"— not set";
+  dom.myGrid.textContent=js8.grid||"— not set";
   dom.followSpeed.checked=js8.followSpeed;
   if(document.activeElement!==dom.clockCorrection)dom.clockCorrection.value=js8.clockCorrectionMs;
   dom.autoTiming.checked=js8.autoTiming;
@@ -3623,7 +3652,7 @@ async function restoreFileTransfers() {
 // ---- radio commands and TX --------------------------------------------------
 
 async function requestFrequency(frequency) {
-  state.pendingFrequency=frequency; dom.frequencyMenu.hidden=true; dom.trxFrequency.setAttribute("aria-expanded","false"); renderHeader();
+  state.pendingFrequency=frequency; closeFrequencyMenu(); renderHeader();
   try {
     const response=await fetch(RADIO_CMD_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({type:"setFrequency",frequency:String(frequency)})});
     if (!response.ok) throw new Error(`TRX request ${response.status}`);
@@ -5065,6 +5094,10 @@ function messagePresetValue(key) {
     "snr-query":"SNR?","copy-query":"HW CPY?",rr:"RR",fb:"FB",qsl:"QSL",
     "qsl-query":"QSL?",yes:"YES",no:"NO",tu:"TU","dit-dit":"DIT DIT",
     "grid-query":"GRID?","info-query":"INFO?","status-query":"STATUS?",
+    // Answered automatically by js8-autoreply.js when somebody asks US, and it is
+    // what draws the green arrows between third-party dots on the stations map --
+    // so asking it by hand is the one way to fill that map in on a quiet band.
+    "hearing-query":"HEARING?",
     // Byte for byte what the auto-reply sends for INFO? (js8-autoreply.js): answering by
     // hand and answering automatically must not produce two different descriptions of the
     // same station.
@@ -5583,8 +5616,9 @@ function bind() {
   dom.trxReconnect.addEventListener("click",reconnectRadio);
   dom.trxHelpDialog.addEventListener("click",event=>{if(event.target===dom.trxHelpDialog)dom.trxHelpDialog.close();});
   dom.trxFrequency.addEventListener("click",()=>{const open=dom.frequencyMenu.hidden;dom.frequencyMenu.hidden=!open;dom.trxFrequency.setAttribute("aria-expanded",String(open));});
-  dom.frequencyMenu.addEventListener("click",event=>{const button=event.target.closest("[data-frequency]");if(button)requestFrequency(Number(button.dataset.frequency)).catch(()=>{});});
-  dom.freqTimetableButton.addEventListener("click",()=>{const open=dom.freqTimetablePanel.hidden;dom.freqTimetablePanel.hidden=!open;dom.freqTimetableButton.setAttribute("aria-expanded",String(open));if(open){renderTimetableGrid();renderTimetableButton();}else closeTimetablePopover();});
+  dom.frequencyMenu.addEventListener("click",event=>{if(event.target.closest("[data-menu-close]")){closeFrequencyMenu();return;}const button=event.target.closest("[data-frequency]");if(button)requestFrequency(Number(button.dataset.frequency)).catch(()=>{});});
+  dom.freqTimetableClose.addEventListener("click",closeTimetablePanel);
+  dom.freqTimetableButton.addEventListener("click",()=>{if(!dom.freqTimetablePanel.hidden){closeTimetablePanel();return;}dom.freqTimetablePanel.hidden=false;dom.freqTimetableButton.setAttribute("aria-expanded","true");renderTimetableGrid();renderTimetableButton();});
   dom.freqTimetableEnable.addEventListener("click",()=>setTimetableEnabled(!timetable().enabled));
   dom.freqTimetableClear.addEventListener("click",clearTimetable);
   dom.freqTimetableGrid.addEventListener("click",event=>{const cell=event.target.closest("[data-slot]");if(!cell)return;const index=Number(cell.dataset.slot);if(ttRuntime.editSlot===index){closeTimetablePopover();return;}openTimetablePopover(index,cell);});
@@ -5679,15 +5713,11 @@ function bind() {
   dom.stationHead.addEventListener("click",event=>{const button=event.target.closest("[data-station-sort]");if(!button)return;const key=button.dataset.stationSort;if(state.stationSort.key===key)state.stationSort.direction=state.stationSort.direction==="asc"?"desc":"asc";else state.stationSort={key,direction:"asc"};renderActivity();persistSession();});
   dom.txSpeed.addEventListener("change",()=>setJs8Setting("speed",dom.txSpeed.value));
   dom.txOffset.addEventListener("change",()=>setJs8Setting("txOffsetHz",Math.max(RX_LOW,Math.min(RX_HIGH,Number(dom.txOffset.value)||1500))));
-  dom.myCall.addEventListener("input",()=>{state.settingsDraft.myCall=dom.myCall.value;});
-  dom.myGrid.addEventListener("input",()=>{state.settingsDraft.grid=dom.myGrid.value;});
   // Typing only updates the watts beside the box; nothing reaches the radio
   // until SET, which is what makes the number a stored choice.
   dom.rfPercent.addEventListener("input",()=>{rfDraft=dom.rfPercent.value;rfLastError="";renderHeader();});
   dom.rfPercentSet.addEventListener("click",setRfPowerFromField);
   dom.txGain.addEventListener("input",()=>{state.settingsDraft.txGain=dom.txGain.value;});
-  dom.myCall.addEventListener("change",()=>{const value=dom.myCall.value.toUpperCase();state.settingsDraft.myCall=null;setJs8Setting("myCall",value);renderActivity();});
-  dom.myGrid.addEventListener("change",()=>{const value=dom.myGrid.value.toUpperCase();state.settingsDraft.grid=null;setJs8Setting("grid",value);});
   dom.followSpeed.addEventListener("change",()=>setJs8Setting("followSpeed",dom.followSpeed.checked));
   dom.clockCorrection.addEventListener("change",()=>setJs8Setting("clockCorrectionMs",Number(dom.clockCorrection.value)||0));
   dom.autoTiming.addEventListener("change",()=>setJs8Setting("autoTiming",dom.autoTiming.checked));
@@ -5793,7 +5823,16 @@ function bind() {
   });
   dom.txGain.addEventListener("change",()=>{const value=state.settingsDraft.txGain===null?dom.txGain.value:state.settingsDraft.txGain;state.settingsDraft.txGain=null;setJs8Setting("txGain",Number(value)||.25);});
   dom.txSafety.addEventListener("change",()=>setJs8Setting("txSafetyAccepted",dom.txSafety.checked));
-  dom.resetSettings.addEventListener("click",()=>{const reset=Js8Settings.reset(localStorage);settings=reset.settings;state.settingsDraft={myCall:null,grid:null,txGain:null};state.activeMode=settings.activeModem;dom.storageState.textContent=reset.label;applySettingsToRuntime();renderActivity();renderControls();closeTimetablePopover();if(!dom.freqTimetablePanel.hidden)renderTimetableGrid();reconcileTimetable();});
+  dom.resetSettings.addEventListener("click",()=>{const reset=Js8Settings.reset(localStorage);settings=reset.settings;state.settingsDraft={txGain:null};state.activeMode=settings.activeModem;dom.storageState.textContent=reset.label;applySettingsToRuntime();renderActivity();renderControls();closeTimetablePopover();if(!dom.freqTimetablePanel.hidden)renderTimetableGrid();reconcileTimetable();});
+  if(dom.promoteSettings)dom.promoteSettings.addEventListener("click",async()=>{
+    dom.promoteSettings.disabled=true;
+    dom.promoteState.textContent="Saving…";
+    const ok=await promoteStationProfile();
+    dom.promoteState.textContent=ok?"Saved — every device sees this now."
+      :"Could not save it to the interface.";
+    if(ok&&dom.promoteRow)dom.promoteRow.hidden=true;
+    dom.promoteSettings.disabled=false;
+  });
   dom.startupRetry.addEventListener("click",()=>location.reload());
   dom.heartbeat.addEventListener("click",()=>{if(!dom.heartbeat.disabled)startHeartbeat();});
   dom.tune.addEventListener("click",()=>{if(!dom.tune.disabled)toggleTune();});
@@ -5857,7 +5896,66 @@ function bind() {
   document.addEventListener("visibilitychange",()=>{if(document.hidden&&activeEncoder)activeEncoder.abort();});
   // Escape inside a modal belongs to that dialog. Without this guard, dismissing
   // the APRS parameter popup would also abort a transmission already on air.
-  addEventListener("keydown",event=>{if(event.key==="Escape"){if(document.querySelector("dialog[open]"))return;if(activeEncoder)activeEncoder.abort();dom.frequencyMenu.hidden=true;closeMessagePresets();closeTimetablePopover();closeGroupPanel();dom.freqTimetablePanel.hidden=true;dom.freqTimetableButton.setAttribute("aria-expanded","false");}});
+  addEventListener("keydown",event=>{if(event.key==="Escape"){if(document.querySelector("dialog[open]"))return;if(activeEncoder)activeEncoder.abort();closeFrequencyMenu();closeMessagePresets();closeGroupPanel();closeTimetablePanel();}});
+}
+
+// Callsign and locator belong to the station, not to this browser. The interface
+// wins; this browser's copy is a cache. The one exception is an interface that
+// has never been given a callsign while this browser has one -- that is the
+// operator's own setting from before identity moved, so it is pushed up rather
+// than thrown away, and only ever into an empty station.
+async function syncStationIdentity() {
+  if(!window.StationIdentity)return;
+  const local=()=>{const js8=currentJs8();return {call:js8.myCall,grid:js8.grid};};
+  const apply=changes=>{
+    if(changes.call!==undefined)setJs8Setting("myCall",changes.call);
+    if(changes.grid!==undefined)setJs8Setting("grid",changes.grid);
+    renderControls();renderActivity();
+  };
+  // Armed FIRST, and unconditionally. A page that booted while the interface was
+  // briefly unreachable used to give up on the identity for the whole session --
+  // and a page with no callsign is one that refuses to transmit, with no sign of
+  // why once the link came back.
+  //
+  // Adopting once was true only for as long as nobody opened SETUP: change the
+  // callsign there and this page went on transmitting the old one until somebody
+  // reloaded it, with nothing on screen to say so.
+  window.StationIdentity.watch(local,apply);
+  const station=await window.StationIdentity.read();
+  if(!station)return;
+  if(!window.StationIdentity.adopt(station,local(),apply))
+    await window.StationIdentity.promote(station,local());
+}
+
+// The station's operating profile wins over this browser's copy, with the two
+// per-machine values (this computer's clock correction, which panels are open
+// here) kept back. An EMPTY station is left alone: that is what the promote
+// button in the settings panel is for, and silently uploading whatever this
+// browser happened to have would make the first tablet to load the page decide
+// the whole station's band schedule.
+async function adoptStationProfile() {
+  if(!window.StationProfile)return;
+  const station=await window.StationProfile.read();
+  if(window.StationProfile.isEmpty(station)){
+    if(dom.promoteRow)dom.promoteRow.hidden=false;
+    return;
+  }
+  const merged=window.StationProfile.forBrowser(station,"js8",settings);
+  if(!merged)return;
+  const saved=Js8Settings.save(localStorage,merged);
+  settings=saved.settings;
+  state.activeMode=settings.activeModem;
+  applySettingsToRuntime();
+}
+
+// Offered, never automatic, and only into a station that has none: this is the
+// operator's own setup from before the profile moved, and the station is empty
+// exactly once.
+async function promoteStationProfile() {
+  if(!window.StationProfile)return false;
+  const station=await window.StationProfile.read();
+  if(!window.StationProfile.isEmpty(station))return false;
+  return window.StationProfile.write("js8",settings);
 }
 
 async function init() {
@@ -5867,6 +5965,8 @@ async function init() {
   bind();
   if(!await acquireJs8Session())return;
   populateModes(); loadTxModule();
+  await syncStationIdentity();
+  await adoptStationProfile();
   if(!hasSeenTrxHelp())openTrxHelp("first");
   for (const details of document.querySelectorAll("details[data-section]"))
     if (Object.prototype.hasOwnProperty.call(settings.ui.disclosures,details.dataset.section)) details.open=settings.ui.disclosures[details.dataset.section];

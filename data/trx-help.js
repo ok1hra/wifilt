@@ -140,12 +140,24 @@
         + "another mode, the radio is not in a data mode and the modem cannot decode."));
     }
 
+    // The callsign and the grid used to be typed here. They are the station's,
+    // not this page's, and SETUP is now the only place they can be edited -- so
+    // instructing anyone to type them on the JS8Call page describes fields that
+    // have been read-only outputs since the identity moved off the browser.
     steps.push(step("Complete the JS8Call-ICOM page setup",
-      "Choose a JS8 dial frequency by tapping the TRX frequency, set "
-      + `${code("My callsign")} and ${code("My grid")}, wait for the audio clock to lock, and `
-      + `confirm ${code("Enable radio TX")}. Start with ${code("TX audio gain 0.25")} and `
-      + `${code(`${modLevel} 25%`)}. Use TUNE briefly, change only one level at a time, and aim `
-      + "for a clean signal with little or no ALC indication."));
+      "Choose a JS8 dial frequency by tapping the TRX frequency, wait for the audio clock to "
+      + `lock, and confirm ${code("Enable radio TX")}. The callsign and locator shown in `
+      + `SETTINGS are the station's own: they are typed once in ${code("SETUP → Identity")} and `
+      + "are read-only here."));
+
+    // The audio level is measured now, not tuned by hand against the ALC needle.
+    steps.push(step("Measure the TX audio level",
+      `Leave ${code(`${modLevel}`)} at the ${code("25%")} above and run `
+      + `${code("Automatic TX gain")} in SETTINGS: it keys one carrier and raises the audio `
+      + "until the radio's ALC just acts, then stores the level below that. Set the band and "
+      + "the RF power you want first — the result is filed under exactly that pair, and shared "
+      + `with the WSPR beacon. ${code("CAL PLAN")} in the bar at the top measures a whole `
+      + "band × power matrix in one run."));
 
     return steps;
   }
@@ -159,7 +171,9 @@
     const steps = [
       `<li>${code(`MENU → SET → Connectors → MOD Input → DATA MOD`)} to ${code(net)}.</li>`,
       `<li>${code(`MENU → SET → Connectors → MOD Input → ${net} MOD Level`)} to ${code("25%")}`
-        + " as a starting point, then trim with TUNE until the radio's ALC meter stays at zero.</li>",
+        + " as a starting point. Do not trim the audio by eye against the ALC meter — "
+        + "<b>Automatic TX gain</b> in SETTINGS measures it, and <b>CAL PLAN</b> in the bar at "
+        + "the top measures a whole band × power matrix.</li>",
       `<li>${code(`MENU → SET → Connectors → ${net} AF/IF Output → Output Select`)} to `
         + `${code("AF")}, and ${code("AF SQL")} to ${code("OFF (Open)")}.</li>`,
       `<li>Mode ${code("USB-D")} with filter ${code("FIL1")}. The beacon selects the mode, `
@@ -209,15 +223,21 @@
 
   // ---- rendering -----------------------------------------------------------
 
+  // The eyebrow used to say WLAN whatever radio was on screen -- the one word the
+  // whole model table exists to get right, sitting above a body that correctly
+  // said LAN for four of the five. It follows the model now, which means it has to
+  // be repainted like everything else, and says neither when no model is chosen.
+  const netWord = model => (model ? model.net : "THE NETWORK");
+
   const KINDS = {
-    js8:  {eyebrow: "JS8CALL-ICOM OVER WLAN",
+    js8:  {eyebrow: model => `JS8CALL-ICOM OVER ${netWord(model)}`,
            warning: "The radio is not in a suitable data mode. Complete the setup below and load "
                   + "the <strong>JS8CALL</strong> preset; the JS8Call-ICOM header must show "
                   + "<strong>USB-D</strong>.",
            note: "<strong>Reminder:</strong> JS8Call-ICOM is a high-duty-cycle digital mode. Use "
                + "conservative RF power and verify antenna matching before transmitting.",
            steps: js8Steps},
-    wspr: {eyebrow: "WSPR BEACON OVER WLAN",
+    wspr: {eyebrow: model => `WSPR BEACON OVER ${netWord(model)}`,
            warning: "The radio is not in a data mode. The beacon sets <strong>USB-D</strong> "
                   + "itself before every slot, but the audio path below has to be set up by hand "
                   + "first.",
@@ -292,10 +312,13 @@
   function repaint() {
     const doc = state.doc;
     if (!doc) return;
+    const kind = KINDS[state.kind] || KINDS.js8;
     const content = doc.querySelector("#trxHelpDialog .trx-help-content");
     const heading = doc.getElementById("trxHelpTitle");
     const warning = doc.getElementById("trxHelpModeWarning");
-    if (warning) warning.innerHTML = (KINDS[state.kind] || KINDS.js8).warning;
+    const eyebrow = doc.getElementById("trxHelpEyebrow");
+    if (warning) warning.innerHTML = kind.warning;
+    if (eyebrow) eyebrow.textContent = kind.eyebrow(state.selected);
     if (heading) heading.textContent = title();
     if (content) content.innerHTML = body();
   }
@@ -323,7 +346,9 @@
     dialog.innerHTML = ""
       + '<form method="dialog" class="trx-help-card">'
       + "<header><div>"
-      + `<small>${escapeHtml((KINDS[state.kind] || KINDS.js8).eyebrow)}</small>`
+      // Filled by repaint(), like the title beside it: the eyebrow names the
+      // radio's own word for the audio path, so it cannot be baked in at mount.
+      + '<small id="trxHelpEyebrow"></small>'
       + '<h2 id="trxHelpTitle"></h2></div>'
       + '<button class="trx-help-close" type="submit" value="close"'
       + ' aria-label="Close setup help" title="Close">×</button>'

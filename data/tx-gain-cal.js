@@ -321,6 +321,43 @@
   const entryKey = (model, band, percent) =>
     `${model || "?"}|${band || "?"}|${Number(percent) || 0}`;
 
+  // The key IS the model, the band and the power, so a record that repeats them
+  // is paying for the same three strings twice -- and the file has a hard cap
+  // that a full band-by-power matrix would otherwise walk straight through.
+  // Measured: 195 B per record with them, 110 B without, so 44 cells go from
+  // 8.6 kB to 4.9 kB and fit inside the existing 6 kB ceiling.
+  //
+  // The flags are dropped when false for the same reason: `"reachedCeiling":false`
+  // is 22 bytes saying nothing. Absent means false everywhere that reads them.
+  const REDUNDANT = ["model", "band", "percent"];
+  const FLAGS = ["reachedCeiling", "autoTrimmed"];
+
+  function compact(key, entry) {
+    const out = {};
+    for (const [name, value] of Object.entries(entry || {})) {
+      if (REDUNDANT.includes(name)) continue;
+      if (FLAGS.includes(name) && !value) continue;
+      if (value === undefined || value === null) continue;
+      out[name] = value;
+    }
+    return out;
+  }
+
+  // Reading puts them back, so nothing downstream has to know the record got
+  // smaller. Records written before this still carry their own copies; the key
+  // wins, because it is what the entry is filed under.
+  function expand(key, entry) {
+    const parts = String(key || "").split("|");
+    if (parts.length < 3) return entry;
+    return Object.assign({}, entry, {
+      model: parts[0] === "?" ? (entry.model || "") : parts[0],
+      band: parts[1] === "?" ? (entry.band || "") : parts[1],
+      percent: Number(parts[2]) || Number(entry.percent) || 0,
+      reachedCeiling: entry.reachedCeiling === true,
+      autoTrimmed: entry.autoTrimmed === true,
+    });
+  }
+
   // ---- the station's table ---------------------------------------------------
   //
   // Firmware-side, because a calibration describes the station rather than the
@@ -392,7 +429,7 @@
 
     entry(key) {
       const found = this.doc && this.doc.entries ? this.doc.entries[key] : null;
-      return found && Number(found.gain) > 0 ? found : null;
+      return found && Number(found.gain) > 0 ? expand(key, found) : null;
     }
 
     // The entry only if it is usable for the MOD level the radio has right now.
@@ -428,7 +465,7 @@
     async put(key, entry) {
       await this.load();
       if (!this.doc.entries) this.doc.entries = {};
-      this.doc.entries[key] = entry;
+      this.doc.entries[key] = compact(key, entry);
       return this.save();
     }
 
@@ -468,6 +505,6 @@
   }
 
   return {TxGainCal, TxGainStore, DEFAULTS, ULAW_BYTES_PER_SECOND,
-          bandOf, entryKey, STORE_URL, SCHEMA_VERSION, migrate,
+          bandOf, entryKey, compact, expand, STORE_URL, SCHEMA_VERSION, migrate,
           entryStatus, seedFrom, toDb, fromDb};
 });

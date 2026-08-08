@@ -372,6 +372,21 @@
       });
     });
 
+    // A new log starts as the station the interface says it is. Still editable:
+    // a contest entry, a /P outing or a guest operator are all legitimate
+    // reasons for one log to carry a different call -- but nobody should have to
+    // retype their own callsign on a device that already knows it.
+    if (window.StationIdentity) {
+      window.StationIdentity.read().then(station => {
+        if (!station) return;
+        const call = document.getElementById('lmMyCall');
+        const loc  = document.getElementById('lmLoc');
+        if (call && !call.value.trim() && station.call) call.value = station.call;
+        if (loc && !loc.value.trim() && station.grid) loc.value = station.grid;
+        _updateExchPreview();
+      }).catch(() => {});
+    }
+
     document.getElementById('lmExchType').addEventListener('change', _onExchTypeChange);
     document.getElementById('lmExchStatic').addEventListener('input', _updateExchPreview);
     document.getElementById('lmLoc').addEventListener('input', _updateExchPreview);

@@ -31,18 +31,34 @@
 - First plug USB-C between ESP32 and PC
 - Then open the Firmware page and follow the instructions https://ok1hra.github.io/wifilt/
 
+**Upgrading a device that already works? Save its configuration first** — ```SETUP / Download config```.
+A flash replaces the filesystem, so the TRX slot configuration, the LOG and JS8 settings, **every TX
+audio gain calibration**, the CW and frequency memories and the MSG BOX are lost. WiFi networks,
+callsign, locator and the radio's LAN credentials live in NVS and survive. Your QSO log is stored in
+the browser, not on the device, so a flash cannot touch it.
+
 ## Quick start guide
-- upload firmware
-- connect PC to WIFI SSID ```WIFILT-AP``` access point
-- [Find IP address](#find-ip-address)
-- open IP address in web browser
-- select ```SETUP``` page and set Wifi SSID and password
-- after reboot device connect to your Wifi access point
-- [Find IP address](#find-ip-address) again or open http://wifilt.local in web browser
-- on the radio, enable ```Network Control``` and set a network user and password — see [docs/user-manual.md](docs/user-manual.md)
-- in ```SETUP / Radio``` set TRX1 to ```ICOM-LAN```, enter the radio address and credentials, and press ```Test & identify radio```
+1. Upload the firmware (see above).
+2. Connect a phone or PC to the WiFi network ```WIFILT-AP```, password ```remoteqth```.
+3. Open http://192.168.4.1 — some phones open the setup page by themselves.
+4. Restoring a backup? Do it now, with ```Upload config``` at the bottom of the setup page, before
+   setting anything by hand.
+5. Enter your WiFi network name and password, then save. The device joins your network while its
+   hotspot is still running and **shows the address it was given, with a QR code** — scan it or write
+   it down, because the hotspot closes when the device restarts.
+6. On the radio, enable ```Network Control``` and set a network user and password — see
+   [docs/user-manual.md](docs/user-manual.md).
+7. Reconnect your phone or PC to your normal WiFi, open the address from step 5, and in
+   ```SETUP / Radio``` set TRX1 to ```ICOM-LAN```, enter the radio address and credentials, and press
+   ```Test & identify radio```.
+
+Lost the address? See [Find IP address](#find-ip-address).
 
 ## Find IP address
+
+The interface shows its own address on the handover screen right after it joins your WiFi, and
+http://wifilt.local usually works from then on. Give the device a fixed lease in your router and the
+address stops moving. If neither is available:
 
 ### via Arduino IDE
 - Open terminal in Arduino IDE
@@ -55,6 +71,9 @@
 - Turn on the interface
 - Wait for the Status LED to turn off, which signals the Wifi connection
 - In the terminal window, use the command ```ping wifilt.local``` - the output will show the IP address that the interface received from the DHCP server
+
+### via your router
+- Look for the DHCP lease named ```wifilt``` in the router's client list
 
 ## WEB app user Manual
 - [docs/user-manual.md](docs/user-manual.md) — setup, web UI, CW/RTTY, MQTT, troubleshooting

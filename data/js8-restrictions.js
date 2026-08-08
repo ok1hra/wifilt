@@ -9,9 +9,11 @@
 //
 // Two layers, decided in docs/js8call-neobsluhovany-provoz-plan.md (rule D):
 //
-//   Window, keyed by (callsign, command). A station may legitimately ask you
+//   Window, keyed by (callsign, question). A station may legitimately ask you
 //   several different things in a row, so each pair has its own window. Asking
-//   the SAME thing again inside its window is the offence.
+//   the SAME thing again inside its window is the offence -- and "the same thing"
+//   is the ANSWER, not the wording: `HW CPY?`, `SNR?` and a bare `?` all ask for
+//   one signal report, so js8-autoreply.js hands them all the same `windowKey`.
 //
 //   Penalty, keyed by CALLSIGN alone, doubling from one minute and decaying back
 //   down the same curve. Per-command penalties would be defeated by simply
@@ -92,11 +94,15 @@
 
     // Decide whether an auto reply may be sent. Never mutates on a refusal other
     // than to escalate, so a caller can ask twice without side effects.
-    evaluate({call, command, nowMs, isSelectedCall = false}) {
+    // `windowKey` is what the window is keyed by, `command` is what the log and
+    // the refusal text name. They differ only where two commands have the same
+    // answer -- "HW CPY?" and "SNR?" -- and then sharing the window is the point:
+    // asking the same thing in two different words is still asking it twice.
+    evaluate({call, command, nowMs, isSelectedCall = false, windowKey = command}) {
       if (!call || !command) return {allowed: false, reason: "invalid request"};
 
       // Heartbeat ACKs are throttled, not policed. A station beaconing on its
-      // normal interval (default 15 min, well inside the 55 min window) is not
+      // normal interval -- 15 min upstream, 60 min this station's default -- is not
       // misbehaving, so a repeat is simply suppressed -- upstream HBBlockingDB
       // does the same. It must never seed or escalate a penalty, and an unrelated
       // penalty from query abuse must not silence a heartbeat either; otherwise a
@@ -130,7 +136,7 @@
           retryInMs: banMs, detail: `${call} banned ${Math.round(banMs / MINUTE)} min`};
       }
 
-      const key = `${call} ${command}`;
+      const key = `${call} ${windowKey}`;
       const last = this.windows.get(key);
       const windowMs = this.windowMsFor(command, isSelectedCall);
       if (last !== undefined && nowMs - last < windowMs) {

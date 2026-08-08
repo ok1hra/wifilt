@@ -1,9 +1,29 @@
 # Name,   Type, SubType, Offset,   Size,     Flags
-# Custom layout for the IC-705 interface (4 MB flash, No OTA).
-# Bluetooth removed -> firmware ~0.96 MB, so app0 is shrunk from 2 MB to 1.375 MB
-# (still ~480 kB headroom) and the reclaimed space plus the dropped coredump
-# partition are handed to the LittleFS "spiffs" partition for web assets.
+# Custom layout for the WIFILT interface (4 MB flash, No OTA).
+# Bluetooth removed -> firmware ~1.0 MB, so app0 is shrunk from 2 MB to 1.375 MB
+# (still ~440 kB headroom) and the reclaimed space plus the dropped coredump
+# partition are handed to LittleFS.
+#
+# TWO LittleFS partitions, not one, and the split is the whole point:
+#
+#   cfg     the operator's configuration -- radio slots and the model the radio
+#           reported, LOG/JS8 settings, the TX gain calibrations, CW and
+#           frequency memories, MSG BOX. NO TOOL EVER WRITES HERE. The installer
+#           and tools/upload-firmware-spiffs.sh write app0 and spiffs only, so a
+#           firmware update stops costing the operator every calibration they
+#           ever measured -- each one a 20 s carrier on the air to get back.
+#
+#   spiffs  the web assets, rebuilt from data/ on every release and replaced
+#           wholesale on every flash. Nothing here is worth keeping.
+#
+# Keeping the name "spiffs" for the assets is deliberate: the ESP32 core, both
+# upload scripts and gh-pages.sh all look the partition up by that name, and the
+# assets are the one that has to keep moving in step with the firmware.
+#
+# 0x190000 + 0x270000 = 0x400000 exactly. Anything that changes these two lines
+# has to be re-checked against the end of a 4 MB flash.
 nvs,      data, nvs,     0x9000,   0x5000,
 otadata,  data, ota,     0xe000,   0x2000,
 app0,     app,  ota_0,   0x10000,  0x160000,
-spiffs,   data, spiffs,  0x170000, 0x290000,
+cfg,      data, spiffs,  0x170000, 0x20000,
+spiffs,   data, spiffs,  0x190000, 0x270000,

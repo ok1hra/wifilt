@@ -54,12 +54,12 @@
   for (const id of ["trxFrequencyValue", "trxMode", "radioModel", "linkState", "utcClock",
     "sessionBusy", "sessionBusyWhere", "sessionTakeover",
     "beaconInterface", "callsign", "locator", "locatorTransmitted", "powerDbm", "powerWatts",
-    "powerPercent", "powerSet", "stationError", "radioModelOverride", "fullPowerWatts",
+    "powerPercent", "powerSet", "radioModelOverride", "fullPowerWatts",
     "fullPowerSource", "clockCorrection", "powerField", "powerMismatch",
     "txGain", "txSafety", "tuneButton", "powerMeter", "swr", "tuneReference",
     "calField", "calResolved", "planField", "planButton",
     "referenceCount", "referenceClear",
-    "periodHint", "scheduleAdd", "scheduleClear", "scheduleUndo",
+    "periodHint", "scheduleAdd", "scheduleClear", "scheduleUndo", "scheduleClose",
     "scheduleList", "schedulePopover",
     "previewTitle", "previewCount", "previewGrid",
     "previewNext", "startStop", "beaconState", "nextSession", "liveSession",
@@ -259,9 +259,31 @@
     settings.version = SETTINGS_VERSION;
     saveSettings();
   }
+  // The beacon's settings are a fact about the station -- its power, its band
+  // schedule, its per-band references -- not about this browser, so they go to
+  // the interface as well. Debounced: the panel saves on every keystroke.
+  const pushStationProfile = window.StationProfile
+    ? window.StationProfile.writer("wspr", 1500) : null;
+
   function saveSettings() {
     try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); }
     catch (_error) { /* private mode: the page still works for this session */ }
+    if (pushStationProfile) pushStationProfile(settings);
+  }
+
+  // The station overrules this browser, except for the clock correction, which
+  // is a property of this computer. An empty station is left alone -- promoting
+  // is the operator's decision, made in the JS8 settings panel.
+  function adoptStationProfile() {
+    if (!window.StationProfile) return Promise.resolve(false);
+    return window.StationProfile.read().then(station => {
+      const merged = window.StationProfile.forBrowser(station, "wspr", settings);
+      if (!merged) return false;
+      settings = {...settingsDefaults(), ...merged};
+      migrateSettings();
+      try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (_e) {}
+      return true;
+    }).catch(() => false);
   }
 
   // ---- single-operator lock -------------------------------------------------
@@ -625,7 +647,9 @@
     const locked = !beaconStopped();
     dom.frequencyMenu.innerHTML =
       `<header><strong>WSPR dial frequencies</strong><small>${locked
-        ? "the schedule is driving the radio" : "choose a band to tune the TRX"}</small></header>` +
+        ? "the schedule is driving the radio" : "choose a band to tune the TRX"}</small>` +
+      `<span class="tt-actions"><button class="tt-clear" type="button" data-menu-close` +
+      ` title="Close">CLOSE</button></span></header>` +
       `<div class="frequency-presets">${WsprCore.PRESETS.map(preset =>
         `<button class="frequency-preset${preset.hz === selected ? " current" : ""}"` +
         ` type="button" data-frequency="${preset.hz}"${locked ? " disabled" : ""}>` +
@@ -638,8 +662,7 @@
   }
 
   async function requestFrequency(hz) {
-    dom.frequencyMenu.hidden = true;
-    dom.trxFrequency.setAttribute("aria-expanded", "false");
+    closeFrequencyMenu();
     state.pendingFrequency = hz;
     render();
     try {
@@ -1080,6 +1103,13 @@
   // Closing the panel drops the undo snapshot with it. An UNDO that outlives the
   // editing session it belongs to offers to restore a schedule the operator has
   // stopped thinking about, which is a worse surprise than the one it prevents.
+  // Its own function for the same reason closeTimetablePanel() has one: four
+  // places closed this menu and each wrote the two statements out again.
+  function closeFrequencyMenu() {
+    dom.frequencyMenu.hidden = true;
+    dom.trxFrequency.setAttribute("aria-expanded", "false");
+  }
+
   function closeTimetablePanel() {
     dom.freqTimetablePanel.hidden = true;
     dom.freqTimetableButton.setAttribute("aria-expanded", "false");
@@ -1096,6 +1126,9 @@
   // are now in the shared class: JS8LAN needs the same frames for the ALC gain
   // limiter, and one hook is better than two that can drift.
   let session = null, tx = null, beaconTimer = null, beaconPreparing = false;
+  // Kept so the browser harness can make the minute pass on demand; the page
+  // itself never touches it after it is armed.
+  let identityWatch = null;
 
   function audioUrl() {
     const scheme = location.protocol === "https:" ? "wss" : "ws";
@@ -1495,7 +1528,7 @@
       if (leftAfterTune < RETUNE_CUTOFF_MS)
         throw new Error(`the band change left only ${(leftAfterTune / 1000).toFixed(1)} s`);
       const frame = WsprCore.encode({
-        callsign: dom.callsign.value.trim().toUpperCase(),
+        callsign: sharedCall(),
         locator: sharedGrid(),
         powerDbm: dbm});
       // Randomised inside the 200 Hz WSPR window, standard practice against
@@ -1521,7 +1554,7 @@
       // missed slot, and the grid has to say so rather than showing a gap.
       state.currentSession = {
         slotUtcMs: next.slotUtcMs, band: next.slot.band, dialHz: next.slot.hz,
-        offsetHz: 0, callsign: dom.callsign.value.trim().toUpperCase(),
+        offsetHz: 0, callsign: sharedCall(),
         locator: sharedGrid().slice(0, 4), dbm: dbm || 0, powerSamples: [],
       };
       await recordSession({completed: false, afterKeying: false,
@@ -1665,6 +1698,10 @@
     // to read it. Every stored knee is a knee AT a MOD level, so the resolver needs
     // this to tell a usable entry from one measured before the sensitivity moved.
     modLevel: () => (gainPlan ? gainPlan.modLevel() : 0),
+    // And a way to go and read it. The plan panel owns the CI-V client for it;
+    // a calibration started from the settings panel alone would otherwise file
+    // its knee under an unknown MOD level.
+    refreshModLevel: () => (gainPlan ? gainPlan.refreshModLevel() : null),
   });
 
   // The batch plan. Same module the JS8Call page mounts; it borrows the single-shot
@@ -1818,7 +1855,7 @@
     if (power.watts > POWER_CEILING_W * 1.01)
       return `the radio is set to ${power.watts.toFixed(1)} W, above the ${POWER_CEILING_W} W ceiling`;
     try {
-      WsprCore.validate({callsign: dom.callsign.value, locator: sharedGrid(),
+      WsprCore.validate({callsign: sharedCall(), locator: sharedGrid(),
                          powerDbm: power.dbm});
     } catch (error) { return error.message; }
     if (!scheduledSlots()) return "the schedule is empty";
@@ -1874,6 +1911,19 @@
   }
 
   function render() {
+    // The red frame around the whole viewport while the radio is keyed. Same
+    // rule, same class and same stylesheet as JS8Call (`body.radio-transmitting`
+    // in data.css, which this page already loads) -- it belongs here more, not
+    // less: WSPR keys for 110 s at a time, and the calibration keys on bands the
+    // operator never dialled by hand.
+    //
+    // Every driver on this page counts, which is why it is not read off the
+    // beacon's WsprTx: TUNE, the beacon and the gain calibration are three
+    // drivers on one transmitter, and `session.ptt` is the socket's own answer
+    // for all of them. `state.radio.tx` is the radio's, one second late.
+    document.body.classList.toggle("radio-transmitting",
+      Boolean(state.radio.tx || (session && session.ptt)));
+
     // Whether ICOM-LAN is configured at all was settled by lan-gate.js before
     // this page booted, so the only thing left to hide the interface for is
     // another page holding the radio.
@@ -2000,7 +2050,7 @@
     // warning. The dBm on the left stays the radio's, because that is the truth
     // that goes on the air whether or not the target was ever written.
     dom.settingsSummary.textContent =
-      `${dom.callsign.value || "no callsign"} · ${dom.locatorTransmitted.textContent} · ` +
+      `${sharedCall() || "no callsign"} · ${dom.locatorTransmitted.textContent} · ` +
       `${power.dbm === null ? "power unknown" : `${power.dbm} dBm`}` +
       `${mismatch ? ` · target ${mismatch.target} dBm not applied` : ""}` +
       `${txSafetyAccepted() ? "" : " · TX not enabled"}`;
@@ -2153,25 +2203,17 @@
     dom.radioModelOverride.value = settings.modelOverride;
   }
 
+  // The callsign and the locator have no handlers here any more: they are the
+  // station's, they are typed in SETUP, and this page shows them. Editing them in
+  // three places meant three validations, and the JS8 one turned a half-typed
+  // locator into an empty one -- which the interface stores, so a typo on one
+  // tablet wiped the square the beacon transmits.
+  function showIdentity() {
+    dom.callsign.textContent = sharedCall() || "— not set";
+    dom.locator.textContent = sharedGrid() || "— not set";
+  }
+
   function wire() {
-    dom.callsign.addEventListener("change", () => {
-      const value = dom.callsign.value.trim().toUpperCase();
-      dom.callsign.value = value;
-      saveShared({myCall: value});
-      render();
-    });
-    dom.locator.addEventListener("change", () => {
-      try {
-        const locator = WsprCore.parseLocatorInput(dom.locator.value);
-        dom.locator.value = locator;
-        saveShared({grid: locator});
-        dom.stationError.hidden = true;
-      } catch (error) {
-        dom.stationError.hidden = false;
-        dom.stationError.textContent = error.message;
-      }
-      render();
-    });
     dom.powerDbm.addEventListener("change", () => {
       settings.powerDbm = Number(dom.powerDbm.value); saveSettings();
       // A fresh choice re-enables an automation that a turn of the knob had
@@ -2278,9 +2320,11 @@
       dom.trxFrequency.setAttribute("aria-expanded", String(opening));
     });
     dom.frequencyMenu.addEventListener("click", event => {
+      if (event.target.closest("[data-menu-close]")) { closeFrequencyMenu(); return; }
       const button = event.target.closest("[data-frequency]");
       if (button && !button.disabled) requestFrequency(Number(button.dataset.frequency));
     });
+    dom.scheduleClose.addEventListener("click", closeTimetablePanel);
     // The schedule now lives in the topbar, as it does on JS8Call.
     dom.freqTimetableButton.addEventListener("click", () => {
       const opening = dom.freqTimetablePanel.hidden;
@@ -2308,14 +2352,12 @@
     document.addEventListener("click", event => {
       if (dom.frequencyMenu.hidden) return;
       if (event.target.closest("#frequencyMenu") || event.target.closest("#trxFrequency")) return;
-      dom.frequencyMenu.hidden = true;
-      dom.trxFrequency.setAttribute("aria-expanded", "false");
+      closeFrequencyMenu();
     });
     addEventListener("keydown", event => {
       if (event.key !== "Escape") return;
       closeTimetablePanel();
-      dom.frequencyMenu.hidden = true;
-      dom.trxFrequency.setAttribute("aria-expanded", "false");
+      closeFrequencyMenu();
     });
     dom.trxHelpButton.addEventListener("click", () => openSetupHelp("manual"));
     dom.trxHelpDialog.addEventListener("click", event => {
@@ -2396,8 +2438,34 @@
 
     loadSettings();
     populateSelects();
-    dom.callsign.value = sharedCall();
-    dom.locator.value = sharedGrid();
+    // The interface owns the callsign and the locator; this page's copy of them
+    // is a cache. Without this a second tablet beacons under whatever the JS8
+    // profile in ITS browser happens to say -- which on a fresh one is nothing.
+    adoptStationProfile().then(changed => {
+      if (!changed) return;
+      populateSelects();
+      dom.txGain.value = String(txGain());
+      renderSchedule();
+      render();
+    });
+    if (window.StationIdentity) {
+      const localIdentity = () => ({call: sharedCall(), grid: sharedGrid()});
+      const applyIdentity = changes => {
+        if (changes.call !== undefined) saveShared({myCall: changes.call});
+        if (changes.grid !== undefined) saveShared({grid: changes.grid});
+        showIdentity();
+        render();
+      };
+      window.StationIdentity.read().then(station => {
+        const local = localIdentity();
+        if (!window.StationIdentity.adopt(station, local, applyIdentity))
+          return window.StationIdentity.promote(station, local);
+      }).catch(() => {});
+      // A beacon page is left open for days, which is exactly how long it used to
+      // go on transmitting a callsign that had been changed in SETUP.
+      identityWatch = window.StationIdentity.watch(localIdentity, applyIdentity);
+    }
+    showIdentity();
     dom.txGain.value = String(txGain());
     dom.activityDays.value = state.activityRange;
     wire();
@@ -2484,6 +2552,7 @@
                          // driven entirely by tx-level frames, so the harness
                          // needs to see where the search got to.
                          gainCal, gainPlan, gainStore, resolvedGain, beaconGuard,
+                         get identityWatch() { return identityWatch; },
                          get calArmed() { return calArmed; },
                          scheduleView, addChange, saveSettings,
                          get editingSlot() { return editingSlot; },

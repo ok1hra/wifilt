@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>JS8Call-ICOM — WIFILT</title>
-  <link rel="stylesheet" href="/data.css?v=20260803a">
+  <link rel="stylesheet" href="/data.css?v=20260808c">
 </head>
 <body class="startup-pending lan-gate-checking">
   <header class="site-topbar">
@@ -52,6 +52,10 @@
           <div class="tt-actions">
             <button id="freqTimetableEnable" class="tt-toggle" type="button" role="switch" aria-checked="false">OFF</button>
             <button id="freqTimetableClear" class="tt-clear" type="button">Clear</button>
+            <!-- Same CLOSE as the CAL PLAN panel next door. A pop-out whose only
+                 exits are Escape and a click on the button that opened it is one
+                 that reads as stuck on a tablet, where neither is obvious. -->
+            <button id="freqTimetableClose" class="tt-clear" type="button" title="Close">CLOSE</button>
           </div>
         </header>
         <div id="freqTimetableGrid" class="tt-grid"></div>
@@ -156,8 +160,8 @@
     <section id="sessionBusy" class="gate-card session-busy" hidden role="alert">
       <div class="gate-card-icon" aria-hidden="true">!</div>
       <div>
-        <h1>JS8LAN is already open elsewhere</h1>
-        <p>One radio, one operator: JS8LAN drives the transceiver over a single audio link, so only one page can run it at a time. Close the other page, or take the session over here.</p>
+        <h1>The radio is driven from somewhere else</h1>
+        <p>One radio, one operator: JS8Call-ICOM and WSPR-Beacon both drive the transceiver through a single audio link, so only one page can run at a time. Close the other page, or take the session over here.</p>
         <p id="sessionBusyWhere" class="session-busy-where"></p>
         <p>This page will unlock by itself as soon as the other one is closed.</p>
         <button id="sessionTakeover" class="gate-card-action" type="button">TAKE THE SESSION OVER HERE</button>
@@ -229,6 +233,7 @@
               <button type="button" role="menuitem" data-message-preset="info-query"><strong>INFO?</strong><small>Request station info</small></button>
               <button type="button" role="menuitem" data-message-preset="info"><strong>INFO …</strong><small>Send your own station info</small></button>
               <button type="button" role="menuitem" data-message-preset="status-query"><strong>STATUS?</strong><small>Request status message</small></button>
+              <button type="button" role="menuitem" data-message-preset="hearing-query"><strong>HEARING?</strong><small>Ask which stations they are copying</small></button>
               <button type="button" role="menuitem" data-message-preset="rr"><strong>RR</strong><small>Roger, received</small></button>
               <button type="button" role="menuitem" data-message-preset="fb"><strong>FB</strong><small>Fine business</small></button>
               <button type="button" role="menuitem" data-message-preset="qsl"><strong>QSL</strong><small>Confirm reception</small></button>
@@ -345,8 +350,16 @@
       <details class="compact-section" data-section="settings">
         <summary><span>SETTINGS</span><span id="settingsSummary" class="summary-status"></span><span id="settingsFlags" class="summary-flags" aria-label="Active functions"></span></summary>
         <div class="settings">
-          <label>My callsign <input id="myCall" maxlength="12" autocomplete="off"></label>
-          <label>My grid <input id="myGrid" maxlength="6" autocomplete="off"></label>
+          <!-- Shown, not edited. The callsign and the locator belong to the
+               interface, not to this browser: a second tablet with its own copy
+               is how a station ends up transmitting under two answers, or under
+               none. SETUP is the one place they can be typed. -->
+          <label class="identity-field">My callsign
+            <output id="myCall" class="identity-value"></output></label>
+          <label class="identity-field">My grid
+            <output id="myGrid" class="identity-value"></output></label>
+          <p class="identity-note">Station identity, stored in the interface —
+            <a href="/setup#identitySection" id="identitySetupLink">change it in SETUP</a>.</p>
           <label>Decode speeds <input value="E, A, B, C, I (automatic)" disabled></label>
           <label>Follow detected speed <input id="followSpeed" type="checkbox"></label>
           <label>Clock correction <input id="clockCorrection" type="number" min="-1000" max="1000" step="1"><span>ms</span></label>
@@ -404,6 +417,19 @@
           <label>Heartbeat every <select id="hbMinutes"></select><small id="hbState">off</small></label>
           <label class="safety-setting">Acknowledge heartbeats <input id="hbAck" type="checkbox"><small>Replies HEARTBEAT SNR to stations you hear, at most once per 55 minutes each.</small></label>
           <div class="settings-storage"><span id="storageState"></span><button id="resetSettings" type="button">Restore defaults</button></div>
+          <!-- Shown only while the interface has no profile of its own: these are
+               the operator's settings from before the profile moved off the
+               browser, and offering them upwards beats deleting them. It is a
+               button and not an automatic upload because the first tablet to
+               load the page would otherwise decide the whole station's band
+               schedule. -->
+          <p class="settings-promote" id="promoteRow" hidden>
+            <span>This interface has no operating profile yet — the heartbeat, groups, band
+              schedule and power below are stored only in this browser, so another device
+              would not have them.</span>
+            <button id="promoteSettings" type="button">SAVE THESE TO THE STATION</button>
+            <span id="promoteState"></span>
+          </p>
         </div>
       </details>
 
@@ -419,9 +445,39 @@
   </footer>
 
   <script src="/wake-lock.js?v=20260727a"></script>
-  <script src="/lan-gate.js?v=20260727a"></script>
+  <script src="/lan-gate.js?v=20260808d"></script>
   <script src="/fw-version.js?v=20260719d"></script>
   <script src="/js8-settings.js?v=20260806a"></script>
+  <script src="/station-identity.js?v=20260808b"></script>
+  <script src="/station-profile.js?v=20260808a"></script>
+<script src="/setup-spine.js?v=20260808c"></script>
+<script>
+  // The spine follows the operator here for one reason: the transmit check is
+  // the only step of it that cannot be done on SETUP, because that page has no
+  // TX stack and no radio session. Leaving the thread behind at exactly the
+  // longest, most physical step is what this prevents. It draws nothing once
+  // there is nothing outstanding.
+  (function () {
+    if (!window.SetupSpine || !window.SetupSpine.createBanner) return;
+    function mount() {
+      var main = document.querySelector("main");
+      if (!main) return;
+      var banner = window.SetupSpine.createBanner({
+        host: main,
+        onCalibrate: function () {
+          var panel = document.getElementById("calField");
+          if (!panel) return;
+          var section = panel.closest("details");
+          if (section) section.open = true;
+          panel.scrollIntoView({behavior: "smooth", block: "center"});
+        }
+      });
+      if (banner) banner.refresh();
+    }
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", mount);
+    else mount();
+  }());
+</script>
   <script src="/js8-email.js?v=20260719d"></script>
   <script src="/js8-aprs.js?v=20260731a"></script>
   <script src="/js8-file-transfer.js?v=20260719d"></script>
@@ -450,9 +506,9 @@
        level into watts and must never disagree with the WSPR page about how. -->
   <!-- One table of Icom models: watts for WSPR, menu paths for the setup guides. -->
   <script src="/icom-models.js?v=20260802a"></script>
-  <script src="/trx-help.js?v=20260802a"></script>
+  <script src="/trx-help.js?v=20260808d"></script>
   <script>TrxHelp.mount(document, {kind: "js8"});</script>
-  <script src="/wspr-core.js?v=20260726a"></script>
+  <script src="/wspr-core.js?v=20260808c"></script>
   <!-- WsprTx joins WsprCore because the calibration carrier is a STREAMED single
        tone -- the only kind whose level can move while it plays, which is what
        the search needs eight or nine times inside one keying. Must follow both. -->
@@ -465,6 +521,6 @@
   <script src="/tx-gain-plan-ui.js?v=20260807a"></script>
   <script src="/dxcc.js?v=20260719d"></script>
   <script src="/log-db.js?v=20260720a"></script>
-  <script src="/data.js?v=20260806a"></script>
+  <script src="/data.js?v=20260808c"></script>
 </body>
 </html>

@@ -1,8 +1,9 @@
-// The ICOM-LAN precondition, shared by the two DATA sub-pages (JS8LAN and WSPR).
+// The ICOM-LAN precondition, shared by the two DATA sub-pages (JS8Call-ICOM and
+// WSPR).
 //
 // Both need the same thing from the radio -- Icom network control plus
-// bidirectional WLAN audio -- and both used to decide it for themselves. They
-// drifted: JS8LAN read the saved configuration and looked for whichever TRX slot
+// bidirectional network audio -- and both used to decide it for themselves. They
+// drifted: the JS8 page read the saved configuration and looked for whichever TRX slot
 // carries the LAN transport, WSPR compared the primary radio's reported type, so
 // with LAN on TRX2 or TRX3 the two pages disagreed about whether the feature was
 // available at all. One module, one rule, one explanation.
@@ -37,7 +38,7 @@
     + ".gate-card small{display:block;min-height:1em;margin-top:10px;color:#e5484d}"
     + ".session-busy-where{color:#f1e3d2!important;font-weight:800}"
     + ".session-busy small{color:#7e918b!important}"
-    // Both states blank the page rather than leaving it half-rendered: a JS8LAN
+    // Both states blank the page rather than leaving it half-rendered: a modem
     // or beacon screen that cannot key the radio is worse than an explanation.
     // Only the topbar survives, so the sub-nav still switches pages -- which is
     // why it lives up there and not inside <main>.
@@ -54,12 +55,16 @@
     + '<div class="gate-card-icon" aria-hidden="true">!</div>'
     + "<div>"
     + "<h1>DATA requires a TRX over ICOM-LAN</h1>"
-    + "<p>This function uses Icom network control and bidirectional WLAN audio. "
+    // Not "WLAN": only the IC-705 is wireless and calls it that. Every other
+    // supported radio is Ethernet and calls it LAN, and this card is the first
+    // thing their operators see.
+    + "<p>This function uses Icom network control and bidirectional network audio. "
     + "TRXNET and CI-V carry commands only, so there is no way to get audio in or "
     + "out through them.</p>"
     + "<ol>"
-    + "<li>On the radio, connect to WLAN and enable <strong>Network Control</strong> "
-    + "in its remote/network settings.</li>"
+    + "<li>Put the radio on the same network as this interface &mdash; by cable on the "
+    + "Ethernet models, over WLAN on the IC-705 &mdash; and enable "
+    + "<strong>Network Control</strong> in its remote/network settings.</li>"
     + "<li>Open <strong>SETUP &rarr; Radio</strong> and select "
     + "<strong>Connection: ICOM-LAN</strong> on one of TRX1-TRX3.</li>"
     + "<li>Enter the radio IP address, network username and network password, "

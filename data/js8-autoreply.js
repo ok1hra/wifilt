@@ -16,9 +16,23 @@
   // Command -> how the answer is built. `needs` names the piece of station state
   // that must be configured, so a missing INFO text refuses with a reason the
   // operator can act on instead of transmitting an empty frame.
+  // `windowAs` groups commands whose ANSWER is identical into ONE restriction
+  // window. A bare "?", "SNR?" and "HW CPY?" all ask for the same signal report,
+  // so answering two of them in a row is transmitting the same frame twice --
+  // which is precisely what the window exists to refuse. Without this, adding
+  // HW CPY? handed every station a second free transmission.
   const HANDLERS = {
     "SNR?":     {reply: (ctx, frame) => `SNR ${formatSnr(frame.snr)}`, needs: null},
-    "?":        {reply: (ctx, frame) => `SNR ${formatSnr(frame.snr)}`, needs: null},
+    "?":        {reply: (ctx, frame) => `SNR ${formatSnr(frame.snr)}`, needs: null,
+                 windowAs: "SNR?"},
+    // "How do you copy me?" is the SNR question asked in words -- it is the
+    // default reply JS8Call offers to a CQ, so it is the FIRST thing most
+    // stations send at an unattended one, and leaving it unanswered made this
+    // station look deaf at exactly the moment it was being tested. The answer is
+    // the same signal report, from the same measurement, so it cannot disagree
+    // with what an SNR? a minute later would say.
+    "HW CPY?":  {reply: (ctx, frame) => `SNR ${formatSnr(frame.snr)}`, needs: null,
+                 windowAs: "SNR?"},
     "GRID?":    {reply: ctx => `GRID ${ctx.grid}`,     needs: "grid"},
     "INFO?":    {reply: ctx => `INFO ${ctx.infoText}`, needs: "infoText"},
     "STATUS?":  {reply: ctx => `STATUS ${ctx.statusText}`, needs: "statusText"},
@@ -144,6 +158,7 @@
 
       if (this.restrictions) {
         const verdict = this.restrictions.evaluate({call: from, command, nowMs,
+          windowKey: handler.windowAs || command,
           isSelectedCall: normalizeCall(ctx.selectedCall) === from});
         if (!verdict.allowed)
           return this._skip(verdict.reason, verdict.detail,

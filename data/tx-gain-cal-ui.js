@@ -47,6 +47,12 @@
   const CAL_LEAD_MS = 2500;             // shortest lead the firmware's window allows
   const CAL_SWR_LIMIT = 3.0;            // firmware units, which overstate SWR
   const MOD_LEVEL_TARGET = 0.7;         // where the knee should sit; see decision 11
+  // Both pages put this driver on the SAME audio socket as their own (the WSPR
+  // beacon's WsprTx, JS8's Js8Tx), and every control frame is now matched by
+  // txId. Two counters that both start at 1 would make that match wrong rather
+  // than absent: the beacon's third transmission and the third calibration cell
+  // would answer to the same number. The ranges are simply kept apart.
+  const CAL_FIRST_TX_ID = 1000000;
 
   const CSS = ""
     + ".cal-field{grid-column:1 / -1;border:1px solid #674a30;padding:8px;display:grid;gap:6px}"
@@ -94,6 +100,40 @@
     " input is the LAN one, that its MOD level is not too low, and that RF power" +
     " is not set higher than the audio path can drive";
 
+  // And the number, whenever the MOD level is known. "Not too low" is a direction;
+  // the operator has to turn a knob to a value, and the ratio that says which value
+  // is the same one the batch plan corrects by -- the level needed scales with the
+  // audio the radio would not take. A ceiling reading only proves the true knee is
+  // ABOVE the ceiling, never how far above, so this is a floor on the answer and
+  // says so rather than pretending to be the answer.
+  // The floor the batch plan refuses to write below, read from it rather than
+  // copied: the panel must not advise a level the plan would then refuse. Absent
+  // on a page that mounts only the single-shot tool, hence the fallback.
+  function modRawMin() {
+    const plan = typeof module === "object" && module.exports
+      ? require("./tx-gain-plan.js")
+      : (typeof globalThis !== "undefined" ? globalThis : self).TxGainPlan;
+    return (plan && plan.MOD_RAW_MIN) || 26;
+  }
+
+  function ceilingAdvice(modLevel) {
+    const level = Number(modLevel) || 0;
+    if (!level) return CEILING_ADVICE;
+    // The same step tx-gain-plan.js's modStep() takes for a ceiling: four times,
+    // never below twice the floor. Two numbers for one answer -- one in the panel
+    // and another in the plan -- is worse than either.
+    const wanted = Math.min(255, Math.max(Math.round(level * 4), modRawMin() * 2));
+    const where = `. The radio's MOD level is ${level} of 255 ` +
+                  `(${Math.round(level * 100 / 255)} %)`;
+    // Nothing left to turn up. The same finding the plan reports, in the same
+    // words: this is no longer about the MOD level.
+    if (wanted <= level)
+      return CEILING_ADVICE + where + " — already at maximum, so the RF power is " +
+        "higher than this audio path can drive: measure at a lower power";
+    return CEILING_ADVICE + where + ` — try ${wanted} and measure again` +
+      (wanted >= 255 ? ", which is as high as it goes" : "");
+  }
+
   // How much longer a search that just advanced may run. Its own function so the test
   // drives THIS code rather than a second copy of the arithmetic.
   const extendedDeadline = (nowMs, endsAtMs) =>
@@ -116,6 +156,7 @@
         wallNow: adapter.wallNow,
         streamId: adapter.streamId,
         targetFillBytes: CAL_TARGET_FILL_BYTES,
+        firstTxId: CAL_FIRST_TX_ID,
         onEvent: event => this.onTxEvent(event),
       });
       if (adapter.mount) {
@@ -227,6 +268,13 @@
       this.onOutcome = options.onOutcome || null;
       Object.assign(this.run, identity, {message: "", result: null, dbm: this.page.dbm(),
                                          poPeak: 0, swrPeak: 0, sawAlcField: false});
+      // What the radio's MOD level is, BEFORE the carrier -- the entry is stored
+      // with it, and an entry stored with 0 is one nothing can ever call stale.
+      // Only when it is not already known: the batch plan reads it once for the
+      // whole run, and this is a CI-V round trip worth up to 2.5 s.
+      if (!this.modLevel() && this.page.refreshModLevel) {
+        try { await this.page.refreshModLevel(); } catch (_error) {}
+      }
       try {
         // The only write the calibration makes. Without a data mode the LAN audio
         // never reaches the modulator, the search runs to the ceiling and reports
@@ -349,12 +397,22 @@
       // table of them is what a radio with a silent MOD level produces. It is reported
       // as a failed cell with the three causes the operator can act on.
       if (result.reachedCeiling) {
-        this.run.message = "no knee found" + CEILING_ADVICE;
+        this.run.message = "no knee found" + ceilingAdvice(this.modLevel());
         await this.restoreModeNow();
         this.page.onRunChange(false);
         this.render();
-        this.report({ok: false, reason: "the level reached the ceiling and the radio " +
-                                        "never limited — nothing was measured"});
+        // Not a calibration, but not nothing either: "the radio took 0.8 without
+        // limiting" is the observation the batch plan's MOD-level correction is
+        // built on, and it used to be thrown away here. The plan saw a bare
+        // failure, recorded no survey knee, and its ceiling branch -- the one
+        // that multiplies a too-low MOD level -- could never run. A station whose
+        // MOD level was the whole problem therefore had no way out of it: every
+        // cell above the one power that happened to fit reported "no knee found"
+        // for ever. So the outcome carries the fact as well as the verdict.
+        this.report({ok: false, reachedCeiling: true, knee: result.knee,
+                     gain: result.gain, po: this.run.poPeak,
+                     reason: "the level reached the ceiling and the radio " +
+                             "never limited — nothing was measured"});
         return;
       }
       try {
@@ -455,12 +513,17 @@
           ` · Po ${this.run.poPeak}/255 · ${left} s left`;
       }
 
-      const result = this.run.result;
+      // A ceiling result is a failed measurement, and the failure is already
+      // spelled out on the error line below. Printing "knee 0.8000, stored
+      // 0.8000" beside it said the opposite of the truth twice over: 0.8 is
+      // where the search gave up rather than a knee, and nothing was stored.
+      const result = this.run.result && !this.run.result.reachedCeiling
+        ? this.run.result : null;
       this.dom.result.hidden = !result;
       if (result) this.dom.result.textContent =
         `knee ${result.knee.toFixed(4)}, stored ${result.gain.toFixed(4)}` +
         (this.modLevel() ? ` at MOD level ${this.modLevel()}` : "") +
-        (result.reachedCeiling ? CEILING_ADVICE : ` — ${modLevelAdvice(result.knee)}`);
+        ` — ${modLevelAdvice(result.knee)}`;
       this.dom.error.hidden = !this.run.message;
       this.dom.error.textContent = this.run.message;
     }
@@ -488,7 +551,8 @@
   // }
   const create = adapter => new TxGainCalRun(adapter);
 
-  return {create, TxGainCalRun, modLevelAdvice, extendedDeadline,
+  return {create, TxGainCalRun, modLevelAdvice, ceilingAdvice, extendedDeadline,
           CAL_MAX_MS, CAL_EXTEND_MS, CAL_HARD_MS, CAL_TARGET_FILL_BYTES,
-          CAL_RAMP_SAMPLES, CAL_LEAD_MS, CAL_SWR_LIMIT, MOD_LEVEL_TARGET};
+          CAL_RAMP_SAMPLES, CAL_LEAD_MS, CAL_SWR_LIMIT, MOD_LEVEL_TARGET,
+          CAL_FIRST_TX_ID};
 });

@@ -83,42 +83,14 @@
   }
 
   // ---- Maidenhead ----------------------------------------------------------
-
-  function latLonToGrid(lat, lon, characters = 6) {
-    if (!Number.isFinite(lat) || !Number.isFinite(lon))
-      throw new WsprError("coordinates must be finite numbers");
-    // Clamp rather than wrap: a pole or the date line must not roll into a
-    // field that does not exist.
-    const la = Math.min(Math.max(lat, -90), 90) + 90;
-    const lo = Math.min(Math.max(lon, -180), 180) + 180;
-    const fieldLon = Math.min(17, Math.floor(lo / 20));
-    const fieldLat = Math.min(17, Math.floor(la / 10));
-    let grid = String.fromCharCode(65 + fieldLon, 65 + fieldLat)
-             + Math.min(9, Math.floor((lo - fieldLon * 20) / 2))
-             + Math.min(9, Math.floor(la - fieldLat * 10));
-    if (characters >= 6) {
-      const restLon = lo - fieldLon * 20 - Math.floor((lo - fieldLon * 20) / 2) * 2;
-      const restLat = la - fieldLat * 10 - Math.floor(la - fieldLat * 10);
-      grid += String.fromCharCode(65 + Math.min(23, Math.floor(restLon / (2 / 24))),
-                                  65 + Math.min(23, Math.floor(restLat / (1 / 24))));
-    }
-    return grid;
-  }
-
-  // Accepts either a ready-made locator or a coordinate pair, so one input field
-  // can serve both without the operator having to say which is which.
-  function parseLocatorInput(input) {
-    const text = String(input == null ? "" : input).trim();
-    if (/^[A-Za-z]{2}[0-9]{2}([A-Za-z]{2})?$/.test(text))
-      return normalizeLocator(text).locator;
-    const pair = text.split(/[,;\s]+/).filter(Boolean);
-    if (pair.length !== 2) throw new WsprError(`cannot read "${text}" as a locator or coordinate pair`);
-    const lat = Number(pair[0]), lon = Number(pair[1]);
-    if (!Number.isFinite(lat) || !Number.isFinite(lon) ||
-        Math.abs(lat) > 90 || Math.abs(lon) > 180)
-      throw new WsprError(`cannot read "${text}" as a locator or coordinate pair`);
-    return latLonToGrid(lat, lon, 6);
-  }
+  //
+  // latLonToGrid() and parseLocatorInput() were here, and they are now in
+  // station-identity.js. They existed to serve ONE input field -- the WSPR
+  // settings panel's locator box -- and that box is a display now: the locator
+  // belongs to the station, is typed in SETUP, and is validated there. Leaving a
+  // second parser behind would mean the beacon page could still accept a locator
+  // the interface refuses. The encoder keeps normalizeLocator(), which is what it
+  // needs to pack a frame.
 
   // ---- packing -------------------------------------------------------------
 
@@ -619,7 +591,6 @@
     SYMBOL_COUNT, SAMPLE_RATE, SAMPLES_PER_SYMBOL, SIGNAL_SAMPLES,
     TONE_SPACING_HZ, DURATION_S, POWER_LEVELS, WsprError,
     normalizeCallsign, normalizeLocator, normalizePower, validate,
-    latLonToGrid, parseLocatorInput,
     packCallsign, packLocatorAndPower, packMessage,
     convolutionalEncode, interleave, syncBit, encode,
     WsprStream, nextSlotUtcMs,

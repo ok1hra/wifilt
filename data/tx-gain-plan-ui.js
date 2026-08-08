@@ -61,6 +61,8 @@
     + ".plan-chip button{background:none;border:0;color:#8ba59d;cursor:pointer;padding:0 0 0 4px}"
     + ".plan-ask{border:1px solid #e0a020;padding:8px;display:grid;gap:6px;background:#241c08}"
     + ".plan-ask b{color:#e0a020}"
+    + ".plan-ask label{display:flex;gap:6px;align-items:center;color:#8ba59d;font-size:12px}"
+    + ".plan-ask label input{accent-color:#e0a020}"
     + ".plan-live{font-family:ui-monospace,monospace;font-size:12px;color:#e0a020}"
     + ".plan-error{font-size:12px;color:#e06c5a;line-height:1.5}"
     + ".plan-ok{font-size:12px;color:#9fd39f;line-height:1.5}"
@@ -188,6 +190,15 @@
       this.run = null;
       this.ask = null;               // the pending antenna question
       this.askAtMs = 0;
+      // The operator's opt-out from the question, and the box that arms it. Both
+      // live on the panel rather than in tx-gain-plan.js on purpose: the RULE is
+      // "one question per retune" and that stays where the safety rules are; this
+      // is the operator answering the remaining ones in advance, which is a fact
+      // about the person at the desk and not about the plan. Per run, never
+      // stored: an antenna confirmation that outlived the session it was given in
+      // would be a confirmation about a station nobody was standing next to.
+      this.askAll = false;           // the checkbox, while a question is up
+      this.autoAnswer = false;       // armed: answer the remaining questions "ok"
       this.message = "";
       this.summary = "";
       this.busyCell = null;
@@ -236,6 +247,14 @@
         this.dom.ask.addEventListener("click", event => {
           const action = event.target.closest("[data-answer]");
           if (action) this.answer(action.dataset.answer);
+        });
+        // The question redraws twice a second (the "waiting 4:12" line has to be
+        // honest), and the redraw is an innerHTML rewrite -- so a checkbox that
+        // kept its own state would be unticked again within half a second of
+        // being ticked. The flag is the state; the box only shows it.
+        this.dom.ask.addEventListener("change", event => {
+          const box = event.target.closest("[data-answer-all]");
+          if (box) this.askAll = Boolean(box.checked);
         });
         // After the dom map is built, never before: wireWindow reaches for
         // this.dom.close, and calling it a few lines earlier threw inside the
@@ -322,14 +341,19 @@
     // One CI-V read, when the window opens and not on a timer: the MOD level changes
     // only when somebody turns a knob or this tool writes it. It is what says whether
     // the stored table still describes this radio.
+    // Awaitable, because the single-shot calibration waits on it: a knee is a knee
+    // AT a MOD level, and a run that stored `modLevel: 0` produced an entry nothing
+    // could ever call stale -- measured, unfalsifiable, and re-measured by every
+    // plan afterwards. That was every calibration started from the settings panel
+    // without opening this window first.
     refreshModLevel() {
-      if (this.modReading || this.running) return;
-      if (!this.mod.capability.readable) { this.render(); return; }
+      if (this.modReading || this.running) return Promise.resolve(this.mod.value);
+      if (!this.mod.capability.readable) { this.render(); return Promise.resolve(0); }
       this.modReading = true;
       this.render();
-      this.mod.readLevel()
+      return this.mod.readLevel()
         .catch(() => null)
-        .then(() => { this.modReading = false; this.render(); });
+        .then(value => { this.modReading = false; this.render(); return value; });
     }
 
     // Cannot be dismissed while it is asking. Not while merely running: a long run
@@ -492,6 +516,10 @@
       if (this.running) return;
       this.message = "";
       this.summary = "";
+      // Never inherited from the last run: the operator confirmed the antennas
+      // that were connected then.
+      this.askAll = false;
+      this.autoAnswer = false;
       const problem = this.blockingReason();
       if (problem) { this.message = problem; this.render(); return; }
 
@@ -622,6 +650,14 @@
           this.run.note({type: "tuned", hz: step.hz});
           return;
         case "askAntenna":
+          // Answered in advance. The plan still asks -- the rule that a retune
+          // costs a confirmation is untouched, and it is still one answer per
+          // retune -- but the operator gave the answers when they ticked the box,
+          // rather than being fetched back to the screen for each of them.
+          if (this.autoAnswer) {
+            this.run.note({type: "antennaOk", band: step.band});
+            return;
+          }
           this.ask = step;
           this.askAtMs = Date.now();
           this.armAskTimeout();
@@ -698,9 +734,16 @@
             outcome.ok
               ? {type: "measured", knee: outcome.knee, gain: outcome.gain,
                  po: outcome.po, reachedCeiling: outcome.reachedCeiling}
-              : isStationFailure(outcome.reason)
-                ? {type: "stationFailed", reason: outcome.reason}
-                : {type: "cellFailed", reason: outcome.reason}),
+              // A ceiling is neither a measurement nor an ordinary failure: it is
+              // the one observation the MOD-level correction is made of, and
+              // folding it into cellFailed is what left that correction unable to
+              // fire on the only stations that need it.
+              : outcome.reachedCeiling
+                ? {type: "ceiling", knee: outcome.knee, gain: outcome.gain,
+                   po: outcome.po, reason: outcome.reason}
+                : isStationFailure(outcome.reason)
+                  ? {type: "stationFailed", reason: outcome.reason}
+                  : {type: "cellFailed", reason: outcome.reason}),
         }).catch(error => finish({type: "cellFailed",
                                   reason: String(error.message || error)}));
       });
@@ -750,6 +793,10 @@
     answer(action) {
       if (!this.ask || !this.run) return;
       const band = this.ask.band;
+      // The box is about the questions still to come, so it arms whichever way
+      // this one was answered: "skip 40 m, and stop asking me about the rest".
+      if (this.askAll && (action === "ok" || action === "skip")) this.autoAnswer = true;
+      this.askAll = false;
       this.ask = null;
       this.clearAskTimeout();
       // The question is gone the instant it is answered. Waiting for the next render
@@ -790,6 +837,8 @@
       const snapshot = this.run ? this.run.snapshot() : null;
       this.clearAskTimeout();
       this.busyCell = null;
+      this.askAll = false;
+      this.autoAnswer = false;
       this.run = null;
       this.page.onPlanChange(false);
       if (!snapshot) return;
@@ -927,6 +976,15 @@
           `reaches ${3.0}.${decoder ? " " + decoder : ""}</p>` +
           `<div class="plan-tools"><button type="button" data-answer="ok">CONTINUE</button>` +
           `<button type="button" data-answer="skip">SKIP ${this.ask.band}</button></div>` +
+          // The whole remaining run, answered here. Said as what it costs, not as
+          // a convenience: after this the plan retunes and keys on bands nobody is
+          // asked about, so it is worth ticking only when every antenna in the
+          // plan is already right -- one switch, one wideband antenna, an ATU that
+          // follows the dial. SWR still stops the run; that guard is not the
+          // operator's to switch off.
+          `<label><input type="checkbox" data-answer-all` +
+          `${this.askAll ? " checked" : ""}> don't ask again at the next retune —` +
+          ` measure the rest without stopping (SWR still stops it)</label>` +
           // No second STOP here. There is one STOP, in the toolbar, where it does not
           // move about -- two buttons with one meaning is a question about which is
           // which, asked at the moment the operator is being asked something else.
@@ -962,8 +1020,11 @@
       }
       if (snapshot) {
         todo.className = "plan-todo working";
-        todo.textContent = "Nothing to do — the plan is running. It will ask again " +
-          "before it changes band.";
+        todo.textContent = this.autoAnswer
+          ? "Nothing to do — the plan is running. You asked it not to stop at the " +
+            "next retunes, so it changes band and keys without asking again."
+          : "Nothing to do — the plan is running. It will ask again " +
+            "before it changes band.";
         return;
       }
       if (problem) {

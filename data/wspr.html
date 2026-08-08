@@ -7,7 +7,7 @@
 <!-- The shell -- topbar, radio bar, disclosure sections, waterfall, timetable --
      is shared with the JS8Call page so the two cannot drift apart. wspr.css only
      carries what is genuinely WSPR's. -->
-<link rel="stylesheet" href="/data.css?v=20260728a">
+<link rel="stylesheet" href="/data.css?v=20260808c">
 <link rel="stylesheet" href="/wspr.css?v=20260730b">
 </head>
 <!-- lan-gate.js clears the checking class once it knows whether ICOM-LAN is set
@@ -30,7 +30,7 @@
     <script>document.addEventListener("click",function(e){var b=document.querySelector(".brand-about");if(b.open&&!b.contains(e.target))b.open=false;});</script>
     <a class="tab" href="/log" target="_blank" rel="noopener">QRPLog</a><a class="tab" href="/dxc.html" onclick="window.open(this.href,'DXC','width=600,height=750,left=0,top=0,menubar=no,location=no,status=no'); return false;">DXC</a>
     <a class="tab tab-active" href="/data" title="JS8Call-ICOM and WSPR over ICOM-LAN">DATA</a><a class="tab" href="/setup" target="_blank" rel="noopener">SETUP</a>
-    <a class="tab" href="/datasync" target="_blank" rel="noopener">LOGSYNC</a>
+    <a class="tab" href="/datasync" target="_blank" rel="noopener">LOGSYNC</a><a class="tab bd-nav" href="/bd" target="_blank" rel="noopener" hidden>BD</a>
     <span id="topbarFw" class="topbar-fw"></span>
   </nav>
   <!-- Plain links, no target: both pages share one session token in
@@ -66,6 +66,9 @@
                   title="Undo the last timetable edit">UNDO</button>
           <button id="scheduleClear" class="tt-clear" type="button"
                   title="Remove all sequence changes">CLEAR</button>
+          <!-- Same CLOSE as the CAL PLAN panel next door. -->
+          <button id="scheduleClose" class="tt-clear" type="button"
+                  title="Close">CLOSE</button>
         </div>
       </header>
       <div id="scheduleList" class="tt-schedule-list"></div>
@@ -216,12 +219,18 @@
     <details class="compact-section" data-section="settings">
       <summary><span>SETTINGS</span><span id="settingsSummary" class="summary-status"></span></summary>
       <div class="settings wspr-settings">
-        <label>My callsign <input id="callsign" maxlength="10" autocomplete="off" spellcheck="false"></label>
-        <label>My locator or coordinates
-          <input id="locator" maxlength="24" autocomplete="off" spellcheck="false"
-                 placeholder="JN79QI or 50.0755, 14.4378">
+        <!-- What goes on the air, shown but not edited here. A beacon that runs
+             unattended for days must not be transmitting one browser's idea of
+             the callsign: the interface holds it, SETUP types it, this reads it. -->
+        <label class="identity-field">My callsign
+          <output id="callsign" class="identity-value"></output></label>
+        <label class="identity-field">My locator
+          <output id="locator" class="identity-value"></output>
           <small>transmits <b id="locatorTransmitted">----</b> — WSPR type 1 carries four characters</small>
         </label>
+        <p class="identity-note">Station identity, stored in the interface —
+          <a href="/setup#identitySection">change it in SETUP</a>. Coordinates can be
+          entered there and are converted to a square.</p>
         <label>Clock correction <span><input id="clockCorrection" type="number" min="-1000" max="1000" step="1"><small>ms, shared with JS8Call-ICOM</small></span></label>
         <label>Radio
           <select id="radioModelOverride">
@@ -269,7 +278,6 @@
           <small>I will use safe RF power and a suitable load/antenna. The same confirmation as
                  on the JS8Call-ICOM page &mdash; one radio, one pledge.</small>
         </label>
-        <p id="stationError" class="form-error" role="alert" hidden></p>
       </div>
     </details>
 
@@ -281,9 +289,39 @@
 </footer>
 
 <script src="/wake-lock.js?v=20260727a"></script>
-<script src="/lan-gate.js?v=20260727a"></script>
+<script src="/lan-gate.js?v=20260808d"></script>
 <script src="/fw-version.js?v=20260726a"></script>
 <script src="/js8-settings.js?v=20260806a"></script>
+<script src="/station-identity.js?v=20260808b"></script>
+<script src="/station-profile.js?v=20260808a"></script>
+<script src="/setup-spine.js?v=20260808c"></script>
+<script>
+  // The spine follows the operator here for one reason: the transmit check is
+  // the only step of it that cannot be done on SETUP, because that page has no
+  // TX stack and no radio session. Leaving the thread behind at exactly the
+  // longest, most physical step is what this prevents. It draws nothing once
+  // there is nothing outstanding.
+  (function () {
+    if (!window.SetupSpine || !window.SetupSpine.createBanner) return;
+    function mount() {
+      var main = document.querySelector("main");
+      if (!main) return;
+      var banner = window.SetupSpine.createBanner({
+        host: main,
+        onCalibrate: function () {
+          var panel = document.getElementById("calField");
+          if (!panel) return;
+          var section = panel.closest("details");
+          if (section) section.open = true;
+          panel.scrollIntoView({behavior: "smooth", block: "center"});
+        }
+      });
+      if (banner) banner.refresh();
+    }
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", mount);
+    else mount();
+  }());
+</script>
 <!-- Only for formatFrequency(): the dotted grouping has to match the JS8Call
      page exactly, and one shared function is the way to guarantee that. -->
 <script src="/js8-presets.js?v=20260719d"></script>
@@ -295,9 +333,9 @@
 <script src="/tx-alc-guard.js?v=20260803a"></script>
 <!-- One table of Icom models: watts for WSPR, menu paths for the setup guides. -->
 <script src="/icom-models.js?v=20260802a"></script>
-<script src="/trx-help.js?v=20260802a"></script>
+<script src="/trx-help.js?v=20260808d"></script>
 <script>TrxHelp.mount(document, {kind: "wspr"});</script>
-<script src="/wspr-core.js?v=20260730b"></script>
+<script src="/wspr-core.js?v=20260808c"></script>
 <script src="/wspr-tx.js?v=20260728a"></script>
 <!-- The calibration tool: panel, carrier and verdict, shared with /data. -->
 <script src="/tx-gain-cal-ui.js?v=20260807b"></script>
@@ -308,6 +346,6 @@
 <script src="/tx-gain-plan.js?v=20260807a"></script>
 <script src="/tx-gain-plan-ui.js?v=20260807a"></script>
 <script src="/wspr-log.js?v=20260726a"></script>
-<script src="/wspr.js?v=20260730b"></script>
+<script src="/wspr.js?v=20260808c"></script>
 </body>
 </html>

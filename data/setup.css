@@ -92,6 +92,19 @@ body {
   color: var(--muted);
 }
 
+/* The one place the storage badges are explained. It sits under the device line
+   because a tooltip is no explanation on the phone this page is set up from. */
+.setup-badge-legend {
+  margin-top: 4px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.setup-badge-legend b {
+  color: var(--accent);
+  font-weight: 700;
+}
+
 .setup-form {
   display: grid;
   gap: 16px;
@@ -1170,3 +1183,32 @@ button.icom-scan-hit:hover {
   .txgain-row { grid-template-columns: minmax(0, 1fr) auto auto; }
   .txgain-advice, .txgain-when { grid-column: 1 / -1; font-size: 12px; }
 }
+
+/* Identity ---------------------------------------------------------------- */
+/* The two strings the whole station is known by. The note is quiet -- it is
+   context, not a warning -- and the error is loud, because the only way to get
+   one is to have typed a locator the interface will refuse. */
+.setup-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.setup-note code {
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #0f1312;
+  font-size: 0.95em;
+}
+
+/* Reuses the badge's colours, laid out as a line rather than as a pill in a
+   summary row -- same meaning, different place. */
+#identityLocatorError {
+  margin: 0;
+  margin-left: 0;
+  white-space: normal;
+}
+
+#identityLocatorError[hidden] { display: none; }

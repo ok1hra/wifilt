@@ -103,11 +103,15 @@ int BaudRate        = 9600;
 // const char* BTname  = "IC705-interface";
 String BT_NAME;  // legacy EEPROM field, retained for downgrade compatibility
 bool Debug          = false;
-bool cwIpOnConnect  = true;       // announce WiFi IP via CW on first full-CAT radio connect
+// Off by default: it keys the sidetone on every first connect, and an operator
+// who has just been handed the address on screen did not ask to hear it. A
+// device that already stored a choice keeps it -- EEPROM 136 only falls back to
+// this when it was never written.
+bool cwIpOnConnect  = false;      // announce WiFi IP via CW on first full-CAT radio connect
 volatile bool cwIpSendPending = false;
 
 #define LOOP_WARN_MS 200
-#define REV 20260807
+#define REV 20260808
 #define WIFI
 #define UDP_TO_FSK
 #define WDT         // watchdog timer
@@ -435,6 +439,14 @@ uint8_t   wifiTryCandidateIdx = 0;
 bool      wifiTryScanSawNothing = false;  // a scan completed and found no configured SSID
 IPAddress lastStaIp;               // survives a reboot; 0.0.0.0 when unknown
 
+// The operator's configuration lives on its own flash partition, which no tool
+// writes: the installer and both upload scripts touch app0 and the asset
+// filesystem only. Before this, every firmware update replaced the filesystem
+// that held the radio slots, the LOG/JS8 settings and every TX gain calibration
+// -- and each of those calibrations costs a 20 s carrier on the air to measure
+// again. `LittleFS` stays the web assets; everything below is on `cfgFS`.
+fs::LittleFSFS cfgFS;
+
 static const char* RADIO_CONFIG_PATH = "/radio-config.json";
 
 struct RadioSlotConfig {
@@ -589,6 +601,7 @@ int incomingByte = 0;   // for incoming serial data
   String DxcLocator = "";
 
   static const char* LOG_CONFIG_PATH = "/log-config.json";
+  static const size_t LOG_CONFIG_MAX_BYTES = 2048;
 
   // Measured ALC knees, one entry per model|band|percent. Deliberately opaque
   // to the firmware: it serves the file and overwrites it, and never parses a
@@ -603,6 +616,13 @@ int incomingByte = 0;   // for incoming serial data
   // only ever calibrated on the shack PC.
   static const char* TXGAIN_CONFIG_PATH = "/txgain.json";
   static const size_t TXGAIN_MAX_BYTES = 6144;   // ~40 entries; a full band plan
+  // The JS8 and WSPR operating profile: speed, TX offset, heartbeat interval,
+  // groups, the 24 h band schedule, the RF power percent. It used to live in
+  // each browser's localStorage, which meant a second tablet ran the station
+  // with a different schedule and no heartbeat and nothing said so. Same design
+  // as the calibration table -- a blob the firmware stores and never reads into.
+  static const char* JS8_CONFIG_PATH = "/js8-config.json";
+  static const size_t JS8_CONFIG_MAX_BYTES = 4096;   // measured: 2041 B with a full 48-slot schedule
 
   // In-memory cache of log-config.json fields used by setupTemplateProcessor.
   String g_lcTrx1Label = "TRX1";   // replaced by the radio's own model once known
@@ -756,6 +776,8 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   bool saveRadioConfig(void);
   void syncLegacyRadioGlobals(void);
   bool radioSlotConnected(uint8_t slot);
+  bool radioSlotSetUp(uint8_t slot);
+  bool stationRadioSetUp(void);
   void radioSlotSetFrequencyState(uint8_t slot, uint32_t freq);
   void radioSlotSetModeState(uint8_t slot, const char *mode);
   IcomLanClient* radioLanClient(uint8_t slot);
@@ -809,6 +831,10 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void handleConfigUpload(void);
   void handleGetLogConfig(void);
   void handlePostLogConfig(void);
+  void handleGetJs8Config(void);
+  void handlePostJs8Config(void);
+  void handleGetIdentity(void);
+  void handlePostIdentity(void);
   void handleGetTxGain(void);
   void handlePostTxGain(void);
   void handleGetCivRead(void);
@@ -928,11 +954,11 @@ void loadMemoryConfig(void){
     freqMemoryText[i] = "";
   }
 
-  if (!LittleFS.exists(MEMORY_CONFIG_PATH)) {
+  if (!cfgFS.exists(MEMORY_CONFIG_PATH)) {
     return;
   }
 
-  File file = LittleFS.open(MEMORY_CONFIG_PATH, FILE_READ);
+  File file = cfgFS.open(MEMORY_CONFIG_PATH, FILE_READ);
   if (!file) {
     return;
   }
@@ -972,7 +998,7 @@ void loadMemoryConfig(void){
 }
 
 bool saveMemoryConfig(void){
-  File file = LittleFS.open(MEMORY_CONFIG_PATH, "w");
+  File file = cfgFS.open(MEMORY_CONFIG_PATH, "w");
   if (!file) {
     Serial.println("LFS | cannot open /memories.cfg for writing"
                    " used=" + String(LittleFS.usedBytes()) +
@@ -1020,8 +1046,8 @@ bool saveMemoryConfig(void){
 
 // Parse log-config.json into g_lc* variables so setupTemplateProcessor can serve them.
 void loadLogConfigVars(void){
-  if (!LittleFS.exists(LOG_CONFIG_PATH)) return;
-  File f = LittleFS.open(LOG_CONFIG_PATH, "r");
+  if (!cfgFS.exists(LOG_CONFIG_PATH)) return;
+  File f = cfgFS.open(LOG_CONFIG_PATH, "r");
   if (!f) return;
   String j = f.readString();
   f.close();
@@ -1198,10 +1224,10 @@ bool extractJsonBool(const String &json, const char *key, bool defaultValue){
 }
 
 static String readLogConfigJson() {
-  if (!LittleFS.exists(LOG_CONFIG_PATH)) {
+  if (!cfgFS.exists(LOG_CONFIG_PATH)) {
     return String();
   }
-  File f = LittleFS.open(LOG_CONFIG_PATH, "r");
+  File f = cfgFS.open(LOG_CONFIG_PATH, "r");
   if (!f) {
     return String();
   }
@@ -1236,7 +1262,7 @@ static String buildLogConfigJson(
 }
 
 static bool saveLogConfigJson(const String &json) {
-  File f = LittleFS.open(LOG_CONFIG_PATH, "w");
+  File f = cfgFS.open(LOG_CONFIG_PATH, "w");
   if (!f) {
     return false;
   }
@@ -1296,8 +1322,8 @@ void bdLoadDefaults() {
 }
 
 void bdLoadConfig() {
-  if (!LittleFS.exists(BD_CONFIG_PATH)) { bdLoadDefaults(); return; }
-  File f = LittleFS.open(BD_CONFIG_PATH, FILE_READ);
+  if (!cfgFS.exists(BD_CONFIG_PATH)) { bdLoadDefaults(); return; }
+  File f = cfgFS.open(BD_CONFIG_PATH, FILE_READ);
   if (!f) { bdLoadDefaults(); return; }
   String j = f.readString();
   f.close();
@@ -1319,7 +1345,7 @@ void bdLoadConfig() {
 }
 
 void bdSaveConfig() {
-  File f = LittleFS.open(BD_CONFIG_PATH, "w");
+  File f = cfgFS.open(BD_CONFIG_PATH, "w");
   if (!f) return;
   f.print("{\"source\":"); f.print(bdSource);
   f.print(",\"rows\":[");
@@ -1735,7 +1761,15 @@ void handleTrxNetPeers(){
   String j;
   j.reserve(1024);
   j += "{";
-  if (APmode) {
+  // "AP mode" and "the softAP is up" stopped being the same thing when the WiFi
+  // handover was added: during it the station is joined AND the hotspot is still
+  // running, so an operator already reading this page over their own network was
+  // told the device was in AP mode. It is -- but saying so there is answering a
+  // question nobody asked. The radio clients and TrxNet both start only when a
+  // boot finds APmode false, so what is actually outstanding is the restart.
+  if (APmode && WiFiStationReady()) {
+    j += "\"state\":\"handoff\",\"self\":\"\",\"peers\":[]";
+  } else if (APmode) {
     j += "\"state\":\"ap\",\"self\":\"\",\"peers\":[]";
   } else if (!trxNetEnabled) {
     j += "\"state\":\"disabled\",\"self\":\"\",\"peers\":[]";
@@ -2505,13 +2539,13 @@ void syncLegacyRadioGlobals(void) {
 
 bool loadRadioConfig(void) {
   initLegacyRadioSlots();
-  if (!LittleFS.exists(RADIO_CONFIG_PATH)) {
+  if (!cfgFS.exists(RADIO_CONFIG_PATH)) {
     syncLegacyRadioGlobals();
     radioConfigLoaded = false;
     return false;
   }
 
-  File f = LittleFS.open(RADIO_CONFIG_PATH, "r");
+  File f = cfgFS.open(RADIO_CONFIG_PATH, "r");
   if (!f) {
     syncLegacyRadioGlobals();
     radioConfigLoaded = false;
@@ -2584,7 +2618,7 @@ bool saveRadioConfig(void) {
   }
   json += "}";
 
-  File f = LittleFS.open(RADIO_CONFIG_PATH, "w");
+  File f = cfgFS.open(RADIO_CONFIG_PATH, "w");
   if (!f) return false;
   size_t written = f.print(json);
   f.flush();
@@ -2680,6 +2714,32 @@ bool radioSlotConnected(uint8_t slot) {
   if (radioSlots[slot].transport == RADIO_TRXNET)
     return slot == 0 ? primaryTrxNetHasData : g_trxHasData[slot - 1];
   return slot == 0 ? primarySerialHasData : g_trxHasData[slot - 1];
+}
+
+// Has this slot been set up at all? Deliberately stricter for LAN than for the
+// other two, because LAN is the only transport that can prove itself: the radio
+// answers with its own model and rememberRadioModel() writes it down, which is
+// durable evidence that a login once succeeded. CI-V and TrxNet leave no such
+// trace, so there a configured address is the only evidence there is.
+//
+// NOT "is it connected" -- a radio that is switched off has not become
+// unconfigured, and this decides where the bare IP leads.
+bool radioSlotSetUp(uint8_t slot) {
+  if (slot > 2 || !radioSlots[slot].enabled) return false;
+  switch (radioSlots[slot].transport) {
+    case RADIO_LAN:    return radioSlots[slot].model.length() > 0;
+    case RADIO_TRXNET: return radioSlots[slot].netId != 0x00;
+    case RADIO_CIV:    return radioSlots[slot].civAddr != 0x00;
+    default:           return false;
+  }
+}
+
+// A fresh device defaults to TRX1 on ICOM-LAN with no address and no model, so
+// this is false exactly while nothing has been configured -- it cannot come out
+// false for a working CI-V or TrxNet station.
+bool stationRadioSetUp() {
+  for (uint8_t slot = 0; slot < 3; slot++) if (radioSlotSetUp(slot)) return true;
+  return false;
 }
 
 void radioSlotSetFrequencyState(uint8_t slot, uint32_t freq) {
@@ -2864,8 +2924,8 @@ void handleConfigDownload() {
   j += ",\"dxccall\":\"";    j += configJsonEscape(DxcCallsign); j += "\"";
   j += ",\"dxclocator\":\""; j += configJsonEscape(DxcLocator);  j += "\"";
   j += ",\"btname\":\"";     j += configJsonEscape(BT_NAME);     j += "\"";
-  if (LittleFS.exists(RADIO_CONFIG_PATH)) {
-    File radioFile = LittleFS.open(RADIO_CONFIG_PATH, "r");
+  if (cfgFS.exists(RADIO_CONFIG_PATH)) {
+    File radioFile = cfgFS.open(RADIO_CONFIG_PATH, "r");
     if (radioFile) {
       String radioJson = radioFile.readString();
       radioFile.close();
@@ -2885,8 +2945,8 @@ void handleConfigDownload() {
   // filesystem -- so without this a reflash silently costs every band and power
   // the operator ever calibrated, each of them a 20 s carrier on the air to get
   // back. Embedded verbatim, exactly like radioConfig and logConfig above.
-  if (LittleFS.exists(TXGAIN_CONFIG_PATH)) {
-    File txgainFile = LittleFS.open(TXGAIN_CONFIG_PATH, "r");
+  if (cfgFS.exists(TXGAIN_CONFIG_PATH)) {
+    File txgainFile = cfgFS.open(TXGAIN_CONFIG_PATH, "r");
     if (txgainFile) {
       String txgainJson = txgainFile.readString();
       txgainFile.close();
@@ -2894,6 +2954,21 @@ void handleConfigDownload() {
       if (txgainJson.startsWith("{")) {
         j += ",\"txGain\":";
         j += txgainJson;
+      }
+    }
+  }
+  // The operating profile travels with the rest. It moved out of the browser in
+  // 2026-08-08 precisely so it would stop being the one thing a backup could not
+  // carry, and the restore below has to know the same key.
+  if (cfgFS.exists(JS8_CONFIG_PATH)) {
+    File js8File = cfgFS.open(JS8_CONFIG_PATH, "r");
+    if (js8File) {
+      String js8Json = js8File.readString();
+      js8File.close();
+      js8Json.trim();
+      if (js8Json.startsWith("{")) {
+        j += ",\"js8Config\":";
+        j += js8Json;
       }
     }
   }
@@ -3042,20 +3117,64 @@ void handleConfigUpload() {
     if (btname.length() >= 1 && btname.length() <= 20) { BT_NAME = btname; eepromWriteStr(BT_NAME, 267, 21); }
   }
 
+  // A section that is present but too big used to be skipped in silence, and the
+  // restore still answered {"ok":true}. That is the exact failure the comment
+  // below was written to prevent: everything comes back except the calibrations,
+  // and nothing says so until the operator goes looking for them weeks later.
+  // Refuse the whole restore instead, and name what did not fit.
+  auto rejectOversize = [&](const char *section, size_t got, size_t limit) {
+    String j = "{\"ok\":false,\"error\":\"too_big\",\"section\":\"";
+    j += section;
+    j += "\",\"bytes\":"; j += (unsigned)got;
+    j += ",\"limit\":";    j += (unsigned)limit;
+    j += "}";
+    webServer.send(409, "application/json", j);
+  };
+
   {
     String logCfg = extractJsonObject(body, "logConfig");
-    if (logCfg.length() > 0 && logCfg.length() <= 2048) {
-      saveLogConfigJson(logCfg);
+    if (logCfg.length() > LOG_CONFIG_MAX_BYTES) {
+      rejectOversize("logConfig", logCfg.length(), LOG_CONFIG_MAX_BYTES);
+      return;
     }
+    if (logCfg.length() > 0) saveLogConfigJson(logCfg);
   }
 
   {
     // Same key the download writes. A mismatch here would restore everything
     // except the calibrations and say nothing about it.
     String txgainCfg = extractJsonObject(body, "txGain");
-    if (txgainCfg.length() > 0 && txgainCfg.length() <= TXGAIN_MAX_BYTES) {
-      File f = LittleFS.open(TXGAIN_CONFIG_PATH, "w");
-      if (f) { f.print(txgainCfg); f.close(); }
+    if (txgainCfg.length() > TXGAIN_MAX_BYTES) {
+      rejectOversize("txGain", txgainCfg.length(), TXGAIN_MAX_BYTES);
+      return;
+    }
+    if (txgainCfg.length() > 0) {
+      File f = cfgFS.open(TXGAIN_CONFIG_PATH, "w");
+      if (!f || f.print(txgainCfg) != txgainCfg.length()) {
+        if (f) f.close();
+        webServer.send(500, "application/json",
+          "{\"ok\":false,\"error\":\"storage\",\"section\":\"txGain\"}");
+        return;
+      }
+      f.close();
+    }
+  }
+
+  {
+    String js8Cfg = extractJsonObject(body, "js8Config");
+    if (js8Cfg.length() > JS8_CONFIG_MAX_BYTES) {
+      rejectOversize("js8Config", js8Cfg.length(), JS8_CONFIG_MAX_BYTES);
+      return;
+    }
+    if (js8Cfg.length() > 0) {
+      File f = cfgFS.open(JS8_CONFIG_PATH, "w");
+      if (!f || f.print(js8Cfg) != js8Cfg.length()) {
+        if (f) f.close();
+        webServer.send(500, "application/json",
+          "{\"ok\":false,\"error\":\"storage\",\"section\":\"js8Config\"}");
+        return;
+      }
+      f.close();
     }
   }
 
@@ -3085,7 +3204,7 @@ void handleConfigUpload() {
 
   String uploadedRadioConfig = extractJsonObject(body, "radioConfig");
   if (uploadedRadioConfig.startsWith("{")) {
-    File radioFile = LittleFS.open(RADIO_CONFIG_PATH, "w");
+    File radioFile = cfgFS.open(RADIO_CONFIG_PATH, "w");
     if (!radioFile || radioFile.print(uploadedRadioConfig) != uploadedRadioConfig.length()) {
       if (radioFile) radioFile.close();
       webServer.send(500, "application/json", "{\"error\":\"radio_config_write\"}");
@@ -3125,8 +3244,8 @@ void handleConfigUpload() {
 
 void handleGetLogConfig() {
   String spiffsJson = "{}";
-  if (LittleFS.exists(LOG_CONFIG_PATH)) {
-    File f = LittleFS.open(LOG_CONFIG_PATH, "r");
+  if (cfgFS.exists(LOG_CONFIG_PATH)) {
+    File f = cfgFS.open(LOG_CONFIG_PATH, "r");
     if (f) { spiffsJson = f.readString(); f.close(); spiffsJson.trim(); }
   }
   // Inject EEPROM TrxNet peer IDs + CI-V conn type so frontend can derive whether
@@ -3140,6 +3259,17 @@ void handleGetLogConfig() {
   inject += ",\"trx3enabled\":"; inject += radioSlots[2].enabled ? "true" : "false";
   inject += ",\"trx2transport\":\""; inject += radioTransportName(radioSlots[1].transport); inject += "\"";
   inject += ",\"trx3transport\":\""; inject += radioTransportName(radioSlots[2].transport); inject += "\"";
+  // The labels as they stand NOW, which is not what the stored document says.
+  // adoptModelAsLabelIfUnset() replaces a still-neutral "TRX1" with the model a
+  // LAN radio reported, deliberately in RAM only -- the model is already
+  // persisted in radio-config.json and an operator-typed label must keep
+  // winning. But then QRPLog read the file and put "TRX1" on a button for a
+  // radio that had told us it is an IC-705. These come last on purpose: a
+  // repeated key resolves to its final value in JSON.parse, so this overrides
+  // the stored label without rewriting the document to change a display string.
+  inject += ",\"trx1Label\":\""; inject += configJsonEscape(g_lcTrx1Label); inject += "\"";
+  inject += ",\"trx2Label\":\""; inject += configJsonEscape(g_lcTrx2Label); inject += "\"";
+  inject += ",\"trx3Label\":\""; inject += configJsonEscape(g_lcTrx3Label); inject += "\"";
   String out;
   out.reserve(spiffsJson.length() + inject.length() + 4);
   if (spiffsJson.startsWith("{") && spiffsJson.length() > 2) {
@@ -3161,7 +3291,7 @@ void handlePostLogConfig() {
   webServer.client().setNoDelay(true);
   String body = webServer.arg("plain");
   body.trim();
-  if (body.length() == 0 || body.length() > 2048) {
+  if (body.length() == 0 || body.length() > LOG_CONFIG_MAX_BYTES) {
     webServer.send(400, "application/json", "{\"error\":\"bad_request\"}");
     return;
   }
@@ -3169,7 +3299,7 @@ void handlePostLogConfig() {
     webServer.send(400, "application/json", "{\"error\":\"not_json\"}");
     return;
   }
-  File f = LittleFS.open(LOG_CONFIG_PATH, "w");
+  File f = cfgFS.open(LOG_CONFIG_PATH, "w");
   if (!f) { webServer.send(500, "application/json", "{\"error\":\"write\"}"); return; }
   f.print(body);
   f.close();
@@ -3177,17 +3307,142 @@ void handlePostLogConfig() {
   webServer.send(200, "application/json", "{\"ok\":true}");
 }
 
+// ---- JS8 / WSPR operating profile --------------------------------------------
+//
+// A blob store, exactly like the calibration table: the browser owns the schema,
+// the firmware owns the bytes. Anything else would put a second opinion about
+// the schedule into C++.
+void handleGetJs8Config() {
+  webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  webServer.sendHeader("Connection", "close");
+  webServer.client().setNoDelay(true);
+  if (!cfgFS.exists(JS8_CONFIG_PATH)) {
+    // Empty, not 404: "this station has no profile yet" is a state, not a fault,
+    // and it is the state the PROMOTE button in the browser looks for.
+    webServer.send(200, "application/json", "{}");
+    return;
+  }
+  File f = cfgFS.open(JS8_CONFIG_PATH, FILE_READ);
+  if (!f) { webServer.send(500, "application/json", "{}"); return; }
+  webServer.streamFile(f, "application/json");
+  f.close();
+}
+
+void handlePostJs8Config() {
+  webServer.sendHeader("Connection", "close");
+  webServer.client().setNoDelay(true);
+  String body = webServer.arg("plain");
+  body.trim();
+  if (body.length() == 0 || body.length() > JS8_CONFIG_MAX_BYTES) {
+    String j = "{\"ok\":false,\"error\":\"too_big\",\"bytes\":";
+    j += (unsigned)body.length();
+    j += ",\"limit\":"; j += (unsigned)JS8_CONFIG_MAX_BYTES; j += "}";
+    webServer.send(body.length() == 0 ? 400 : 409, "application/json", j);
+    return;
+  }
+  if (body[0] != '{' || body[body.length()-1] != '}') {
+    webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"not_an_object\"}");
+    return;
+  }
+  File f = cfgFS.open(JS8_CONFIG_PATH, "w");
+  if (!f || f.print(body) != body.length()) {
+    if (f) f.close();
+    webServer.send(500, "application/json", "{\"ok\":false,\"error\":\"storage\"}");
+    return;
+  }
+  f.close();
+  webServer.send(200, "application/json", "{\"ok\":true}");
+}
+
 // ---- TX gain calibration table ----------------------------------------------
 //
 // A blob store, not a config endpoint. See TXGAIN_CONFIG_PATH.
+
+// Callsign and locator are a fact about the STATION, not about a browser, and
+// three pages used to keep their own answer: the DX cluster fields here, the JS8
+// settings panel in localStorage, and the log's own per-log station call. The
+// middle one is what WSPR reads, so which callsign went on the air depended on
+// which tablet was open. They read from /setup-data.json now and write back
+// here, so there is exactly one stored value.
+//
+// Deliberately its own endpoint rather than part of /setup/save: handleSet()
+// discards any post without ssid and pswd, and neither DATA nor WSPR has the
+// setup form to send.
+
+// The read side. /setup-data.json answers the same two strings, but it is two
+// kilobytes and it opens THREE files off the filesystem to build them -- fine
+// once at page load, wrong for a page that re-reads the identity so an open
+// tablet cannot go on beaconing under a callsign that was changed in SETUP
+// minutes ago. This is two strings out of EEPROM shadow copies and nothing else.
+void handleGetIdentity() {
+  webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  webServer.sendHeader("Connection", "close");
+  String out = "{\"call\":\"";
+  out += configJsonEscape(DxcCallsign);
+  out += "\",\"grid\":\"";
+  out += configJsonEscape(DxcLocator);
+  out += "\"}";
+  webServer.send(200, "application/json", out);
+}
+
+void handlePostIdentity() {
+  webServer.sendHeader("Connection", "close");
+  webServer.client().setNoDelay(true);
+  String body = webServer.arg("plain");
+  if (body.length() == 0 || body.length() > 256) {
+    webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"body\"}");
+    return;
+  }
+  bool callChanged = false, wrote = false;
+  if (body.indexOf("\"call\"") >= 0) {
+    String call = extractJsonString(body, "call");
+    call.toUpperCase();
+    if (call.length() > 16) {
+      webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"call\"}");
+      return;
+    }
+    if (call != DxcCallsign) {
+      DxcCallsign = call;
+      eepromWriteStr(DxcCallsign, 203, 16);
+      callChanged = true;
+      wrote = true;
+    }
+  }
+  if (body.indexOf("\"grid\"") >= 0) {
+    String grid = extractJsonString(body, "grid");
+    grid.toUpperCase();
+    if (grid.length() > 6) {
+      webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"grid\"}");
+      return;
+    }
+    if (grid != DxcLocator) {
+      DxcLocator = grid;
+      eepromWriteStr(DxcLocator, 219, 6);
+      wrote = true;
+    }
+  }
+  if (wrote && !EEPROM.commit()) {
+    webServer.send(500, "application/json", "{\"ok\":false,\"error\":\"storage\"}");
+    return;
+  }
+  // The cluster logs in with the callsign, so a changed one has to be carried
+  // to it -- otherwise the spots keep arriving addressed to the old station.
+  if (callChanged) DxcRequestReconnect();
+  String out = "{\"ok\":true,\"call\":\"";
+  out += configJsonEscape(DxcCallsign);
+  out += "\",\"grid\":\"";
+  out += configJsonEscape(DxcLocator);
+  out += "\"}";
+  webServer.send(200, "application/json", out);
+}
 
 void handleGetTxGain() {
   webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   webServer.sendHeader("Connection", "close");
   webServer.client().setNoDelay(true);
   String json;
-  if (LittleFS.exists(TXGAIN_CONFIG_PATH)) {
-    File f = LittleFS.open(TXGAIN_CONFIG_PATH, "r");
+  if (cfgFS.exists(TXGAIN_CONFIG_PATH)) {
+    File f = cfgFS.open(TXGAIN_CONFIG_PATH, "r");
     if (f) { json = f.readString(); f.close(); json.trim(); }
   }
   // An empty document rather than a 404. A radio that has never been calibrated
@@ -3218,7 +3473,7 @@ void handlePostTxGain() {
     webServer.send(400, "application/json", "{\"error\":\"not_json\"}");
     return;
   }
-  File f = LittleFS.open(TXGAIN_CONFIG_PATH, "w");
+  File f = cfgFS.open(TXGAIN_CONFIG_PATH, "w");
   if (!f) { webServer.send(500, "application/json", "{\"error\":\"write\"}"); return; }
   f.print(body);
   f.close();
@@ -3437,6 +3692,10 @@ void setupWebServer(void){
   webServer.on("/config/upload",   HTTP_POST, handleConfigUpload);
   webServer.on("/log-config", HTTP_GET,  handleGetLogConfig);
   webServer.on("/log-config", HTTP_POST, handlePostLogConfig);
+  webServer.on("/identity",   HTTP_GET,  handleGetIdentity);
+  webServer.on("/identity",   HTTP_POST, handlePostIdentity);
+  webServer.on("/js8-config.json", HTTP_GET,  handleGetJs8Config);
+  webServer.on("/js8-config.json", HTTP_POST, handlePostJs8Config);
   webServer.on("/txgain.json", HTTP_GET,  handleGetTxGain);
   webServer.on("/txgain.json", HTTP_POST, handlePostTxGain);
   webServer.on("/civread",     HTTP_GET,  handleGetCivRead);
@@ -3447,8 +3706,13 @@ void setupWebServer(void){
 
   webServer.on("/", HTTP_GET, [](){
     // A fresh device starts in configuration AP mode.  Opening its bare IP
-    // must lead directly to Setup. In station mode JS8LAN is the home page.
-    if (APmode) { renderSetupPage(); return; }
+    // must lead directly to Setup. In station mode JS8LAN is the home page --
+    // but only once there is a radio to point it at. Until then /data would
+    // answer with the gate card telling the operator to go to Setup, so the
+    // sequence was being carried by a refusal instead of by an instruction.
+    // Setup is the home page of a station that is not set up yet; its tab bar
+    // still carries QRPLog, DATA and LOGSYNC, so this leads without trapping.
+    if (APmode || !stationRadioSetUp()) { renderSetupPage(); return; }
     webServer.sendHeader("Location", "/data", true);
     webServer.send(302, "text/plain", "");
   });
@@ -3526,7 +3790,7 @@ void setupWebServer(void){
     webServer.sendHeader("Connection", "close");
     webServer.client().setNoDelay(true);
     if (!bdEnabled) { webServer.send(403, "application/json", "{\"error\":\"hw\"}"); return; }
-    File f = LittleFS.open(BD_CONFIG_PATH, FILE_READ);
+    File f = cfgFS.open(BD_CONFIG_PATH, FILE_READ);
     if (!f) { webServer.send(404, "application/json", "{}"); return; }
     webServer.streamFile(f, "application/json");
     f.close();
@@ -3835,6 +4099,8 @@ void setup(){
        HardwareRev=3;  // 560
     }else if(HWidValue>693 && HWidValue<=900){
       HardwareRev=4;  // 827
+    }else{
+      HardwareRev=99;  // above every ID window -- no divider fitted, board unidentified
     }
   Serial.print(" HW | ");
   Serial.print(HardwareRev);
@@ -3857,6 +4123,18 @@ void setup(){
     digitalWrite(CIVmutePin, HIGH);
 
   #if defined(WIFI)
+    // The configuration partition comes up FIRST and separately. The installer
+    // never writes it, which is the whole reason it exists -- but that also
+    // means a brand new device arrives with it unformatted, so formatOnFail is
+    // what makes the first boot work. A failure here must NOT stop the assets
+    // from being served: a device that cannot show its own setup page is far
+    // worse than one that has forgotten its calibrations.
+    if (!cfgFS.begin(true, "/cfg", 5, "cfg")) {
+      Serial.println("CFG | configuration partition mount failed - settings will not persist");
+    } else {
+      Serial.println("CFG | mounted used=" + String(cfgFS.usedBytes()) +
+                     " total=" + String(cfgFS.totalBytes()));
+    }
     if (!LittleFS.begin(true)) {
       Serial.println("LFS | mount failed");
     } else {
@@ -3866,7 +4144,7 @@ void setup(){
       if (hasPrimaryRadioConfig()) {
         // EEPROM/NVS is authoritative because it survives full filesystem uploads.
         loadPrimaryRadioConfig();
-      } else if (LittleFS.exists(MEMORY_CONFIG_PATH)) {
+      } else if (cfgFS.exists(MEMORY_CONFIG_PATH)) {
         // One-time migration from firmware versions that kept TRX1 only in
         // memories.cfg. The legacy copy remains readable by older firmware.
         if (!savePrimaryRadioConfig()) {
@@ -3880,7 +4158,9 @@ void setup(){
         if (!saveRadioConfig()) Serial.println("CFG | unified radio migration failed");
       }
       loadLogConfigVars();
-      bdEnabled = (HardwareRev >= 4);
+      // 99 is the "unidentified board" sentinel, not a future revision -- BD needs
+      // a positively detected rev 04+, otherwise a missing ID divider would enable it.
+      bdEnabled = (HardwareRev >= 4 && HardwareRev != 99);
       if (bdEnabled) {
         bdLoadConfig();
         bdInit();
@@ -6766,23 +7046,34 @@ void handleSet() {
       }
 
       if (!nextSlots[slot].enabled) continue;
+      // A slot with NOTHING in it is not a mistake, it is a slot nobody has got
+      // to yet -- which is the state every device leaves the factory in, and
+      // the state AP mode cannot leave, because the radio cannot be on a
+      // network this interface has not joined. TRX1 is always enabled and
+      // defaults to ICOM-LAN, so refusing the whole form for it took the WiFi
+      // and the callsign down with it: the one button that gets an operator out
+      // of AP mode answered 400 every time. radioSlotSetUp() already calls
+      // exactly these states "not set up", and the setup page says so in step 3.
+      //
+      // PARTLY filled is still refused. That produces a slot which will never
+      // connect and never explains why, and it can only come from a mistake.
       if (nextSlots[slot].transport == RADIO_LAN) {
+        bool blank = (nextSlots[slot].lanIp.length() == 0 || nextSlots[slot].lanIp == "0.0.0.0")
+                  && nextSlots[slot].lanUser.length() == 0
+                  && nextSlots[slot].lanPass.length() == 0;
         IPAddress parsedIp;
-        if (!parsedIp.fromString(nextSlots[slot].lanIp)
-            || nextSlots[slot].lanUser.length() == 0
-            || nextSlots[slot].lanPass.length() == 0) {
+        if (!blank && (!parsedIp.fromString(nextSlots[slot].lanIp)
+                       || nextSlots[slot].lanUser.length() == 0
+                       || nextSlots[slot].lanPass.length() == 0)) {
           setupCivAddrErr = "TRX" + String(slot + 1) + " LAN needs IP, username and password";
           ERRdetect = 1;
         }
       } else if (nextSlots[slot].transport == RADIO_TRXNET) {
-        if (TRXNET_ID == 0x00 || nextSlots[slot].netId == 0x00
-            || nextSlots[slot].netId == TRXNET_ID) {
+        if (nextSlots[slot].netId != 0x00
+            && (TRXNET_ID == 0x00 || nextSlots[slot].netId == TRXNET_ID)) {
           setupCivAddrErr = "TRX" + String(slot + 1) + " needs a peer NET_ID different from Own NET_ID";
           ERRdetect = 1;
         }
-      } else if (nextSlots[slot].civAddr == 0x00) {
-        setupCivAddrErr = "TRX" + String(slot + 1) + " needs a CI-V address";
-        ERRdetect = 1;
       }
     }
 
@@ -7353,10 +7644,10 @@ void handleMsgboxGet(){
   // Serve the current file, or the pre-type one while it is still all we have.
   // Which record was mail for the operator and which was stock held for a third
   // station is decided in the browser, so the migration is a plain read here.
-  const char* path = LittleFS.exists(MSGBOX_PATH) ? MSGBOX_PATH
-                   : (LittleFS.exists(MSGBOX_LEGACY_PATH) ? MSGBOX_LEGACY_PATH : nullptr);
+  const char* path = cfgFS.exists(MSGBOX_PATH) ? MSGBOX_PATH
+                   : (cfgFS.exists(MSGBOX_LEGACY_PATH) ? MSGBOX_LEGACY_PATH : nullptr);
   if(!path){ webServer.send(200, "text/plain", ""); return; }
-  File f = LittleFS.open(path, FILE_READ);
+  File f = cfgFS.open(path, FILE_READ);
   if(!f){ webServer.send(500, "text/plain", "msgbox unavailable"); return; }
   webServer.sendHeader("Cache-Control", "no-store");
   webServer.streamFile(f, "text/plain");
@@ -7370,15 +7661,15 @@ void handleMsgboxPost(){
     unattendedLogEvent(UEV_BLOCK, "msgbox write refused: too large");
     return;
   }
-  File f = LittleFS.open(MSGBOX_PATH, "w");
+  File f = cfgFS.open(MSGBOX_PATH, "w");
   if(!f){ webServer.send(500, "application/json", "{\"error\":\"write failed\"}"); return; }
   f.print(body);
   f.close();
   // The typed file now holds everything the old one did, so the old one is dead
   // weight -- and leaving it would resurrect deleted mail if the new file were
   // ever lost.
-  if(LittleFS.exists(MSGBOX_LEGACY_PATH)){
-    LittleFS.remove(MSGBOX_LEGACY_PATH);
+  if(cfgFS.exists(MSGBOX_LEGACY_PATH)){
+    cfgFS.remove(MSGBOX_LEGACY_PATH);
     Serial.println("MSGBOX | migrated, /inbox.jsonl removed");
   }
   Serial.print("MSGBOX | stored "); Serial.print(body.length()); Serial.println(" B");
@@ -7397,15 +7688,15 @@ void handleMsgboxPost(){
 static bool unattendedLogWriteToFlash(const uint8_t* data1, size_t n1,
                                       const uint8_t* data2, size_t n2, bool overflow){
   uint32_t existing = 0;
-  if(LittleFS.exists(UNATTENDED_LOG_PATH)){
-    File probe = LittleFS.open(UNATTENDED_LOG_PATH, FILE_READ);
+  if(cfgFS.exists(UNATTENDED_LOG_PATH)){
+    File probe = cfgFS.open(UNATTENDED_LOG_PATH, FILE_READ);
     if(probe){ existing = probe.size(); probe.close(); }
   }
   size_t add = n1 + n2 + (overflow ? 24 : 0);
   if(unattendedLogNeedsRotate(existing, add)){
     // Keep the newest part; start at the next line boundary so the first
     // retained entry is a whole event and not a fragment.
-    File src = LittleFS.open(UNATTENDED_LOG_PATH, FILE_READ);
+    File src = cfgFS.open(UNATTENDED_LOG_PATH, FILE_READ);
     String kept;
     if(src){
       src.seek(unattendedLogRotateFrom(existing));
@@ -7414,10 +7705,10 @@ static bool unattendedLogWriteToFlash(const uint8_t* data1, size_t n1,
       int nl = kept.indexOf('\n');
       if(nl >= 0) kept.remove(0, nl + 1);
     }
-    File dst = LittleFS.open(UNATTENDED_LOG_PATH, "w");
+    File dst = cfgFS.open(UNATTENDED_LOG_PATH, "w");
     if(dst){ dst.print(kept); dst.close(); }
   }
-  File out = LittleFS.open(UNATTENDED_LOG_PATH, FILE_APPEND);
+  File out = cfgFS.open(UNATTENDED_LOG_PATH, FILE_APPEND);
   if(!out) return false;
   if(overflow) out.print("0 BLOCK log queue overflow\n");   // decision 13: never drop silently
   if(data1 && n1) out.write(data1, n1);
@@ -7601,11 +7892,11 @@ void handleUnattendedGet(){
 }
 
 void handleUnattendedLog(){
-  if(!LittleFS.exists(UNATTENDED_LOG_PATH)){
+  if(!cfgFS.exists(UNATTENDED_LOG_PATH)){
     webServer.send(200, "text/plain", "");
     return;
   }
-  File f = LittleFS.open(UNATTENDED_LOG_PATH, FILE_READ);
+  File f = cfgFS.open(UNATTENDED_LOG_PATH, FILE_READ);
   if(!f){ webServer.send(500, "text/plain", "log unavailable"); return; }
   webServer.sendHeader("Cache-Control", "no-store");
   webServer.streamFile(f, "text/plain");

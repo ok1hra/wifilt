@@ -356,9 +356,14 @@
     // Selected cells that ended the clean pass without a measurement: failed, or
     // dropped when their band was skipped. Deliberately NOT cells that were skipped
     // for being already calibrated -- those are finished, not unfinished.
+    // Nor a cell that hit the ceiling. That failure is deterministic: the MOD
+    // level is settled before the matrix starts, so nothing about the second
+    // attempt differs from the first, and keying it again spends a full carrier
+    // to learn the same thing. The reason stays in `results` either way.
     unfinishedCells() {
       const measured = new Set(this.results
-        .filter(row => row.status === "ok" || row.reason === "already calibrated for this MOD level")
+        .filter(row => row.status === "ok" || row.reachedCeiling ||
+                       row.reason === "already calibrated for this MOD level")
         .map(row => `${row.band}|${row.percent}`));
       return cellsOf(this.plan).filter(cell => !measured.has(`${cell.band}|${cell.percent}`));
     }
@@ -508,6 +513,31 @@
           this.results.push({...cell, status: cell.survey ? "survey" : "ok", knee,
                              gain: Number(event.gain) || knee, po,
                              note: cell.survey ? "" : this.thermalNote(cell, po)});
+          this.index++;
+          break;
+        }
+        case "ceiling": {
+          // The search ran to 0.8 and the radio never limited. Nothing was
+          // measured and nothing was stored -- but the OBSERVATION is what the
+          // MOD level correction below is made of, and it is only ever produced
+          // by the station this loop exists to fix: a MOD level so low that the
+          // audio path cannot drive the radio to the power it is set to.
+          //
+          // So a survey cell records it, ceiling flag and all, and modStep()
+          // then multiplies the MOD level and looks again. A matrix cell has
+          // nothing to correct any more and is a plain failure.
+          const cell = this.queue[this.index] || {};
+          if (cell.survey) {
+            this.surveyKnees.push({band: cell.band, hz: cell.hz, percent: cell.percent,
+                                   knee: Number(event.knee) || 0, reachedCeiling: true});
+            this.results.push({...cell, status: "survey", knee: Number(event.knee) || 0,
+                               gain: Number(event.gain) || 0, po: Number(event.po) || 0,
+                               reachedCeiling: true, note: ""});
+          } else {
+            this.results.push({...cell, status: "failed",
+                               reason: String(event.reason || "no knee found"),
+                               reachedCeiling: true});
+          }
           this.index++;
           break;
         }

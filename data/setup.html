@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Setup — WIFILT</title>
-  <link rel="stylesheet" href="/setup.css?v=20260802a">
+  <link rel="stylesheet" href="/setup.css?v=20260808d">
 </head>
 <body>
   <header class="topbar">
@@ -36,18 +36,103 @@
         <p class="eyebrow">Configuration</p>
         <h1>WIFILT<span class="setup-tagline">Web interface for Icom LAN Transceivers</span></h1>
         <p class="meta" id="setupMeta">Loading setup data</p>
+        <!-- The badges used to name the ESP32 partition each section writes to
+             (`spiffs`, `littlefs`), which stopped meaning anything useful the
+             moment the configuration moved to its own partition: `spiffs` is now
+             the name of the one that IS replaced on every flash, so the badge
+             said the opposite of what an operator reads it for. They name the
+             fate instead, and the fate is spelled out here once. -->
+        <p class="meta setup-badge-legend"><b>eeprom</b> and <b>config</b> both survive a firmware
+          update — the installer writes neither. <b>live</b> is running state and is not stored.</p>
       </header>
+
+      <!-- The five steps, derived from the facts below rather than from a saved
+           cursor. It only orients and links; the fields themselves stay in the
+           sections they have always been in. -->
+      <div id="setupSpineHost"></div>
+      <script src="/icom-models.js?v=20260808a"></script>
+      <script src="/icom-discovery.js?v=20260808a"></script>
+      <script src="/setup-spine.js?v=20260808c"></script>
+      <!-- The identity fields on this page are the only editable copy in the
+           product, so the validation they use has to be the same one every other
+           page trusts. -->
+      <script src="/station-identity.js?v=20260808b"></script>
+      <script>
+        // One way to put a section in front of the operator, wherever it now
+        // lives. Two of the seven sections are moved into the spine's steps, and
+        // there they sit inside a body that is hidden while the step is shut --
+        // so `details.open = true` alone would scroll to nothing and focus
+        // nothing. Everything on this page that wants to show a field asks here.
+        window.revealSetupSection = function (id) {
+          var section = document.getElementById(id);
+          if (!section) return;
+          section.open = true;
+          if (window.setupSpine && window.setupSpine.revealSection
+              && window.setupSpine.revealSection(id)) return;
+          section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        };
+
+        (function () {
+          var host = document.getElementById('setupSpineHost');
+          if (!host || !window.SetupSpine) return;
+
+          // Everything page-specific the spine needs is here, so the module
+          // itself never reaches into this document.
+          function setField(name, value) {
+            var input = document.querySelector('[name="' + name + '"]');
+            if (!input) return;
+            input.value = value;
+            // The transport select drives which fields count as required and
+            // which get disabled before submitting, so the page has to be told
+            // rather than just written to.
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+
+          window.setupSpine = window.SetupSpine.create({
+            host: host,
+            openSection: function (id) { window.revealSetupSection(id); },
+            // Hands a whole section over to a step, which MOVES it out of the
+            // <form>. Fields outside the form are not in its FormData, so they
+            // are re-attached by name -- the same mechanism the sections below
+            // the form have always used, and which collectFormBody() already
+            // reads. Without this the callsign would look saved and never be.
+            adopt: function (id) {
+              var section = document.getElementById(id);
+              if (!section) return null;
+              section.querySelectorAll('input,select,textarea').forEach(function (field) {
+                field.setAttribute('form', 'setup-form');
+              });
+              return section;
+            },
+            // Step 1 in AP mode does not end in a save but in a handover, and
+            // that flow takes the whole page over, so it stays with the page.
+            joinNetwork: function () { window.setupSaveAndRestart(); },
+            applyRadio: function (values) {
+              setField('trx1transport', values.transport);
+              setField('trx1lanip', values.ip);
+              setField('trx1lanuser', values.user);
+              setField('trx1lanpass', values.pass);
+              setField('trx1civaddr', values.civaddr);
+            },
+            // Bound late on purpose: the save helper is defined further down the
+            // page, and this only ever runs on a click.
+            save: function () { return window.setupSaveQuiet(); }
+          });
+          window.setupSpine.start();
+        }());
+      </script>
 
       <form action="/setup" method="post" class="setup-form" id="setup-form">
 
-        <details class="setup-section">
-          <summary class="setup-section-title">WiFi <span class="setup-local-badge">eeprom</span></summary>
+        <details class="setup-section" id="wifiSection">
+          <summary class="setup-section-title">WiFi <span class="setup-local-badge" title="Stored in NVS on the interface. A firmware flash never writes there, so these survive an update.">eeprom</span></summary>
           <div class="setup-section-body">
             <p class="wifi-last-known" id="wifiLastKnown" hidden></p>
             <label>Connect to WiFi SSID 1
               <div class="input-with-tip">
                 <input type="text" name="ssid" maxlength="20" value="">
-                <span class="help-tip" data-tip="Primary WiFi network name. The device tries this first after restart.">?</span>
+                <span class="help-tip" data-tip="One of two equal networks — there is no primary. At boot the device scans and starts with whichever configured network is actually on the air, strongest signal first.">?</span>
               </div>
               <span class="msg"></span>
             </label>
@@ -62,7 +147,7 @@
             <label>Connect to WiFi SSID 2
               <div class="input-with-tip">
                 <input type="text" name="ssid2" maxlength="20" value="">
-                <span class="help-tip" data-tip="Fallback WiFi network. When profile 1 fails the device tries profile 2 — and alternates between them until it connects.">?</span>
+                <span class="help-tip" data-tip="A second network of equal standing, not a fallback: either one may be tried first, whichever the boot scan sees strongest. If that one refuses, the device alternates to the other.">?</span>
               </div>
               <span class="msg"></span>
             </label>
@@ -74,23 +159,58 @@
               </div>
               <span class="msg"></span>
             </label>
+            <!-- The radio-side procedure used to be written out here as one
+                 generic list, and again model-aware behind the ? button on DATA
+                 and WSPR, and a third time on the ICOM-LAN gate card. Only the
+                 model-aware one was ever right for five radios, so the generic
+                 copy is gone: step 3 of the spine above now generates the same
+                 steps for whichever radio the operator picks. -->
             <div class="setup-guide">
               <strong class="setup-guide-title">Put the radio on the same network as this interface</strong>
-              <ol>
-                <li>Enter your router's network name and password in <b>SSID 1</b> / <b>Password 1</b> above, then Save.</li>
-                <li><b>Radios with a LAN socket</b> (IC-7610, IC-9700, IC-7300MK2, IC-7760): connect an Ethernet cable from the radio to the same router. Leave <code>DHCP</code> <b>ON</b> and note the address the radio shows.</li>
-                <li><b>IC-705</b> (wireless): open <code>MENU → SET → WLAN Set</code>, set <code>WLAN</code> to <b>ON</b> and <code>Connection Type</code> to <b>Station</b>. Under <code>Access Point</code> scan the networks, pick the <b>same SSID</b> as in step 1 and enter its password. Keep <code>DHCP</code> <b>ON</b> and note the <b>IP Address</b> shown in <code>WLAN Set</code>.</li>
-                <li>Turn network control on. On the IC-705, IC-7300MK2 and IC-7760 it lives under <code>Remote Settings</code>; on the IC-7610 and IC-9700 the items sit directly under <code>Network</code>. Set <code>Network Control</code> to <b>ON</b> and configure a Network User ID and password.</li>
-                <li>Select <b>Radio → TRX1 → ICOM-LAN</b> below, enter that address and those credentials, then press <b>Test &amp; identify radio</b> — it reports whether the radio accepted the login and reads back its model.</li>
-              </ol>
-              <span class="setup-guide-note">Both devices must be on the same network for the interface to reach the radio. The DATA and WSPR pages carry a full per-radio setup guide behind their <b>?</b> button.</span>
+              <span class="setup-guide-note">Both devices have to be on the same network for the
+                interface to reach the radio. The exact menu path differs per model, so the steps
+                are in <b>step 3 · Radio</b> at the top of this page, generated for the radio you
+                pick there. The DATA and WSPR pages carry the full per-radio guide, operating
+                settings included, behind their <b>?</b> button.</span>
 </div>
           </div>
         </details>
 
 
+        <!-- Who this station is. Its own section, and above the cluster rather
+             than inside it: the callsign and the locator used to be DX-cluster
+             login fields that everything else quietly borrowed, which read as if
+             turning the cluster off would take them with it. They are what JS8
+             and the WSPR beacon put on the air, and this is the ONLY place they
+             can be edited -- the fields on those pages show this value and link
+             back here. -->
+        <details class="setup-section" id="identitySection" open>
+          <summary class="setup-section-title">Identity <span class="setup-local-badge" title="Stored in NVS on the interface. A firmware flash never writes there, so these survive an update.">eeprom</span></summary>
+          <div class="setup-section-body">
+            <p class="setup-note">This is the station's callsign and locator, stored in the
+              interface itself. JS8Call, the WSPR beacon, the logbook and the DX cluster all
+              use these — they are not settings of the browser you are looking at.</p>
+            <label>My callsign
+              <div class="input-with-tip">
+                <input type="text" name="dxccall" id="identityCall" maxlength="16" placeholder="OK1HRA" value="" oninput="this.value=this.value.toUpperCase()">
+                <span class="help-tip" data-tip="Your callsign: the cluster logs in with it, JS8 transmits it, and it goes into the log.">?</span>
+              </div>
+            </label>
+            <label>My locator
+              <div class="input-with-tip">
+                <input type="text" name="dxclocator" id="identityLocator" maxlength="24" placeholder="JO70FD" value="" autocapitalize="characters" spellcheck="false">
+                <span class="help-tip" data-tip="Your Maidenhead locator, 4 or 6 characters. Coordinates work too — type &quot;50.0755, 14.4378&quot; and it is converted when you leave the field.">?</span>
+              </div>
+            </label>
+            <p class="setup-note" id="identityLocatorNote">A Maidenhead square such as JO70FD. You
+              can also type coordinates — <code>50.0755, 14.4378</code> — and they are converted
+              when you leave the field.</p>
+            <p class="setup-required-warning" id="identityLocatorError" role="alert" hidden></p>
+          </div>
+        </details>
+
         <details class="setup-section" id="radioSection">
-          <summary class="setup-section-title">Radio <span class="setup-local-badge">eeprom + spiffs</span><span id="radioConfigWarning" class="setup-required-warning" role="status" hidden>RADIO CONFIG INCOMPLETE</span></summary>
+          <summary class="setup-section-title">Radio <span class="setup-local-badge" title="TRX1's connection is mirrored into NVS; the rest lives on the interface's own configuration partition. Neither is written by a firmware flash.">eeprom + config</span><span id="radioConfigWarning" class="setup-required-warning" role="status" hidden>RADIO CONFIG INCOMPLETE</span></summary>
           <div class="setup-section-body">
             <div class="setup-radio-global">
               <strong>Shared CI-V bus</strong>
@@ -279,8 +399,10 @@
           </div>
         </details>
 
-        <details class="setup-section">
-          <summary class="setup-section-title">DX Cluster <span class="setup-local-badge">eeprom</span></summary>
+        <details class="setup-section" id="dxcSection">
+          <summary class="setup-section-title">DX Cluster <span class="setup-local-badge" title="Stored in NVS on the interface. A firmware flash never writes there, so these survive an update.">eeprom</span></summary>
+          <!-- The callsign the cluster logs in with is the station's, one section
+               up. Nothing here duplicates it. -->
           <div class="setup-section-body">
             <label>DXC host
               <div class="input-with-tip">
@@ -294,18 +416,7 @@
                 <span class="help-tip" data-tip="Telnet port of the DX cluster server. Common: 7300 or 23.">?</span>
               </div>
             </label>
-            <label>Callsign
-              <div class="input-with-tip">
-                <input type="text" name="dxccall" maxlength="16" placeholder="OK1HRA" value="" oninput="this.value=this.value.toUpperCase()">
-                <span class="help-tip" data-tip="Your callsign sent to the cluster for login.">?</span>
-              </div>
-            </label>
-            <label>My locator
-              <div class="input-with-tip">
-                <input type="text" name="dxclocator" maxlength="6" placeholder="JO70" value="" oninput="this.value=this.value.toUpperCase()">
-                <span class="help-tip" data-tip="Your Maidenhead locator (4 or 6 characters) used for distance and bearing calculations to DX spots.">?</span>
-              </div>
-            </label>
+            <p class="setup-note">Logs in as <b id="dxcLoginCall">—</b>, from the Identity section above.</p>
           </div>
         </details>
 
@@ -313,37 +424,8 @@
 
       <div class="setup-form spiffs-form">
 
-        <details class="setup-section" id="logSettingsSection">
-          <summary class="setup-section-title">LOG &amp; JS8LAN settings <span class="setup-local-badge">littlefs</span></summary>
-          <div class="setup-section-body">
-            <label>RST default SSB/FM
-              <div class="input-with-tip">
-                <input type="text" id="ls_rstSsb" name="rstSsb" form="setup-form" maxlength="3" value="" placeholder="59">
-                <span class="help-tip" data-tip="Default RST/RS pre-filled for SSB and FM QSOs.">?</span>
-              </div>
-            </label>
-            <label>RST default CW/RTTY
-              <div class="input-with-tip">
-                <input type="text" id="ls_rstCwRtty" name="rstCwRtty" form="setup-form" maxlength="3" value="" placeholder="599">
-                <span class="help-tip" data-tip="Default RST pre-filled for CW and digital mode QSOs.">?</span>
-              </div>
-            </label>
-            <label class="checkbox-row">
-              <input type="checkbox" id="ls_manualModeForPhone" name="manualModeForPhone" form="setup-form">
-              Manual mode for Phone (SSB/FM) — no automatic macros
-              <span class="help-tip" data-tip="When checked, pressing Enter on an SSB/FM QSO logs it immediately without sending any CW/RTTY macro.">?</span>
-            </label>
-            <label>Blocked DXCC list (one per line)
-              <div class="input-with-tip input-with-tip-top">
-                <textarea id="ls_blockedDxcc" name="blockedDxcc" form="setup-form" rows="3" placeholder="Russia&#10;Belarus&#10;Kaliningrad"></textarea>
-                <span class="help-tip" data-tip="DXCC entity names to block (one per line, e.g. Russia). In the QRPLog journal matching callsigns are highlighted red; in JS8LAN they are hidden from stations, traffic and inbox, automatic functions never answer them, and manual TX to them is refused.">?</span>
-              </div>
-            </label>
-          </div>
-        </details>
-
         <details class="setup-section" id="trxnetSection">
-          <summary class="setup-section-title">TrxNet <span class="setup-local-badge">eeprom</span></summary>
+          <summary class="setup-section-title">TrxNet <span class="setup-local-badge" title="Stored in NVS on the interface. A firmware flash never writes there, so these survive an update.">eeprom</span></summary>
           <div class="setup-section-body">
             <span id="trxnetApNote"></span>
             <label>Own NET_ID
@@ -373,13 +455,42 @@
           </div>
         </details>
 
+        <details class="setup-section" id="logSettingsSection">
+          <summary class="setup-section-title">LOG &amp; DATA settings <span class="setup-local-badge" title="Stored on the interface's own configuration partition, which a firmware flash does not write.">config</span></summary>
+          <div class="setup-section-body">
+            <label>RST default SSB/FM
+              <div class="input-with-tip">
+                <input type="text" id="ls_rstSsb" name="rstSsb" form="setup-form" maxlength="3" value="" placeholder="59">
+                <span class="help-tip" data-tip="Default RST/RS pre-filled for SSB and FM QSOs.">?</span>
+              </div>
+            </label>
+            <label>RST default CW/RTTY
+              <div class="input-with-tip">
+                <input type="text" id="ls_rstCwRtty" name="rstCwRtty" form="setup-form" maxlength="3" value="" placeholder="599">
+                <span class="help-tip" data-tip="Default RST pre-filled for CW and digital mode QSOs.">?</span>
+              </div>
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="ls_manualModeForPhone" name="manualModeForPhone" form="setup-form">
+              Manual mode for Phone (SSB/FM) — no automatic macros
+              <span class="help-tip" data-tip="When checked, pressing Enter on an SSB/FM QSO logs it immediately without sending any CW/RTTY macro.">?</span>
+            </label>
+            <label>Blocked DXCC list (one per line)
+              <div class="input-with-tip input-with-tip-top">
+                <textarea id="ls_blockedDxcc" name="blockedDxcc" form="setup-form" rows="3" placeholder="Russia&#10;Belarus&#10;Kaliningrad"></textarea>
+                <span class="help-tip" data-tip="DXCC entity names to block (one per line, e.g. Russia). In the QRPLog journal matching callsigns are highlighted red; on the DATA page they are hidden from stations, traffic and the MSG BOX, automatic functions never answer them, and manual TX to them is refused.">?</span>
+              </div>
+            </label>
+          </div>
+        </details>
+
         <!-- Measured ALC knees. This page only SHOWS them and links to where they
              are measured: calibration keys the transmitter, and the audio path,
              the TX pledge and the single-operator lock all live on the WSPR page
              already. Hidden entirely unless some slot carries ICOM-LAN, because
              without it there is no audio path to calibrate. -->
         <details class="setup-section" id="txGainSection" hidden>
-          <summary class="setup-section-title">TX audio gain <span class="setup-local-badge">littlefs</span></summary>
+          <summary class="setup-section-title">TX audio gain <span class="setup-local-badge" title="Stored on the interface's own configuration partition, which a firmware flash does not write.">config</span></summary>
           <div class="setup-section-body">
             <p class="setup-hint">The highest audio level the radio accepts without its
                ALC acting, measured per radio, band and power setting. Both DATA modes
@@ -409,7 +520,7 @@
         </details>
 
         <details class="setup-section" id="unattendedSection">
-          <summary class="setup-section-title">Remote management of JS8 unattended operation <span class="setup-local-badge">live</span></summary>
+          <summary class="setup-section-title">Remote management of JS8 unattended operation <span class="setup-local-badge" title="Not stored at all — this is the firmware's running state, and it resets on restart.">live</span></summary>
           <div class="setup-section-body">
             <p class="setup-hint">Remotely configure and monitor JS8 unattended operation from any device on the network. The modem tab must stay open and visible on the station computer; this page only arms, monitors and stops the function.</p>
             <dl class="unattended-grid" id="unattendedGrid"></dl>
@@ -425,7 +536,10 @@
         <div class="actions">
           <button type="submit" form="setup-form">Save &amp; Restart</button>
         </div>
-        <p class="footnote">After reboot the interface alternates between WiFi profile 1 and 2 until it connects. AP mode remains available from the USB-C serial console.</p>
+        <p class="footnote">After reboot the interface scans and starts with whichever configured network
+          it can see, strongest first — not always profile 1. If that one refuses it alternates to the
+          other; after four failed attempts, or when neither network is on the air, it falls back to AP
+          mode. AP mode is also reachable from the USB-C serial console.</p>
       </div>
 
       <div class="backup-row">
@@ -631,13 +745,19 @@
               lanSeen = true;
             }
           });
+          // In AP mode the radio CANNOT be configured yet -- it is not on a
+          // network the interface has not joined -- so "incomplete" there is a
+          // red alarm about work that is not due, sitting next to a spine step
+          // that correctly says "waiting for the network". The check still runs,
+          // because the save gate uses its answer; only the alarm is held back.
+          var due = !((window.setupDeviceInfo || {}).apMode);
           var warning = document.getElementById('radioConfigWarning');
           if (warning) {
-            warning.hidden = missing === 0;
+            warning.hidden = missing === 0 || !due;
             warning.textContent = 'RADIO CONFIG INCOMPLETE' + (missing ? ' · ' + missing : '');
           }
           var section = document.getElementById('radioSection');
-          if (section) section.classList.toggle('setup-section-warning', missing > 0);
+          if (section) section.classList.toggle('setup-section-warning', missing > 0 && due);
           return missing === 0;
         }
         function enforceLanExclusivity() {
@@ -678,7 +798,9 @@
         if (setupForm) setupForm._validateRadios = validateRadios;
         selectRadio('trx1');
         refreshAllRadios();
-        if (!validateRadios()) document.getElementById('radioSection').open = true;
+        // Not in AP mode: forcing the radio panel open there puts a page of
+        // fields that cannot be filled in yet between the operator and step 2.
+        if (!validateRadios() && !data.apMode) document.getElementById('radioSection').open = true;
 
         // TrxNet ID: auto-fill from IP last octet if factory default, else use saved value
         var trxnetInput = document.getElementById('trxnetidInput');
@@ -707,7 +829,12 @@
           if (!r.ok) throw new Error('setup-data ' + r.status);
           return r.json();
         })
-        .then(applySetupData)
+        .then(function (data) {
+          applySetupData(data);
+          // The spine reads the same document rather than fetching it again:
+          // every step of it is derived from facts already in this payload.
+          if (window.setupSpine) window.setupSpine.setData(data);
+        })
         .catch(function () {
           var meta = document.getElementById('setupMeta');
           if (meta) meta.textContent = 'Setup data unavailable';
@@ -716,6 +843,74 @@
   </script>
 
   <script>
+    // ---- Identity ---------------------------------------------------------
+    //
+    // The one place a callsign and a locator can be typed. Everything else in the
+    // product shows this value and links here, so the checking that used to be
+    // spread over three pages -- and was wrong on one of them -- is here, once.
+    //
+    // The locator field accepts a coordinate pair as well as a square, which is
+    // the WSPR settings box's old trick; it moved with the field. Conversion
+    // happens on `change`, so the operator sees the square that will be stored
+    // rather than being told later that their coordinates were not a locator.
+    (function () {
+      var call = document.getElementById('identityCall');
+      var locator = document.getElementById('identityLocator');
+      var error = document.getElementById('identityLocatorError');
+      var login = document.getElementById('dxcLoginCall');
+      if (!call || !locator || !window.StationIdentity) return;
+
+      function showError(message) {
+        error.hidden = !message;
+        error.textContent = message || '';
+        locator.classList.toggle('setup-required-missing', !!message);
+      }
+
+      // Returns true when the field holds something storable. Called on `change`
+      // and again before the form is posted -- a value that never lost focus has
+      // never been through the first one.
+      function settleLocator() {
+        var typed = locator.value.trim();
+        var grid = window.StationIdentity.parseLocator(typed);
+        if (grid === null) {
+          showError('"' + typed + '" is not a Maidenhead square or a coordinate pair — '
+            + 'four or six characters such as JO70FD, or "50.0755, 14.4378".');
+          return false;
+        }
+        // Only ever rewritten to what will actually be stored. An empty field is
+        // allowed: clearing the identity on purpose is the operator's business.
+        locator.value = grid;
+        showError('');
+        return true;
+      }
+
+      locator.addEventListener('change', settleLocator);
+      locator.addEventListener('input', function () { showError(''); });
+      // The quiet save the spine uses never goes through `submit`, so it asks
+      // here instead. One validator, three ways of reaching it.
+      window.setupSettleIdentity = settleLocator;
+
+      function refreshLogin() {
+        if (login) login.textContent = call.value.trim() || 'no callsign yet';
+      }
+      call.addEventListener('input', refreshLogin);
+      // The setup document lands after this runs, and setValue() dispatches
+      // `input`, so the line above catches the load as well as any typing.
+      refreshLogin();
+
+      // The form posts the locator raw, so a field that was never settled must
+      // not reach the firmware. Capture phase: this has to run before the
+      // submit handler that hides the page and starts the restart countdown.
+      var form = document.getElementById('setup-form');
+      if (form) form.addEventListener('submit', function (event) {
+        if (settleLocator()) return;
+        event.preventDefault();
+        event.stopPropagation();
+        window.revealSetupSection('identitySection');
+        locator.focus();
+      }, true);
+    }());
+
     function updatePeerName(inputName, spanId) {
       var inp = document.querySelector('[name="' + inputName + '"]');
       var span = document.getElementById(spanId);
@@ -768,6 +963,10 @@
           '</div>';
       }
       function render(d) {
+        if (d.state === 'handoff') {
+          note('TrxNet starts on the next restart — the hotspot is still running');
+          return;
+        }
         if (d.state === 'ap') { note('TrxNet not active in AP mode'); return; }
         if (d.state === 'disabled') { note('TrxNet disabled'); return; }
         var peers = (d.peers || []).slice();
@@ -859,9 +1058,14 @@
         forget.disabled = false;
         body.innerHTML = keys.map(function (key) {
           var e = entries[key] || {};
+          // model|band|percent, straight off the key. Records used to repeat all
+          // three inside themselves; they are stored compacted now, and the key
+          // is the authority either way.
+          var parts = String(key).split('|');
+          var what = (parts[0] || e.model || '?') + ' · ' + (parts[1] || e.band || '?')
+            + ' · ' + (parts.length > 2 ? parts[2] : (e.percent == null ? '?' : e.percent)) + ' %';
           return '<div class="txgain-row">' +
-            '<span class="txgain-what">' + esc(e.model || '?') + ' · ' + esc(e.band || '?') +
-              ' · ' + esc(String(e.percent == null ? '?' : e.percent)) + ' %</span>' +
+            '<span class="txgain-what">' + esc(what) + '</span>' +
             '<span class="txgain-level">' + esc(String(e.gain)) +
               (e.autoTrimmed ? ' <span class="txgain-trim">trimmed</span>' : '') + '</span>' +
             '<span class="txgain-advice">' + esc(advice(Number(e.knee))) + '</span>' +
@@ -958,6 +1162,51 @@
         document.head.appendChild(s);
       }
 
+      // Is the device answering on this address? The page is served from the
+      // softAP, so every probe here is cross-origin and no answer can be read --
+      // but `no-cors` still resolves on a reachable host and rejects on a dead
+      // one, and reachable is the entire question.
+      function reachable(url) {
+        return fetch(url, { mode: 'no-cors', cache: 'no-store' }).then(function () { return url; });
+      }
+
+      // The end of the handover, and it has to BE an end. Leaving the operator
+      // with an address written on a screen and a softAP still running is how a
+      // device ends up in both modes at once -- station up, AP up, TrxNet and
+      // the radio clients still refusing because APmode says so. So this
+      // restarts, waits for the device to come back on the real network, and
+      // takes the operator there.
+      function renderReconnect(box, d) {
+        var byName = 'http://' + d.host + '.local/';
+        var byIp = 'http://' + d.ip + '/';
+        box.innerHTML =
+          '<h2>Reconnect to ' + (d.ssid || 'your network') + '</h2>' +
+          '<p class="wifi-handoff-lead">The hotspot is gone — the device is restarting onto your ' +
+            'own network. Switch this phone or computer back to <b>' + (d.ssid || 'your network') +
+            '</b>. This page opens the device by itself as soon as it answers.</p>' +
+          '<p class="wifi-handoff-url"><a href="' + byName + '">' + byName + '</a></p>' +
+          '<p class="wifi-handoff-alt">If the name does not resolve on your network, use the ' +
+            'address instead: <a href="' + byIp + '">' + byIp + '</a></p>' +
+          '<button type="button" class="wifi-handoff-btn" id="wifiHandoffGo">Open the device now</button>';
+        document.getElementById('wifiHandoffGo').addEventListener('click', function () {
+          window.location.href = byName;
+        });
+        // Both are tried because they fail differently: mDNS may not resolve at
+        // all on some networks, and the lease may hand out a different address
+        // than the one the join reported. Whichever answers first wins, and the
+        // name is preferred when both do, because it survives the next lease.
+        var done = false;
+        var poll = setInterval(function () {
+          if (done) return;
+          Promise.any ? Promise.any([reachable(byName), reachable(byIp)])
+              .then(function () { if (done) return; done = true; clearInterval(poll);
+                window.location.href = byName; })
+              .catch(function () {})
+            : reachable(byIp).then(function () { if (done) return; done = true;
+                clearInterval(poll); window.location.href = byName; }).catch(function () {});
+        }, 2000);
+      }
+
       function renderSuccess(host, d) {
         var url = 'http://' + d.ip;
         host.innerHTML = '';
@@ -968,20 +1217,17 @@
           '<p class="wifi-handoff-lead">Open the device at this address from now on:</p>' +
           '<p class="wifi-handoff-url"><a href="' + url + '">' + url + '</a></p>' +
           '<p class="wifi-handoff-alt">Usually also reachable by name: ' +
-            '<a href="http://' + d.host + '/">http://' + d.host + '/</a> or ' +
             '<a href="http://' + d.host + '.local/">http://' + d.host + '.local/</a>. ' +
             'Give the device a fixed lease in your router and the address stops moving.</p>' +
           '<div class="wifi-handoff-qr" id="wifiHandoffQr"></div>' +
-          '<p class="wifi-handoff-foot">Write the address down before continuing — this hotspot ' +
-            'shuts down on restart.</p>' +
-          '<button type="button" class="wifi-handoff-btn" id="wifiHandoffDone">Restart into normal mode</button>';
+          '<p class="wifi-handoff-foot">This hotspot shuts down when you continue, and the device ' +
+            'comes back on ' + (d.ssid || 'your network') + ' only.</p>' +
+          '<button type="button" class="wifi-handoff-btn" id="wifiHandoffDone">Restart and reconnect</button>';
         host.appendChild(box);
         qrInto(document.getElementById('wifiHandoffQr'), url);
         document.getElementById('wifiHandoffDone').addEventListener('click', function () {
-          box.innerHTML = '<h2>Restarting…</h2><p class="wifi-handoff-lead">Reconnect your phone or ' +
-            'computer to ' + (d.ssid || 'your network') + ', then open <a href="' + url + '">' + url +
-            '</a>.</p>';
           fetch('/restart', { method: 'POST' }).catch(function () {});
+          renderReconnect(box, d);
         });
       }
 
@@ -1070,13 +1316,11 @@
         var b = body(slot);
         if (b) b.innerHTML = '<span class="icom-scan-empty">' + esc(text) + '</span>';
       }
-      function refusal(code) {
-        if (code === 'ap') return 'Not available in AP mode — the radio lives on your home network.';
-        if (code === 'no_wifi') return 'No network connection.';
-        if (code === 'busy') return 'A scan or test is already running.';
-        if (code === 'tx') return 'Not while the radio is transmitting.';
-        return 'Device refused the request.';
-      }
+      // The conversation with the firmware -- and the wording for its refusals
+      // and verdicts -- lives in icom-discovery.js, because the spine at the top
+      // of this page holds the same two conversations. Only the drawing is here.
+      var Discovery = window.IcomDiscovery;
+      function refusal(code) { return Discovery.refusalText(code); }
 
       function render(d) {
         var p = panel(activeSlot);
@@ -1106,18 +1350,8 @@
         if (b) b.innerHTML = html;
       }
 
-      function pollScan() {
-        fetch('/icom/scan.json', { cache: 'no-store' })
-          .then(function (r) { return r.json(); })
-          .then(function (d) {
-            if (d.state === 'failed') { stopScan(); msg(activeSlot, 'Scan could not start.'); return; }
-            render(d);
-            if (d.state !== 'running') stopScan();
-          })
-          .catch(function () { stopScan(); msg(activeSlot, 'Scan status unavailable.'); });
-      }
       function stopScan() {
-        if (scanTimer) { clearInterval(scanTimer); scanTimer = null; }
+        if (scanTimer) { scanTimer(); scanTimer = null; }
       }
 
       function startScan(slot) {
@@ -1126,16 +1360,13 @@
         var p = panel(slot);
         if (p) p.hidden = false;
         msg(slot, 'Starting…');
-        fetch('/icom/scan', { method: 'POST', cache: 'no-store' })
-          .then(function (r) {
-            return r.json().then(function (j) { return { ok: r.ok, data: j }; });
-          })
-          .then(function (res) {
-            if (!res.ok) { msg(slot, refusal(res.data && res.data.error)); return; }
-            scanTimer = setInterval(pollScan, 900);
-            pollScan();
-          })
-          .catch(function () { msg(slot, 'Device did not answer.'); });
+        scanTimer = Discovery.startScan({
+          onUpdate: render,
+          onDone: render,
+          onRefused: function (text) { msg(slot, text); },
+          onFailed: function () { msg(slot, 'Scan could not start.'); },
+          onError: function () { msg(slot, 'Scan status unavailable.'); }
+        });
       }
 
       function testResultEl(slot) {
@@ -1147,34 +1378,12 @@
         e.textContent = text;
         e.className = 'icom-test-result' + (cls ? ' ' + cls : '');
       }
-      function testVerdict(state, model) {
-        // The model comes from the radio's own capabilities packet, which
-        // arrives before the login completes — so a successful test always
-        // knows it, and WSPR stops having to be told what 100 % power means.
-        if (state === 'ok') {
-          return [model ? 'Logged in — radio identifies as ' + model + '.' : 'Radio accepted the login.', 'is-ok'];
-        }
-        if (state === 'bad_credentials') return ['Radio refused the username or password.', 'is-bad'];
-        if (state === 'no_answer') return ['No answer from that address.', 'is-bad'];
-        return ['Testing…', ''];
-      }
       function showModel(slot, model) {
         var e = document.querySelector('[data-icom-model="' + slot + '"]');
         if (e) e.textContent = model ? 'Detected: ' + model : '';
       }
       function stopTest() {
-        if (testTimer) { clearInterval(testTimer); testTimer = null; }
-      }
-      function pollTest(slot) {
-        fetch('/icom/test.json', { cache: 'no-store' })
-          .then(function (r) { return r.json(); })
-          .then(function (d) {
-            var v = testVerdict(d.state, d.model);
-            setTestText(slot, v[0], v[1]);
-            if (d.model) showModel(slot, d.model);
-            if (d.state !== 'running') stopTest();
-          })
-          .catch(function () { stopTest(); setTestText(slot, 'Test status unavailable.', 'is-bad'); });
+        if (testTimer) { testTimer(); testTimer = null; }
       }
       function startTest(slot) {
         stopTest();
@@ -1190,20 +1399,16 @@
           return;
         }
         setTestText(slot, 'Testing…', '');
-        fetch('/icom/test', {
-          method: 'POST',
-          cache: 'no-store',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        })
-          .then(function (r) {
-            return r.json().then(function (j) { return { ok: r.ok, data: j }; });
-          })
-          .then(function (res) {
-            if (!res.ok) { setTestText(slot, refusal(res.data && res.data.error), 'is-bad'); return; }
-            testTimer = setInterval(function () { pollTest(slot); }, 900);
-          })
-          .catch(function () { setTestText(slot, 'Device did not answer.', 'is-bad'); });
+        function show(verdict, model) {
+          setTestText(slot, verdict.text, verdict.cls);
+          if (model) showModel(slot, model);
+        }
+        testTimer = Discovery.startTest(payload, {
+          onUpdate: show,
+          onDone: show,
+          onRefused: function (text) { setTestText(slot, text, 'is-bad'); },
+          onError: function () { setTestText(slot, 'Test status unavailable.', 'is-bad'); }
+        });
       }
 
       document.addEventListener('click', function (ev) {
@@ -1325,12 +1530,94 @@
     (function () {
       var form = document.querySelector('form[action="/setup"]');
       if (!form) return;
-      form.addEventListener('submit', function (e) {
-        e.preventDefault();
-        if (form._validateRadios && !form._validateRadios()) {
-          document.getElementById('radioSection').open = true;
+
+      // Collecting the form is shared with the spine, and it has to be, because
+      // handleSet() throws the WHOLE post away unless ssid and pswd are both in
+      // it -- "save just the radio" is not something the firmware offers. Every
+      // save is the whole form, so exactly one place may build it.
+      function collectFormBody() {
+        var data = new FormData(form);
+        document.querySelectorAll('[form="setup-form"]').forEach(function(el) {
+          if (!el.name) return;
+          if ((el.type === 'checkbox' || el.type === 'radio')) {
+            data.delete(el.name);
+            if (el.checked) data.append(el.name, el.value || 'on');
+            return;
+          }
+          data.delete(el.name);
+          data.append(el.name, el.value);
+        });
+        data.append('noRestart', '1');
+        var encoded = new URLSearchParams();
+        data.forEach(function(value, key) {
+          encoded.append(key, value);
+        });
+        return encoded.toString();
+      }
+
+      function postSetup(body) {
+        return fetch('/setup/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+          body: body
+        }).then(function (r) {
+          if (!r.ok) throw new Error('/setup/save ' + r.status);
+          return r.json();
+        }).then(function (result) {
+          if (!result.ok) throw new Error('save failed');
+          return result;
+        });
+      }
+
+      // What the spine saves with: no page takeover, no restart. Its steps end
+      // in a working link rather than in a reboot.
+      //
+      // The locator is settled first, and a refusal is a rejected promise rather
+      // than a quiet save of a bad value: the whole point of moving the field
+      // here was that garbage must not reach the interface from anywhere.
+      window.setupSaveQuiet = function () {
+        if (window.setupSettleIdentity && !window.setupSettleIdentity()) {
+          window.revealSetupSection('identitySection');
+          return Promise.reject(new Error('locator'));
+        }
+        return postSetup(collectFormBody());
+      };
+
+      // Why this is not just `if (!valid) return`: it was, and the result was a
+      // button that did nothing at all on a factory-fresh device. TRX1 is always
+      // active and defaults to ICOM-LAN with three empty fields, so the radio
+      // check fails on every first run -- and in AP mode it MUST fail, because
+      // the radio cannot be on a network the interface has not joined yet. The
+      // one button that gets an operator out of AP mode was gated behind work
+      // that can only be done after leaving it.
+      //
+      // So: in AP mode the radio is not a gate at all. Elsewhere it still is,
+      // but a loud one -- it says what is missing and takes two presses, never a
+      // silent nothing.
+      var radioGateArmed = false;
+      function radioGateBlocks() {
+        if (!form._validateRadios || form._validateRadios()) return false;
+        if ((window.setupDeviceInfo || {}).apMode) return false;
+        window.revealSetupSection('radioSection');
+        if (radioGateArmed) return false;
+        radioGateArmed = true;
+        var warning = document.getElementById('radioConfigWarning');
+        if (warning) {
+          warning.hidden = false;
+          warning.textContent = 'RADIO CONFIG INCOMPLETE — press Save again to save anyway';
+        }
+        return true;
+      }
+
+      window.setupSaveAndRestart = function () {
+        // The spine's step 1 calls this directly, so the capture-phase locator
+        // guard on `submit` never sees it. A half-typed locator must not reach
+        // the firmware down THAT path either.
+        if (window.setupSettleIdentity && !window.setupSettleIdentity()) {
+          window.revealSetupSection('identitySection');
           return;
         }
+        if (radioGateBlocks()) return;
         var shell = document.querySelector('main.setup-shell') || form.parentNode;
         shell.style.display = 'none';
         var msg = document.createElement('p');
@@ -1359,33 +1646,8 @@
           }, 5000);
         }
 
-        var data = new FormData(form);
-        document.querySelectorAll('[form="setup-form"]').forEach(function(el) {
-          if (!el.name) return;
-          if ((el.type === 'checkbox' || el.type === 'radio')) {
-            data.delete(el.name);
-            if (el.checked) data.append(el.name, el.value || 'on');
-            return;
-          }
-          data.delete(el.name);
-          data.append(el.name, el.value);
-        });
-        data.append('noRestart', '1');
-        var encoded = new URLSearchParams();
-        data.forEach(function(value, key) {
-          encoded.append(key, value);
-        });
-        fetch('/setup/save', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-          body: encoded.toString()
-        })
-          .then(function (r) {
-            if (!r.ok) throw new Error('/setup/save ' + r.status);
-            return r.json();
-          })
+        postSetup(collectFormBody())
           .then(function (result) {
-            if (!result.ok) throw new Error('save failed');
             // In AP mode a plain restart would take the portal away and leave
             // the operator with no address to open. Hand over instead: raise the
             // station next to the running softAP and show what the router gave.
@@ -1408,6 +1670,11 @@
             msg.parentNode.removeChild(msg);
             alert('Save failed: ' + message + '\nCheck device connection and try again.');
           });
+      };
+
+      form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        window.setupSaveAndRestart();
       });
     }());
 

@@ -25,6 +25,8 @@ function unattendedState(){return{armed:!unaReboot,remainingMs:unaReboot?0:43200
 let lanStateRequests=0, primaryStateRequests=0, primaryCommands=[];
 // The radio's own power level and link, as far as this fixture is concerned.
 let radioRfPower=128, radioConnected=true;
+// The station identity every page now reads instead of keeping its own.
+const identity={call:"OK1HRA",grid:"JO70"};
 // The station calibration table, as the firmware stores it: a blob it never
 // looks inside.
 let txgainDoc='{"v":1,"entries":{}}';
@@ -96,6 +98,12 @@ const server=http.createServer((req,res)=>{
   // the page must name TRX 2 and read that slot's fields, while staying gated so
   // it never competes with the main frame for the single-operator lease.
   if(url.pathname==="/setup-data.json"){const js8=url.searchParams.get("scope")==="js8call",fixture=url.searchParams.get("fixture"),lanOnTrx2=fixture==="trx2",missing=fixture==="missing"||lanOnTrx2||!js8,lanip=missing?"":"192.168.1.60",lanuser=missing?"":"operator",lanpass=missing?"":"secret123";res.setHeader("Content-Type","application/json");res.end(JSON.stringify({fwRev:20260718,hwRev:4,apModeText:"AP mode ON",mac:"00:11:22:33:44:55",ssid:"fixture-wifi",pswd:"fixture-password",ssid2:"",pswd2:"",trxnetid:"01",lanip,lanuser,lanpass,civaddr:"A4",trx1enabled:true,trx1label:"IC-705",trx1transport:lanOnTrx2?"trxnet":"lan",trx1lanip:lanip,trx1lanuser:lanuser,trx1lanpass:lanpass,trx1civaddr:"A4",trx1netid:"02",trx2enabled:lanOnTrx2,trx2label:"TRX2",trx2transport:lanOnTrx2?"lan":"trxnet",trx2lanip:lanOnTrx2?"192.168.1.61":"",trx2lanuser:lanOnTrx2?"operator":"",trx2lanpass:"",trx2netid:"02",trx2civaddr:"94",trx3enabled:false,trx3label:"TRX3",trx3transport:"trxnet",trx3netid:"03",trx3civaddr:"A2"}));return;}
+  // The station's identity, out of the interface's EEPROM. Its own route because
+  // /setup-data.json is two kilobytes and three filesystem reads for two strings,
+  // and the pages re-read this one on a timer.
+  if(url.pathname==="/identity"){
+    if(req.method==="POST"){let body="";req.on("data",c=>body+=c);req.on("end",()=>{try{const w=JSON.parse(body);if(w.call!==undefined)identity.call=String(w.call).toUpperCase();if(w.grid!==undefined)identity.grid=String(w.grid).toUpperCase();}catch(_e){}res.setHeader("Content-Type","application/json");res.end(JSON.stringify({ok:true,...identity}));});return;}
+    res.setHeader("Content-Type","application/json");res.setHeader("Cache-Control","no-store");res.end(JSON.stringify(identity));return;}
   if(url.pathname==="/cmd"&&req.method==="POST"){const lanTarget=url.searchParams.get("radio")==="lan";let body="";req.on("data",chunk=>body+=chunk);req.on("end",()=>{try{const parsed=JSON.parse(body);commands.push(parsed);if(!lanTarget)primaryCommands.push(parsed);applyCivRaw(parsed);}catch(_error){}res.setHeader("Content-Type","application/json");res.end('{"ok":true}');});return;}
   if(url.pathname==="/smoke.html"){
     // Without the charset the inline checks below are decoded as windows-1252,
@@ -123,10 +131,11 @@ f.onload=()=>{
   setTimeout(()=>{
     try {
     const now=Date.now();
-    const emptyIdentityDefaults=d.querySelector('#myCall').value===''&&d.querySelector('#myGrid').value==='';
+    // The identity comes from the interface, not from this browser and not from
+    // typing it here: the fields are displays now. A second tablet used to boot
+    // with an empty callsign and transmit under it.
+    const stationIdentityShown=d.querySelector('#myCall').textContent==='OK1HRA'&&d.querySelector('#myGrid').textContent==='JO70';
     const defaultDisclosuresInitially=d.querySelector('details[data-section="spectrum"]').open&&d.querySelector('details[data-section="reply"]').open&&[...d.querySelectorAll('details[data-section="traffic"],details[data-section="stations"],details[data-section="settings"],details[data-section="timing"]')].every(node=>!node.open);
-    d.querySelector('#myCall').value='OK1HRA';d.querySelector('#myCall').dispatchEvent(new f.contentWindow.Event('change',{bubbles:true}));
-    d.querySelector('#myGrid').value='JO70';d.querySelector('#myGrid').dispatchEvent(new f.contentWindow.Event('change',{bubbles:true}));
     f.contentWindow.__dataTest.setActivity({frames:[],timing:[],channels:[],messages:[
       {text:'K0OG: OK1HRA OLDER',callsigns:['K0OG','OK1HRA'],kinds:['directed','data'],submode:0,offsetHz:700,firstSlotUtcMs:now-3000,lastSlotUtcMs:now-3000},
       {text:'KN4CRD: GENERAL',callsigns:['KN4CRD'],kinds:['compound','data'],submode:0,offsetHz:750,firstSlotUtcMs:now-2500,lastSlotUtcMs:now-2500},
@@ -163,15 +172,18 @@ f.onload=()=>{
     const originalPreset=d.querySelector('[data-frequency="14078000"]');
     const editingCall=d.querySelector('#myCall'),editingGrid=d.querySelector('#myGrid'),editingTxGain=d.querySelector('#txGain');
     const defaultTxGain=editingTxGain.value==='0.25';
-    editingCall.focus();editingCall.value='N0';editingCall.dispatchEvent(new f.contentWindow.Event('input',{bubbles:true}));
-    editingGrid.value='';editingGrid.dispatchEvent(new f.contentWindow.Event('input',{bubbles:true}));
+    // Not fields any more, so there is nothing half-typed to protect -- and no
+    // second place for a locator to be validated differently, which is how a typo
+    // here used to wipe the square the WSPR beacon transmits.
+    const identityIsReadOnly=editingCall.tagName==='OUTPUT'&&editingGrid.tagName==='OUTPUT'
+      &&!!d.querySelector('.identity-note a[href="/setup#identitySection"]');
     editingTxGain.focus();editingTxGain.value='0.35';editingTxGain.dispatchEvent(new f.contentWindow.Event('input',{bubbles:true}));
     f.contentWindow.__dataTest.setRadioConnection(true,'linked');
     f.contentWindow.__dataTest.setAudioLive(false);
     const connectedWithoutAudioIsNotLive=!d.querySelector('#linkState').textContent.includes('RX LIVE');
     setTimeout(async ()=>{
       try {
-      const modemSettingsEditingStable=editingCall.value==='N0'&&editingGrid.value==='';
+      const identityStableAcrossRenders=editingCall.textContent==='OK1HRA'&&editingGrid.textContent==='JO70';
       const txGainEditingStable=editingTxGain.value==='0.35';
       editingCall.value='OK1HRA';editingCall.dispatchEvent(new f.contentWindow.Event('change',{bubbles:true}));
       editingGrid.value='JO70';editingGrid.dispatchEvent(new f.contentWindow.Event('change',{bubbles:true}));
@@ -258,7 +270,7 @@ f.onload=()=>{
       const checks={
         frequencyScopedActivity:originalBandActivity.messages===6&&originalBandActivity.calls===3&&otherBandStartsEmpty.messages===0&&otherBandStartsEmpty.calls===0&&otherBandActivity.messages===1&&otherBandActivity.calls===1&&restoredBandActivity.messages===6&&restoredBandActivity.calls===3&&withinToleranceActivity.messages===6&&withinToleranceActivity.calls===3,
         offDialFrequencyMarked:offDialMarksButton&&onDialClearsButton,
-        emptyIdentityDefaults,
+        stationIdentityShown,
         // This harness browses http://wifilt.test, a named host rather than
         // loopback, so it is NOT a secure context and navigator.wakeLock is
         // undefined here exactly as it is on http://192.168.x.x. That makes the
@@ -273,7 +285,7 @@ f.onload=()=>{
         // silently falling back or landing transparent. #5ad18a = rgb(90,209,138).
         wakeLockDotIsGreen:(()=>{const dot=d.querySelector('#wakeLockDot');return Boolean(dot)&&f.contentWindow.getComputedStyle(dot).backgroundColor==='rgb(90, 209, 138)';})(),
         wakeLockDotHasNoText:d.querySelector('#wakeLockDot')?.textContent==='',
-        modemSettingsEditingStable,
+        identityIsReadOnly,identityStableAcrossRenders,
         defaultTxGain,
         txGainEditingStable,
         txGainSaved:savedTxGain===0.35,
@@ -372,9 +384,24 @@ f.onload=()=>{
         pageFooter:d.querySelector('.js8-page-footer a[href^="https://github.com/"]')?.textContent.trim()==='GitHub'&&d.querySelector('.js8-page-footer a[href="/THIRD-PARTY-NOTICES.txt"]')?.textContent.trim()==='Licenses',
         idleNoLeaveWarning:(()=>{const event=new f.contentWindow.Event('beforeunload',{cancelable:true});return f.contentWindow.dispatchEvent(event)!==false&&!event.defaultPrevented;})(),
         helpButton:d.querySelector('#trxHelpButton')?.textContent.trim()==='?',
-        helpSteps:d.querySelectorAll('#trxHelpDialog .trx-setup-steps > li').length===8&&d.querySelector('#trxHelpDialog').textContent.includes('DATA MOD')&&d.querySelector('#trxHelpDialog').textContent.includes('WLAN'),
+        // Nine steps on a PRESET radio: the eight it always had plus the one that
+        // measures the audio level. The count is asserted so a step cannot be
+        // silently dropped, and 'WLAN' proves the IC-705's own word for the path
+        // reached the guide instead of the generic one.
+        helpSteps:d.querySelectorAll('#trxHelpDialog .trx-setup-steps > li').length===9&&d.querySelector('#trxHelpDialog').textContent.includes('DATA MOD')&&d.querySelector('#trxHelpDialog').textContent.includes('WLAN'),
         helpAudioPath:[...d.querySelectorAll('#trxHelpDialog code')].some(node=>{const text=node.textContent;return text.startsWith('MENU')&&text.includes('SET')&&text.includes('Connectors')&&text.includes('MOD Input')&&text.endsWith('WLAN MOD Level');}),
-        helpAudioLevels:(()=>{const codes=[...d.querySelectorAll('#trxHelpDialog code')].map(node=>node.textContent);return codes.includes('25%')&&codes.includes('TX audio gain 0.25')&&codes.includes('WLAN MOD Level 25%')&&!codes.includes('50%');})(),
+        // The guide used to hand out two starting numbers -- MOD level 25 % and
+        // TX audio gain 0.25 -- and leave the operator to trim the second by eye
+        // against the ALC needle. Only the MOD level is still a number to type;
+        // the audio gain is measured, so the guide has to name the tool that
+        // measures it and must NOT print a gain to copy.
+        helpAudioLevels:(()=>{const codes=[...d.querySelectorAll('#trxHelpDialog code')].map(node=>node.textContent);return codes.includes('25%')&&codes.includes('WLAN MOD Level')&&codes.includes('Automatic TX gain')&&codes.includes('CAL PLAN')&&!codes.includes('TX audio gain 0.25')&&!codes.includes('50%');})(),
+        // The identity moved to SETUP, so the guide must send the operator there
+        // rather than describe fields that are read-only outputs on this page.
+        helpIdentityPointsAtSetup:(()=>{const text=d.querySelector('#trxHelpDialog').textContent;return text.includes('SETUP → Identity')&&text.includes('read-only')&&!/set\s+My callsign/.test(text);})(),
+        // The eyebrow above the title used to say WLAN for every radio, which is
+        // the one word the model table exists to get right.
+        helpEyebrowFollowsModel:d.querySelector('#trxHelpEyebrow')?.textContent.trim()==='JS8CALL-ICOM OVER WLAN',
         firstVisitHelp:window.firstVisitHelpObserved===true,
         txSafe:d.querySelector('#sendButton').disabled,
         worker:d.querySelector('#modemState').textContent.includes('ready'),
@@ -442,6 +469,38 @@ f.onload=()=>{
       const setupValues={trx1lanip:'192.168.1.60',trx1lanuser:'operator',trx1lanpass:'secret123'};
       missingInputs.forEach(input=>{input.value=setupValues[input.name];input.dispatchEvent(new setupFrame.contentWindow.Event('input',{bubbles:true}));});
       checks.setupLanWarning=setupMissingObserved&&lanWarning.hidden===true&&missingInputs.every(input=>!input.classList.contains('setup-radio-field-missing')&&input.getAttribute('aria-invalid')==='false');
+      // ---- SETUP: the station's identity ---------------------------------
+      //
+      // The one place a callsign and a locator can be typed, which is why the
+      // checking lives here: three editable copies meant three validations, and
+      // the JS8 one had none -- a half-typed locator posted an empty grid, and
+      // the firmware stores what it is given.
+      const identitySection=sd.querySelector('#identitySection');
+      const identityLocator=sd.querySelector('#identityLocator');
+      const identityError=sd.querySelector('#identityLocatorError');
+      checks.setupIdentityAboveCluster=!!identitySection&&
+        (identitySection.compareDocumentPosition(sd.querySelector('#dxcSection'))&
+         setupFrame.contentWindow.Node.DOCUMENT_POSITION_FOLLOWING)!==0&&
+        !!sd.querySelector('#identitySection [name="dxccall"]')&&
+        !!sd.querySelector('#identitySection [name="dxclocator"]')&&
+        !sd.querySelector('#dxcSection [name="dxccall"]');
+      // Coordinates are a locator nobody converted yet; the field does it on the
+      // way out, so the operator sees the square that will be stored.
+      identityLocator.value='50.0755, 14.4378';
+      identityLocator.dispatchEvent(new setupFrame.contentWindow.Event('change',{bubbles:true}));
+      checks.setupLocatorTakesCoordinates=identityLocator.value==='JO70FB'&&identityError.hidden===true;
+      // And what it must NOT do: turn something unreadable into an empty field,
+      // which is a stored instruction to forget the station's square.
+      identityLocator.value='JN6';
+      identityLocator.dispatchEvent(new setupFrame.contentWindow.Event('change',{bubbles:true}));
+      checks.setupLocatorRefusesGarbage=identityLocator.value==='JN6'&&identityError.hidden===false&&
+        identityError.textContent.includes('Maidenhead');
+      checks.setupSaveRefusesBadLocator=await setupFrame.contentWindow.setupSaveQuiet()
+        .then(()=>false).catch(()=>true);
+      identityLocator.value='JO70FD';
+      identityLocator.dispatchEvent(new setupFrame.contentWindow.Event('change',{bubbles:true}));
+      checks.setupLocatorClears=identityError.hidden===true;
+
       // ---- SETUP: the station's TX gain calibrations --------------------
       //
       // SETUP shows them and links to where they are measured; it must never
@@ -599,9 +658,19 @@ f.onload=()=>{
       await new Promise(resolve=>setTimeout(resolve,2400));
       const handoffLink=holder.querySelector('.wifi-handoff-url a');
       checks.wifiHandoffAddress=!!handoffLink&&handoffLink.getAttribute('href')==='http://192.168.1.55'&&
-        !!holder.querySelector('a[href="http://wifilt/"]')&&
         !!holder.querySelector('a[href="http://wifilt.local/"]')&&
         !!holder.querySelector('#wifiHandoffDone');
+      // The handover has to END. Left at the address screen with the hotspot
+      // still running, the device sits in both modes at once -- station joined,
+      // AP up, TrxNet and the radio clients still refusing because APmode says
+      // so. Pressing the button restarts and hands the operator a screen that
+      // opens the real address by itself once they are back on their network.
+      holder.querySelector('#wifiHandoffDone').click();
+      await new Promise(resolve=>setTimeout(resolve,200));
+      checks.wifiHandoffFinishes=!!holder.querySelector('#wifiHandoffGo')&&
+        !!holder.querySelector('a[href="http://wifilt.local/"]')&&
+        !!holder.querySelector('a[href="http://192.168.1.55/"]')&&
+        /Reconnect to/.test(holder.textContent);
       holder.remove();
       // Unattended panel: armed, but the fixture says the modem tab has been
       // silent for 31 s. A timer alone would still read "armed" -- the point of
@@ -704,8 +773,13 @@ f.onload=()=>{
         calls:[{call:'K0OG',snr:-12,offsetHz:1500,submode:0,dtMs:0,quality:1,lastSlotUtcMs:Date.now()}]});
       const composer=d.querySelector('#messageInput');
       composer.value='';
-      f.contentWindow.__dataTest.feedDirected({from:'K0OG',to:'OK1HRA',command:' SNR?'});
+      f.contentWindow.__dataTest.feedDirected({from:'K0OG',to:'OK1HRA',command:' HW CPY?'});
       const bufferedAnswer=composer.value;
+      // "How do you copy me?" is the signal report asked in words, and it is the
+      // reply JS8Call offers by default to a CQ -- so on an unattended station it
+      // is the first thing that arrives. It is answered with the same report SNR?
+      // would get, which is also why the two share one restriction window.
+      checks.hwCpyAnswersSnr=bufferedAnswer==='K0OG SNR -12';
       // A second identical query inside the window must be refused, not answered.
       composer.value='';
       f.contentWindow.__dataTest.feedDirected({from:'K0OG',to:'OK1HRA',command:' SNR?'});
@@ -1141,6 +1215,17 @@ f.onload=()=>{
       const ttBox=d.querySelector('#freqTimetableButton').getBoundingClientRect();
       checks.trxPowerBarHeight=Math.abs(barBox.height-ttBox.height)<1&&
         d.querySelectorAll('#trxPower .pwr-bar i').length===10;
+      // Every pop-out in the radio bar is dismissed the same way. Escape and a
+      // second click on the button that opened it both work, but neither is
+      // discoverable on a tablet -- CAL PLAN had the button the other two lacked.
+      d.querySelector('#trxFrequency').click();
+      d.querySelector('#frequencyMenu [data-menu-close]').click();
+      checks.dialMenuCloses=d.querySelector('#frequencyMenu').hidden&&
+        d.querySelector('#trxFrequency').getAttribute('aria-expanded')==='false';
+      d.querySelector('#freqTimetableButton').click();
+      d.querySelector('#freqTimetableClose').click();
+      checks.timetableCloses=d.querySelector('#freqTimetablePanel').hidden&&
+        d.querySelector('#freqTimetableButton').getAttribute('aria-expanded')==='false';
       f.contentWindow.__dataTest.setRadioPower(3,true,'IC-705');
       // A radio left where the WSPR beacon put it is not a dead radio: 1.2 %
       // still lights one segment, and 118 mW must not be shown as "0 W".
@@ -1172,6 +1257,17 @@ f.onload=()=>{
       d.querySelector('#messagePresetsButton').click();
       d.querySelector('[data-message-preset="cq"]').click();
       checks.cqPreset=d.querySelector('#messageInput').value==='CQ CQ CQ';
+      // HEARING? is the one query that fills in the stations map: the answer names
+      // who the other station copies, which is what the green arrows between
+      // third-party dots are drawn from. It has to encode as ONE directed frame --
+      // a two-frame query costs the same airtime as the answer it asks for.
+      d.querySelector('#messagePresetsButton').click();
+      d.querySelector('[data-message-preset="hearing-query"]').click();
+      checks.hearingPreset=d.querySelector('#messageInput').value==='HEARING?'&&
+        (()=>{const frames=f.contentWindow.Js8Protocol.buildReplyFrames(
+                {myCall:'OK1HRA',toCall:'KN4CRD',text:'HEARING?'});
+              return frames.length===1&&f.contentWindow.Js8Protocol.decodeFrame(
+                {...frames[0],submode:0,offsetHz:1500,slotUtcMs:0}).command===' HEARING?';})();
       // INFO without the question mark describes THIS station, so it has nothing to say
       // until SETTINGS carries that description -- and once it does, it must say exactly
       // what the auto-reply would say, or the station describes itself two ways.
