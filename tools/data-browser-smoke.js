@@ -325,9 +325,10 @@ f.onload=()=>{
         ownCallPanelsExpanded:d.querySelector('details[data-section="traffic"]').open&&d.querySelector('details[data-section="stations"]').open,
         ownCallTraffic:[...d.querySelectorAll('#traffic [data-own-call="true"]')].some(node=>node.textContent==='OK1HRA'&&getComputedStyle(node).color==='rgb(255, 107, 107)'),
         ownCallStation:(()=>{const node=d.querySelector('#stationRows tr[data-call="OK1HRA"] [data-own-call="true"]');return node?.textContent==='OK1HRA'&&getComputedStyle(node).color==='rgb(255, 107, 107)';})(),
-        // EMAIL is deliberately absent from the selector; the composer itself is
-        // still shipped and still checked below through the test hook.
-        txModes:[...d.querySelectorAll('#txSessionMode option')].map(option=>option.value).join(',')==='CHAT,BIN',
+        // EMAIL and BIN are deliberately absent from the selector; both composers are
+        // still shipped and still checked below through the test hook. CHAT alone is
+        // nothing to choose from, so the row itself is hidden too.
+        txModes:[...d.querySelectorAll('#txSessionMode option')].map(option=>option.value).join(',')==='CHAT'&&d.querySelector('.tx-session-toolbar')?.hidden===true,
         autoSpeed:d.querySelector('#txSpeedResolved')?.textContent.includes('A')===true,
         stationSpeed:(d.querySelector('#stationRows tr[data-call="K0OG"] td:nth-child(5)')?.textContent.trim()||'').startsWith('A')&&(d.querySelector('#stationRows tr[data-call="K0OG"] td:nth-child(5)')?.textContent.trim()||'').endsWith('15 s'),
         stationCountry:(()=>{const own=d.querySelector('#stationRows tr[data-call="OK1HRA"] td.station-country'),us=d.querySelector('#stationRows tr[data-call="K0OG"] td.station-country');return own?.textContent.trim()==='Czech Republic'&&own?.title==='Czech Republic'&&(us?.textContent.trim()||'').length>0&&d.querySelector('[data-station-sort="country"]')?.textContent.trim().startsWith('DXCC')===true;})(),
@@ -1361,9 +1362,8 @@ f.onload=()=>{
       const aprsReplyRow=[...d.querySelectorAll('#traffic .message')].find(row=>row.textContent.includes('DE WXBOT'));
       checks.aprsReplyVisible=Boolean(aprsReplyRow)&&Boolean(aprsReplyRow.querySelector('.aprs-badge'));
       d.querySelector('[data-traffic-filter="all"]').click();
-      const txSessionMode=d.querySelector('#txSessionMode');
-      // The Mode selector no longer offers EMAIL, so the composer is opened the
-      // only way that is left. Everything below it is unchanged: the module ships.
+      // The Mode selector offers neither EMAIL nor BIN, so both composers are opened
+      // the only way that is left. Everything below is unchanged: the modules ship.
       f.contentWindow.__dataTest.setTxSessionMode('EMAIL');
       d.querySelector('#emailGatewayAdd')?.click();
       const setEmailField=(selector,value)=>{const input=d.querySelector(selector);input.value=value;input.dispatchEvent(new f.contentWindow.Event('input',{bubbles:true}));};
@@ -1373,7 +1373,7 @@ f.onload=()=>{
       d.querySelector('#emailGatewayForm').requestSubmit();
       setEmailField('#emailAddress','user@example.com');setEmailField('#emailMessage','TEST');
       checks.emailReady=d.querySelector('#emailSession')?.hidden===false&&d.querySelector('#emailPreview').textContent==='@APRSIS CMD :EMAIL-2  :USER@EXAMPLE.COM TEST'&&d.querySelector('#emailSession').textContent.includes('Gateway callsign')&&d.querySelector('#emailSend').disabled;
-      if(txSessionMode){txSessionMode.value='BIN';change('#txSessionMode');}
+      f.contentWindow.__dataTest.setTxSessionMode('BIN');
       checks.binReady=d.querySelector('#binSession')?.hidden===false&&!d.querySelector('#binFile').disabled&&!d.querySelector('#binRecipient').disabled&&d.querySelector('#binOffer').disabled&&d.querySelector('#binSession').textContent.includes('Reliable point-to-point');
       d.querySelector('#txSpeed').value='E';change('#txSpeed');
       const slowLimits=d.querySelector('#binFileDetails').textContent;
@@ -1392,7 +1392,7 @@ f.onload=()=>{
       setTimeout(()=>{const prepared=f.contentWindow.__dataTest.fileProtocol().prepared;checks.binPrepared=prepared?.manifest.originalSize===5&&prepared?.manifest.blockCount===1&&prepared?.manifest.sha256Hex.length===64;},500);
       const binStore=new f.contentWindow.Js8FileTransfer.TransferStore();
       binStore.save({id:'SMOKE1',direction:'tx',state:'complete',blocks:[new Uint8Array([1,2,3])]}).then(()=>binStore.get('SMOKE1')).then(saved=>{checks.binStorage=saved?.blocks?.[0]?.[2]===3;return binStore.delete('SMOKE1');}).catch(()=>{});
-      if(txSessionMode){txSessionMode.value='CHAT';change('#txSessionMode');}
+      f.contentWindow.__dataTest.setTxSessionMode('CHAT');
       currentPreset.click();
       d.querySelector('#recipient').value='K0OG';change('#recipient');
       d.querySelector('#txSpeed').value='I';change('#txSpeed');

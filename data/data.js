@@ -2031,8 +2031,9 @@ function renderControls() {
   dom.tuneLabel.textContent=state.tuneActive?"STOP":"TUNE";
   dom.tuneOffset.textContent=`${js8.txOffsetHz} Hz`;
   renderMessagePresets();
-  // A value with no matching <option> blanks the selector, and EMAIL no longer has
-  // one; keep the last real choice on screen instead of an empty box.
+  // A value with no matching <option> blanks the selector, and neither EMAIL nor BIN
+  // has one; keep the last real choice on screen instead of an empty box. Both modes
+  // still work when state.txSessionMode is set from elsewhere (e.g. the test hook).
   if([...dom.txSessionMode.options].some(option=>option.value===state.txSessionMode))
     dom.txSessionMode.value=state.txSessionMode;
   dom.chatSession.hidden=state.txSessionMode!=="CHAT";

@@ -351,6 +351,7 @@ button { color: inherit; cursor: pointer; }
 .tx-session-toolbar label { display:flex; align-items:center; gap:7px; color:var(--muted); font-size:12px; }
 .tx-session-toolbar select { min-width:110px; padding:6px 26px 6px 8px; color:var(--text); background:#081310; border:1px solid var(--line); border-radius:4px; font-weight:800; }
 .tx-session-toolbar small { color:var(--muted); }
+.tx-session-toolbar[hidden] { display:none; }
 .keyboard-session { margin: 9px 10px 0; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: #091512; }
 .keyboard-session > header { min-height: 38px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 9px; background: var(--panel2); }
 .keyboard-session > header div { display: flex; align-items: baseline; gap: 8px; }

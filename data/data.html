@@ -208,11 +208,13 @@
 
       <details class="compact-section" data-section="reply" open>
         <summary><span>TX SESSION</span><span id="txSummary" class="summary-status">Idle</span></summary>
-        <div class="tx-session-toolbar">
-          <!-- EMAIL is not offered here: the gateway composer, its dialogs and js8-email.js
-               all stay in place, only the operator-facing choice is gone. Restore the option
-               to bring the mode back. -->
-          <label>Mode <select id="txSessionMode"><option>CHAT</option><option>BIN</option></select></label>
+        <div class="tx-session-toolbar" hidden>
+          <!-- Neither EMAIL nor BIN is offered here: both composers, their dialogs and
+               js8-email.js / js8-file-transfer.js all stay in place, only the operator-facing
+               choice is gone. CHAT is the only mode left, so the whole row is hidden rather
+               than showing a selector with nothing to select. Restore the options and drop
+               the `hidden` attribute to bring the modes back. -->
+          <label>Mode <select id="txSessionMode"><option>CHAT</option></select></label>
           <small id="txSessionModeHint">Keyboard-to-keyboard messages</small>
         </div>
         <div id="txPayload" class="tx-payload" hidden></div>
