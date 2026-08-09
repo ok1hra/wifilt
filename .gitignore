@@ -40,7 +40,6 @@
 # something in the repository actually links to belong below.
 /docs/*.md
 /docs/agents/
-!/docs/user-manual.md
 !/docs/find-device-ip.md
 !/docs/js8call-build.md
 !/docs/trxnet.md
