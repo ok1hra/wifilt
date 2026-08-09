@@ -75,11 +75,90 @@ address stops moving. If neither is available:
 ### via your router
 - Look for the DHCP lease named ```wifilt``` in the router's client list
 
-## WEB app user Manual
+## Documentation
 - [docs/user-manual.md](docs/user-manual.md) — setup, web UI, CW/RTTY, MQTT, troubleshooting
-- [docs/js8call-modem-implementation.md](docs/js8call-modem-implementation.md) — implementation plan for the browser-based JS8Call modem
-- [docs/aud1-audio-websocket-protocol.md](docs/aud1-audio-websocket-protocol.md) — proposed versioned RX/TX audio WebSocket envelope
+- [docs/find-device-ip.md](docs/find-device-ip.md) — every way to locate the interface on your network
+- [docs/trx-http-api.md](docs/trx-http-api.md) — the HTTP API between the web log and a TRX, and what an adapter for TRX2/TRX3 must implement
+- [docs/aud1-audio-websocket-protocol.md](docs/aud1-audio-websocket-protocol.md) — the versioned RX/TX audio WebSocket envelope
+- [docs/wspr.md](docs/wspr.md) — the WSPR protocol as implemented by the beacon
+- [docs/trxnet.md](docs/trxnet.md) — the TrxNet peer-to-peer transport
+- [docs/js8call-build.md](docs/js8call-build.md) — rebuilding the JS8 modem from source
+
+Comments in the sources and entries in [Changelog.md](Changelog.md) sometimes
+cite a design note such as `docs/wspr-majak-implementace.md`. Those are the
+maintainer's Czech working notes, kept out of the repository on purpose; they
+record *why* a decision was taken, and the decision itself is always readable
+from the code they annotate. The documents listed above are the published ones.
+
 <img src="https://raw.githubusercontent.com/ok1hra/wifilt/main/hw/sw-block.png">
+
+## Building from source
+
+Everything needed to build and flash the project is in this repository. The
+firmware and the web assets are built separately — a normal change to a page
+does not require the WASM toolchain.
+
+### Firmware and web assets
+
+- Arduino IDE 1.8.19 or 2.x
+- Espressif Arduino-ESP32 core **2.0.14**
+- Board: **ESP32 Dev Module**, Partition Scheme **No OTA (2MB APP/2MB SPIFFS)**
+  — the sketch-local `partitions.csv` overrides the menu choice and is what
+  actually lands on the device
+- Library: [TrxNet 0.3.0](https://github.com/ok1hra/TrxNet)
+- Flash mode is **DIO**, not QIO. These interface boards ship a Zbit clone flash
+  chip whose QIO reads are unreliable, and a QIO bootloader leaves the board
+  unable to boot.
+
+```bash
+# 1. bump REV in wifilt.ino
+# 2. Arduino IDE: Sketch → Export Compiled Binary
+# 3. flash the firmware and the filesystem in one session
+./tools/upload-firmware-spiffs.sh --port /dev/ttyUSB0
+./tools/upload-firmware-spiffs.sh --dry-run          # check without writing
+
+# after editing data/*.html, *.css or *.js, regenerate the served copies
+./tools/gzip-assets.sh
+```
+
+### Web installer page
+
+`tools/gh-pages.sh` builds the esp-web-tools installer published at
+https://ok1hra.github.io/wifilt/ — it reads the partition geometry from
+`partitions.csv`, builds the LittleFS image from `data/`, and writes
+`build/gh-pages/` (a generated directory, not tracked here):
+
+```bash
+./tools/gh-pages.sh              # build only
+./tools/gh-pages.sh --publish    # build and push to the gh-pages branch
+```
+
+### JS8 modem (WASM)
+
+Only needed when the JS8 DSP sources or the pinned upstream change; the built
+artifacts are committed in `data/`. Requires Debian 12 packages:
+
+```bash
+sudo apt install build-essential ca-certificates cmake dpkg-dev emscripten \
+  git gzip libboost1.81-dev libfftw3-dev nodejs p7zip-full python3 \
+  terser xz-utils
+
+./tools/build-js8-assets.sh
+```
+
+Pinned versions: Emscripten 3.1.6, CMake 3.25.1, Node 18.20.4 (local checks
+accept Node 18–20). See [docs/js8call-build.md](docs/js8call-build.md) and
+`prototype/js8-core-prototype/toolchain/toolchain.lock`.
+
+### Tests
+
+The regression harnesses need no radio and no hardware:
+
+```bash
+node tools/wspr-encoder-smoke.js      # encoder vs. WSJT-X golden vectors
+node tools/js8-txqueue-smoke.js       # JS8 transmit queue and retry TTL
+node tools/state-json-budget-smoke.js # /state cannot overflow its buffer
+```
 
 ## Hardware
 - **Output signal POWER-OUT** (13.8V/0.5A) with LED activates after connecting a full-CAT primary radio (can turn on your hamshack)
@@ -120,3 +199,31 @@ address stops moving. If neither is available:
 - [rev3 3MF](https://raw.githubusercontent.com/ok1hra/wifilt/main/3Dprint/ic-705-interface-3.3mf)
 - [With mountpoint rev3 STL](https://raw.githubusercontent.com/ok1hra/wifilt/main/3Dprint/ic-705-interface-3-mountpoint.stl)
 - [With mountpoint rev3 3MF](https://raw.githubusercontent.com/ok1hra/wifilt/main/3Dprint/ic-705-interface-3-mountpoint.3mf)
+
+## License
+
+WIFILT is free software, distributed under the **GNU General Public License,
+version 3 or later** — see [LICENSE](LICENSE). It builds on other people's GPL
+work, and this repository is the corresponding source for every binary the
+project distributes, including the firmware and filesystem images served by the
+web installer.
+
+The parts that came from elsewhere, with their own copyright and licence, are
+listed in [data/THIRD-PARTY-NOTICES.txt](data/THIRD-PARTY-NOTICES.txt) — the
+same notice the device serves from its own web UI. In short:
+
+| Component | Origin | Licence |
+|---|---|---|
+| Icom LAN passcode and packet layouts in `icomLanClient.h` | [wfview](https://gitlab.com/eliggett/wfview/) — W6EL, M0VSE | GPL-3.0 |
+| JS8 encoder and decoder (`data/js8-*.wasm`) | [JS8Call-improved](https://github.com/JS8Call-improved/JS8Call-improved) and its JS8/WSJT-X heritage | GPL-3.0 |
+| WSPR protocol constants in `data/wspr-core.js` | WSJT-X — K1JT and the WSJT-X team | GPL-3.0 |
+| FFTW 3.3.10, linked into `js8-decoder.wasm` | [fftw.org](https://fftw.org/); source vendored in `third_party/fftw/` | GPL-2.0-or-later |
+| Eigen 3.4 | [libeigen/eigen](https://gitlab.com/libeigen/eigen) | MPL-2.0, plus BSD-3 and Apache-2.0 files |
+| Boost 1.81 headers | [boost.org](https://www.boost.org/) | BSL-1.0 |
+| Brotli decoder in `data/js8-brotli.wasm` | [google/brotli](https://github.com/google/brotli) | MIT |
+| DXCC prefix engine in `data/dxcc.js` | DJ1YFK, with AD1C's `cty.dat` | GPL |
+| Wake-lock media in `data/wake-lock.js` | [NoSleep.js](https://github.com/richtr/NoSleep.js) — Rich Tibbett | MIT |
+
+Icom is a registered trademark of Icom Incorporated. WIFILT is an independent
+software project and is not affiliated with, endorsed by, or sponsored by Icom
+Incorporated.

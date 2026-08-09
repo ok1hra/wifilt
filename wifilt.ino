@@ -20,8 +20,11 @@
   - Board: "ESP32 Dev Module"
   - Partition Scheme: "No OTA (2MB APP/2MB SPIFFS)"
   - TrxNet 0.3.0: https://github.com/ok1hra/TrxNet
-  EEPROM, BluetoothSerial, WiFi, ESPmDNS, WebServer, FS and LittleFS are
-  supplied by the pinned ESP32 core; PubSubClient is not required.
+  EEPROM, WiFi, ESPmDNS, WebServer, FS and LittleFS are supplied by the pinned
+  ESP32 core; PubSubClient is not required. Bluetooth was removed in 2026-07 --
+  the transports are ICOM-LAN, CI-V and TrxNet.
+  Flash mode must be DIO (not QIO) and the sketch-local partitions.csv overrides
+  the Partition Scheme menu entry. See README.md "Building from source".
 
   DATA/JS8 asset and release dependencies (Debian 12)
     sudo apt install build-essential ca-certificates cmake dpkg-dev emscripten \

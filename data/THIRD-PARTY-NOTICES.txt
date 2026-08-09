@@ -37,17 +37,30 @@ The js8-decoder.wasm module statically links the single-precision FFTW library.
 Copyright (c) 2003, 2007-14 Matteo Frigo; Copyright (c) 2003, 2007-14
 Massachusetts Institute of Technology.
 License: GNU GPL version 2 or, at your option, any later version.
-Source retrieval and the pinned checksum are in
-prototype/js8-core-prototype/build-decoder-wasm.sh and toolchain/toolchain.lock.
+Because that binary is distributed, the FFTW source is part of this project's
+Corresponding Source and is vendored rather than fetched: the unmodified
+upstream archive is third_party/fftw/fftw3_3.3.10.orig.tar.gz, byte-identical
+to Debian's fftw3 3.3.10-1 orig tarball. Its SHA256 is pinned in
+prototype/js8-core-prototype/build-decoder-wasm.sh and toolchain/toolchain.lock,
+and the build refuses to run if the archive is missing or does not match.
 Upstream: https://fftw.org/
 
 Eigen 3.4
 ---------
-The decoder is compiled with the vendored Eigen header library. Individual
-source files retain their copyright and license notices.
-License: primarily Mozilla Public License 2.0; file-specific notices apply.
+The decoder is compiled with the vendored Eigen header library. Every source
+file carries its own copyright and license notice; the licenses are not
+uniform:
+
+  * the bulk of the headers are Mozilla Public License 2.0, and each one
+    carries the MPL notice granting a copy from https://mozilla.org/MPL/2.0/;
+  * the LAPACKE and MKL binding headers (*_LAPACKE.h, Assign_MKL.h,
+    MKL_support.h, src/misc/lapacke*.h, PardisoSupport.h) are
+    Copyright (c) 2010-2011 Intel Corporation, 3-clause BSD, with the license
+    text inline in each file;
+  * src/Core/arch/Default/BFloat16.h is Copyright 2017 The TensorFlow Authors,
+    Apache License 2.0.
+
 Source: JS8Call-improved-master/vendor/Eigen/
-License text: https://www.mozilla.org/MPL/2.0/
 Upstream: https://gitlab.com/libeigen/eigen
 
 Boost 1.81 headers

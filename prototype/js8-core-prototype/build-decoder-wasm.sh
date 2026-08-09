@@ -27,18 +27,30 @@ test -d /usr/include/boost
 
 mkdir -p "$deps_dir" "$output_dir" "$deps_dir/include"
 
-if [ ! -d "$fftw_dir" ]; then
-  (cd "$deps_dir" && apt-get source fftw3=3.3.10-1)
+# FFTW is statically linked into js8-decoder.wasm, which we distribute, so its
+# source is part of our Corresponding Source under GPLv2 section 3. It is
+# therefore vendored in the repository rather than fetched: `apt-get source`
+# needed the network, a Debian mirror and deb-src entries, and its checksum gate
+# was skipped entirely whenever the archive was absent -- which was every clean
+# build. The tarball here is byte-identical to Debian's fftw3 3.3.10-1 orig.
+fftw_archive="$repository_dir/third_party/fftw/fftw3_3.3.10.orig.tar.gz"
+expected_fftw_sha=56c932549852cddcfafdab3820b0200c7742675be92179e59e6215b340e26467
+
+[ -f "$fftw_archive" ] || {
+  echo "ERROR: vendored FFTW source missing: $fftw_archive" >&2
+  exit 1
+}
+actual_fftw_sha=$(sha256sum "$fftw_archive" | awk '{print $1}')
+if [ "$actual_fftw_sha" != "$expected_fftw_sha" ]; then
+  echo "ERROR: unexpected FFTW source archive: $actual_fftw_sha" >&2
+  exit 1
 fi
 
-fftw_archive="$deps_dir/fftw3_3.3.10.orig.tar.gz"
-if [ -f "$fftw_archive" ]; then
-  expected_fftw_sha=56c932549852cddcfafdab3820b0200c7742675be92179e59e6215b340e26467
-  actual_fftw_sha=$(sha256sum "$fftw_archive" | awk '{print $1}')
-  if [ "$actual_fftw_sha" != "$expected_fftw_sha" ]; then
-    echo "ERROR: unexpected FFTW source archive: $actual_fftw_sha" >&2
-    exit 1
-  fi
+# The archive's own root is fftw-3.3.10; $fftw_dir keeps the fftw3-3.3.10 name
+# `apt-get source` used to produce, so the strip is what makes the two agree.
+if [ ! -d "$fftw_dir" ]; then
+  mkdir -p "$fftw_dir"
+  tar xzf "$fftw_archive" -C "$fftw_dir" --strip-components=1
 fi
 
 if [ ! -f "$fftw_dir/.libs/libfftw3f.a" ]; then

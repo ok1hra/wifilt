@@ -28,3 +28,30 @@
 /log/
 /wfview-master/
 /ic705-history-backup.json
+
+# Manufacturer and third-party manuals. These are copyrighted works we hold no
+# redistribution licence for -- they are reference material for development
+# only and must never be published with the project.
+/docs/*.pdf
+
+# Published documentation is an allowlist, not a denylist. Everything in docs/
+# is a working note until it is named here, because the alternative -- listing
+# the drafts -- silently publishes every new one. Only English documents that
+# something in the repository actually links to belong below.
+/docs/*.md
+/docs/agents/
+!/docs/user-manual.md
+!/docs/find-device-ip.md
+!/docs/js8call-build.md
+!/docs/trxnet.md
+!/docs/trx-http-api.md
+!/docs/aud1-audio-websocket-protocol.md
+!/docs/wspr.md
+
+# Device filesystem dumps, release snapshots and the upstream Mercury checkout
+# (its own git repository -- vendor it deliberately if it is ever needed).
+/backups/
+/mercury/
+*.zip
+/convert_logs.py
+/AGENTS.md

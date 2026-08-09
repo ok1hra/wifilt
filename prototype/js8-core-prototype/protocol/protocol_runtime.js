@@ -360,8 +360,8 @@
     return bits;
   }
 
-  function packDenseData(input) {
-    const text=String(input).toUpperCase(),bits=[true,true];
+  function packDenseData(input, prefix = [true, true]) {
+    const text=String(input).toUpperCase(),bits=[...prefix];
     let consumed=0;
     for(const character of text){
       const index=JSC_LITERAL_INDEX[character];
@@ -383,6 +383,36 @@
     const packed=huffman.consumed>dense.consumed?huffman:dense;
     if(!packed.consumed)throw new Error(`character not supported by JS8: ${String(input)[0]||""}`);
     return packed;
+  }
+
+  // Fast data: JSC over all 72 bits with NO prefix. Upstream builds every submode except
+  // Normal this way (packFastDataMessage, with JS8_FAST_DATA_CAN_USE_HUFF switched off),
+  // and the absence of a Huffman variant is deliberate on their side too -- with no header
+  // bit there is nothing to say which of the two encodings a frame carries. The two spare
+  // bits are why the fast form exists at all.
+  function packFastData(input) {
+    const packed=packDenseData(input, []);
+    if(!packed.consumed)throw new Error(`character not supported by JS8: ${String(input)[0]||""}`);
+    return packed;
+  }
+  // Which data form to put on the air. Upstream sends the 2-bit-header form on Normal and
+  // the headerless one everywhere else (Varicode.cpp:2148), but the RECEIVER decides by the
+  // transmitted type bit, not by its own submode (DecodedText::tryUnpackFastData tests
+  // `bits_ & JS8CallData`), so both forms are legal in every submode.
+  //
+  // That matters, because copying upstream's rule blindly makes our messages LONGER: the
+  // fast form has no Huffman variant (upstream compiles it out — with no header bit there
+  // is nothing to say which encoding a frame holds), and for plain English our Huffman
+  // path often beats the dense one. So outside Normal we compute both and keep whichever
+  // carries more characters, which is never worse than either rule alone. On Normal we
+  // stay byte-for-byte on upstream's choice.
+  function chooseDataForm(input, submode) {
+    const normal = packData(input);
+    if (Number(submode) === 0) return {packed: normal, fast: false};
+    let fast = null;
+    try { fast = packFastData(input); } catch (_error) { fast = null; }
+    return fast && fast.consumed >= normal.consumed
+      ? {packed: fast, fast: true} : {packed: normal, fast: false};
   }
 
   function checksum16(input) {
@@ -426,10 +456,52 @@
     return directedMessageLayout(request).messageText;
   }
 
-  function buildReplyFrames({myCall, toCall, text}) {
+  // [3 flag][50 callsign][11][5][3] = 72 — the layout of Varicode::packCompoundFrame.
+  function packCompoundFrame(flag, call, number, bits3 = 0) {
+    const callsign = packAlphaNumeric50(call);
+    if (callsign === 0n) return null;
+    const packed11 = BigInt((number >> 5) & 0x7ff);
+    const packed8 = BigInt(((number & 0x1f) << 3) | (bits3 & 7));
+    const value = (((BigInt(flag) << 50n) | callsign) << 11n) | packed11;
+    return pack72((value << 8n) | packed8);
+  }
+
+  // A directed command squeezed into the compound frame's number field. SNR commands
+  // carry their report in the low six bits; everything else is just the index.
+  function compoundCommandNumber(index, packedNumber) {
+    if (index !== 25 && index !== 29) return NUSERGRID + (index & 0x7f);
+    return NUSERGRID + (0x80 | (index === 29 ? 0x40 : 0) | (packedNumber & 0x3f));
+  }
+
+  // True when the addressee does not fit the 28-bit callsign field: a custom group
+  // (@ARESGA) or a compound callsign (PA/OK1ABC). Both then travel the long way round.
+  function needsCompoundTo(toCall) {
+    return packCallsign(toCall) === null;
+  }
+
+  // Case 2 of the comment in Varicode.cpp:2205 — a compound addressee. The ordinary
+  // directed frame is NOT transmitted at all; the pair below replaces it, which is why
+  // a custom group costs one extra slot per message.
+  function buildCompoundDirectedFrames({myCall, grid, toCall, text}) {
     const layout = directedMessageLayout({myCall, toCall, text});
-    const frames = [{raw:packDirectedHeader(myCall, toCall, layout.index,
-                                            layout.packedNumber), frameType:0,
+    const from = packCompoundFrame(FRAME.COMPOUND, myCall, packGrid(grid || ""));
+    const to = packCompoundFrame(FRAME.COMPOUND_DIRECTED, toCall,
+      compoundCommandNumber(layout.index, layout.packedNumber));
+    if (!from || !to) throw new Error("reply requires a packable callsign and group");
+    return {layout, frames: [
+      {raw:from, frameType:0, role:"compound", textStart:0, textEnd:0,
+       messageText:layout.messageText},
+      {raw:to, frameType:0, role:"directed", textStart:0,
+       textEnd:layout.headerText.length, messageText:layout.messageText}]};
+  }
+
+  function buildReplyFrames({myCall, toCall, text, grid = "", mode = 0}) {
+    const compound = needsCompoundTo(toCall)
+      ? buildCompoundDirectedFrames({myCall, grid, toCall, text}) : null;
+    const layout = compound ? compound.layout : directedMessageLayout({myCall, toCall, text});
+    const frames = compound ? compound.frames
+      : [{raw:packDirectedHeader(myCall, toCall, layout.index,
+                                 layout.packedNumber), frameType:0,
       role:"directed", textStart:0, textEnd:layout.headerText.length,
       messageText:layout.messageText}];
     let remaining = layout.remainder;
@@ -441,9 +513,11 @@
     }
     let textStart = layout.headerText.length;
     while (remaining) {
-      const packed = packData(remaining);
+      // Bit 2 of the frame type is what tells the receiver which unpacker to use, and it
+      // is transmitted, so the choice can be made per frame on what actually fits.
+      const {packed, fast} = chooseDataForm(remaining, mode);
       const textEnd = textStart + packed.consumed;
-      frames.push({raw:packed.raw, frameType:0, role:"data", textStart, textEnd,
+      frames.push({raw:packed.raw, frameType:fast?4:0, role:"data", textStart, textEnd,
                    messageText:layout.messageText});
       remaining = remaining.slice(packed.consumed);
       textStart = textEnd;
@@ -549,18 +623,30 @@
               to: target, command, grid, callsigns: [callsign],
               text};
     }
-    let extra = "";
-    if (number <= NBASEGRID) extra = ` ${unpackGrid(number)}`;
+    // The number field is either a grid or a reduced-fidelity command, exactly as in
+    // Varicode::unpackCompoundMessage. Keep the command in the same shape decodeDirected
+    // produces (leading space, report separate), so a stitched pair is indistinguishable
+    // downstream from a plain directed frame.
+    let grid = "";
+    let command = "";
+    let suffix = "";
+    if (number <= NBASEGRID) grid = unpackGrid(number);
     else if (number >= NUSERGRID && number < NMAXGRID) {
       const packed = number - NUSERGRID;
       const commandIndex = packed & 0x80 ? (packed & 0x40 ? 29 : 25) : packed;
-      extra = COMMANDS[commandIndex] || "";
-      if (packed & 0x80) extra += ` ${formatSnr((packed & 0x3f) - 31)}`;
+      command = COMMANDS[commandIndex] || "";
+      if (packed & 0x80) suffix = formatSnr((packed & 0x3f) - 31);
     }
     const directed = flag === FRAME.COMPOUND_DIRECTED;
-    return {kind: directed ? "compound-directed" : "compound", protocolType: flag,
-            from: callsign, command: extra.trim(), callsigns: [callsign],
-            text: directed ? `${callsign}${extra} ` : `${callsign}: `};
+    // In a compound-directed frame the packed callsign is the ADDRESSEE, not the sender.
+    // Reporting it as `from` credited the recipient with the transmitter's signal report
+    // in the stations table -- harmless for a group (@ is skipped there) and a plain lie
+    // for a compound callsign.
+    const base = {protocolType: flag, grid, callsigns: [callsign]};
+    return directed
+      ? {...base, kind: "compound-directed", to: callsign, command, number: suffix,
+         text: `${callsign}${command}${suffix ? ` ${suffix}` : ""} `}
+      : {...base, kind: "compound", from: callsign, command: "", text: `${callsign}: `};
   }
 
   function decodeFrame(frame, dictionary) {
@@ -640,6 +726,49 @@
     return MODE_BANDWIDTH_HZ[Number(submode)] || 50;
   }
 
+  // FNV-1a. Any stable hash would do; what matters is that it is a pure function of the
+  // callsign, so the offset a station picks is reproducible in a test instead of being
+  // a different number on every run.
+  function callsignHash(call) {
+    let hash = 0x811c9dc5;
+    for (const character of String(call || "").toUpperCase()) {
+      hash ^= character.charCodeAt(0);
+      hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return hash >>> 0;
+  }
+
+  // Where to answer a query that was addressed to a group. Every member answers the same
+  // question in the same slot, so keying on our own fixed offset means two members who
+  // never moved off the default collide every single time.
+  //
+  // Occupancy is exact -- it comes from decoded frames, not from a guess -- but it
+  // describes the PAST. The other members are silent right now, so their free-slot lists
+  // look like ours, and "take the first free one" would send us all to the same place.
+  // The difference therefore has to appear in the CHOICE among free slots, and hashing
+  // our own callsign produces it without randomness.
+  //
+  // Returns null when nothing is free, which is a real state on TURBO: 250 Hz signals
+  // leave only about six slots in the whole range. The caller then keys on its own
+  // offset and says so, because silently colliding is worse than colliding out loud.
+  function pickGroupReplyOffsetHz({frames, myCall, submode, nowMs,
+                                   lowHz = 1000, highHz = 2700, periods = 4}) {
+    const width = bandwidthHz(submode);
+    const horizon = slotPeriodMs(submode) * periods;
+    const busy = [];
+    for (const frame of frames || []) {
+      const offset = Number(frame && frame.offsetHz);
+      if (!Number.isFinite(offset)) continue;
+      if (Number.isFinite(Number(nowMs)) && Number.isFinite(Number(frame.slotUtcMs))
+          && Number(nowMs) - Number(frame.slotUtcMs) > horizon) continue;
+      busy.push([offset, offset + bandwidthHz(frame.submode)]);
+    }
+    const free = [];
+    for (let hz = lowHz; hz + width <= highHz; hz += width)
+      if (!busy.some(([low, high]) => hz < high && hz + width > low)) free.push(hz);
+    return free.length ? free[callsignHash(myCall) % free.length] : null;
+  }
+
   class ActivityStore {
     constructor(dictionary = null) {
       this.dictionary = dictionary;
@@ -713,7 +842,7 @@
         channel = {key: channelKey, id: `${channelKey}|${frame.slotUtcMs}`,
                    text: "", raw: [], kinds: [], firstSlotUtcMs: frame.slotUtcMs,
                    lastSlotUtcMs: frame.slotUtcMs, submode: frame.submode,
-                   offsetHz: frame.offsetHz, callsigns: [], directed: null,
+                   offsetHz: frame.offsetHz, callsigns: [], directed: null, compoundFrom: "",
                    // A channel opened by a frame that is not the first one means we tuned
                    // into the middle: the header, and with it from/to/command, is gone.
                    headerMissing: !(frame.frameType & 1), gaps: [], frameCount: 0};
@@ -732,6 +861,14 @@
       // completed message can yield a clean, checksum-verified payload.
       if (!channel.directed && decoded.kind === "directed")
         channel.directed = {from: decoded.from, to: decoded.to, command: decoded.command};
+      // A compound addressee arrives as a PAIR -- `MYCALL GRID` then `@GROUP CMD` -- and
+      // the ordinary directed frame is never sent, so from/to/command exist only once the
+      // two are put back together. Without this the message has no addressee at all and
+      // every engine downstream (auto-reply, inbox, relay, the chat thread) ignores it.
+      if (decoded.kind === "compound" && decoded.from) channel.compoundFrom = decoded.from;
+      if (decoded.kind === "compound-directed" && !channel.directed)
+        channel.directed = {from: channel.compoundFrom || "<....>", to: decoded.to,
+                            command: decoded.command};
       channel.text += decoded.text;
       channel.raw.push(frame.raw);
       channel.kinds.push(decoded.kind);
@@ -777,9 +914,10 @@
     }
   }
 
-  return {ActivityStore, FRAME, JscDictionary, MODE_PERIOD_SECONDS, MODE_BANDWIDTH_HZ,
+  return {ActivityStore, FRAME, JscDictionary, SPECIAL_CALLS, MODE_PERIOD_SECONDS, MODE_BANDWIDTH_HZ,
           REASSEMBLY_TIMEOUT_PERIODS, buildCqFrames, buildHeartbeatFrames, buildReplyFrames,
           checksum16, formatDirectedMessage, normalizeAssembledCommand,
+          callsignHash, pickGroupReplyOffsetHz, needsCompoundTo, chooseDataForm,
           buildTxFrames, decodeFrame, slotPeriodMs, bandwidthHz,
           pack72, unpack72};
 });

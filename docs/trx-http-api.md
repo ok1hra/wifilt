@@ -1,226 +1,268 @@
 # WIFILT — TRX HTTP API
 
-Popis komunikačního protokolu mezi webovým logem a TRX zařízením.
-Dokument slouží jako referenční specifikace pro implementaci API adaptéru do TRX2 a TRX3.
+The communication protocol between the web log and a TRX device. This document
+is the reference specification for implementing an API adapter for TRX2 and
+TRX3.
 
 ---
 
-## 1. Přehled architektury
+## 1. Architecture overview
 
 ```
   Browser (log.html)
        │
-       │ HTTP přes WiFi (port 80)
+       │ HTTP over WiFi (port 80)
        ▼
-  ESP32 firmware  ←── webServer na port 80 ──→  IC-705 (Bluetooth CI-V)
+  ESP32 firmware  ←── web server on port 80 ──→  radio (ICOM-LAN / CI-V / TrxNet)
 
-  Pro TRX2 / TRX3:
+  For TRX2 / TRX3:
   Browser (log.html)
        │
-       │ HTTP přes WiFi (libovolný port)
+       │ HTTP over WiFi (any port)
        ▼
-  Vlastní zařízení / adapter  ←──→  druhý/třetí TRX (jakýkoliv transport)
+  Your own device / adapter  ←──→  second/third TRX (any transport)
 ```
 
-Web log komunikuje výhradně přes **HTTP na port 80** vůči IP adrese ESP32.
-Pro TRX2 a TRX3 musí každé zařízení implementovat **identické HTTP API** na své IP adrese.
-Přepínání probíhá přímo v browseru — podle aktivního TRX se mění base URL požadavků.
+The web log talks over **HTTP on port 80** to the ESP32's IP address and
+nothing else. For TRX2 and TRX3 each device must implement an **identical HTTP
+API** on its own IP address. Switching happens entirely in the browser — the
+active TRX selects the base URL of the requests.
 
 ---
 
-## 2. Endpointy API
+## 2. API endpoints
 
-### 2.1 `GET /state` — stav TRX (polling)
+### 2.1 `GET /state` — TRX state (polling)
 
-Klient volá každých **250 ms** při spojení, **1000 ms** při chybě.
+The client polls every **250 ms** while connected and every **1000 ms** after
+an error.
 
-**Požadavek:**
+**Request:**
 ```
 GET /state HTTP/1.1
-Host: <ip-zarizeni>
+Host: <device-ip>
 ```
 
-**Který TRX endpoint popisuje:** bez parametru vždy **TRX1** (primární rádio) —
-tak ho čte log, band decoder i WSPR. Volitelný `?radio=lan` vrátí stejný dokument,
-ale pro **rádio připojené přes LAN**, ať už je na TRX1, TRX2 nebo TRX3. To používá
-stránka JS8LAN, protože LAN může operátor přiřadit kterémukoli slotu. Když LAN
-žádný slot nemá, parametr se ignoruje a odpověď popisuje TRX1.
+**Which TRX the endpoint describes:** with no parameter, always **TRX1** (the
+primary radio) — that is how the log, the band decoder and WSPR read it. The
+optional `?radio=lan` returns the same document for the **radio connected over
+LAN**, whichever of TRX1, TRX2 or TRX3 it sits on. The DATA/JS8LAN page uses
+this, because the operator may assign LAN to any slot. When no slot carries
+LAN the parameter is ignored and the answer describes TRX1.
 
-U LAN rádia mimo TRX1 nese odpověď kompaktnější stav: `frequency`, `mode` (včetně
-`-D`), `tx`, `filter`, `rfPower`, `smeterRaw`, `powerMeterRaw`, `swr` a
-`supplyVolts` jsou platné; `ritRaw`, `afGain`, `keySpeed`, `preamp` a `vox` se pro
-tuto cestu nesledují a vracejí `0`.
+For a LAN radio outside TRX1 the answer carries a more compact state:
+`frequency`, `mode` (including `-D`), `tx`, `filter`, `rfPower`, `smeterRaw`,
+`powerMeterRaw`, `swr` and `supplyVolts` are valid; `ritRaw`, `afGain`,
+`keySpeed`, `preamp` and `vox` are not tracked on this path and return `0`.
 
-**Odpověď:** `200 OK`, `Content-Type: application/json`
+**Response:** `200 OK`, `Content-Type: application/json`
 
 ```json
 {
-  "connected":       true,
-  "btStatus":        "BT linked",
-  "wifiStatus":      "WiFi STA",
-  "wifiRssi":        -67,
-  "fwRev":           "42",
-  "power":           true,
-  "frequency":       14074000,
-  "mode":            "USB",
-  "filter":          1,
-  "radioAddress":    "0xA4",
-  "transceiverType": "IC-705-BT",
-  "radioName":       "IC-705",
-  "tx":              false,
-  "ritRaw":          0,
-  "smeterRaw":       0,
-  "powerMeterRaw":   0,
-  "afGain":          0,
-  "keySpeed":        138,
-  "rfPower":         205,
-  "supplyVolts":     13.80,
-  "swr":             1.0,
-  "preamp":          0,
-  "vox":             0
+  "connected":           true,
+  "catHealthy":          true,
+  "audioReady":          true,
+  "audioTxReady":        true,
+  "lanStatus":           "LAN linked",
+  "btStatus":            "",
+  "wifiStatus":          "WiFi STA",
+  "radioTransport":      "ICOM-LAN",
+  "fullCat":             true,
+  "tuneSupported":       true,
+  "wifiRssi":            -67,
+  "fwRev":               "20260809",
+  "bdSupported":         true,
+  "power":               true,
+  "frequency":           14074000,
+  "mode":                "USB",
+  "filter":              1,
+  "radioAddress":        "0xA4",
+  "transceiverType":     "ICOM-LAN",
+  "radioName":           "IC-705",
+  "tx":                  false,
+  "ritRaw":              0,
+  "smeterRaw":           0,
+  "powerMeterRaw":       0,
+  "afGain":              0,
+  "keySpeed":            138,
+  "rfPower":             0,
+  "rfPowerSeen":         false,
+  "supplyVolts":         13.80,
+  "swr":                 1.0,
+  "preamp":              0,
+  "vox":                 0,
+  "lanDrops":            0,
+  "lanStalls":           0,
+  "lanFilled":           0,
+  "audioTxQueued":       0,
+  "audioTxPackets":      0,
+  "audioTxReplays":      0,
+  "audioTxReplayMisses": 0,
+  "audioTxSendFailures": 0,
+  "audioTxMaxLateMs":    0,
+  "audioRxDropped":      0,
+  "audioMaxSendUs":      0,
+  "dxcConnected":        false
 }
 ```
 
-#### Klíčová pole pro log
+An adapter for TRX2/TRX3 does not have to produce every field. The log reads
+the ones listed below; anything it does not find it treats as absent, not as
+an error. `btStatus` is a legacy field retained for older clients — the
+Bluetooth transport itself has been removed.
 
-| Pole | Typ | Popis |
+#### Key fields for the log
+
+| Field | Type | Description |
 |------|-----|-------|
-| `connected` | bool | TRX je dostupný a odpovídá na CI-V/CAT |
-| `frequency` | uint32 | Aktuální frekvence v Hz |
-| `mode` | string | Aktuální mód (viz seznam níže) |
-| `tx` | bool | TRX právě vysílá |
-| `fwRev` | string | Verze firmware — zobrazuje se v topbaru |
-| `power` | bool | TRX je zapnutý |
+| `connected` | bool | The TRX is reachable and answering CI-V/CAT |
+| `frequency` | uint32 | Current frequency in Hz |
+| `mode` | string | Current mode (see the list below) |
+| `tx` | bool | The TRX is transmitting right now |
+| `fwRev` | string | Firmware revision — shown in the top bar |
+| `power` | bool | The TRX is switched on |
 
-#### Platné hodnoty `mode`
+#### Valid `mode` values
 
 `LSB`, `USB`, `AM`, `CW`, `CW-R`, `RTTY`, `RTTY-R`, `FM`, `DV`
 
-#### Chování klienta
+#### Client behaviour
 
-- Pokud požadavek selže (síťová chyba nebo non-2xx), log přejde do stavu *disconnected*
-  a zachová poslední ručně zadané hodnoty frekvence a módu.
-- Pole `connected: false` při dostupném serveru = TRX je připojen k adaptéru, ale radio nereaguje.
+- If the request fails (network error or non-2xx), the log goes *disconnected*
+  and keeps the last manually entered frequency and mode.
+- `connected: false` from a server that does answer means the TRX is wired to
+  the adapter but the radio is not responding.
 
 ---
 
-### 2.2 `POST /cmd` — příkazy do TRX
+### 2.2 `POST /cmd` — commands to the TRX
 
-**Požadavek:**
+**Request:**
 ```
 POST /cmd HTTP/1.1
-Host: <ip-zarizeni>
+Host: <device-ip>
 Content-Type: application/json
 
-{ "type": "<typ>", ... }
+{ "type": "<type>", ... }
 ```
 
-**Cíl příkazu:** bez parametru míří na **TRX1**. Stejně jako u `/state` lze přidat
-`?radio=lan` a příkaz půjde do rádia na LAN, ať je na kterémkoli slotu — tak
-JS8LAN ladí a přepíná mód. `setFrequency`, `setMode` a `civ.raw` respektují cíl;
-`sendCw` a `abortCw` zůstávají u TRX1.
+**Command target:** with no parameter the command goes to **TRX1**. As with
+`/state`, adding `?radio=lan` sends it to the radio on LAN whichever slot it
+occupies — this is how the DATA/JS8LAN page tunes and changes mode.
+`setFrequency`, `setMode` and `civ.raw` honour the target; `sendCw` and
+`abortCw` stay with TRX1.
 
-**Úspěšná odpověď:** `200 OK`
+**Success:** `200 OK`
 ```json
 { "ok": true }
 ```
 
-**Úspěšná odpověď pro nepodporovaný příkaz:** `200 OK`
+**Success for an unsupported command:** `200 OK`
 ```json
 { "ok": true }
 ```
 
-Adapter vrátí `{"ok": true}` i pro příkazy, které nepodporuje nebo tiše ignoruje — viz sekce [2.5 Nepodporované příkazy](#25-nepodporované-příkazy).
+An adapter returns `{"ok": true}` even for commands it does not support or
+silently ignores — see [2.5 Unsupported commands](#25-unsupported-commands--adapter-and-client-behaviour).
 
-**Chybové odpovědi:**
+**Error responses:**
 
-| HTTP status | JSON | Situace |
+| HTTP status | JSON | Situation |
 |------------|------|---------|
-| 503 | `{"error":"radio_disconnected"}` | TRX není připojen nebo nereaguje |
-| 400 | `{"error":"invalid_frequency"}` | Frekvence mimo rozsah nebo nulová |
-| 400 | `{"error":"invalid_mode"}` | Neznámý název módu |
-| 400 | `{"error":"invalid_hex"}` | Špatný hex payload v `civ.raw` |
-| 400 | `{"error":"missing_text"}` | Chybí text u `sendCw` |
-| 400 | `{"error":"empty body"}` | Prázdné tělo požadavku |
-| 500 | `{"error":"tx_failed"}` | Příkaz se nepodařilo odeslat do TRX |
+| 503 | `{"error":"radio_disconnected"}` | TRX not connected or not responding |
+| 400 | `{"error":"invalid_frequency"}` | Frequency out of range or zero |
+| 400 | `{"error":"invalid_mode"}` | Unknown mode name |
+| 400 | `{"error":"invalid_hex"}` | Bad hex payload in `civ.raw` |
+| 400 | `{"error":"missing_text"}` | `sendCw` without text |
+| 400 | `{"error":"empty body"}` | Empty request body |
+| 500 | `{"error":"tx_failed"}` | The command could not be sent to the TRX |
 
 ---
 
-#### `abortCw` — okamžitě přerušit probíhající CW nebo RTTY/FSK vysílání
+#### `abortCw` — stop CW or RTTY/FSK transmission immediately
 
 ```json
 { "type": "abortCw" }
 ```
 
-- **Tento příkaz nevyžaduje aktivní BT spojení** — zpracuje se i při `radio_disconnected` stavu, protože přerušení RTTY závisí na přímém GPIO, nikoli na CI-V.
-- Mód `CW` / `CW-R` → CI-V příkaz `0x17 0xFF` (datový bajt `FF` zastaví CW keyer IC-705 dle dokumentace: *"FF stops sending CW messages"*); frame: `FE FE A4 E0 17 FF FD`
-- Mód `RTTY` / `RTTY-R` → nastaví volatile příznak `abortFskTransmission`; FSK smyčka ho detekuje na konci aktuálního znaku (max. 165 ms), PTT okamžitě vypne, tail delay se přeskočí
-- Jiné módy → příkaz se přijme a tiše ignoruje (`{"ok": true}`)
-- Adapter pro TRX2/3 by měl příkaz podpořit; pokud ho nepodporuje, vrátí `{"ok": true}` a ignoruje ho
-- Volá se z logu při stisku `Esc` bez otevřeného dialogu
+- **This command does not require a live radio link** — it is processed even in
+  the `radio_disconnected` state, because aborting RTTY depends on direct GPIO,
+  not on CI-V.
+- Mode `CW` / `CW-R` → CI-V command `0x17 0xFF` (the data byte `FF` stops the
+  IC-705 CW keyer per the documentation: *"FF stops sending CW messages"*);
+  frame: `FE FE A4 E0 17 FF FD`
+- Mode `RTTY` / `RTTY-R` → sets the volatile `abortFskTransmission` flag; the
+  FSK loop notices it at the end of the current character (165 ms at most),
+  drops PTT immediately and skips the tail delay
+- Other modes → the command is accepted and silently ignored (`{"ok": true}`)
+- A TRX2/3 adapter should support it; if it does not, it returns `{"ok": true}`
+  and ignores it
+- The log sends it when `Esc` is pressed with no dialog open
 
 ---
 
-#### `sendCw` — odeslat CW nebo RTTY/FSK text
+#### `sendCw` — send CW or RTTY/FSK text
 
 ```json
 { "type": "sendCw", "text": "CQ TEST DE OK1HRA" }
 ```
 
-- Firmware routuje automaticky podle aktuálního módu:
-  - mód `CW` / `CW-R` → CI-V příkaz `0x17` (CW keyer)
-  - mód `RTTY` / `RTTY-R` → FSK keying přes GPIO + PTT
-- Text je ASCII, max. délka závisí na bufferu zařízení (ESP32 implementace: `sizeof(CwMsg) - 1`)
-- Prázdný text → `400 missing_text`
+- The firmware routes automatically by the current mode:
+  - mode `CW` / `CW-R` → CI-V command `0x17` (CW keyer)
+  - mode `RTTY` / `RTTY-R` → FSK keying over GPIO + PTT
+- The text is ASCII; the maximum length depends on the device buffer (ESP32
+  implementation: `sizeof(CwMsg) - 1`)
+- Empty text → `400 missing_text`
 
-Příklady volání z logu:
+Examples of what the log sends:
 ```
-CQ TEST DE OK1HRA OK1HRA TEST    ← makro CQ
-OK1ABC 5nn TT1                   ← makro TXEXCH (číslo QSO)
-tu OK1HRA                        ← makro TU
+CQ TEST DE OK1HRA OK1HRA TEST    ← CQ macro
+OK1ABC 5nn TT1                   ← TXEXCH macro (QSO number)
+tu OK1HRA                        ← TU macro
 ```
 
 ---
 
-#### `setFrequency` — nastavit frekvenci VFO
+#### `setFrequency` — set the VFO frequency
 
 ```json
 { "type": "setFrequency", "frequency": 14074000 }
 ```
 
-- `frequency` — celé číslo v Hz, kladné nenulové
-- ESP32 implementace: CI-V příkaz `0x05` s BCD kódováním 5 bajtů
+- `frequency` — integer in Hz, positive and non-zero
+- ESP32 implementation: CI-V command `0x05` with 5-byte BCD encoding
 
 ---
 
-#### `setMode` — nastavit mód a šířku filtru
+#### `setMode` — set mode and filter width
 
 ```json
 { "type": "setMode", "mode": "USB", "filter": "FIL1" }
 ```
 
-| Parametr | Hodnoty | Popis |
+| Parameter | Values | Description |
 |----------|---------|-------|
-| `mode` | `LSB`, `USB`, `AM`, `CW`, `CW-R`, `RTTY`, `RTTY-R`, `FM`, `DV` | Požadovaný mód |
-| `filter` | `FIL1` (výchozí), `FIL2`, `FIL3` | Šířka filtru |
+| `mode` | `LSB`, `USB`, `AM`, `CW`, `CW-R`, `RTTY`, `RTTY-R`, `FM`, `DV` | Requested mode |
+| `filter` | `FIL1` (default), `FIL2`, `FIL3` | Filter width |
 
-- ESP32 implementace: CI-V příkaz `0x06`; `FIL1` = wide, `FIL2` = medium, `FIL3` = narrow
+- ESP32 implementation: CI-V command `0x06`; `FIL1` = wide, `FIL2` = medium,
+  `FIL3` = narrow
 
 ---
 
-#### `setRitClear` — vynulovat RIT
+#### `setRitClear` — clear RIT
 
 ```json
 { "type": "setRitClear" }
 ```
 
-Voláno automaticky po každém zalogovaném QSO (viz [app.js:648](../data/app.js#L648)).
+Sent automatically after every logged QSO (see [log.js:1854](../data/log.js#L1854)).
 
-- ESP32 implementace: CI-V příkaz `0x21 00 00 00 00 00` (RIT clear)
+- ESP32 implementation: CI-V command `0x21 00 00 00 00 00` (RIT clear)
 
 ---
 
-#### `civ.raw` — raw CI-V průchod (volitelné)
+#### `civ.raw` — raw CI-V passthrough (optional)
 
 ```json
 {
@@ -232,41 +274,44 @@ Voláno automaticky po každém zalogovaném QSO (viz [app.js:648](../data/app.j
 }
 ```
 
-| Pole | Typ | Popis |
+| Field | Type | Description |
 |------|-----|-------|
-| `data` | hex string | CI-V payload bez rámce; ESP32 doplní `FE FE <addr> E0 ... FD` |
-| `framed` | bool (opt.) | `true` = `data` obsahuje kompletní CI-V rámec včetně `FE FE ... FD` |
-| `expectReply` | bool (opt.) | Čekat na datovou odpověď od TRX |
-| `expectAck` | bool (opt.) | Čekat na ACK/NACK |
+| `data` | hex string | CI-V payload without the frame; the ESP32 adds `FE FE <addr> E0 ... FD` |
+| `framed` | bool (opt.) | `true` = `data` already contains a complete CI-V frame including `FE FE ... FD` |
+| `expectReply` | bool (opt.) | Wait for a data reply from the TRX |
+| `expectAck` | bool (opt.) | Wait for ACK/NACK |
 
-Toto je rozšířené rozhraní pro přímé CI-V operace. Pro základní log stačí `sendCw`, `setFrequency`, `setMode` a `setRitClear`.
+This is the extended interface for direct CI-V work. A basic log only needs
+`sendCw`, `setFrequency`, `setMode` and `setRitClear`.
 
 ---
 
-### 2.5 Nepodporované příkazy — chování adapteru a klienta
+### 2.5 Unsupported commands — adapter and client behaviour
 
-Různá zařízení mají různé schopnosti. Pravidlo je jednoduché:
+Different devices have different capabilities. The rule is simple:
 
-**Adapter vrátí `HTTP 200` + `{"ok": true}` pro každý příkaz, který tiše ignoruje.**
+**An adapter returns `HTTP 200` + `{"ok": true}` for every command it silently
+ignores.**
 
-Klient nerozlišuje "provedeno" od "ignorováno" — v obou případech pokračuje normálně.
-Adapter **nesmí** vracet chybový status pro nepodporované příkazy, protože by to narušilo chování klienta.
+The client does not distinguish "done" from "ignored" — it carries on
+normally in both cases. An adapter **must not** return an error status for an
+unsupported command, because that would break the client's behaviour.
 
-#### Chování klienta pro jednotlivé příkazy
+#### Client behaviour per command
 
-| Příkaz | Co klient udělá při `r.ok === false` | Doporučení pro adapter |
+| Command | What the client does on `r.ok === false` | Recommendation for the adapter |
 |--------|--------------------------------------|------------------------|
-| `sendCw` | zobrazí hint **"Send failed"** | vrátit `{"ok": true}` a text zahodit |
-| `abortCw` | tiše ignoruje (`.catch(() => {})`) | vrátit `{"ok": true}`; ideálně zastavit aktivní TX |
-| `setRitClear` | tiše ignoruje (`.catch(() => {})`) | vrátit `{"ok": true}` |
-| `setFrequency` | tiše ignoruje | vrátit `{"ok": true}` |
-| `setMode` | tiše ignoruje | vrátit `{"ok": true}` |
-| `civ.raw` | tiše ignoruje | vrátit `{"ok": true}` |
+| `sendCw` | shows the hint **"Send failed"** | return `{"ok": true}` and drop the text |
+| `abortCw` | silently ignores (`.catch(() => {})`) | return `{"ok": true}`; ideally stop the active TX |
+| `setRitClear` | silently ignores (`.catch(() => {})`) | return `{"ok": true}` |
+| `setFrequency` | silently ignores | return `{"ok": true}` |
+| `setMode` | silently ignores | return `{"ok": true}` |
+| `civ.raw` | silently ignores | return `{"ok": true}` |
 
-#### Příklad minimálního handleru v adapteru
+#### A minimal adapter handler
 
 ```python
-# Python / Flask příklad
+# Python / Flask example
 @app.post("/cmd")
 def cmd():
     body = request.get_json(silent=True) or {}
@@ -276,38 +321,40 @@ def cmd():
         text = body.get("text", "")
         if not text:
             return {"error": "missing_text"}, 400
-        my_keyer_send(text)          # vlastní implementace
+        my_keyer_send(text)          # your own implementation
         return {"ok": True}
 
     if t == "setRitClear":
-        my_rit_clear()               # nebo nic, pokud nepodporováno
+        my_rit_clear()               # or nothing, if unsupported
         return {"ok": True}
 
-    # Všechny ostatní typy — tiše přijmout, neudělat nic
+    # Every other type — accept silently, do nothing
     return {"ok": True}
 ```
 
-#### Kdy vrátit chybu
+#### When to return an error
 
-Chybový status (`4xx`, `5xx`) má smysl pouze tehdy, když:
-- tělo požadavku je prázdné nebo nevalidní JSON → `400 empty body`
-- TRX je fyzicky nedostupný a příkaz nelze splnit ani částečně → `503 radio_disconnected`
-- interní chyba adapteru → `500 tx_failed`
+An error status (`4xx`, `5xx`) is only appropriate when:
+- the request body is empty or invalid JSON → `400 empty body`
+- the TRX is physically unreachable and the command cannot be honoured even
+  partially → `503 radio_disconnected`
+- the adapter hit an internal error → `500 tx_failed`
 
-**Nikdy nevracet `400 unsupported_type`** pro příkazy, které adapter nezná — klient by zobrazil chybový hint.
+**Never return `400 unsupported_type`** for a command the adapter does not
+know — the client would show an error hint.
 
 ---
 
-### 2.3 `GET /log-config` — konfigurace logu
+### 2.3 `GET /log-config` — log configuration
 
 ```
 GET /log-config HTTP/1.1
 ```
 
-**Odpověď:** `200 OK`, `Content-Type: application/json`
-Obsah: libovolný JSON objekt uložený klientem (nebo `{}` pokud prázdný).
+**Response:** `200 OK`, `Content-Type: application/json`
+Body: any JSON object the client stored (or `{}` when empty).
 
-Relevantní pole, která log zapisuje a čte:
+The fields the log writes and reads:
 ```json
 {
   "trx1Label": "IC-705",
@@ -318,7 +365,7 @@ Relevantní pole, která log zapisuje a čte:
 
 ---
 
-### 2.4 `POST /log-config` — uložení konfigurace logu
+### 2.4 `POST /log-config` — store the log configuration
 
 ```
 POST /log-config HTTP/1.1
@@ -327,80 +374,85 @@ Content-Type: application/json
 { "trx1Label": "IC-705", "trx2Label": "FT-991", "trx3Label": "SDR" }
 ```
 
-**Odpověď:** `{"ok": true}`
+**Response:** `{"ok": true}`
 
-- Zařízení uloží JSON as-is (ESP32 do SPIFFS `/log-config.json`)
-- Validace: neprázdný JSON objekt, max. 2048 B
+- The device stores the JSON as-is (the ESP32 puts it in `/log-config.json` on
+  the filesystem)
+- Validation: a non-empty JSON object, 2048 B maximum
 
 ---
 
-## 3. Legacy rozhraní (zachovat pro kompatibilitu)
+## 3. Legacy interfaces (kept for compatibility)
 
-### 3.1 HTTP CAT port (výchozí 81)
+### 3.1 HTTP CAT port (default 81)
 
-Jednoduchý HTTP server pro externí logery (N1MM+, Win-Test):
+A simple HTTP server for external loggers (N1MM+, Win-Test):
 
 ```
 GET http://<ip>:81/ HTTP/1.1
 ```
 
-**Odpověď:** plain text
+**Response:** plain text
 ```
 14074000|USB|
 ```
-nebo při vypnutém TRX:
+or, with the TRX switched off:
 ```
 0|OFF|
 ```
 
-Formát: `<frekvence_Hz>|<mód>|`
+Format: `<frequency_Hz>|<mode>|`
 
 ---
 
-### 3.2 UDP CW/FSK port (výchozí 89)
+### 3.2 UDP CW/FSK port (default 89)
 
-Přijímá ASCII text, odesílá jako CW nebo FSK.
+Accepts ASCII text and sends it as CW or FSK.
 
 ```bash
 echo -n "cq de ok1hra;" | nc -u -w1 192.168.1.x 89
 ```
 
-- Každý paket = jeden CW/FSK text k odeslání
-- `;` na konci není vyžadováno, ale bývá zvykem (konvence N1MM+)
-- Routování CW vs. FSK podle aktuálního módu TRX (stejné jako `sendCw`)
+- One packet = one CW/FSK text to send
+- The trailing `;` is not required but is customary (the N1MM+ convention)
+- CW vs. FSK routing follows the TRX's current mode (the same as `sendCw`)
 
 ---
 
-### 3.3 UDP CAT port (výchozí 90)
+### 3.3 UDP CAT port (default 90)
 
-Přijímá raw CI-V bajty (binárně), z bezpečnostních důvodů je implementován pouze příkaz clear RIT:
+Accepts raw CI-V bytes (binary). For safety only the clear-RIT command is
+implemented:
 
 ```
-Byte[0] = 0x21  →  odeslat clear RIT do TRX
+Byte[0] = 0x21  →  send clear RIT to the TRX
 ```
 
 ---
 
-## 4. Minimální implementace pro TRX2 / TRX3
+## 4. Minimum implementation for TRX2 / TRX3
 
-Aby webový log plně fungoval s druhým nebo třetím zařízením, musí adapter implementovat tyto endpointy:
+For the web log to work fully with a second or third device, the adapter has to
+implement these endpoints:
 
-| Endpoint | Metoda | Priorita |
+| Endpoint | Method | Priority |
 |----------|--------|----------|
-| `/state` | GET | **povinné** — bez tohoto log neví nic o stavu TRX |
-| `/cmd` s `sendCw` | POST | **povinné** — makra CQ, TXEXCH, TU |
-| `/cmd` s `setRitClear` | POST | doporučené — volá se po každém QSO |
-| `/cmd` s `setFrequency` | POST | volitelné — jen pokud zařízení umí nastavit VFO |
-| `/cmd` s `setMode` | POST | volitelné |
-| `/log-config` | GET + POST | volitelné — lze vrátit `{}` |
+| `/state` | GET | **required** — without it the log knows nothing about the TRX |
+| `/cmd` with `sendCw` | POST | **required** — the CQ, TXEXCH and TU macros |
+| `/cmd` with `setRitClear` | POST | recommended — sent after every QSO |
+| `/cmd` with `setFrequency` | POST | optional — only if the device can set the VFO |
+| `/cmd` with `setMode` | POST | optional |
+| `/log-config` | GET + POST | optional — may return `{}` |
 
 ---
 
-## 5. Rozšíření klienta pro více TRX
+## 5. Extending the client to several TRX
 
-V současné implementaci (`app.js`) je `activeTrx` jen UI label — veškerý HTTP provoz jde vždy na stejnou IP (ESP32). Pro skutečné přepínání TRX je potřeba:
+In the current implementation (`data/log.js`) `activeTrx` is only a UI label —
+all HTTP traffic always goes to the same IP (the ESP32). Real TRX switching
+needs:
 
-1. Přidat do `/log-config` mapování TRX → IP adresa:
+1. A TRX → IP address map in `/log-config`:
    ```json
    {
      "trx1Label": "IC-705",  "trx1Url": "",
@@ -408,59 +460,53 @@ V současné implementaci (`app.js`) je `activeTrx` jen UI label — veškerý H
      "trx3Label": "SDR",     "trx3Url": "http://192.168.1.51"
    }
    ```
-   Prázdné `trxUrl` = použij lokální ESP32 (výchozí chování).
+   An empty `trxUrl` means "use the local ESP32" (the default behaviour).
 
-2. `pollState()` a `handlePostCmd()` v `app.js` cílí na `trxBaseUrl()` podle `app.activeTrx`.
+2. `pollState()` and `handlePostCmd()` in `log.js` targeting `trxBaseUrl()`
+   derived from `app.activeTrx`.
 
-3. Přepnutí TRX → okamžitý nový poll `/state` na novou adresu.
+3. Switching the TRX triggering an immediate fresh `/state` poll against the
+   new address.
 
 ---
 
-## 6. Souhrn CI-V příkazů implementovaných v ESP32
+## 6. CI-V commands implemented in the ESP32
 
-| CI-V cmd | Hex | Funkce |
+| CI-V cmd | Hex | Function |
 |----------|-----|--------|
-| Read frequency | `0x03` | Čtení aktuální frekvence VFO |
-| Read mode | `0x04` | Čtení aktuálního módu a filtru |
-| Set frequency | `0x05` | Nastavení frekvence VFO (5 BCD bajtů) |
-| Set mode | `0x06` | Nastavení módu a filtru |
-| Send CW | `0x17` | Odeslání CW textu keyer bufferem |
-| Stop CW | `0x17 0xFF` | Okamžité přerušení aktuálně odesílané CW zprávy (`FF` = stop) |
-| RIT clear | `0x21 00 00 00 00 00` | Nulování RIT offsetu |
-| CI-V transceive | `1A 05 01 31 01` | Zapnutí push notifikací ze staničky |
-| Quick split | `1A 05 00 45` | Čtení split stavu |
+| Read frequency | `0x03` | Read the current VFO frequency |
+| Read mode | `0x04` | Read the current mode and filter |
+| Set frequency | `0x05` | Set the VFO frequency (5 BCD bytes) |
+| Set mode | `0x06` | Set the mode and filter |
+| Send CW | `0x17` | Send CW text through the keyer buffer |
+| Stop CW | `0x17 0xFF` | Abort the CW message being sent (`FF` = stop) |
+| RIT clear | `0x21 00 00 00 00 00` | Zero the RIT offset |
+| CI-V transceive | `1A 05 01 31 01` | Enable push notifications from the radio |
+| Quick split | `1A 05 00 45` | Read the split state |
 
-CI-V rámec má strukturu: `FE FE <radio_addr> E0 <cmd> [<payload>] FD`
+A CI-V frame is structured as `FE FE <radio_addr> E0 <cmd> [<payload>] FD`
 
 - `FE FE` = start bytes
-- `<radio_addr>` = adresa IC-705, typicky `0xA4` (konfigurováno v SETUP)
-- `E0` = adresa controlleru (ESP32)
+- `<radio_addr>` = the radio's address, typically `0xA4` (configured in SETUP)
+- `E0` = the controller address (the ESP32)
 - `FD` = stop byte
 
 ---
 
----
+## 7. SETUP API fields
 
-## 7. Změny SETUP API (2026-05-20)
+### `/setup-data.json`
 
-### `/setup-data.json` — nová pole
-
-| Pole | Typ | Popis |
+| Field | Type | Description |
 |------|-----|-------|
-| `ipLastOctet` | uint8 | Poslední oktet IP adresy zařízení (0 v AP módu). Slouží k návrhu hodnoty `Own NET_ID` v TrxNet sekci. |
-| `trxnetidIsDefault` | bool | `true` pokud EEPROM byte 41 nebyl nikdy uložen (factory default) — frontend pak automaticky vyplní `trxnetid` z `ipLastOctet`. |
-| `trx2conntype` | uint8 | Typ připojení TRX2: `0` = TrxNet, `1` = CI-V. Uloženo v EEPROM byte 44. |
-| `trx3conntype` | uint8 | Typ připojení TRX3: `0` = TrxNet, `1` = CI-V. Uloženo v EEPROM byte 47. |
+| `ipLastOctet` | uint8 | Last octet of the device IP address (0 in AP mode). Used to suggest the `Own NET_ID` value in the TrxNet section. |
+| `trxnetidIsDefault` | bool | `true` when EEPROM byte 41 has never been written (factory default) — the frontend then fills `trxnetid` from `ipLastOctet`. |
+| `trx2conntype` | uint8 | TRX2 connection type: `0` = TrxNet, `1` = CI-V. Stored in EEPROM byte 44. |
+| `trx3conntype` | uint8 | TRX3 connection type: `0` = TrxNet, `1` = CI-V. Stored in EEPROM byte 47. |
 
-### `/config/download` a `/config/upload` — nová pole
+### `/config/download` and `/config/upload`
 
-| Pole | Typ | Popis |
+| Field | Type | Description |
 |------|-----|-------|
-| `trx2conntype` | uint8 | Typ připojení TRX2 (0=TrxNet, 1=CI-V). |
-| `trx3conntype` | uint8 | Typ připojení TRX3 (0=TrxNet, 1=CI-V). |
-
-*Poznámka: CI-V připojení pro TRX2/3 (conntype=1) není v aktuálním firmware implementováno — volba je uložena v EEPROM a připravena pro budoucí release.*
-
----
-
-*Aktualizováno 2026-05-20*
+| `trx2conntype` | uint8 | TRX2 connection type (0=TrxNet, 1=CI-V). |
+| `trx3conntype` | uint8 | TRX3 connection type (0=TrxNet, 1=CI-V). |

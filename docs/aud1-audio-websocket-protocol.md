@@ -1,22 +1,24 @@
-# AUD1 — audio WebSocket protokol
+# AUD1 — audio WebSocket protocol
 
-Stav: návrh ověřovaný pouze v `prototype/js8-core-prototype`; produkční
-firmware ani stránka DATA jej zatím nepoužívají.
+Status: in production. The firmware serves this protocol on port 83 at
+`/audiows` (`wifilt.ino`, `aud1_ws_parser.h`, `aud1_tx_state.h`) and the DATA
+page speaks it through `data/js8-aud1.js`. An isolated reference implementation
+of the same wire format lives in `prototype/js8-core-prototype`, where the
+edge cases below are tested without a radio:
 
-Izolovaná referenční implementace nyní obsahuje:
+- a firmware-side `Aud1RxEmitter` with two-phase `prepare`/`commit`, so that a
+  failed WebSocket write produces a gap and a `DISCONTINUITY` rather than a
+  fabricated sequence number;
+- a strict browser `WsAudioSource` that requires `hello`, enforces the
+  `streamId` match, preserves the original wire bytes and holds the first five
+  packets back until the UTC epoch is locked;
+- delivery of `epoch(streamId, anchorUtcMs)` to the Worker before the first
+  `audio` packet;
+- Node and native Chrome WebSocket tests for duplicate, gap and reconnect.
 
-- firmware-side `Aud1RxEmitter` s dvoufázovým `prepare/commit`, aby neúspěšný
-  WebSocket zápis vytvořil mezeru a `DISCONTINUITY`, nikoli falešnou sekvenci;
-- strict browser `WsAudioSource`, který vyžaduje `hello`, shodu `streamId`,
-  zachovává původní wire a prvních pět paketů drží do uzamčení UTC epochy;
-- předání `epoch(streamId, anchorUtcMs)` Workeru před prvním `audio` paketem;
-- Node i nativní Chrome WebSocket test pro duplikát, mezeru a reconnect.
+## Connection setup
 
-Tyto části nejsou importovány do `wifilt.ino` ani `data/data.js`.
-
-## Navázání spojení
-
-Po otevření `/audiows` server nejprve pošle textovou JSON zprávu:
+After `/audiows` is opened the server sends a text JSON message first:
 
 ```json
 {
@@ -30,48 +32,49 @@ Po otevření `/audiows` server nejprve pošle textovou JSON zprávu:
 }
 ```
 
-`streamId` je náhodná nenulová 32bitová identita epochy. Změní se při restartu
-audio session, resetu čítače vzorků nebo novém přihlášení k rádiu. Klient při
-změně zahodí rozpracované sloty; nesmí rozdíl interpretovat jako paketovou
-ztrátu v předchozí epoše.
+`streamId` is a random non-zero 32-bit epoch identity. It changes on an audio
+session restart, on a sample counter reset and on a new login to the radio. On
+a change the client discards partially assembled slots; it must not read the
+difference as packet loss inside the previous epoch.
 
-## Binární zpráva
+## Binary message
 
-Každá WebSocket binární zpráva obsahuje jednu 40bajtovou hlavičku a právě jeden
-payload. Všechna vícebajtová pole hlavičky jsou unsigned big-endian.
+Every binary WebSocket message carries exactly one 40-byte header and exactly
+one payload. All multi-byte header fields are unsigned big-endian.
 
-| Offset | Délka | Pole | Význam |
+| Offset | Length | Field | Meaning |
 |---:|---:|---|---|
 | 0 | 4 | magic | ASCII `AUD1` |
 | 4 | 1 | version | `1` |
 | 5 | 1 | kind | `1=RX_ULAW`, `2=RX_PCM16`, `3=TX_PCM16` |
-| 6 | 2 | flags | bitové příznaky níže |
+| 6 | 2 | flags | bit flags, below |
 | 8 | 2 | headerBytes | `40` |
-| 10 | 2 | reserved | musí být nula |
-| 12 | 4 | streamId | identita audio epochy |
-| 16 | 4 | sequence | pořadí zprávy v daném směru, modulo 2^32 |
-| 20 | 4 | sampleRate | vzorků za sekundu |
-| 24 | 8 | firstSample | index prvního audio vzorku od začátku epochy |
-| 32 | 4 | txId | nula pro RX, identita TX operace pro TX |
-| 36 | 4 | payloadBytes | přesná délka zbytku zprávy |
+| 10 | 2 | reserved | must be zero |
+| 12 | 4 | streamId | audio epoch identity |
+| 16 | 4 | sequence | message order in that direction, modulo 2^32 |
+| 20 | 4 | sampleRate | samples per second |
+| 24 | 8 | firstSample | index of the first audio sample since the epoch began |
+| 32 | 4 | txId | zero for RX, the TX operation identity for TX |
+| 36 | 4 | payloadBytes | exact length of the rest of the message |
 
-Příznaky: `0x0001 FIRST`, `0x0002 LAST`, `0x0004 DISCONTINUITY`, `0x0008
-ABORT`. Neznámé bity jsou ve verzi 1 chyba protokolu.
+Flags: `0x0001 FIRST`, `0x0002 LAST`, `0x0004 DISCONTINUITY`, `0x0008 ABORT`.
+Unknown bits are a protocol error in version 1.
 
-`RX_ULAW` má jeden G.711 µ-law byte na vzorek. PCM payload je signed PCM16
-little-endian; jeho délka musí být sudá. Endianita PCM je záměrně odlišná od
-síťové hlavičky a musí být explicitně implementovaná přes `DataView`, ne přes
-neověřený pohled hostitelského typu.
+`RX_ULAW` carries one G.711 µ-law byte per sample. A PCM payload is signed
+PCM16 little-endian and its length must be even. The PCM endianness
+deliberately differs from the network header and has to be implemented
+explicitly through `DataView`, never through an unchecked host-typed view.
 
-`firstSample` je autorita pro media time. Příchozí čas WebSocket zprávy slouží
-jen k měření jitteru. Mezera v `firstSample` se doplní nulami a vyvolá
-discontinuity; překrytý payload se ořízne, úplný duplikát se zahodí.
+`firstSample` is the authority for media time. The arrival time of the
+WebSocket message is only used to measure jitter. A gap in `firstSample` is
+filled with zeros and raises a discontinuity; an overlapping payload is
+trimmed and a complete duplicate is discarded.
 
-## Byte-level vektor
+## Byte-level vector
 
-Hlavička `RX_ULAW`, flags `FIRST|DISCONTINUITY`, `streamId=0x01020304`,
+An `RX_ULAW` header, flags `FIRST|DISCONTINUITY`, `streamId=0x01020304`,
 `sequence=0x05060708`, 8 kHz, `firstSample=0x0000000100000002`,
-`txId=0x0a0b0c0d` a payload `ff 7f 00`:
+`txId=0x0a0b0c0d` and payload `ff 7f 00`:
 
 ```text
 41 55 44 31 01 01 00 05 00 28 00 00 01 02 03 04
@@ -79,43 +82,48 @@ Hlavička `RX_ULAW`, flags `FIRST|DISCONTINUITY`, `streamId=0x01020304`,
 0a 0b 0c 0d 00 00 00 03 ff 7f 00
 ```
 
-Příjemce musí odmítnout špatné magic/version, jinou délku hlavičky, nenulové
-reserved, neznámý kind/flag, nulový sample rate, nesoulad `payloadBytes` a
-lichou délku PCM.
+A receiver must reject a bad magic or version, a different header length, a
+non-zero reserved field, an unknown kind or flag, a zero sample rate, a
+`payloadBytes` mismatch and an odd PCM length.
 
-## Bezpečné TX minimum
+## The safe TX minimum
 
-Samotný binární stream ani `tx-ready` nesmí zapnout PTT. `tx-ready(txId)` pouze
-potvrzuje, že firmware ověřil požadavek a rezervoval omezený ring buffer; rádio
-je stále PTT OFF. Klient začne posílat audio tempem 20 ms před cílovým slotem.
-Firmware smí zaklíčovat teprve v cílovém slotu a pouze s kompletním minimálním
-prebufferem. `LAST` ukončuje audio, `ABORT` zahodí buffer a všechny timeouty
-nebo odpojení musí ve firmware skončit PTT OFF.
+Neither the binary stream nor `tx-ready` may key PTT. `tx-ready(txId)` only
+confirms that the firmware validated the request and reserved a bounded ring
+buffer; the radio is still PTT OFF. The client starts sending audio 20 ms
+ahead of the target slot. The firmware may key only in the target slot and
+only with the complete minimum prebuffer. `LAST` ends the audio, `ABORT`
+discards the buffer, and every timeout or disconnect must end at PTT OFF in
+the firmware.
 
-## TX řídicí zprávy prototypu
+## TX control messages
 
-Každý modemový frame má vlastní nenulové `txId` a vlastní PTT cyklus. Klient
-nejprve odešle textovou zprávu `tx.prepare` s poli `txId`, `sampleRate`,
-`samples`, `packets`, `mode`, `toneHz`, `slotUtcMs`, `prebufferSamples` a
-`packetMs=20`. Binární `TX_PCM16` smí začít odesílat až po odpovědi serveru
-`tx-ready` se stejným `txId`, ale `tx-ready` není oprávnění k PTT.
+Every modem frame gets its own non-zero `txId` and its own PTT cycle. The
+client first sends a text `tx.prepare` message with the fields `txId`,
+`sampleRate`, `samples`, `packets`, `mode`, `toneHz`, `slotUtcMs`,
+`prebufferSamples` and `packetMs=20`. Binary `TX_PCM16` may only start once the
+server has answered `tx-ready` with the same `txId` — and `tx-ready` is still
+not permission to key.
 
-Klient začne v `slotUtcMs - prebufferSamples/sampleRate`, posílá jeden 20ms
-paket každých 20 ms a omezuje catch-up burst. Firmware mapuje browserový cílový
-slot na svůj monotónní čas; přesnost této mapy musí být změřena při dummy-load
-testu. Pokud v cílovém okamžiku chybí prebuffer, sekvence/`firstSample` nesedí,
-ring přeteče nebo po PTT nastane underrun, celý `txId` přejde do fault a PTT OFF.
+The client starts at `slotUtcMs - prebufferSamples/sampleRate`, sends one 20 ms
+packet every 20 ms and bounds the catch-up burst. The firmware maps the
+browser's target slot onto its own monotonic clock; the accuracy of that map
+has to be measured under a dummy load. If the prebuffer is short at the target
+instant, if sequence/`firstSample` disagree, if the ring overflows, or if an
+underrun follows PTT, the whole `txId` goes to fault and PTT OFF.
 
-Produkční JS8LAN používá `prebufferSamples=48000` (1 s) a dovolí dohnat nejvýše
-25 paketů (500 ms). Firmware po převodu na 8kHz uLaw drží 12288B ring (1,536 s),
-takže krátký zásek mobilního prohlížeče nevede k vynechání slotu a současně
-zůstává catch-up omezený. PTT se během plnění ring bufferu nezapíná.
+Production JS8LAN uses `prebufferSamples=48000` (1 s) and allows at most 25
+packets (500 ms) of catch-up. After conversion to 8 kHz µ-law the firmware
+holds a 12288-byte ring (1.536 s), so a brief stall in a mobile browser does
+not cost the slot while catch-up stays bounded. PTT is not keyed while the ring
+buffer is being filled.
 
-První a poslední audio blok nesou příznaky `FIRST` a `LAST`. Firmware průběžně
-hlásí `tx-state`; po fyzickém vyprázdnění audio bufferu odešle `tx-drained`.
-Chyba se hlásí jako `tx-error`. Klient může přenos ukončit zprávou `tx.abort`;
-firmware pak zahodí čekající audio a potvrdí stav s PTT OFF. Timeout, ztráta
-WebSocketu, chybná sekvence, underrun i reconnect musí bez výjimky skončit PTT
+The first and last audio block carry the `FIRST` and `LAST` flags. The firmware
+reports `tx-state` as it goes and sends `tx-drained` once the audio buffer has
+physically emptied. Failures are reported as `tx-error`. The client can end a
+transmission with `tx.abort`; the firmware then discards pending audio and
+acknowledges the state with PTT OFF. A timeout, a lost WebSocket, a bad
+sequence, an underrun and a reconnect must all, without exception, end at PTT
 OFF.
 
 ```text
@@ -126,10 +134,10 @@ QUEUED -> PREPARING -> WAITING_SLOT -> PREBUFFERING -> TRANSMITTING
 TRANSMITTING -> DRAINING -> COMPLETED -> PTT OFF
 ```
 
-Vícerámcová zpráva zopakuje tento handshake pro každý frame a jeho následující
-časový slot. Potvrzení jednoho `txId` nikdy neopravňuje odeslat další frame.
+A multi-frame message repeats this handshake for every frame and its following
+time slot. Acknowledging one `txId` never authorises sending the next frame.
 
-Izolovaný `Aud1TxGate` ověřuje capture, prebuffer, kontinuitu, omezenou velikost
-bufferu, drain, abort, disconnect a underrun. Produkční převod PCM16/48 kHz na
-rádiový 8kHz µ-law stream a měření slotového času na zařízení zůstávají součástí
-dummy-load brány.
+The isolated `Aud1TxGate` covers capture, prebuffer, continuity, bounded buffer
+size, drain, abort, disconnect and underrun. The production conversion of
+PCM16/48 kHz into the radio's 8 kHz µ-law stream, and the measurement of slot
+timing on the device, remain part of the dummy-load gate.
