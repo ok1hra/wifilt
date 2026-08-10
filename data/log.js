@@ -730,6 +730,17 @@
     return s.replace(/0/g, 'T').replace(/9/g, 'N');
   }
 
+  // ── Sent report ────────────────────────────────────────────────────────────
+  // The operator's Snt field decides what goes on the air, so the log and the
+  // air cannot disagree. Anything unusable falls back to the plain 599, which
+  // keeps the untouched case byte-for-byte identical to the old hardcoded text
+  // — the CW path sends the payload verbatim, without upper-casing it.
+  function rstText(ctx, abbrev) {
+    const raw = String(ctx.rstSent || '').trim().toUpperCase();
+    const rst = /^[1-5][1-9N]{1,2}$/.test(raw) ? raw.replace(/N/g, '9') : '599';
+    return abbrev ? rst.replace(/0/g, 't').replace(/9/g, 'n') : rst;
+  }
+
   // ── Build macro text ───────────────────────────────────────────────────────
 
   /**
@@ -737,7 +748,7 @@
    *
    * ctx = {
    *   mode, freqHz, stationCall, call, exchangeType,
-   *   exchange, qsoNumber, prevQsoNumber, myLocator, cwAbbrev
+   *   exchange, qsoNumber, prevQsoNumber, myLocator, cwAbbrev, rstSent
    * }
    * type: 'CQ' | 'TXEXCH' | 'TXEXCHSP' | 'TXEXCHSP2' | 'TU'
    */
@@ -745,7 +756,8 @@
     const mg     = modeGroup(ctx.mode);
     const vhf    = isVhfPlus(ctx.freqHz);
     const abbrev = ctx.cwAbbrev !== false;
-    const rst    = abbrev ? '5nn' : '599';
+    const rst    = rstText(ctx, abbrev);   // CW: abbreviated (5nn)
+    const rstPlain = rstText(ctx, false);      // RTTY: always digits
     const nr     = cwNumber(ctx.qsoNumber  || 1, abbrev);
     const prevNr = cwNumber(ctx.prevQsoNumber || Math.max(1, (ctx.qsoNumber || 1) - 1), abbrev);
     const loc    = ctx.myLocator || '';
@@ -762,10 +774,10 @@
       case 'TXEXCH': {
         if (mg === 'RTTY') {
           const nrStr  = String(ctx.qsoNumber || 1).padStart(3, '0');
-          const excStr = ctx.exchangeType === 'NRUTC' ? ('599-' + nrStr + '-' + utcHHMM())
-                       : ctx.exchangeType === 'NRLOC' ? ('599-' + nrStr + '-' + loc)
-                       : ctx.exchangeType === 'NR'    ? '599-' + nrStr
-                       : (ctx.exchange ? '599-' + ctx.exchange : '599');
+          const excStr = ctx.exchangeType === 'NRUTC' ? (rstPlain + '-' + nrStr + '-' + utcHHMM())
+                       : ctx.exchangeType === 'NRLOC' ? (rstPlain + '-' + nrStr + '-' + loc)
+                       : ctx.exchangeType === 'NR'    ? rstPlain + '-' + nrStr
+                       : (ctx.exchange ? rstPlain + '-' + ctx.exchange : rstPlain);
           return '\r\n ' + dxCall + ' ' + dxCall + ' ' + excStr + ' ' + excStr;
         }
         if (mg === 'CW') {
@@ -783,10 +795,10 @@
       case 'TXEXCHSP': {
         if (mg === 'RTTY') {
           const nrStr  = String(ctx.qsoNumber || 1).padStart(3, '0');
-          const excStr = ctx.exchangeType === 'NRUTC' ? ('599-' + nrStr + '-' + utcHHMM())
-                       : ctx.exchangeType === 'NRLOC' ? ('599-' + nrStr + '-' + loc)
-                       : ctx.exchangeType === 'NR'    ? '599-' + nrStr
-                       : (ctx.exchange ? '599-' + ctx.exchange : '599');
+          const excStr = ctx.exchangeType === 'NRUTC' ? (rstPlain + '-' + nrStr + '-' + utcHHMM())
+                       : ctx.exchangeType === 'NRLOC' ? (rstPlain + '-' + nrStr + '-' + loc)
+                       : ctx.exchangeType === 'NR'    ? rstPlain + '-' + nrStr
+                       : (ctx.exchange ? rstPlain + '-' + ctx.exchange : rstPlain);
           return '\r\n ' + dxCall + ' ' + dxCall + ' ' + excStr + ' ' + excStr;
         }
         if (mg === 'CW') {
@@ -805,10 +817,10 @@
         const pnCw  = cwNumber(pn, abbrev);
         const pnStr = String(pn).padStart(3, '0');
         if (mg === 'RTTY') {
-          const excStr = ctx.exchangeType === 'NRUTC' ? ('599-' + pnStr + '-' + utcHHMM())
-                       : ctx.exchangeType === 'NRLOC' ? ('599-' + pnStr + '-' + loc)
-                       : ctx.exchangeType === 'NR'    ? '599-' + pnStr
-                       : (ctx.exchange ? '599-' + ctx.exchange : '599');
+          const excStr = ctx.exchangeType === 'NRUTC' ? (rstPlain + '-' + pnStr + '-' + utcHHMM())
+                       : ctx.exchangeType === 'NRLOC' ? (rstPlain + '-' + pnStr + '-' + loc)
+                       : ctx.exchangeType === 'NR'    ? rstPlain + '-' + pnStr
+                       : (ctx.exchange ? rstPlain + '-' + ctx.exchange : rstPlain);
           return '\r\n ' + dxCall + ' ' + dxCall + ' ' + excStr + ' ' + excStr;
         }
         if (mg === 'CW') {
@@ -886,8 +898,16 @@ const app = {
   tx:         false,
   fwRev:      '',
 
-  // RST field: true if operator manually edited it for the current QSO
-  rstDirty:   false,
+  // RST fields: true if the operator manually edited one for the current QSO.
+  // Tracked per field so editing the received report does not freeze the sent
+  // one from following a mode change (and the other way round).
+  rstSentDirty: false,
+  rstRcvdDirty: false,
+
+  // The sent report as it actually went on the air, captured when a macro
+  // carrying it was successfully transmitted. The log records this, not the
+  // field — editing the field afterwards cannot rewrite what was already sent.
+  rstSentTx:  '',
 
   // Form state machine
   formState:      'IDLE',  // IDLE | CALL_ENTERED | EXCHANGE_ENTERED | LOGGED
@@ -910,7 +930,8 @@ const BACKUP_IDLE_MS = 30 * 60 * 1000;
 // ── DOM references ────────────────────────────────────────────────────────────
 
 const inpCall     = document.getElementById('inpCall');
-const inpRst      = document.getElementById('inpRst');
+const inpRst      = document.getElementById('inpRst');      // sent
+const inpRstRcvd  = document.getElementById('inpRstRcvd');  // received
 const inpExch     = document.getElementById('inpExch');
 const btnRunMode  = document.getElementById('btnRunMode');
 const logHint     = document.getElementById('logHint');
@@ -954,6 +975,23 @@ function rstDefault(mode) {
     default:
       return '599';
   }
+}
+
+// A report is only allowed on the air (and into the log as "sent") once it is
+// complete. Without this a half-typed field would be keyed: the operator clears
+// 599, types "5", and in RUN mode the next Enter sends TXEXCH straight away.
+// N is the CW shorthand for 9 and is accepted as typed.
+function validRst(raw) {
+  const s = String(raw || '').trim().toUpperCase();
+  return /^[1-5][1-9N]{1,2}$/.test(s) ? s.replace(/N/g, '9') : '';
+}
+
+// Both RST fields follow the mode until the operator touches them.
+function resetRstFields() {
+  inpRst.value     = rstDefault(app.mode);
+  inpRstRcvd.value = rstDefault(app.mode);
+  app.rstSentDirty = false;
+  app.rstRcvdDirty = false;
 }
 
 function utcHHMM() {
@@ -1017,7 +1055,8 @@ function applyState(data) {
     const newMode = (data.mode || 'USB').trim();
     if (newMode !== app.mode) {
       app.mode = newMode;
-      if (!app.rstDirty) inpRst.value = rstDefault(app.mode);
+      if (!app.rstSentDirty) inpRst.value     = rstDefault(app.mode);
+      if (!app.rstRcvdDirty) inpRstRcvd.value = rstDefault(app.mode);
     }
   }
 
@@ -1374,7 +1413,8 @@ normaliseUpper(inpCall);
 normaliseUpper(inpExch);
 inpExch.addEventListener('input', updateExchLocatorPreview);
 
-inpRst.addEventListener('input', () => { app.rstDirty = true; });
+inpRst.addEventListener('input',     () => { app.rstSentDirty = true; });
+inpRstRcvd.addEventListener('input', () => { app.rstRcvdDirty = true; });
 
 // ── DXCC lookup on Call input ─────────────────────────────────────────────────
 
@@ -1445,8 +1485,8 @@ function formStateOf() {
 function clearForm() {
   inpCall.value    = '';
   inpExch.value    = '';
-  inpRst.value     = rstDefault(app.mode);
-  app.rstDirty     = false;
+  resetRstFields();
+  app.rstSentTx    = '';
   app.prevCallSent = '';
   app.skipNextTu   = false;
   app.formState    = 'IDLE';
@@ -1469,6 +1509,7 @@ function macroCtx(overrides) {
     call:         inpCall.value.trim(),
     exchangeType: ['NR','NRUTC','NRLOC'].includes(de) ? de : 'STATIC',
     exchange:     de,
+    rstSent:      validRst(inpRst.value) || rstDefault(app.mode),
     qsoNumber:    log.nextQsoNumber    || 1,
     prevQsoNumber:(log.nextQsoNumber   || 1) - 1,
     myLocator:    log.myLocator        || '',
@@ -1479,6 +1520,9 @@ function macroCtx(overrides) {
 }
 
 // ── Send CW/RTTY macro via WebSocket ─────────────────────────────────────────
+
+// Macros that put the sent report on the air. CQ and TU do not carry one.
+const RST_BEARING_MACROS = ['TXEXCH', 'TXEXCHSP', 'TXEXCHSP2'];
 
 function sendMacroText(macroType) {
   if (!window.LogMacros) return;
@@ -1493,8 +1537,12 @@ function sendMacroText(macroType) {
     showHint('TRX not connected');
     return;
   }
-  LogMacros.sendMacro(macroType, macroCtx()).then(ok => {
-    if (!ok) showHint('Send failed');
+  const ctx = macroCtx();
+  LogMacros.sendMacro(macroType, ctx).then(ok => {
+    if (!ok) { showHint('Send failed'); return; }
+    // Only these three carry the report; CQ and TU do not. A failed POST is not
+    // recorded — nothing left the interface.
+    if (RST_BEARING_MACROS.includes(macroType)) app.rstSentTx = ctx.rstSent;
   });
 }
 
@@ -1757,8 +1805,11 @@ function logQso(call, exch, options) {
   const dateUtc    = now.toISOString().slice(0, 10);
   const timeUtc    = String(now.getUTCHours()).padStart(2,'0') + ':' +
                      String(now.getUTCMinutes()).padStart(2,'0');
-  const rstSent    = rstDefault(app.mode);
-  const rstRcvd    = inpRst.value.trim() || rstSent;
+  // Sent: what actually went on the air wins over the field, so a later edit
+  // cannot rewrite history. Falls back to the field when nothing was keyed at
+  // all (phone, S&P without a macro, "log without TX").
+  const rstSent    = app.rstSentTx || validRst(inpRst.value) || rstDefault(app.mode);
+  const rstRcvd    = validRst(inpRstRcvd.value) || rstDefault(app.mode);
 
   // DXCC lookup
   const dxcc = window.DXCC ? DXCC.lookupDxcc(call) : null;
@@ -2271,7 +2322,7 @@ async function checkStoragePersistence() {
 
 function init() {
   setRunMode('RUN');
-  inpRst.value = rstDefault(app.mode);
+  resetRstFields();
   startClock();
   pollState();
   checkStoragePersistence();
@@ -2325,7 +2376,8 @@ function init() {
   });
   sbManualMode.addEventListener('change', () => {
     app.mode = sbManualMode.value;
-    if (!app.rstDirty) inpRst.value = rstDefault(app.mode);
+    if (!app.rstSentDirty) inpRst.value     = rstDefault(app.mode);
+    if (!app.rstRcvdDirty) inpRstRcvd.value = rstDefault(app.mode);
   });
 
   // Start WebSocket for macros

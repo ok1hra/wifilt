@@ -175,8 +175,18 @@
           <button id="btnCheck" class="btn-action btn-merged-r btn-action-hidden" type="button" title="Check call in log">check</button>
         </div>
       </div>
-      <!-- RST standalone, no label -->
+      <!-- RST sent + received, standalone, no labels. The journal header right
+           below carries "Snt" and "Rcv" in the same order, which is the legend.
+           Neither field is reachable by the Enter flow — the cursor runs
+           Call → Exch — so they stay out of the way until deliberately clicked. -->
       <input id="inpRst"
+             class="log-input log-input-rst"
+             type="text"
+             maxlength="3"
+             autocomplete="off"
+             spellcheck="false"
+             placeholder="599">
+      <input id="inpRstRcvd"
              class="log-input log-input-rst"
              type="text"
              maxlength="3"
