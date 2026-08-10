@@ -4192,6 +4192,16 @@ void setup(){
 static uint32_t statusFlashStart = 0;
 static bool     statusFlashOn    = false;
 
+// The LED's resting state: lit once the station link is up, dark while waiting
+// for it. Before this the pin was written exactly twice -- LOW at boot and HIGH
+// on the first successful connect -- so after a WiFi outage the LED went on
+// claiming a link that was gone. In AP mode the PWM fade owns the pin, so the
+// only correct move is to hand it back.
+static void statusLedSteady(){
+  if (APmode) { ledcWrite(pwmChannel, 255); return; }
+  digitalWrite(StatusPin, WiFiStationReady() ? HIGH : LOW);
+}
+
 static void statusFlashKick(){
   if (APmode) return;
   digitalWrite(StatusPin, LOW);
@@ -4552,8 +4562,10 @@ void Watchdog(){
           wifiLastBssidValid = true;
         }
         WifiTimer = currentMillis;
+        statusLedSteady();
       } else {
         if (WifiDownSince == 0) WifiDownSince = currentMillis;
+        statusLedSteady();
         unsigned long downFor = currentMillis - WifiDownSince;
         wl_status_t st = WiFi.status();
 
@@ -6172,6 +6184,16 @@ void sendCW(){
       return;
     }
     abortFskTransmission = false;
+    // Dark for the whole transmission. The restore at the end of this branch had
+    // no counterpart -- nothing ever turned the LED off -- so RTTY had no
+    // indication at all while the header comment promised one. Per-bit keying
+    // was considered and rejected: one bit is 22 ms, so the eye would fuse it
+    // into a dimmed LED rather than see it blink.
+    if(APmode==true){
+      ledcWrite(pwmChannel, 0);
+    }else{
+      digitalWrite(StatusPin, LOW);
+    }
     digitalWrite(PTT, HIGH);          // PTT ON
     delay(PTTlead);                   // PTT lead delay
     // ch = ' '; Serial.print(ch); chTable(); sendFsk();   // Space before sending
@@ -6208,11 +6230,7 @@ void sendCW(){
     digitalWrite(PTT, LOW);
     if (Debug) Serial.println();
     digitalWrite(FSK_OUT, LOW);
-    if(APmode==true){
-      ledcWrite(pwmChannel, 255);
-    }else{
-      digitalWrite(StatusPin, HIGH);
-    }
+    statusLedSteady();
     powerTimer=millis();
   }
 
