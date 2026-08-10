@@ -74,6 +74,95 @@ published.
 
 ---
 
+## REV 20260810 — 2026-08-10
+
+Six commits from `docs/oprava-kodu-po-auditu-manualu.md` — the list of places where the code, not
+the documentation, was wrong. Verifying each item turned up three problems the audit had not found.
+**Nothing here has been checked on a radio yet.**
+
+### `36c62f9` log: two RST fields, and the log records what was transmitted
+
+* **The report fields were crossed.** The editable field (which the cursor skips — Enter runs
+  Call → Exch) fed `RST_RCVD`, while `RST_SENT` was a constant. Overriding 599 to 579 logged
+  `RST_SENT 599` / `RST_RCVD 579`, both wrong. There is a field for each now, unlabelled: the
+  journal header directly below carries `Snt` and `Rcv` in the same order.
+* **The sent field decides what is keyed.** Macros carried a hardcoded `5nn`/`599` in thirteen
+  places, so an overridden report reached the log without ever reaching the air. A value that does
+  not parse as a report is not keyed — in RUN mode the next Enter transmits immediately and the
+  operator may be mid-edit.
+* **The log stores what actually went out**, captured when the macro was acknowledged, so an edit
+  made afterwards cannot rewrite history. The received report always comes from its field; with no
+  macro sent at all (phone, S&P, *log without TX*) the sent field is what gets logged.
+* **`tools/log-rst-smoke.js`** is new — `log.html` was the only page no harness drove. It asserts on
+  the body of `/cmd` and on the stored QSO, not on what the page renders.
+
+### `ed5c4d6` setup: drop three controls that nothing read, and the dead template layer
+
+* **`RST default SSB/FM`, `RST default CW/RTTY`, `Manual mode for Phone`** were saved, survived
+  updates, were served on `/log-config` — and had no consumer. Phone was manual unconditionally, so
+  the checkbox had nothing to switch. Removed rather than wired: a report is either the convention
+  (nothing to set) or the operator types it.
+* **`setupTemplateProcessor()` + `sendTemplatedHtml()` (~120 lines) deleted.** The renderer was
+  called from nowhere and not one `%KEY%` was left in `data/`; the setup page has been filled in the
+  browser from `/config` for a long time. Its per-line `%` scanner would also have eaten
+  `calc(100% + 5px)` and `(dots + 1) % 4` had anyone revived it.
+* **A refused save now says why.** Removing that layer left five validation strings with no reader,
+  which is how it came out that every refusal had been arriving as a bare 400 since the page moved
+  into the browser. `/setup/save` returns the reason and the page reads it.
+
+### `65ae237` cli: list `L`, stop the second question meaning the opposite of the first
+
+* **`L`** — configure and test ICOM-LAN from the console, the only way to set the LAN link without
+  the web page — was missing from the help.
+* **The second confirmation for `E` and `@` was inverted**: `y` then `n` erased, `y` `y` aborted.
+  The asymmetry protects against a held-down `y`, so it is kept and said out loud instead:
+  *press E again to erase*.
+* `D` and `E` answered only upper case while `A` and `L` took both. All take both now.
+* The boot-time listing in AP mode was a second hand-kept copy that had already drifted (no `D`,
+  no `L`); it calls `ListCommands()`.
+
+### `9b9ddb3` led: indicate RTTY, and stop claiming a link that dropped
+
+* **RTTY had no LED indication** — only an orphan restore at the end of the transmission, with
+  nothing ever turning the LED off. It is dark for the whole transmission now. Per-bit mirroring of
+  the FSK line was rejected: one bit is 22 ms, so the eye fuses it into a dimmed LED.
+* **The status pin was written exactly twice in the whole sketch** — `LOW` at boot, `HIGH` on the
+  first connect — so after a WiFi outage the LED kept reporting a link that was gone. One function
+  owns the resting state and the WiFi watchdog drives it in both directions.
+
+### `365cc9d` header: match the code, drop RTLE, rename what outlived its protocol
+
+* **The `Features` block promised three things that do not exist**: an http server on port 81 for a
+  PHP log, a UDP listener on port 89 for CW/RTTY, and a UDP CAT port for clearing RIT. The ports in
+  use are 80, 82 (DX cluster) and 83 (audio); the only UDP socket is TrxNet. **README.md and the
+  user manual copied all three straight out of here and carried them for years.**
+* **The LED table was wrong in every line** — inverted polarity, an MQTT flash long after TrxNet
+  replaced MQTT, and a double flash no code has ever produced.
+* The per-release history appended to that block is gone; it duplicated this file.
+* **RTLE removed** — 17 references to a feature whose `rtle.h` is not in the repository, so
+  uncommenting the define breaks the build.
+* `mqttFreqTimer` → `trxNetPublishTimer`, `UDP_TO_FSK` → `FSK_KEYING`.
+* `docs/websocket-civ-proxy.md` keeps a status banner instead of being deleted: the first of its two
+  recommendations *did* happen (assets in LittleFS), the second never did, and `Changelog.md`
+  references it.
+
+### `15686ba` ui: english strings, an honest element id, and a LAN pill that says something
+
+* Three Czech strings in an English interface — the 2026-08-08 text audit walked past all three.
+* `operatorState` → `stationIdentity`: it shows callsign and locator, not who holds the session.
+* **`LAN 0·0·0`** was three numbers with no legend on the page, only a `title`, which a phone cannot
+  show. It stays hidden while the link is clean and spells itself out when a counter moves:
+  `LAN drop 2 · stall 1 · fill 3`. `AUD1` keeps its label and gains the title it never had.
+
+### Deliberately left alone
+
+* **The DXC regex default.** SETUP's blocked list is the log's setting, DXC has its own filter; not
+  a conflict.
+* `_updateExchPreview()` in the LOG modal keeps `5NN` — it previews the exchange *format*, not a QSO.
+* `FREE (was MQTT_*)` comments in the EEPROM map, and `BT_NAME` for downgrade compatibility.
+
+---
+
 ## REV 20260808 — 2026-08-09
 
 ### `d667a4a` startup
