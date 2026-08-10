@@ -102,11 +102,12 @@
   <button id="trxReconnect" class="trx-reconnect" type="button" hidden>Reconnect</button>
   <!-- Separate from LINKED on purpose: that one reports CI-V over LAN, this one
        the audio socket. A dead audio socket is what stops a beacon keying. -->
-  <span id="aud1State" class="pill aud1-state">AUD1 —</span>
+  <span id="aud1State" class="pill aud1-state" title="The audio channel to the radio: filled dot = the beacon can key, dash = it cannot.">AUD1 —</span>
   <span class="spacer"></span>
   <span id="utcClock" class="pill">UTC --:--:--</span>
   <span id="timingState" class="muted">clock +0 ms</span>
-  <span id="lanHealth" class="muted lan-health" title="LAN link health since the interface booted: dropped sessions · loop stalls · retransmits answered with filler">LAN 0·0·0</span>
+  <!-- Hidden while all three counters are zero; wspr.js spells them out when one moves. -->
+  <span id="lanHealth" class="muted lan-health" title="LAN link health since the interface booted: dropped sessions, loop stalls, retransmits answered with filler" hidden></span>
 </header>
 
 <!-- The setup help dialog is built by trx-help.js from the icom-models.js table,

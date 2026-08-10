@@ -1963,8 +1963,14 @@
     dom.aud1State.textContent = audioUp ? "AUD1 ●" : "AUD1 —";
     dom.aud1State.classList.toggle("up", audioUp);
     dom.trxReconnect.hidden = state.radio.connected;
-    dom.lanHealth.textContent =
-      `LAN ${state.radio.lanDrops}·${state.radio.lanStalls}·${state.radio.lanFilled}`;
+    // "LAN 0·0·0" carried no information -- LINKED and AUD1 already say the link
+    // is healthy -- and the three numbers had no legend anywhere on the page,
+    // only a title, which a phone cannot show. So it stays hidden until one of
+    // them moves, and then it spells itself out.
+    const lanIdle = !state.radio.lanDrops && !state.radio.lanStalls && !state.radio.lanFilled;
+    dom.lanHealth.hidden = lanIdle;
+    dom.lanHealth.textContent = lanIdle ? "" :
+      `LAN drop ${state.radio.lanDrops} · stall ${state.radio.lanStalls} · fill ${state.radio.lanFilled}`;
     dom.lanHealth.classList.toggle("warn",
       state.radio.lanDrops > 0 || state.radio.lanFilled > 0);
     dom.timingState.textContent = `clock ${clockCorrectionMs() >= 0 ? "+" : ""}${clockCorrectionMs()} ms`;

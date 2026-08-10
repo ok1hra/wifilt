@@ -17,6 +17,9 @@ const root = path.resolve(__dirname, "..");
 const data = path.join(root, "data");
 
 let radioName = "IC-705";
+// The LAN health counters the header reports. Mutable so the page can be checked
+// in both states: silent while the link is clean, spelled out once it is not.
+const lanHealth = {drops: 0, stalls: 0, filled: 0};
 const commands = [];
 const session = {token: "", claims: 0, pings: 0, releases: 0};
 let finished = false, chrome = null, timer = null;
@@ -32,7 +35,8 @@ function stateJson() {
     tx: false, ritRaw: 0, smeterRaw: 0, powerMeterRaw: 118,
     afGain: 100, keySpeed: 20, rfPower: currentRfPower, rfPowerSeen: true,
     supplyVolts: 13.8, swr: 1.2, preamp: 0, vox: 0,
-    lanDrops: 0, lanStalls: 0, lanFilled: 0, dxcConnected: false,
+    lanDrops: lanHealth.drops, lanStalls: lanHealth.stalls, lanFilled: lanHealth.filled,
+    dxcConnected: false,
   };
 }
 
@@ -247,6 +251,13 @@ const server = http.createServer((request, response) => {
     }
 
     // Lets the browser side assert on what the page did or did not send.
+    if (url.pathname === "/setLanHealth") {
+      lanHealth.drops = Number(url.searchParams.get("drops") || 0);
+      lanHealth.stalls = Number(url.searchParams.get("stalls") || 0);
+      lanHealth.filled = Number(url.searchParams.get("filled") || 0);
+      return json({ok: true});
+    }
+
     if (url.pathname === "/commands") return json(commands);
 
     const file = url.pathname === "/wspr.html" || url.pathname === "/"
@@ -1140,8 +1151,20 @@ addEventListener("unhandledrejection", event => {
           (JSON.parse(localStorage.getItem("wifilt.data.js8-settings")) || {})
             .modems.js8call.txGain === 0.35 && globalThis.__wspr.txGain() === 0.35,
           String(globalThis.__wspr.txGain()));
-    check("the LAN health counters reach the bar",
-          $("lanHealth").textContent === "LAN 0·0·0", $("lanHealth").textContent);
+    // A clean link says nothing: LINKED and AUD1 already cover it, and three
+    // bare numbers had no legend on the page at all.
+    check("a healthy LAN link shows no counters",
+          $("lanHealth").hidden && $("lanHealth").textContent === "",
+          String($("lanHealth").hidden) + " " + $("lanHealth").textContent);
+    await fetch("/setLanHealth?drops=2&stalls=1&filled=3");
+    await sleep(2500);
+    check("LAN trouble reaches the bar, and names itself",
+          !$("lanHealth").hidden
+            && /drop 2/.test($("lanHealth").textContent)
+            && /stall 1/.test($("lanHealth").textContent)
+            && /fill 3/.test($("lanHealth").textContent),
+          $("lanHealth").textContent);
+    await fetch("/setLanHealth?drops=0&stalls=0&filled=0");
     check("the audio link has its own indicator",
           $("aud1State").classList.contains("up"), $("aud1State").textContent);
 

@@ -90,7 +90,7 @@ const dom = {
   trxPowerSegments:Array.from(document.querySelectorAll("#trxPower .pwr-bar i")),
   trxHelpButton:$("trxHelpButton"), trxHelpDialog:$("trxHelpDialog"),
   trxHelpModeWarning:$("trxHelpModeWarning"),
-  frequencyMenu:$("frequencyMenu"), freqTimetableClose:$("freqTimetableClose"), linkState:$("linkState"), operatorState:$("operatorState"),
+  frequencyMenu:$("frequencyMenu"), freqTimetableClose:$("freqTimetableClose"), linkState:$("linkState"), stationIdentity:$("stationIdentity"),
   freqTimetableButton:$("freqTimetableButton"), freqTimetableValue:$("freqTimetableValue"),
   freqTimetablePanel:$("freqTimetablePanel"), freqTimetableEnable:$("freqTimetableEnable"),
   freqTimetableClear:$("freqTimetableClear"), freqTimetableGrid:$("freqTimetableGrid"),
@@ -1673,7 +1673,7 @@ function renderHeader() {
   dom.trxReconnect.hidden=!reconnectVisible;
   dom.trxReconnect.disabled=state.reconnectPending;
   dom.trxReconnect.textContent=state.reconnectPending ? "Connecting…" : "Reconnect";
-  dom.operatorState.textContent=`${currentJs8().myCall} · ${currentJs8().grid}`;
+  dom.stationIdentity.textContent=`${currentJs8().myCall} · ${currentJs8().grid}`;
   const tb=audioSource ? audioSource.state().timebase : null;
   dom.timingState.textContent=tb ? `${tb.clock.status} · ${signed(tb.correction.totalMs)} ms` : "clock unchecked";
   if (frequencyMenuKey !== String(state.pendingFrequency || state.radio.frequency)) renderFrequencyMenu();
@@ -1878,7 +1878,7 @@ function renderBinControls() {
   if(!prepared&&!binState.preparing)error=error||"Select a file.";
   if(binState.preparing)error="Preparing SHA-256 and blocks…";
   if(binState.storageError)error=binState.storageError;
-  if(sameCall(binState.peerDraft,currentJs8().myCall))error="Nelze poslat soubor vlastní značce";
+  if(sameCall(binState.peerDraft,currentJs8().myCall))error="Cannot send a file to your own callsign";
   const binPeerCountry=blockedCountryForCall(binState.peerDraft);
   if(binPeerCountry)error=`${binState.peerDraft} is blocked (${binPeerCountry})`;
   dom.binError.textContent=error;
@@ -2094,7 +2094,7 @@ function clearRecipient() {
 // current selection and explain why. Covers both a table-row click and a typed callsign.
 function rejectOwnCall() {
   dom.recipient.value=state.selectedCall;
-  dom.sessionMeta.textContent="Nelze volat vlastní značku";
+  dom.sessionMeta.textContent="Cannot call your own callsign";
 }
 
 function stationDirection(station) {

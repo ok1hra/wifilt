@@ -557,7 +557,7 @@
     const footerText = query
       ? `${filtered.length} / ${_allLogs.length} logs · ${filteredTotal} / ${total} QSO · ${estStr}`
       : `${_allLogs.length} logs · ${total} QSO · ${estStr}`;
-    footer.innerHTML = `${footerText} <button class="si-btn" id="lmStorageInfo" type="button" title="Jak zkontrolovat storage v prohlížeči">ⓘ</button>`;
+    footer.innerHTML = `${footerText} <button class="si-btn" id="lmStorageInfo" type="button" title="How to check browser storage">ⓘ</button>`;
     footer.querySelector('#lmStorageInfo').addEventListener('click', e => {
       e.stopPropagation();
       _ensureStoragePopup();
