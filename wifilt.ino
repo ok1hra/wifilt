@@ -4074,13 +4074,10 @@ void setup(){
       setupWebServer();
       Serial.println("HTTP| web server started");
 
-      APcliAlert();
-      Serial.println("SETTINGS  press key to select");
-      Serial.println("       ?  list refresh");
-      Serial.println("       A  restart to AP mode");
-      Serial.println("       E  erase whole eeprom and restart");
-      Serial.println("       @  restart device");
-      Serial.print( " > " );
+      // The listing lives in one place. This used to be a second, hand-kept
+      // copy that had already fallen behind: no D, no L. ListCommands() prints
+      // the AP banner itself, so the explicit APcliAlert() here would double it.
+      ListCommands();
 
     }else{
       ConnectWiFiAlternating();
@@ -6341,7 +6338,7 @@ void cliHandleByte(uint8_t b){
       ListCommands();
 
     // D
-    }else if(incomingByte==68){
+    }else if(incomingByte==68 || incomingByte==100){
       if(Debug==false){
         Debug=true;
         Serial.println("   Debug ENABLED");
@@ -6365,13 +6362,17 @@ void cliHandleByte(uint8_t b){
       }
  
     // E
-    }else if(incomingByte==69){
+    }else if(incomingByte==69 || incomingByte==101){
       Serial.println("   Erase whole eeprom? (y/n)");
       EnterChar();
       if(incomingByte==89 || incomingByte==121){
-        Serial.println("   Stop erase? (y/n)");
+        // Deliberately NOT another y/n: a held-down y must not be able to wipe
+        // the device. The old second question achieved that by inverting itself
+        // ("Stop erase?" -- n proceeds), which protected the operator without
+        // telling them, so two identical-looking prompts meant opposites.
+        Serial.println("   This deletes all settings. Press E again to erase, any other key aborts.");
         EnterChar();
-        if(incomingByte==78 || incomingByte==110){
+        if(incomingByte==69 || incomingByte==101){
           for(int i=0; i<EEPROM_SIZE; i++){
             EEPROM.write(i, 0xff);
             Serial.print(".");
@@ -6421,9 +6422,9 @@ void cliHandleByte(uint8_t b){
       Serial.println("   Restart Interface? (y/n)");
       EnterChar();
       if(incomingByte==89 || incomingByte==121){
-        Serial.println("   Stop Restart? (y/n)");
+        Serial.println("   Press @ again to restart, any other key aborts.");
         EnterChar();
-        if(incomingByte==78 || incomingByte==110){
+        if(incomingByte==64){
           Serial.println("** Interface will be restarted **");
           delay(3000);
           ESP.restart();
@@ -6665,6 +6666,7 @@ void ListCommands(){
     Serial.println("       D  disable serial debug");
   }
   Serial.println("       E  erase whole eeprom and restart");
+  Serial.println("       L  configure and test ICOM-LAN (IP, username, password)");
   Serial.println("       @  restart device");
   Serial.print( " > " );
 }
