@@ -153,9 +153,11 @@ const dom = {
   trafficSection:document.querySelector('[data-section="traffic"]'),
   trafficFilter:document.querySelector(".traffic-filter"),
   trafficClear:document.querySelector("[data-traffic-clear]"),
+  trafficHide:document.querySelector("[data-traffic-hide]"),
   stationsSection:document.querySelector('[data-section="stations"]'),
   stationMapSection:document.querySelector('[data-section="stations-map"]'),
   stationMap:$("stationMap"), stationMapSummary:$("stationMapSummary"), stationMapLinks:$("stationMapLinks"),
+  stationMapLog:$("stationMapLog"),
   stationHead:document.querySelector(".traffic-table thead"), reply:document.querySelector('[data-section="reply"]'),
   stationSummary:$("stationSummary"), myCall:$("myCall"), myGrid:$("myGrid"),
   promoteRow:$("promoteRow"), promoteSettings:$("promoteSettings"), promoteState:$("promoteState"),
@@ -169,7 +171,7 @@ const dom = {
   groupsButton:$("groupsButton"), stationGroupsButton:$("stationGroupsButton"),
   groupPanel:$("groupPanel"), groupPanelGrid:$("groupPanelGrid"), groupAddForm:$("groupAddForm"),
   cqRepeat:$("cqRepeat"), cqState:$("cqState"),
-  infoText:$("infoText"), statusText:$("statusText"), autoReply:$("autoReply"),
+  infoText:$("infoText"), statusText:$("statusText"), autoReply:$("autoReply"), alertBeep:$("alertBeep"),
   inboxRows:$("inboxRows"), inboxSummary:$("inboxSummary"), inboxQueryMsgs:$("inboxQueryMsgs"), inboxRefresh:$("inboxRefresh"),
   inboxFilters:$("msgBoxFilters"), inboxUndo:$("msgBoxUndo"), inboxUndoButton:$("msgBoxUndoButton"),
   inboxHint:$("msgBoxHint"), inboxSection:document.querySelector('[data-section="inbox"]'),
@@ -301,13 +303,17 @@ const state = {
   txState:null, txWasmReady:false, pendingFrequency:null, lastAudioMs:0,
   startup:{ready:false, failed:false, progress:0, label:"Loading JS8Call-ICOM modem",
     detail:"Preparing modem components…"},
-  stationSort:{key:"lastSlotUtcMs", direction:"desc"}, trafficFilter:"all", testActivityLocked:false,
+  stationSort:{key:"lastSlotUtcMs", direction:"desc"}, trafficFilter:"all", trafficHide:0, testActivityLocked:false,
   previewHz:null, stationLabels:[], stationLabelsVisible:false, stationLabelsArmedMs:0,
-  hearingLinksVisible:true,
+  hearingLinksVisible:true, mapLogScale:false,
   txSessionMode:"CHAT", audioDb:-90, tuneActive:false, spectrumWasTransmitting:false,
   help:{incompatibleActive:false},
   lanConfig:{checked:false, ready:false, detail:"", slot:0},
   ownCallAttention:{call:"", messages:new Set(), stations:new Set()},
+  // Rows addressed to us, so the beep fires once per message. `seeded` keeps the
+  // first render after a reload silent: everything on screen is history, and a
+  // burst of tones for messages that arrived while the tab was shut is noise.
+  answerAttention:{call:"", messages:new Set(), seeded:false},
   activeOutgoing:null, lastOutgoing:null, outgoingLog:[],
   blockedDxccList:[],
   settingsDraft:{txGain:null}, reconnectPending:false,
@@ -366,8 +372,10 @@ function buildSessionSnapshot() {
     buckets, conversations,
     selectedCall: state.selectedCall || "",
     trafficFilter: state.trafficFilter || "all",
+    trafficHide: Number(state.trafficHide) || 0,
     stationSort: {...state.stationSort},
     hearingLinksVisible: state.hearingLinksVisible !== false,
+    mapLogScale: state.mapLogScale === true,
     draft: (dom.message && dom.message.value) || "",
     lastOutgoing: state.lastOutgoing ? snapshotOutgoing(state.lastOutgoing) : null,
     // Own-TX feed history: mid-flight sends become "interrupted" (grey) on the way
@@ -446,9 +454,12 @@ function restoreSession() {
     }
     if (typeof snapshot.selectedCall === "string") state.selectedCall = snapshot.selectedCall;
     if (typeof snapshot.trafficFilter === "string") state.trafficFilter = snapshot.trafficFilter;
+    if (Number.isFinite(Number(snapshot.trafficHide)))
+      state.trafficHide = Math.max(0, Math.min(TRAFFIC_HIDE_STEPS.length - 1, Number(snapshot.trafficHide)));
     if (snapshot.stationSort && typeof snapshot.stationSort.key === "string")
       state.stationSort = {key: snapshot.stationSort.key, direction: snapshot.stationSort.direction === "asc" ? "asc" : "desc"};
     if (typeof snapshot.hearingLinksVisible === "boolean") state.hearingLinksVisible = snapshot.hearingLinksVisible;
+    if (typeof snapshot.mapLogScale === "boolean") state.mapLogScale = snapshot.mapLogScale;
     if (snapshot.lastOutgoing && typeof snapshot.lastOutgoing === "object") state.lastOutgoing = {...snapshot.lastOutgoing};
     if (Array.isArray(snapshot.outgoingLog)) {
       state.outgoingLog = snapshot.outgoingLog.map(item => ({...item, restored: true}));
@@ -1969,6 +1980,7 @@ function renderControls() {
   if(document.activeElement!==dom.infoText)dom.infoText.value=js8.infoText;
   if(document.activeElement!==dom.statusText)dom.statusText.value=js8.statusText;
   dom.autoReply.checked=js8.auto===true;
+  if(dom.alertBeep)dom.alertBeep.checked=js8.alertBeep===true;
   if(!dom.armHours.options.length)
     dom.armHours.innerHTML=Js8Settings.ARM_HOURS.map(h=>`<option value="${h}">${h} h</option>`).join("");
   dom.armHours.value=String(js8.armHours);
@@ -2171,6 +2183,63 @@ function renderStationSort() {
   });
 }
 
+// ---- "somebody is calling me" ----------------------------------------------
+// Narrower than messageMentionsCall(), on purpose. Our callsign turns up in other
+// people's HEARING lists and relay bodies all day long on a busy band; none of
+// that is somebody talking TO us. The frame has to be addressed: directed.to is
+// our callsign. That covers a reply to our CQ, an HB ack, and a hand-typed line,
+// and it excludes being merely mentioned.
+function messageAddressesMe(message,own){
+  if(!own || message.outgoing)return false;
+  return Boolean(message.directed) && sameCall(message.directed.to,own);
+}
+
+// One AudioContext, built on demand and never before. Two reasons it cannot be
+// created at load: a browser will not let audio start without a user gesture, and
+// this page already owns a real-time audio path to the radio that must not compete
+// with a context nobody asked for. The first click anywhere on the page unlocks it.
+let alertAudio=null;
+function alertBeep(){
+  try {
+    const Ctor=self.AudioContext || self.webkitAudioContext;
+    if(!Ctor)return;
+    if(!alertAudio)alertAudio=new Ctor();
+    if(alertAudio.state==="suspended")alertAudio.resume();
+    // Still suspended means the page has never been clicked. Staying silent is the
+    // honest outcome -- there is no way to force it, and the highlighted row is
+    // what the operator gets in the meantime.
+    if(alertAudio.state!=="running")return;
+    const now=alertAudio.currentTime;
+    const osc=alertAudio.createOscillator(), gain=alertAudio.createGain();
+    osc.type="sine"; osc.frequency.value=880;
+    // Shaped, not switched: a bare start/stop on a sine clicks at both ends, and
+    // a click is exactly what a station listening on a nearby speaker notices.
+    gain.gain.setValueAtTime(0.0001,now);
+    gain.gain.exponentialRampToValueAtTime(0.18,now+0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001,now+0.34);
+    osc.connect(gain).connect(alertAudio.destination);
+    osc.start(now); osc.stop(now+0.36);
+  } catch(_error) { /* an alert that cannot sound must never break the feed */ }
+}
+
+// Fires once per message, not once per frame: a long reception grows its text (and
+// therefore its message key) with every frame, so the channel id is what identifies
+// it while it arrives, exactly as openSectionsForNewOwnCall does. Without that a
+// six-frame message addressed to us would beep six times.
+function noteCallsToMe(messages){
+  const own=currentJs8().myCall;
+  const previous=state.answerAttention;
+  const keys=new Set(messages.filter(item=>messageAddressesMe(item,own))
+    .map(item=>item.id ? `channel|${item.id}` : activityMessageKey(item)));
+  const sameOperator=previous.call===own;
+  // A changed callsign re-seeds the set instead of beeping for the whole feed at
+  // once, and a restored session does the same on the first render after reload.
+  const fresh=sameOperator && previous.seeded
+    ? [...keys].filter(key=>!previous.messages.has(key)) : [];
+  state.answerAttention={call:own,messages:keys,seeded:true};
+  if(fresh.length && currentJs8().alertBeep===true)alertBeep();
+}
+
 function openSectionsForNewOwnCall(messages,calls) {
   const own=currentJs8().myCall;
   const previous=state.ownCallAttention;
@@ -2213,6 +2282,44 @@ function filterTraffic(items,own){
   const cutoff=Date.now()-windowMs;
   return messages.filter(message=>messageTimeMs(message)>=cutoff);
 }
+// The report this row was decoded at. Blank -- not "+0" -- when there is none:
+// signed() turns a missing value into a confident zero, and a fabricated report is
+// worse than an empty cell. Rows we were only told about carry snr:null by design
+// (js8-protocol.js), and so do own transmissions, which have nobody to report them.
+function metaSnr(message){
+  const value=Number(message && message.snr);
+  return Number.isFinite(value) ? signed(value) : "";
+}
+
+// Multi-step HIDE: each press drops one more meta column, and the step after the
+// last one brings them all back. The order runs from the piece the row can most
+// afford to lose to the one it cannot -- Hz goes first because the signal stripe
+// under the row already shows where in the passband this sat, and the timestamp
+// goes last because it is the only anchor the feed is read by.
+// Nothing is re-rendered to hide a column: the step lands in a data attribute on
+// the container and CSS does the rest, so a press costs one attribute write even
+// with a hundred rows on screen.
+const TRAFFIC_HIDE_STEPS=[
+  {next:"HIDE Hz",   title:"Hide the audio offset column"},
+  {next:"HIDE SPD",  title:"Hide the speed column too"},
+  {next:"HIDE SNR",  title:"Hide the signal report too"},
+  {next:"HIDE TIME", title:"Hide the timestamp too — only callsign and text remain"},
+  {next:"SHOW ALL",  title:"Bring every column back"},
+];
+function renderTrafficHideButton(){
+  const step=((Number(state.trafficHide)||0)%TRAFFIC_HIDE_STEPS.length+TRAFFIC_HIDE_STEPS.length)
+    %TRAFFIC_HIDE_STEPS.length;
+  state.trafficHide=step;
+  dom.traffic.dataset.hide=String(step);
+  if(!dom.trafficHide)return;
+  // The label names what the NEXT press removes, so the operator never has to
+  // press once to find out what the button does.
+  dom.trafficHide.textContent=TRAFFIC_HIDE_STEPS[step].next;
+  dom.trafficHide.title=TRAFFIC_HIDE_STEPS[step].title;
+  dom.trafficHide.classList.toggle("active",step>0);
+  dom.trafficHide.setAttribute("aria-pressed",String(step>0));
+}
+
 function renderTrafficFilterButtons(own){
   if(state.trafficFilter==="mycall" && !own)state.trafficFilter="all";
   for(const button of dom.trafficFilter.querySelectorAll("[data-traffic-filter]")){
@@ -2499,6 +2606,72 @@ function senderLookupText(text,call,own){
     +ownCallText(text.slice(call.length),own);
 }
 
+// ---- REPLY: answering a CQ from the row that carries it ---------------------
+// A CQ is recognised structurally, from the decoder's own frame classification
+// (js8-protocol.js gives kind "cq" to a heartbeat-type frame with the CQ bit set),
+// never by looking for the letters "CQ" in the text. A station saying "TNX FOR CQ"
+// is not calling one, and a row that offers to transmit must not be decided by a
+// substring.
+//
+// Answering is the operator's click and nothing else. The station never answers a
+// CQ by itself: js8-autoreply.js still holds no handler for a bare SNR, so the only
+// path from a CQ to the transmitter is this button.
+const CQ_REPLY_MAX_AGE_MS=5*60*1000;   // the same 5 minutes the feed's own 5m filter uses
+
+function isCqMessage(message){
+  return !message.outgoing && Array.isArray(message.kinds) && message.kinds.includes("cq");
+}
+
+// Did we already answer THIS CQ? Derived from the own-TX log rather than from a
+// flag stored on the row: the log is what survives a reload, and a second answer
+// to the same call is only wrong if it came after this particular call went out.
+function answeredCqSince(call,sinceMs){
+  const since=Number(sinceMs)||0;
+  return (state.outgoingLog||[]).some(item=>item && sameCall(item.to,call)
+    && (Number(item.utcMs)||0)>=since
+    && ["completed","unconfirmed","transmitting","queued"].includes(item.status));
+}
+
+// Whether the row's REPLY is live, and if not, exactly why. The button is rendered
+// either way: a control that silently vanishes on some rows and not others reads as
+// a rendering bug, and decision 13 does not allow a refusal without a reason.
+// `blockedNow` is the transmit-gate verdict, computed once per render and passed in:
+// it is the same answer for every row, and this page's comments are explicit that
+// the render loop must not keep the encoder waiting.
+function cqReplyState(message,sender,nowMs,blockedNow){
+  if(!isCqMessage(message))return null;
+  const call=sender && sender.clickable ? sender.call : "";
+  if(!call || call.startsWith("@"))return null;         // nobody addressable to answer
+  if(sameCall(call,currentJs8().myCall))return null;    // our own CQ echoed back
+  const snr=Number(message.snr);
+  const text=Number.isFinite(snr)?`SNR ${formatJs8Snr(snr)}`:"";
+  const off=(reason)=>({call,text,enabled:false,reason});
+  // Without a measured report there is nothing to say. This is the one CQ we heard
+  // about rather than heard -- sending "+00" would be inventing a measurement.
+  if(!text)return off("no signal report was measured for this row");
+  const ageMs=nowMs-(Number(message.lastSlotUtcMs||message.firstSlotUtcMs)||0);
+  if(ageMs>CQ_REPLY_MAX_AGE_MS)
+    return off(`this CQ is ${Math.round(ageMs/60000)} min old — they are most likely in a QSO by now`);
+  if(answeredCqSince(call,message.lastSlotUtcMs||message.firstSlotUtcMs))
+    return off(`already answered ${call} since this call`);
+  const blockedCountry=blockedCountryForCall(call);
+  if(blockedCountry)return off(`${call} is blocked (${blockedCountry})`);
+  if(blockedNow&&blockedNow.length)return off(blockedNow[0]);
+  if(!activeEncoder)return off("TX core is not ready");
+  return {call,text,enabled:true,reason:`Answer ${call} with ${text}`};
+}
+
+// One click: take over the TX session for this station, then queue the report.
+// Queued rather than transmitted straight out, for the same reason RESEND is: the
+// click can land in the middle of a frame that is already on the air.
+function replyToCq(call,text){
+  if(!call || !text)return;
+  chooseCall(call);                       // recipient, TX SESSION open, thread on screen
+  txQueue.push({source:"operator", text, to:call,
+    nowMs:js8Clock.now(), submode:selectedMode(), meta:{command:"SNR"}});
+  drainTxQueue(); renderTxQueue(); renderActivity();
+}
+
 function renderReceivedText(message,own){
   const text=String(message.text||"");
   const gaps=[...(message.gaps||[])].sort((a,b)=>Number(a.textIndex)-Number(b.textIndex));
@@ -2559,6 +2732,14 @@ function renderActivity() {
   const own=currentJs8().myCall;
   const responders=respondingCalls();
   renderTrafficFilterButtons(own);
+  renderTrafficHideButton();   // paints the step restored from the session on first render
+  // Hoisted out of the row loop: one band lookup and one clock read per render,
+  // not one per row -- and every row then ages a CQ against the same instant.
+  const workedBand=bandOf(state.radio.frequency);
+  const nowMs=js8Clock.now();
+  // needsRecipient is false on purpose: a REPLY addresses its own row's sender, not
+  // whatever TX SESSION currently has selected.
+  const blockedNow=txBlockReasons(false);
   const partials=partialTrafficItems();
   dom.trafficClear.disabled=(state.activity.messages || []).length===0
     && state.outgoingLog.length===0 && partials.length===0;
@@ -2598,12 +2779,21 @@ function renderActivity() {
       const retryUntil=Number(item&&item.retryUntilMs)||0;
       const resend=txResendable(item)
         ? `<button type="button" class="tx-resend" data-resend-id="${esc(String(item.id))}" title="${esc(resendTitle(item))}">↻ RESEND</button>` : "";
-      return divider+`<article class="message message-tx ${cls}" data-tx-status="${esc(message.status)}" data-tx-attempts="${attempts}"><span class="message-meta"><span>${when}</span><span>TX</span><span>${esc(message.status)}${attempts>1?` ×${attempts}`:""}</span><span class="tx-retry" data-retry-until="${retryUntil}"></span></span><strong>${target}</strong><span class="message-text">${item?renderOutgoingText(item):esc(message.text)}</span>${resend}${renderSignalStripe(message)}</article>`;
+      return divider+`<article class="message message-tx ${cls}" data-tx-status="${esc(message.status)}" data-tx-attempts="${attempts}"><span class="message-meta"><span class="meta-time">${when}</span><span>TX</span><span>${esc(message.status)}${attempts>1?` ×${attempts}`:""}</span><span class="tx-retry" data-retry-until="${retryUntil}"></span></span><strong>${target}</strong><span class="message-text">${item?renderOutgoingText(item):esc(message.text)}</span>${resend}${renderSignalStripe(message)}</article>`;
     }
     const sender=senderOf(message);
     const call=sender.call;
     const operational=Array.isArray(message.kinds) && !message.kinds.includes("data");
     const ownCall=sameCall(call,currentJs8().myCall);
+    // Already in the JS8CALL log on the band we are tuned to: dimmed, so the eye
+    // lands on the stations still worth working. The predicate is the same set the
+    // LOG QSO button reads, rebuilt from the log's real content by refreshJs8Log(),
+    // so it survives a reload and a write from the QRPLog window. Own call and a
+    // group are never "worked"; the green own-callsign rule wins by !important
+    // anyway, which is why an operator's own row can never dim.
+    const workedHere=!ownCall && call && !call.startsWith("@")
+      && state.loggedCalls.has(loggedKey(call,workedBand));
+    const senderClass=[ownCall?"own-callsign":"",workedHere?"worked":""].filter(Boolean).join(" ");
     // An APRS-IS answer to one of our own commands is addressed to the group, so
     // nothing else in the row would tell the operator it came back for them.
     const aprsReply=Js8Aprs.replyForMe(message,currentJs8().myCall)
@@ -2611,11 +2801,23 @@ function renderActivity() {
     // ♢ means the same on both sides of the feed: the end of the message was confirmed. Its
     // absence is therefore evidence, which is why every intact reception carries it.
     const status=receptionState(message);
+    const snrText=metaSnr(message);
     const ended=!message.partial && !message.incomplete;
+    const reply=cqReplyState(message,sender,nowMs,blockedNow);
+    const replyButton=reply
+      ? `<button type="button" class="cq-reply" data-reply-call="${esc(reply.call)}"`
+        +` data-reply-text="${esc(reply.text)}"${reply.enabled?"":" disabled"}`
+        +` title="${esc(reply.reason)}">REPLY</button>` : "";
+    // Addressed to us: the row gets its own frame and badge. This is the only
+    // reaction -- nothing is transmitted in answer, by design. REPLY is the single
+    // path from this feed to the transmitter, and it is a click.
+    const forMe=messageAddressesMe(message,currentJs8().myCall);
     const classes=`message${operational?" operational":""}${aprsReply?" aprs-reply":""}`
+      +(forMe?" message-for-me":"")
+      +(reply&&reply.enabled?" has-reply":"")
       +(message.partial&&message.live?" message-receiving":"")
       +(status==="incomplete"?" message-incomplete":"")+(status==="bad crc"?" message-badcrc":"");
-    return divider+`<article class="${classes}"${status?` data-rx-state="${esc(status)}"`:""}><span class="message-meta"><span>${when}</span><span>${MODE_TO_SPEED[message.submode]||"?"}</span><span>${Math.round(message.offsetHz)} Hz</span>${status?`<span class="rx-state">${esc(status)}</span>`:""}</span><strong${sender.clickable?` data-call="${esc(call)}"`:""}${ownCall?' class="own-callsign" data-own-call="true"':""}>${esc(call || "JS8")}</strong><span class="message-text">${aprsReply}${renderReceivedText(message,currentJs8().myCall)}${ended?'<span class="rx-eot" title="End of message confirmed">♢</span>':""}</span>${renderSignalStripe(message)}</article>`;
+    return divider+`<article class="${classes}"${status?` data-rx-state="${esc(status)}"`:""}><span class="message-meta"><span class="meta-time">${when}</span><span class="meta-speed">${MODE_TO_SPEED[message.submode]||"?"}</span><span class="meta-hz">${Math.round(message.offsetHz)} Hz</span>${snrText?`<span class="meta-snr" title="Signal report this row was decoded at">${snrText} dB</span>`:""}${status?`<span class="rx-state">${esc(status)}</span>`:""}</span><strong${sender.clickable?` data-call="${esc(call)}"`:""}${senderClass?` class="${senderClass}"`:""}${ownCall?' data-own-call="true"':""}${workedHere?` title="${esc(call)} already logged on ${esc(workedBand||"this band")}"`:""}>${esc(call || "JS8")}</strong><span class="message-text">${forMe?'<span class="forme-badge" title="Addressed to your callsign">TO YOU</span>':""}${aprsReply}${renderReceivedText(message,currentJs8().myCall)}${ended?'<span class="rx-eot" title="End of message confirmed">♢</span>':""}</span>${replyButton}${renderSignalStripe(message)}</article>`;
   }).join("") : '<div class="empty-row">Waiting for JS8 activity…</div>';
   // Built from `recent`, the rows actually on screen, so the histogram and the list can
   // never disagree -- change the filter and the strip follows.
@@ -2642,6 +2844,7 @@ function renderActivity() {
     const heardTitle=heard?"":' title="Heard about only — never decoded here"';
     return `<tr data-call="${esc(item.call)}" class="${item.call===state.selectedCall?"selected":""}${ban?" station-restricted":""}${heard?"":" station-indirect"}"${heardTitle}><td class="call${ownCall?" own-callsign":""}${reacted?" reacted":""}"${ownCall?' data-own-call="true"':""}${reacted?' title="Reacted to your transmission"':""}>${reacted?"← ":""}${esc(item.call)}${banMark}</td><td class="station-country"${country?` title="${esc(country)}"`:""}>${esc(country||"—")}</td><td>${heard?signed(item.snr):"—"}</td><td>${heard?Math.round(item.offsetHz):"—"}</td><td>${heard?speedDetail(item.submode):"—"}</td><td class="station-direction">${directionHtml}</td><td>${age(item.lastSlotUtcMs)}</td></tr>`;
   }).join("")+groupRowsHtml();
+  noteCallsToMe(recent);
   openSectionsForNewOwnCall(recent,calls);
   renderStationSort();
   renderStationMap(calls,responders);
@@ -2758,10 +2961,51 @@ function renderStationMap(calls, responders) {
 }
 
 function renderHearingLinksButton(){
+  if(dom.stationMapLog){
+    const log=state.mapLogScale===true;
+    dom.stationMapLog.classList.toggle("active",log);
+    dom.stationMapLog.setAttribute("aria-pressed",String(log));
+  }
   if(!dom.stationMapLinks) return;
   const on=state.hearingLinksVisible!==false;
   dom.stationMapLinks.classList.toggle("active",on);
   dom.stationMapLinks.setAttribute("aria-pressed",String(on));
+}
+
+// Distance -> radius. Linear is the default and unchanged: half the radius is half
+// the distance, which is what a radar plot promises.
+//
+// LOG exists for the case the linear plot cannot draw at all -- a map holding both
+// a station 30 km away and one 15 000 km away puts the neighbour 0.2 % out from the
+// centre, under the operator's own dot. log10(1+d)/log10(1+dmax) spreads those out:
+// 0 km still maps to the centre (log10(1) = 0, so there is no floor to invent and
+// no free constant to tune), it is monotonic, and dmax still lands on the rim.
+function mapRadiusFor(qrbKm,maxKm,plotR){
+  const d=Math.max(0,Number(qrbKm)||0), max=Math.max(1,Number(maxKm)||1);
+  if(state.mapLogScale!==true)return (d/max)*plotR;
+  return (Math.log10(1+d)/Math.log10(1+max))*plotR;
+}
+
+// The rings. In linear mode they sit at a third and two thirds of the radius, as
+// they always have. In LOG mode that would be meaningless -- two thirds of the
+// radius is no longer two thirds of the distance -- so the rings become decades and
+// carry their value. A ring is only drawn when it actually falls inside the plot,
+// otherwise a 200 km map would be crossed by a labelled 10 000 km circle.
+const MAP_LOG_DECADES=[10,100,1000,10000];
+function mapRings(maxKm,plotR,cx,cy){
+  if(state.mapLogScale!==true)
+    return `<circle cx="${cx}" cy="${cy}" r="${(plotR/3).toFixed(1)}" class="map-ring"/>`
+      +`<circle cx="${cx}" cy="${cy}" r="${(plotR*2/3).toFixed(1)}" class="map-ring"/>`;
+  let out="";
+  for(const km of MAP_LOG_DECADES){
+    if(km>=maxKm)continue;                 // beyond the rim, or the rim itself
+    const r=mapRadiusFor(km,maxKm,plotR);
+    if(r<12)continue;                      // too close to the centre dot to read
+    out+=`<circle cx="${cx}" cy="${cy}" r="${r.toFixed(1)}" class="map-ring"/>`
+      +`<text x="${cx+3}" y="${(cy-r+3).toFixed(1)}" class="map-ring-label">`
+      +`${km>=1000?`${km/1000}k`:km}</text>`;
+  }
+  return out;
 }
 
 const MAP={CX:150, CY:150, R_FRAME:132, R_PLOT:120, DOT:4, LABEL_R:143};
@@ -2776,7 +3020,7 @@ function buildStationMapSvg(placed, edges) {
   const {CX,CY,R_FRAME,R_PLOT,DOT,LABEL_R}=MAP;
   const maxKm=Math.max(...placed.map(p=>p.dir.qrbKm)) || 1;
   const points=placed.map(({item,dir,reacted})=>{
-    const r=(dir.qrbKm/maxKm)*R_PLOT, a=dir.azimuthDeg*Math.PI/180;
+    const r=mapRadiusFor(dir.qrbKm,maxKm,R_PLOT), a=dir.azimuthDeg*Math.PI/180;
     return {item,dir,reacted,x:CX+r*Math.sin(a),y:CY-r*Math.cos(a)};
   });
   // Merge dots that would touch (centre-to-centre distance <= one diameter). Greedy single pass;
@@ -2820,14 +3064,13 @@ function buildStationMapSvg(placed, edges) {
   }
   const defs=`<defs><marker id="mapHearingArrow" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L8 4 L0 8 Z" class="map-hearing-head"/></marker></defs>`;
   const frame=
-    `<circle cx="${CX}" cy="${CY}" r="${(R_PLOT/3).toFixed(1)}" class="map-ring"/>`+
-    `<circle cx="${CX}" cy="${CY}" r="${(R_PLOT*2/3).toFixed(1)}" class="map-ring"/>`+
+    mapRings(maxKm,R_PLOT,CX,CY)+
     `<circle cx="${CX}" cy="${CY}" r="${R_FRAME}" class="map-frame"/>`+
     `<text x="${CX}" y="${CY-LABEL_R}" class="map-compass">N</text>`+
     `<text x="${CX+LABEL_R}" y="${CY}" class="map-compass">E</text>`+
     `<text x="${CX}" y="${CY+LABEL_R}" class="map-compass">S</text>`+
     `<text x="${CX-LABEL_R}" y="${CY}" class="map-compass">W</text>`+
-    `<text x="294" y="14" class="map-scale">${(maxKm/1000).toFixed(1)} kkm</text>`;
+    `<text x="294" y="14" class="map-scale">${state.mapLogScale===true?"LOG · ":""}${(maxKm/1000).toFixed(1)} kkm</text>`;
   const spokes=clusters.map(c=>`<line x1="${c.x.toFixed(1)}" y1="${c.y.toFixed(1)}" x2="${CX}" y2="${CY}" class="map-link"/>`).join("");
   const dots=clusters.map(c=>{
     const tip=esc([...c.members.map(stationMapTip),...(insideCluster.get(c)||[])].join("\n"));
@@ -5710,7 +5953,11 @@ function bind() {
   dom.binStop.addEventListener("click",stopFileTransfer);
   dom.binDownload.addEventListener("click",downloadReceivedFile);
   for (const container of [dom.traffic,dom.stationRows]) container.addEventListener("click",event=>{const node=event.target.closest("[data-call]");if(node)chooseCall(node.dataset.call);});
-  dom.trafficFilter.addEventListener("click",event=>{const clearButton=event.target.closest("[data-traffic-clear]");if(clearButton){if(!clearButton.disabled)clearRecentTraffic();return;}const button=event.target.closest("[data-traffic-filter]");if(!button||button.disabled)return;state.trafficFilter=button.dataset.trafficFilter;renderActivity();persistSession();});
+  dom.trafficFilter.addEventListener("click",event=>{const clearButton=event.target.closest("[data-traffic-clear]");if(clearButton){if(!clearButton.disabled)clearRecentTraffic();return;}
+    // HIDE only moves a step counter: no re-render, so the feed does not flicker and
+    // a live reception in progress is not interrupted by the columns changing.
+    if(event.target.closest("[data-traffic-hide]")){state.trafficHide=(Number(state.trafficHide)||0)+1;renderTrafficHideButton();persistSession();return;}
+    const button=event.target.closest("[data-traffic-filter]");if(!button||button.disabled)return;state.trafficFilter=button.dataset.trafficFilter;renderActivity();persistSession();});
   dom.stationHead.addEventListener("click",event=>{const button=event.target.closest("[data-station-sort]");if(!button)return;const key=button.dataset.stationSort;if(state.stationSort.key===key)state.stationSort.direction=state.stationSort.direction==="asc"?"desc":"asc";else state.stationSort={key,direction:"asc"};renderActivity();persistSession();});
   dom.txSpeed.addEventListener("change",()=>setJs8Setting("speed",dom.txSpeed.value));
   dom.txOffset.addEventListener("change",()=>setJs8Setting("txOffsetHz",Math.max(RX_LOW,Math.min(RX_HIGH,Number(dom.txOffset.value)||1500))));
@@ -5822,6 +6069,13 @@ function bind() {
     setJs8Setting("auto",dom.autoReply.checked);
     armUnattended(dom.autoReply.checked?"arm":"revoke");
   });
+  if(dom.alertBeep)dom.alertBeep.addEventListener("change",()=>{
+    setJs8Setting("alertBeep",dom.alertBeep.checked);
+    // Ticking the box IS a user gesture, so this is the one moment the browser
+    // will let audio start. Sounding it here doubles as the proof that it works,
+    // instead of leaving the operator to wonder until the next call arrives.
+    if(dom.alertBeep.checked)alertBeep();
+  });
   dom.txGain.addEventListener("change",()=>{const value=state.settingsDraft.txGain===null?dom.txGain.value:state.settingsDraft.txGain;state.settingsDraft.txGain=null;setJs8Setting("txGain",Number(value)||.25);});
   dom.txSafety.addEventListener("change",()=>setJs8Setting("txSafetyAccepted",dom.txSafety.checked));
   dom.resetSettings.addEventListener("click",()=>{const reset=Js8Settings.reset(localStorage);settings=reset.settings;state.settingsDraft={txGain:null};state.activeMode=settings.activeModem;dom.storageState.textContent=reset.label;applySettingsToRuntime();renderActivity();renderControls();closeTimetablePopover();if(!dom.freqTimetablePanel.hidden)renderTimetableGrid();reconcileTimetable();});
@@ -5858,7 +6112,14 @@ function bind() {
   // RESEND in the feed transmits; it does not merely restage the text. The row already
   // passed through the composer once, and the queue is what keeps the click from
   // colliding with a frame that is still on air.
-  dom.traffic.addEventListener("click",event=>{const button=event.target.closest("[data-resend-id]");if(!button)return;event.stopPropagation();resendOutgoing(button.dataset.resendId);});
+  dom.traffic.addEventListener("click",event=>{
+    // The button is a sibling of the <strong data-call>, not a child, so the
+    // callsign handler registered earlier on this same element already ignores it.
+    // stopPropagation is kept anyway, exactly as RESEND does: it costs nothing and
+    // it stops a future ancestor handler from acting on a click that was a send.
+    const answer=event.target.closest("[data-reply-call]");
+    if(answer){event.stopPropagation();if(!answer.disabled)replyToCq(answer.dataset.replyCall,answer.dataset.replyText);return;}
+    const button=event.target.closest("[data-resend-id]");if(!button)return;event.stopPropagation();resendOutgoing(button.dataset.resendId);});
   // The signal stripe's tooltip is written on hover rather than baked into the feed:
   // renderActivity() only runs when the decoder reports new activity, so on a dead band a
   // pre-rendered "4 min" would sit there for half an hour. A one-second tick rewriting a
@@ -5887,6 +6148,11 @@ function bind() {
   dom.stationMapSection.addEventListener("toggle",()=>{if(dom.stationMapSection.open)renderStationMap((state.activity.calls||[]).filter(item=>!isBlockedCall(item.call)));});
   dom.stationMapLinks.addEventListener("click",()=>{
     state.hearingLinksVisible=state.hearingLinksVisible===false;
+    renderStationMap((state.activity.calls||[]).filter(item=>!isBlockedCall(item.call)));
+    persistSession();
+  });
+  if(dom.stationMapLog)dom.stationMapLog.addEventListener("click",()=>{
+    state.mapLogScale=state.mapLogScale!==true;
     renderStationMap((state.activity.calls||[]).filter(item=>!isBlockedCall(item.call)));
     persistSession();
   });
@@ -6171,6 +6437,12 @@ async function init() {
     autoLogSweep(){maybeAutoLogQsos();},
     logQsoManual(call){state.selectedCall=String(call||"").toUpperCase();return logQsoFor(state.selectedCall,{manual:true});},
     refreshJs8LogNow(){return refreshJs8Log();},
+    // Seeds the per-band logged set the way a finished QSO would, without going
+    // through IndexedDB. What it exercises is the RENDERING rule -- a worked call
+    // is dimmed in the feed -- not the write path, which refreshJs8Log() owns and
+    // which this does not touch.
+    markLogged(call){state.loggedCalls.add(loggedKey(String(call||"").toUpperCase(),
+      bandOf(state.radio.frequency)));renderActivity();},
     js8LogState(){return {log:state.js8Log?{id:state.js8Log.id,contestName:state.js8Log.contestName}:null,logged:[...state.loggedCalls],inFlight:[...state.autoLogInFlight]};},
     logButton(){return {text:dom.logQso.textContent,action:dom.logQso.dataset.action||"",disabled:dom.logQso.disabled,title:dom.logQso.title};},
     async logQsos(){const log=await findJs8Log();return log?await window.LogDB.getQsosForLog(log.id):[];}

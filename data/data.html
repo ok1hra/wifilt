@@ -297,6 +297,9 @@
           <button type="button" data-traffic-filter="all" aria-pressed="true">ALL</button>
           <button type="button" data-traffic-filter="mycall" aria-pressed="false">MYCALL</button>
           <button type="button" data-traffic-filter="tx" aria-pressed="false" title="Only own transmissions that went on air">TX</button>
+          <!-- Multi-step column hide. The label always names what the NEXT press
+               removes, and the step after the last one restores everything. -->
+          <button type="button" data-traffic-hide aria-pressed="false" title="Hide the audio offset column">HIDE Hz</button>
           <button type="button" data-traffic-clear class="traffic-clear" disabled>CLEAR</button>
         </div>
         <div id="traffic" class="messages"><div class="empty-row">Waiting for JS8 activity…</div></div>
@@ -345,7 +348,7 @@
 
       <details class="compact-section" data-section="stations-map">
         <summary><span>Stations map</span><span id="stationMapSummary" class="summary-status">0 on map</span></summary>
-        <div class="map-toolbar"><button type="button" id="stationMapLinks" class="map-toggle active" aria-pressed="true" title="Show who hears whom between remote stations">LINKS</button></div>
+        <div class="map-toolbar"><button type="button" id="stationMapLinks" class="map-toggle active" aria-pressed="true" title="Show who hears whom between remote stations">LINKS</button><button type="button" id="stationMapLog" class="map-toggle" aria-pressed="false" title="Logarithmic distance scale — spreads out nearby stations when the map also holds DX">LOG</button></div>
         <div id="stationMap" class="station-map"></div>
       </details>
 
@@ -410,6 +413,7 @@
           <label>STATUS answer <input id="statusText" maxlength="40" autocomplete="off" placeholder="MONITORING"></label>
           <label class="safety-setting">Answer queries automatically <input id="autoReply" type="checkbox"><small>Replies to SNR?, GRID?, INFO?, STATUS?, HEARING? and AGN?. Off: the answer is placed in the message box for you to send.</small></label>
           <label>Unattended for <select id="armHours"></select><small id="autoState">disarmed</small></label>
+          <label>Beep on a call to me <input id="alertBeep" type="checkbox"><small>A short tone when a station addresses your callsign directly. The row is highlighted either way. Sound needs one click on the page first — the browser will not play until then.</small></label>
           <label>Repeat CQ <select id="cqRepeat"></select><small id="cqState">off</small></label>
           <!-- One palette, opened from here and from STATIONS. A row of its own would have
                to choose between showing the list and staying narrow; the panel shows every

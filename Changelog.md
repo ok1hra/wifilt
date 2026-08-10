@@ -11,6 +11,50 @@ published.
 
 ## Working tree — not committed
 
+### Recent traffic, stations map and the SETUP radio panel — not committed, not verified on air
+
+* **`REPLY` on a CQ line** (`data/data.js`). One press answers the caller with `SNR ±nn` — the
+  report *that line* was decoded at — after making them the recipient and opening TX SESSION. A CQ
+  is taken from the decoder's frame kind, never from the letters "CQ" in the text. The button is
+  drawn on every CQ and **carries the reason when it refuses**: older than five minutes (the same
+  window as the `5m` filter), already answered since that call, a shut transmit gate, or no measured
+  report. Being already in the log does not refuse it. **One press sends — no confirmation dialog,
+  no second click** (a `confirm()` has already killed a session once in this project); it goes
+  through the queue rather than straight to the encoder, so a press landing mid-frame waits for the
+  next slot instead of colliding, which also leaves `ABORT` usable.
+* **The station still never answers a CQ by itself.** `js8-autoreply.js` is untouched: it holds no
+  handler for a bare `SNR`, so the only path from the traffic list to the transmitter is that click.
+  This was a deliberate choice over an armed automatic follow-up.
+* **A line addressed to your callsign is marked** — green border plus a `TO YOU` badge — and
+  optionally beeps (**`Beep on a call to me`**, SETTINGS, **off by default**). The test is
+  `directed.to == my callsign`, deliberately narrower than the existing "mentions my call": being
+  listed in somebody's `HEARING` is not being called. The tone fires once per *message*, keyed on
+  the channel id like `openSectionsForNewOwnCall`, so a six-frame message does not beep six times;
+  the first render after a reload is silent by design. First `AudioContext` in the project — a
+  browser will not sound it until the page has been clicked, and the tick itself is that click.
+* **The signal report is now stated in the line**, next to speed and offset, and left blank rather
+  than printed as `+0` when there is none.
+* **Multi-step `HIDE`** in the filter row: `HIDE Hz` → `HIDE SPD` → `HIDE SNR` → `HIDE TIME` →
+  `SHOW ALL`. The label names what the *next* press removes. Driven by one attribute on the
+  container, so a press costs no re-render. The meta group is left in the grid even when fully
+  collapsed — removing it would drop the text into the wrong track and re-flow the feed.
+* **A callsign already in the JS8CALL log on this band reads dimmer**, from the same set the
+  `LOG QSO` button uses. It never disables anything.
+* **`LOG` on the stations map** — logarithmic distance, `log10(1+d)/log10(1+dmax)`: zero still maps
+  to the centre, no constant to tune. Its rings become labelled decades, because at half the radius
+  a log plot no longer means half the distance. Verified by measurement, not by trusting the
+  formula: a 110 km station goes from a sub-pixel radius **merged into a cluster on top of the
+  operator** to its own dot half way out, while the DX station stays on the rim.
+* **SETUP: the radio panel had its right ~28 px cut off.** Root cause was not the panel but
+  `label { grid-template-columns: 200px 1fr }` — a grid track's automatic minimum is its content's
+  min-content, and an `<input>` refuses to shrink below its default size, so the row grew past its
+  parent instead. Invisible until the panel moved inside a spine step, where `overflow:hidden`
+  clipped it. Fixed with `minmax(0, 1fr)` (which also protects every other label on the page) plus a
+  150 px label column inside the radio editor, so the fields keep the width they look like they
+  have. Measured before and after in headless Chrome: `scrollWidth` 758 → 730 against a 730 px box.
+* **Ten new checks in `tools/data-browser-smoke.js`** covering all of the above, and a
+  `markLogged()` test hook. The known six reds are unchanged.
+
 * **Design notes in `docs/`** (untracked), including `first-run-plan.md`,
   `tx-audio-gain-plan-implementace.md`, `tx-auto-gain-implementace.md`,
   `js8-skupiny-implementace.md`, `msgbox-implementace.md`, `js8-signal-stripe-plan.md`,

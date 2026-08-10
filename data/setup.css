@@ -270,10 +270,17 @@ select {
   padding: 10px 12px;
 }
 
-/* Two-column label layout: fixed label left, input right */
+/* Two-column label layout: fixed label left, input right.
+   The right track is minmax(0, 1fr), never a bare 1fr: a grid track's automatic
+   minimum is its content's min-content size, and an <input>'s min-content is its
+   default ~20-character size -- it flatly refuses to shrink below it. So on a
+   narrow column the row grew past its parent instead of the field getting
+   smaller, which is invisible until something clips it. Something does: the
+   radio workspace is overflow:hidden, and once that panel moved inside a spine
+   step (49px indent) the right-hand ~28px of every field was cut off. */
 label {
   display: grid;
-  grid-template-columns: 200px 1fr;
+  grid-template-columns: 200px minmax(0, 1fr);
   align-items: center;
   gap: 4px 16px;
 }
@@ -708,13 +715,24 @@ label.setup-radio-enable {
   display: none;
 }
 
+/* This editor is the narrowest column any label lives in -- the workspace gives
+   it what is left after the 230px radio nav, inside a spine step that is already
+   indented. The page-wide 200px label column would leave the field 244px here,
+   noticeably tighter than everywhere else, so the column shrinks instead of the
+   input. */
 .setup-radio-fields > label,
 .setup-radio-context > label {
   min-height: 42px;
+  grid-template-columns: 150px minmax(0, 1fr);
 }
 
+/* Belt and braces with the minmax() above: a replaced element carries its own
+   intrinsic minimum width, and min-width:0 is what actually lets it shrink. */
 .setup-radio-fields input,
-.setup-radio-fields select {
+.setup-radio-fields select,
+.setup-radio-context input,
+.setup-radio-context select {
+  min-width: 0;
   max-width: 390px;
 }
 

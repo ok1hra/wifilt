@@ -1565,6 +1565,123 @@ f.onload=()=>{
                     f.contentWindow.__dataTest.snapshotBuild().hearingLinksVisible===false;
                   d.querySelector('#stationMapLinks').click();
                   checks.hearingToggleBack=hearLinks().length===1&&d.querySelector('#stationMapLinks').getAttribute('aria-pressed')==='true';
+                  // LOG distance scale. The map is a radar plot, so a neighbour and a DX
+                  // station on the same picture put the neighbour under the operator's own
+                  // dot. The defining property of the fix is that the NEAR dot moves
+                  // outward while the far one stays on the rim -- asserted by measuring,
+                  // not by trusting the formula.
+                  {
+                    const logNow=Date.now();
+                    f.contentWindow.__dataTest.setActivity({frames:[],timing:[],channels:[],messages:[],calls:[
+                      // A couple of hundred km out, on a bearing the other fixtures do not
+                      // use, and NOT the operator's own square: zero distance maps to the
+                      // centre in both scales, so it would prove nothing.
+                      {call:'OK2NEAR',snr:-3,offsetHz:930,submode:0,lastSlotUtcMs:logNow-1000,grid:'JN70',heardDirectly:true},
+                      {call:'VK3DX',snr:-19,offsetHz:940,submode:0,lastSlotUtcMs:logNow-1000,grid:'QF22',heardDirectly:true}
+                    ]});
+                    // setActivity MERGES into the store, so the map still carries the
+                    // stations the hearing-links block put there -- match on "contains".
+                    // Whether the dot had to be shared is not noise here: being swallowed
+                    // into a cluster on top of the operator IS the symptom this feature
+                    // cures, so the test asserts on it in both directions.
+                    // (No backticks in this file: every line of it lives inside a template
+                    // literal, and one would end the string mid-scenario.)
+                    const dotOf=call=>{
+                      const g=[...d.querySelectorAll('#stationMap .map-dot')]
+                        .find(node=>(node.querySelector('title')?.textContent||'').includes(call));
+                      if(!g)return null;
+                      const c=g.querySelector('circle');
+                      return {merged:Boolean(g.querySelector('.map-badge')),
+                        r:Math.hypot(Number(c.getAttribute('cx'))-150,Number(c.getAttribute('cy'))-150)};
+                    };
+                    const linNear=dotOf('OK2NEAR'), linFar=dotOf('VK3DX');
+                    const logButton=d.querySelector('#stationMapLog');
+                    logButton.click();
+                    const logNear=dotOf('OK2NEAR'), logFar=dotOf('VK3DX');
+                    // Linear: 110 km against a 16 000 km rim is under one pixel, so the
+                    // neighbour is swallowed into a knot of dots on top of the operator.
+                    // LOG: it comes out as its own dot, half way to the rim -- while the DX
+                    // station stays exactly where it was, because the rim is still the rim.
+                    checks.mapLogSpreadsNearStations=Boolean(linNear&&logNear&&linFar&&logFar)&&
+                      linNear.r<10&&linNear.merged&&
+                      !logNear.merged&&logNear.r>40&&
+                      Math.abs(logFar.r-linFar.r)<1&&
+                      logButton.getAttribute('aria-pressed')==='true'&&
+                      f.contentWindow.__dataTest.snapshotBuild().mapLogScale===true;
+                    // A log plot whose rings still sat at a third and two thirds of the
+                    // radius would be a picture with no scale, so the rings become decades
+                    // and say so.
+                    const ringLabels=[...d.querySelectorAll('#stationMap .map-ring-label')].map(n=>n.textContent);
+                    checks.mapLogLabelsItsRings=ringLabels.length>0&&ringLabels.includes('1k')&&
+                      d.querySelector('#stationMap .map-scale').textContent.startsWith('LOG');
+                    logButton.click();
+                    checks.mapLogTogglesBack=Math.abs(dotOf('OK2NEAR').r-linNear.r)<0.5&&
+                      d.querySelectorAll('#stationMap .map-ring-label').length===0&&
+                      logButton.getAttribute('aria-pressed')==='false';
+                  }
+                  // Recent traffic: the signal report in the row, the multi-step HIDE,
+                  // REPLY on a CQ, and the two row states (already worked / addressed
+                  // to me). One activity set drives all of them.
+                  {
+                    const feedNow=Date.now();
+                    const traffic=d.querySelector('#traffic');
+                    const cqRow=(from,atMs,snr)=>({callsigns:[from],kinds:['cq'],submode:0,offsetHz:1200,
+                      snr,firstSlotUtcMs:atMs,lastSlotUtcMs:atMs,text:from+': @ALLCALL CQ JO60 '});
+                    f.contentWindow.__dataTest.setActivity({frames:[],timing:[],channels:[],calls:[],messages:[
+                      cqRow('S51FRESH',feedNow-20000,-12),
+                      cqRow('S52STALE',feedNow-600000,-8),
+                      // A directed frame addressed to us: the one row the operator must act on.
+                      {directed:{from:'DL9ME',to:'OK1HRA',command:' SNR'},kinds:['directed'],submode:0,
+                       offsetHz:1300,snr:-5,firstSlotUtcMs:feedNow-15000,lastSlotUtcMs:feedNow-15000,
+                       text:'DL9ME: OK1HRA SNR -05 ',callsigns:['DL9ME','OK1HRA']}
+                    ]});
+                    const rowFor=call=>[...traffic.querySelectorAll('article.message')]
+                      .find(node=>node.querySelector('strong')?.textContent===call);
+                    // The report is stated as a number, not only as the stripe's opacity.
+                    checks.feedShowsSnr=rowFor('S51FRESH')?.querySelector('.meta-snr')?.textContent==='-12 dB';
+                    const freshReply=rowFor('S51FRESH')?.querySelector('.cq-reply');
+                    const staleReply=rowFor('S52STALE')?.querySelector('.cq-reply');
+                    // A CQ is recognised from the decoder's frame kind, and the answer is
+                    // the report this very row was decoded at.
+                    checks.cqReplyOffered=Boolean(freshReply)&&!freshReply.disabled&&
+                      freshReply.dataset.replyText==='SNR -12'&&freshReply.dataset.replyCall==='S51FRESH';
+                    // Ten minutes old: refused, but still drawn and still saying why. A
+                    // button that vanishes on some rows reads as a rendering fault.
+                    checks.cqReplyRefusesStale=Boolean(staleReply)&&staleReply.disabled&&
+                      /10 min old/.test(staleReply.title);
+                    // Addressed to us: its own row state and badge, and nothing transmitted.
+                    const mineRow=rowFor('DL9ME');
+                    checks.feedMarksCallsToMe=Boolean(mineRow)&&mineRow.classList.contains('message-for-me')&&
+                      mineRow.querySelector('.forme-badge')?.textContent==='TO YOU';
+                    // Being merely mentioned is not being addressed: a CQ row must not
+                    // borrow the state that means "somebody is talking to you".
+                    checks.feedDoesNotMarkPlainTraffic=!rowFor('S51FRESH')?.classList.contains('message-for-me');
+                    // HIDE walks one column per press and wraps back to everything.
+                    const hideButton=d.querySelector('[data-traffic-hide]');
+                    const shown=cls=>{const node=rowFor('S51FRESH')?.querySelector(cls);
+                      return Boolean(node)&&f.contentWindow.getComputedStyle(node).display!=='none';};
+                    const hideStart=shown('.meta-hz')&&shown('.meta-speed')&&shown('.meta-snr')&&shown('.meta-time');
+                    hideButton.click();
+                    const hide1=!shown('.meta-hz')&&shown('.meta-speed')&&shown('.meta-snr')&&shown('.meta-time');
+                    hideButton.click(); hideButton.click();
+                    const hide3=!shown('.meta-hz')&&!shown('.meta-speed')&&!shown('.meta-snr')&&shown('.meta-time');
+                    hideButton.click();
+                    const hide4=!shown('.meta-time')&&hideButton.textContent==='SHOW ALL';
+                    hideButton.click();
+                    checks.trafficHideCycles=hideStart&&hide1&&hide3&&hide4&&
+                      shown('.meta-hz')&&shown('.meta-time')&&hideButton.textContent==='HIDE Hz'&&
+                      f.contentWindow.__dataTest.snapshotBuild().trafficHide===0;
+                    // A station already in the JS8CALL log on THIS band reads dimmer, so
+                    // the eye lands on the ones still worth working. It stays clickable and
+                    // its REPLY stays live: answering again is legitimate.
+                    f.contentWindow.__dataTest.markLogged('S52STALE');
+                    const workedName=rowFor('S52STALE')?.querySelector('strong');
+                    checks.feedDimsWorkedCalls=Boolean(workedName)&&
+                      workedName.classList.contains('worked')&&
+                      /already logged on/.test(workedName.title)&&
+                      !rowFor('S51FRESH')?.querySelector('strong')?.classList.contains('worked')&&
+                      Boolean(rowFor('S51FRESH')?.querySelector('.cq-reply:not([disabled])'));
+                  }
                   // MSG BOX stage E4: the same "who hears whom" evidence decides
                   // where to park a message for a station we cannot reach. SN9GK
                   // reported a signal to MM0VIK, so SN9GK hears MM0VIK.

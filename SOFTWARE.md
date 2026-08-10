@@ -935,7 +935,26 @@ together.
 | **ALL** | everything |
 | **MYCALL** | only traffic involving your callsign |
 | **TX** | only your own transmissions |
+| **HIDE …** | removes one meta column per press — see below |
 | **CLEAR** | empties the traffic list **and** the TX rows |
+
+Every received line also states the **signal report it was decoded at**, next to the speed
+and the audio offset. It is the same measurement the stripe uses for its shading, said as a
+number. A line with no report — a station you were only told about — leaves the field empty
+rather than printing `+0`, which would be an invented measurement.
+
+**HIDE narrows the row one column at a time.** The button always names what the *next* press
+will remove, so you never have to press it to find out: `HIDE Hz` → `HIDE SPD` → `HIDE SNR`
+→ `HIDE TIME` → `SHOW ALL`, then round again. The order runs from the column the line can
+most afford to lose to the one it cannot — the offset goes first because the stripe already
+shows where in the passband the signal sat, and the timestamp goes last because it is the
+anchor the feed is read by. Useful on a phone, where the meta columns squeeze the message
+text. The setting is remembered.
+
+**A callsign you have already worked on this band is dimmer.** The test is the JS8CALL log's
+real content (see [section 5.16](#516-logging-js8-qsos)), so it survives a reload and a QSO
+logged from another window. It never disables anything — answering a station a second time
+is perfectly legitimate — it only lets your eye skip to the stations still worth working.
 
 **Your own transmissions appear here in their own colour**, and they distinguish what was
 actually radiated from what was not — `TX prebuffering`, `TX completed`, `TX fault`. Without
@@ -943,6 +962,59 @@ that you cannot audit what an unattended station did while you were away.
 
 A **`TX fault` row grows a `RESEND` button**. Note that the software *also* makes one
 automatic second attempt of its own, so you may see a retry you did not click.
+
+#### Answering a CQ from the line that carries it
+
+A line that is a **CQ** grows a **`REPLY`** button at its end.
+
+**One press sends. There is no confirmation step and no second click.** The press makes that
+station the recipient in TX SESSION, opens the session, and hands a signal report —
+`SNR -12`, the report *that line* was decoded at — straight to the transmit queue. It is the
+standard answer to a CQ, and it also completes half of the signal-report exchange that logs
+the QSO automatically once the other station answers.
+
+The corollary matters just as much: **nothing at all happens until you press it.** The button
+is the whole decision.
+
+A CQ is recognised from the decoder's own frame type, not by looking for the letters "CQ" in
+the text — a station saying "TNX FOR CQ" is not calling one.
+
+**The button is always drawn, and says why when it will not fire.** Hover it for the reason:
+
+| Refusal | Why |
+|---|---|
+| the CQ is more than five minutes old | they are almost certainly in a QSO by now, and the answer would go nowhere |
+| you already answered that station since that call | a second report is a second transmission for nothing |
+| a transmit gate is shut | the same conditions that grey out SEND — LAN down, wrong mode, TX not enabled |
+| no report was measured | nothing to send; this happens on a station you were only told about |
+
+Being already in the log does **not** refuse it. That only dims the callsign.
+
+The report goes out at the next JS8 slot, like every other transmission — so there are up to
+15 seconds between the press and the carrier. That is not a confirmation step: it needs
+nothing from you and the report goes out by itself. It does mean **`ABORT` in TX SESSION can
+still stop it** if you pressed the wrong line.
+
+> **The station never answers a CQ by itself.** `REPLY` is the only path from this list to
+> the transmitter, and it is a click. Unattended operation
+> ([section 5.12](#512-unattended-operation)) answers *questions* addressed to you — `SNR?`,
+> `GRID?` and the rest — and nothing else.
+
+#### When somebody calls you
+
+A line **addressed to your callsign** gets a green border and a `TO YOU` badge. This is the
+one line in the list you have to act on, so it is the strongest state in it. Being merely
+*mentioned* — your callsign in somebody else's `HEARING` list — does not count and is not
+marked; that happens constantly on a busy band.
+
+Nothing is transmitted in response. What happens next is yours: the station is one click
+away in the line, and TX SESSION is already open.
+
+**Beep on a call to me** in [SETTINGS](#513-settings) adds a short tone to that moment. It
+is **off by default** — the page is meant to be left running for days beside a radio that is
+already making noise. Ticking the box sounds the tone once so you know it works. Browsers
+refuse to play sound until the page has been clicked at least once, so on a tab that has
+only ever been looked at, the highlighted line is all you get.
 
 **Partial messages are shown while they are still arriving.** A multi-slot message assembles
 in place, including the damaged and missing pieces, with a blocking `|` marker at the end
@@ -992,6 +1064,15 @@ The same stations plotted by locator.
 - A **hollow ring** is a station that has been mentioned by others but never decoded here.
 - **LINKS** toggles green arrows between third-party stations showing **who hears whom**,
   over the last 60 minutes. It is on by default.
+- **LOG** switches the distance scale from linear to logarithmic. On a linear plot one DX
+  station sets the scale for everything: with a contact 15 000 km away on the map, a
+  neighbour 150 km out lands about one pixel from the centre, under your own dot, usually
+  merged with every other nearby station into a single clustered dot. On the log scale that
+  same neighbour sits about half way out, and the DX station stays on the rim where it was.
+  In this mode the two plain rings are replaced by labelled **decade rings** — 10, 100,
+  1 000 and 10 000 km, whichever of them fit — because a ring at half the radius no longer
+  means half the distance and a plot without a scale is just a picture. The corner reading
+  is prefixed `LOG`. Off by default; the choice is remembered.
 
 ### 5.10 MSG BOX
 
@@ -1127,6 +1208,7 @@ currently active, so you can see the station's posture without opening the secti
 | **INFO answer** | up to 40 characters, e.g. `50W VERT` |
 | **STATUS answer** | up to 40 characters, e.g. `MONITORING` |
 | **Answer queries automatically** · **Unattended for** · **Repeat CQ** · **My groups** · **Send heartbeats** · **Heartbeat every** · **Acknowledge heartbeats** | see [section 5.12](#512-unattended-operation) |
+| **Beep on a call to me** | a short tone when a station addresses your callsign directly. **Off by default.** The line in Recent traffic is highlighted either way — see [section 5.7](#57-recent-traffic). Ticking it plays the tone once, which is also the click browsers require before they will allow any sound. Purely local to this browser; it never transmits anything. |
 | **Restore defaults** | reset every setting on this page |
 
 The radio setup help opens by itself the first time this browser loads the page. That is

@@ -555,7 +555,31 @@ button { color: inherit; cursor: pointer; }
 .chat-resend:hover { background:rgba(255,191,105,0.12); }
 .chat-bubble[data-message-status="interrupted"] footer { color:var(--amber); }
 .message-meta { display:flex; gap:8px; color:var(--muted); font-size:11px; white-space:nowrap; }
+/* The signal report this row was decoded at. Same value the stripe under the row
+   uses for its opacity, now said as a number -- the stripe answers "how much of an
+   obstacle is this", the number answers "can I work them". Never rendered at all
+   when there is no report, so an empty cell is never mistaken for 0 dB. */
+.meta-snr { color:var(--cyan); }
+/* Multi-step HIDE, driven by one attribute on the container. Cumulative: each step
+   keeps hiding what the earlier ones did, so the rules read as thresholds rather
+   than as five separate states to keep in sync. */
+.messages:is([data-hide="1"],[data-hide="2"],[data-hide="3"],[data-hide="4"]) .meta-hz,
+.messages:is([data-hide="2"],[data-hide="3"],[data-hide="4"]) .meta-speed,
+.messages:is([data-hide="3"],[data-hide="4"]) .meta-snr,
+.messages[data-hide="4"] .meta-time { display:none; }
+/* The meta group itself is deliberately left in the grid even when every one of
+   its columns is hidden. Taking it out would leave the row with two items in a
+   three-track grid, which drops the text into the `auto` track instead of the
+   1fr one and re-flows the whole feed. A collapsed group is 0 wide; the 8px gap
+   it leaves behind is a far cheaper price than that. */
 .message strong { color: var(--cyan); cursor: pointer; }
+/* Already logged on the band we are tuned to. Same hue, dimmer -- the feed's palette
+   is deliberately narrow (cyan = a callsign you can click, green = you, amber = a
+   directed frame), so "worked" is a shade of the colour it already had rather than a
+   fifth colour to learn. It never disables anything: answering a station a second
+   time is legitimate, this only says the eye can move on. */
+.message strong.worked { color:#3f8578; }
+.message strong.worked:hover { color:var(--cyan); }
 .own-callsign { color: var(--green) !important; }
 .message-text { min-width:0; color:#fff; white-space:normal; overflow-wrap:anywhere; }
 /* aprs.fi lookup on the sender's callsign as it appears inside the decoded text. Colour is
@@ -565,6 +589,15 @@ button { color: inherit; cursor: pointer; }
 .call-lookup { color:inherit; text-decoration:underline dotted; text-underline-offset:2px; }
 .call-lookup:hover, .call-lookup:focus-visible { color:var(--cyan); text-decoration:underline; }
 .message.directed { border-left: 3px solid var(--amber); }
+/* Somebody is talking to us. The strongest row state in the feed, because it is
+   the only one the operator has to act on -- and the only reaction there is: the
+   station never answers on its own, REPLY is a click. Green matches the own-callsign
+   rule already inside the text, so the row and the word it is about agree. */
+.message.message-for-me { border-left:3px solid var(--green); background:rgba(90,209,138,0.07); }
+.message.message-for-me.operational { opacity:1; }
+.forme-badge { display:inline-block; margin-right:6px; padding:0 5px; border:1px solid var(--green);
+  border-radius:3px; color:var(--green); font:800 9px/1.6 ui-monospace,monospace;
+  letter-spacing:.08em; vertical-align:1px; }
 /* Own TX in the recent-traffic feed. Red = went on air, grey = a link/TX failure kept
    it off air. A partly transmitted message is neither, so the strike-through sits on
    the unsent characters alone and the frames that really did radiate stay red —
@@ -593,6 +626,22 @@ button { color: inherit; cursor: pointer; }
 .tx-resend { align-self:center; padding:1px 8px; border:1px solid var(--amber); border-radius:10px;
   background:transparent; color:var(--amber); font-size:10px; cursor:pointer; white-space:nowrap; }
 .tx-resend:hover { background:rgba(255,191,105,0.12); }
+/* Answering a CQ. Same shape and place as RESEND -- both are "this row can put
+   something on the air" -- but cyan, because RESEND repeats a transmission that
+   already failed while this one starts a contact. Disabled rather than removed
+   when it cannot fire: the title says which of the guards refused, so a row that
+   will not answer never looks like a row that forgot to draw a button. */
+.cq-reply { align-self:center; padding:1px 8px; border:1px solid var(--cyan); border-radius:10px;
+  background:transparent; color:var(--cyan); font-size:10px; cursor:pointer; white-space:nowrap; }
+.cq-reply:hover:not(:disabled) { background:rgba(102,242,213,0.12); }
+.cq-reply:disabled { border-color:#33544d; color:#4f6b65; cursor:not-allowed; }
+/* A CQ counts as operational traffic (its kinds carry no "data"), so the row is
+   dimmed to .48 with the rest of the machine chatter. Opacity applies to the whole
+   rendered subtree and a child cannot opt out of it, so the fix has to be on the
+   row: a row offering a live REPLY is not background noise, and it sits at the same
+   .82 the other rows reach on hover. A refused REPLY leaves the row dim, which is
+   the honest signal -- there is nothing to do with it. */
+.message.operational.has-reply { opacity:.82; }
 /* Understated "this recipient is blocked" note — amber, like the auto-reply ban, not an alarm. */
 .session-blocked { color: var(--amber); }
 .message.operational { opacity: .48; }
@@ -636,6 +685,10 @@ button { color: inherit; cursor: pointer; }
 .station-map-svg { width: 100%; max-width: 360px; aspect-ratio: 1 / 1; height: auto; margin: 0 auto; display: block; }
 .map-frame { fill: none; stroke: var(--line); stroke-width: 1.5; }
 .map-ring { fill: none; stroke: var(--line); stroke-width: 1; opacity: .5; }
+/* Only drawn in LOG mode, where a ring's radius no longer says its distance. Sits
+   just inside the ring on the north axis, small and unobtrusive -- it is a scale,
+   not a label for anything on the map. */
+.map-ring-label { fill: var(--muted); font: 600 8px ui-monospace, monospace; opacity: .75; }
 .map-compass { fill: var(--muted); font: 700 11px ui-monospace, monospace; text-anchor: middle; dominant-baseline: central; }
 .map-scale { fill: var(--muted); font: 600 11px ui-monospace, monospace; text-anchor: end; }
 .map-link { stroke: var(--line); stroke-width: 1; }

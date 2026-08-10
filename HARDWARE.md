@@ -18,7 +18,9 @@ firmware onto a board. Everything the web interface does once it is running is d
 7. [Connectors and wiring](#7-connectors-and-wiring)
 8. [POWER-OUT, CI-V OUT and the KEY output](#8-power-out-ci-v-out-and-the-key-output)
 9. [Watchdog and automatic recovery](#9-watchdog-and-automatic-recovery)
-10. [PCB, bill of materials and enclosure](#10-pcb-bill-of-materials-and-enclosure)
+10. [Enclosures, PCB and bill of materials](#10-enclosures-pcb-and-bill-of-materials)
+    · [10.1 A case for a bare ESP32 dongle](#101-a-case-for-a-bare-esp32-dongle)
+    · [10.2 The RemoteQTH interface](#102-the-remoteqth-interface)
 
 ---
 
@@ -42,6 +44,9 @@ whole SETUP page.
 `0x190000 + 0x270000 = 0x400000` exactly: the layout ends precisely at the end of a 4 MB
 chip. An 8 MB or 16 MB module works too — the extra flash simply goes unused — but a 2 MB
 module cannot hold the assets.
+
+Any WROOM form factor will do: a dev board, or one of the USB-dongle style carriers, for
+which there is a printed case in [section 10.1](#101-a-case-for-a-bare-esp32-dongle).
 
 You also need:
 
@@ -307,14 +312,31 @@ needs configuring.
 
 ---
 
-## 10. PCB, bill of materials and enclosure
+## 10. Enclosures, PCB and bill of materials
 
-The RemoteQTH interface is an open design.
+### 10.1 A case for a bare ESP32 dongle
+
+![Printed case for an ESP32 USB dongle](img/esp32-usb-dongle.jpg)
+
+A bare module works perfectly well but is awkward to leave lying in the shack. This is a
+printed case for the USB-dongle shape of ESP32-WROOM-32 board — the module on a small carrier
+with a USB connector at one end — with slots that leave the castellated pads reachable.
+
+- [Case for ESP32 dongle, on Printables](https://www.printables.com/model/1755918-case-esp32-dongle-for-wifilt)
+
+Dongle boards like this come and go, and the one it was drawn around may not be on sale for
+long. Check the model page against the board actually in your hand before printing. Nothing
+about WIFILT depends on it: the requirement is still **any ESP32 WROOM module with 4 MB of
+flash**.
+
+### 10.2 The RemoteQTH interface
+
+The interface board is an open design.
 
 - [Schematic rev3 (PDF)](hw/IC-705-interface-03.pdf)
 - [Interactive BOM rev3 (HTML)](hw/IC-705-interface-ibom-03.html)
 
-### 3D printed enclosure
+#### 3D printed enclosure
 
 <img src="3Dprint/preview.png" height="200"><img src="3Dprint/preview-mountpoint.png" height="200">
 

@@ -81,6 +81,12 @@
         // Unattended operation. `auto` is the operator's switch; `armHours` is
         // how long it stays on before the firmware lets it lapse by itself.
         auto:false, armHours:1, infoText:"", statusText:"",
+        // A short tone when a directed frame arrives for us. Off by default: the
+        // page is meant to be left running for days next to a radio that is
+        // already making noise, so a sound nobody asked for is a regression on
+        // every existing installation. No schema bump is needed -- an absent key
+        // normalises to false, which is the default anyway.
+        alertBeep:false,
         hb:false, hbAck:true, hbMinutes:60, groups:[], cqRepeatMin:0,
         // Percent of the radio's CI-V power scale, written on page open and
         // after a reconnect. null means the operator has never chosen, and
@@ -139,6 +145,7 @@
         txGain:clamp(js8.txGain, 0.1, 0.8, 0.25),
         txSafetyAccepted:js8.txSafetyAccepted === true,
         auto:js8.auto === true,
+        alertBeep:js8.alertBeep === true,
         armHours:ARM_HOURS.includes(Number(js8.armHours)) ? Number(js8.armHours) : 1,
         // Free text answered to INFO?/STATUS?; kept short so the reply fits
         // one frame, and stripped of characters the protocol cannot pack.
