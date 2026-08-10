@@ -50,38 +50,38 @@
   - before manual filesystem upload run tools/gzip-assets.sh
   - continue with Arduino IDE
 
-  Features
+  Features -- keep this list matching the code. Its previous version promised an
+  http server on port 81 and a UDP listener on port 89, neither of which had
+  existed for years, and both README.md and the user manual copied them from
+  here. The per-release history that used to be appended below lives in
+  Changelog.md, which is the only place it is maintained.
   + Three independently configured radio slots using LAN, TrxNet or CI-V
-  + Frequency and mode for PHP log available on http port 81 (address http://wifilt.local:81)
-  + UDP port 89 receives ascii characters and transmits them as a CW or RTTY message
-  + UDP port 89 receives ascii characters, which it sends in RTTY mode by keying FSK and PTT TRX inputs
+  + Web interface on http port 80 (http://wifilt.local): setup, QRPLog, DATA/JS8,
+    WSPR, DXC and the band decoder
+  + DX cluster telnet stream relayed on port 82, radio audio (AUD1) on WebSocket port 83
+  + CW and RTTY keyed from the log over the web API (POST /cmd, type sendCw):
+    CW goes out as a CI-V message, RTTY by keying the FSK and PTT outputs
+    (45.45 Bd, 1.5 stop bits, mark LOW, 400 ms lead, 200 ms tail)
   + Status LED
     - Fade in/out - WiFi in AP mode
     - WiFi in client mode
-      - ON waiting connected to WiFi
-      - OFF Wifi connected to AP
-      - FLASH send MQTT freq
-      - DOUBLE FLASH receive CW via UDP
-      - FLASH+PTT receive RTTY via UDP
+      - OFF while waiting for the WiFi connection
+      - ON once connected
+      - 100 ms dark pulse when a CW message is sent
+      - dark for as long as RTTY is being keyed
   + mDNS - to easily find IP devices in the network, using the command "ping wifilt.local"
   + Watchdog - resets the device after more than 73 seconds of inactivity
   + Output signal POWER-OUT (13.8V/0.5A) with LED activates after connecting a full-CAT primary radio
   + Galvanically isolated CI-V output for connecting PA or other devices
   + CIV-MUTE on gpio16 allow send to CI-V output only commands with frequency (not debug messages)
-  + UDP port for CAT command (clear RIT) from log
   + after a full-CAT primary connection, set TRX to enable CI-V transceive + RIT + BK-IN
-  + support external shift register control switch by frequency (not tested)
-  + Detect PCB hardware ID
-  + postponed MQTT
+  + Band decoder: outputs switched by frequency through an external shift register
+  + Detect PCB hardware ID (HW rev 02 and 03)
+  + TrxNet peer-to-peer telemetry between interfaces (replaced MQTT)
   + legacy BT configuration retained only for downgrade compatibility
-  + detect HW rev 02
   + after connect WiFi, play assigned IP address in CW on a full-CAT TRX1 as sidetone only (BK-IN forced off so it never transmits; snapshots+restores mode/BK-IN/AF/RF gain)
   + send ? in serial terminal, answer interface status
-  + add AP mode - status LED signal AP mode by slowly turning on and off (fade in / fade out)
-  + add setup http web form on port 80
-  + add HW rev 3 detection
-  + optional reset after diconnect
-  + add Debug to CLI
+  + optional reset after TRX disconnect
 
   
   FYI https://github.com/Rhizomatica/mercury
@@ -114,13 +114,12 @@ bool cwIpOnConnect  = false;      // announce WiFi IP via CW on first full-CAT r
 volatile bool cwIpSendPending = false;
 
 #define LOOP_WARN_MS 200
-#define REV 20260809
+#define REV 20260810
 #define WIFI
-#define UDP_TO_FSK
+#define FSK_KEYING  // RTTY by keying the FSK + PTT outputs (was UDP_TO_FSK, from when a UDP port fed it)
 #define WDT         // watchdog timer
 #define CIV_OUT     // send freq to CIV out with BaudRate
 // #define BLUETOOTH   // legacy only; UI supports LAN, TrxNet and CI-V
-// #define RTLE     // not work now | credit OK2CQR https://github.com/ok2cqr/rtle/tree/master
 // #define RESET_AFTER_DISCONNECT  // enable reset after each disconnect + short CW msg
 
 #include "EEPROM.h"
@@ -330,20 +329,12 @@ volatile bool btConnectPending = false;
   const byte DNS_PORT = 53;
   DNSServer dnsServer;             // captive portal in AP mode
 #endif
-  #if defined(RTLE)
-    #ifndef HTTP_MAX_DATA_WAIT
-      #define HTTP_MAX_DATA_WAIT 1000
-    #endif
-    #include <WebServer.h>
-    #include "rtle.h"  //Web page header file
-    WebServer rtleserver(88);
-  #endif
 
 
 // uint8_t CwMsg[36] = "";
 char CwMsg[37] = "";
 
-#if defined(UDP_TO_FSK)
+#if defined(FSK_KEYING)
   #define FSK_OUT  33                      // TTL LEVEL pin OUTPUT
   #define PTT      32                      // PTT pin OUTPUT
   #define FSK_MARK_LEVEL   LOW             // FSK mark level [LOW/HIGH]
@@ -2161,7 +2152,7 @@ void handlePostCmd(){
   }
 
   if (type == "abortCw") {
-    #if defined(UDP_TO_FSK)
+    #if defined(FSK_KEYING)
     char modesSnapshot[sizeof(modes)];
     copyModesText(modesSnapshot, sizeof(modesSnapshot));
     if (strcmp(modesSnapshot, "CW") == 0 && radioLinkUp() && radio_address != 0x00) {
@@ -4063,11 +4054,6 @@ void setup(){
 
       dnsServer.start(DNS_PORT, "*", IP);   // captive portal: resolve every host to us
 
-      #if defined(RTLE)
-        rtleserver.on("/", handleRTLE);      //This is display page
-        rtleserver.begin();                  //Start server
-        Serial.println("HTTP| RTLE server started");
-      #endif
 
       StartMdns();
 
@@ -4115,11 +4101,6 @@ void setup(){
         }
       }
 
-      #if defined(RTLE)
-        rtleserver.on("/", handleRTLE);      //This is display page
-        rtleserver.begin();                  //Start server
-        Serial.println("HTTP| RTLE server started");
-      #endif
 
       StartMdns();
       setupWebServer();
@@ -4135,7 +4116,7 @@ void setup(){
 
 
 
-    #if defined(UDP_TO_FSK)
+    #if defined(FSK_KEYING)
       pinMode(PTT,  OUTPUT);
         digitalWrite(PTT, LOW);
       pinMode(FSK_OUT,  OUTPUT);
@@ -4234,9 +4215,6 @@ void loop(){
   if(aud1TxState == AUD1_TX_STREAM) aud1TxTick(false);
   _TIMED("CLI",             serialPump())
   _TIMED("CIV",             civPollTick())
-  #if defined(RTLE)
-    _TIMED("rtleserver",    rtleserver.handleClient())
-  #endif
   handleWebServerLoop();
   _TIMED("NetIdentity",     NetworkIdentityLoop())
   _TIMED("RadioModel",      radioModelLearnTick())
@@ -4488,7 +4466,7 @@ void Watchdog(){
     pollRadio();
   #endif
 
-  static unsigned long mqttFreqTimer = 0;
+  static unsigned long trxNetPublishTimer = 0;
 
   // Primary LAN owns PWR/audio in lanClientLoop(). Direct serial CI-V is also a
   // full primary connection; TrxNet is intentionally telemetry+tune only and
@@ -4514,14 +4492,14 @@ void Watchdog(){
       }
     }
 
-    if (connected && radio_address != 0x00 && millis() - mqttFreqTimer > 2000
+    if (connected && radio_address != 0x00 && millis() - trxNetPublishTimer > 2000
         && frequencyTmp != frequency) {
       if (trxNetEnabled) {
         uint32_t f = (uint32_t)frequency;
         net.publish("/hz", (uint8_t*)&f, sizeof(f));
       }
       frequencyTmp = frequency;
-      mqttFreqTimer = millis();
+      trxNetPublishTimer = millis();
       if (bdEnabled && bdSource == 1) bdUpdate(frequency);
     }
   } else if (radioSlots[0].transport == RADIO_TRXNET) {
@@ -6253,7 +6231,7 @@ void sendCW(){
 
 //-------------------------------------------------------------------------------------------------------
 void sendFsk(){
-  #if defined(UDP_TO_FSK)
+  #if defined(FSK_KEYING)
         #if defined(serialECHO )
               Serial.print(d1);Serial.print(d2);Serial.print(d3);Serial.print(d4);Serial.print(d5);Serial.print(' '); // 5bit code serial echo
         //      Serial.print(OneBit);Serial.print('|');Serial.print(OneBit*StopBit);Serial.print(' ');                  // ms
@@ -6281,7 +6259,7 @@ void sendFsk(){
 }
 
 void chTable(){
-  #if defined(UDP_TO_FSK)
+  #if defined(FSK_KEYING)
 
         fig2 = -1;
         if(ch == ' ')
@@ -7092,15 +7070,6 @@ void handleSet() {
 
   } // else form valid
 }
-
-#if defined(RTLE)
-  void handleRTLE() {
-    String HtmlSrc = "";
-    String s = RTLE_page; //Read HTML contents
-    HtmlSrc +=s;
-    rtleserver.send(200, "text/html", HtmlSrc); //Send web page
-  }
-#endif
 
 // ---- DXC telnet proxy -------------------------------------------------------
 
