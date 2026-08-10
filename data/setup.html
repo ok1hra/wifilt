@@ -458,23 +458,6 @@
         <details class="setup-section" id="logSettingsSection">
           <summary class="setup-section-title">LOG &amp; DATA settings <span class="setup-local-badge" title="Stored on the interface's own configuration partition, which a firmware flash does not write.">config</span></summary>
           <div class="setup-section-body">
-            <label>RST default SSB/FM
-              <div class="input-with-tip">
-                <input type="text" id="ls_rstSsb" name="rstSsb" form="setup-form" maxlength="3" value="" placeholder="59">
-                <span class="help-tip" data-tip="Default RST/RS pre-filled for SSB and FM QSOs.">?</span>
-              </div>
-            </label>
-            <label>RST default CW/RTTY
-              <div class="input-with-tip">
-                <input type="text" id="ls_rstCwRtty" name="rstCwRtty" form="setup-form" maxlength="3" value="" placeholder="599">
-                <span class="help-tip" data-tip="Default RST pre-filled for CW and digital mode QSOs.">?</span>
-              </div>
-            </label>
-            <label class="checkbox-row">
-              <input type="checkbox" id="ls_manualModeForPhone" name="manualModeForPhone" form="setup-form">
-              Manual mode for Phone (SSB/FM) — no automatic macros
-              <span class="help-tip" data-tip="When checked, pressing Enter on an SSB/FM QSO logs it immediately without sending any CW/RTTY macro.">?</span>
-            </label>
             <label>Blocked DXCC list (one per line)
               <div class="input-with-tip input-with-tip-top">
                 <textarea id="ls_blockedDxcc" name="blockedDxcc" form="setup-form" rows="3" placeholder="Russia&#10;Belarus&#10;Kaliningrad"></textarea>
@@ -631,7 +614,7 @@
           'ssid', 'pswd', 'ssid2', 'pswd2', 'trxnetport', 'trxnetprio',
           'baud',
           'dxchost', 'dxcport',
-          'dxccall', 'dxclocator', 'rstSsb', 'rstCwRtty', 'blockedDxcc'
+          'dxccall', 'dxclocator', 'blockedDxcc'
         ];
         ['trx1', 'trx2', 'trx3'].forEach(function (prefix) {
           ['label', 'transport', 'civaddr', 'netid', 'lanip', 'lanuser', 'lanpass'].forEach(function (suffix) {
@@ -641,7 +624,6 @@
         setupNames.forEach(function (name) { setValue(name, data[name]); });
 
         setValue('cwIpOnConnect', data.cwIpOnConnect);
-        setValue('manualModeForPhone', data.manualModeForPhone);
         setValue('trx2enable', data.trx2enabled);
         setValue('trx3enable', data.trx3enabled);
 
@@ -1561,7 +1543,14 @@
           headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
           body: body
         }).then(function (r) {
-          if (!r.ok) throw new Error('/setup/save ' + r.status);
+          // A refusal carries its reason in the body, so read it before giving
+          // up -- a bare status code tells the operator nothing about which
+          // field the interface would not take.
+          if (!r.ok) {
+            return r.json().catch(function () { return {}; }).then(function (body) {
+              throw new Error(body.error || ('/setup/save ' + r.status));
+            });
+          }
           return r.json();
         }).then(function (result) {
           if (!result.ok) throw new Error('save failed');

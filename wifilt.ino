@@ -627,13 +627,10 @@ int incomingByte = 0;   // for incoming serial data
   static const char* JS8_CONFIG_PATH = "/js8-config.json";
   static const size_t JS8_CONFIG_MAX_BYTES = 4096;   // measured: 2041 B with a full 48-slot schedule
 
-  // In-memory cache of log-config.json fields used by setupTemplateProcessor.
+  // In-memory cache of log-config.json fields, served by /log-config.
   String g_lcTrx1Label = "TRX1";   // replaced by the radio's own model once known
   String g_lcTrx2Label = "TRX2";
   String g_lcTrx3Label = "TRX3";
-  String g_lcRstSsb    = "59";
-  String g_lcRstCwRtty = "599";
-  bool   g_lcManualModeForPhone = true;
   String g_lcBlockedDxcc = "Russia\nBelarus\nKaliningrad";
 
   // TrxNet peer cache for TRX2 (index 0) and TRX3 (index 1) — written by onHz/onMode callbacks
@@ -819,7 +816,6 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   size_t buildReadQuickSplitFrame(uint8_t *frame, size_t frameMaxLen);
   void buildStateJson(char *buf, size_t bufSize, bool lanView);
   void handleGetState(void);
-  bool sendTemplatedHtml(const char *path);
   void handleSetupData(void);
   void handleTrxNetPeers(void);
   void handleWebServerLoop(void);
@@ -828,7 +824,6 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void handleSet(void);
   void renderSetupPage(void);
   void resetSetupMessages(void);
-  String setupTemplateProcessor(const String &key);
   void setupWebServer(void);
   void handleConfigDownload(void);
   void handleConfigUpload(void);
@@ -1047,7 +1042,7 @@ bool saveMemoryConfig(void){
   return ok;
 }
 
-// Parse log-config.json into g_lc* variables so setupTemplateProcessor can serve them.
+// Parse log-config.json into the g_lc* cache that /log-config serves.
 void loadLogConfigVars(void){
   if (!cfgFS.exists(LOG_CONFIG_PATH)) return;
   File f = cfgFS.open(LOG_CONFIG_PATH, "r");
@@ -1061,10 +1056,7 @@ void loadLogConfigVars(void){
   v = extractJsonString(j, "trx1Label"); if (v.length() > 0) g_lcTrx1Label = v;
   v = extractJsonString(j, "trx2Label"); if (v.length() > 0) g_lcTrx2Label = v;
   v = extractJsonString(j, "trx3Label"); if (v.length() > 0) g_lcTrx3Label = v;
-  v = extractJsonString(j, "rstSsb");    if (v.length() > 0) g_lcRstSsb = v;
-  v = extractJsonString(j, "rstCwRtty"); if (v.length() > 0) g_lcRstCwRtty = v;
   if (j.indexOf("\"blockedDxcc\"") >= 0) g_lcBlockedDxcc = extractJsonString(j, "blockedDxcc");
-  g_lcManualModeForPhone = extractJsonBool(j, "manualModeForPhone", true);
 }
 
 String jsonEscape(const String &value){
@@ -1245,9 +1237,6 @@ static String buildLogConfigJson(
   const String &trx1Label,
   const String &trx2Label,
   const String &trx3Label,
-  const String &rstSsb,
-  const String &rstCwRtty,
-  bool manualModeForPhone,
   const String &blockedDxcc
 ) {
   String json;
@@ -1256,9 +1245,6 @@ static String buildLogConfigJson(
   json += "\"trx1Label\":\""; json += jsonEscape(trx1Label); json += "\"";
   json += ",\"trx2Label\":\""; json += jsonEscape(trx2Label); json += "\"";
   json += ",\"trx3Label\":\""; json += jsonEscape(trx3Label); json += "\"";
-  json += ",\"rstSsb\":\"";    json += jsonEscape(rstSsb);    json += "\"";
-  json += ",\"rstCwRtty\":\""; json += jsonEscape(rstCwRtty); json += "\"";
-  json += ",\"manualModeForPhone\":"; json += manualModeForPhone ? "true" : "false";
   json += ",\"blockedDxcc\":\""; json += jsonEscape(blockedDxcc); json += "\"";
   json += "}";
   return json;
@@ -1541,125 +1527,6 @@ void resetSetupMessages(void){
   setupSaveOk = false;
 }
 
-String setupTemplateProcessor(const String &key){
-  if (key == "APMODE_TEXT") return APmode ? "AP mode ON" : "AP mode OFF";
-  if (key == "MAC") return MACString;
-  if (key == "REV") return String(REV);
-  if (key == "HWREV") return String(HardwareRev);
-  if (key == "SSID") return SSID;
-  if (key == "PSWD") return PSWD;
-  if (key == "SSID2") return SSID2;
-  if (key == "PSWD2") return PSWD2;
-  if (key == "TRXNET_PORT") return String(TRXNET_PORT);
-  if (key == "TRXNET_ID") { char h[3]; snprintf(h, sizeof(h), "%02x", TRXNET_ID); return String(h); }
-  if (key == "TRX2_NET_ID") { char h[3]; snprintf(h, sizeof(h), "%02x", TRX2_NET_ID); return String(h); }
-  if (key == "TRX3_NET_ID") { char h[3]; snprintf(h, sizeof(h), "%02x", TRX3_NET_ID); return String(h); }
-  if (key == "TRXNET_DEVICE_NAME") return TRXNET_ID != 0x00 ? String(trxDeviceName) : String("disabled");
-  if (key == "TRXNET_AP_NOTE") return APmode
-    ? "<span class=\"ap-note\">TrxNet is not active in AP mode — requires WiFi station mode.</span>"
-    : "";
-  if (key == "TRX1_LABEL") return g_lcTrx1Label;
-  if (key == "TRX2_LABEL") return g_lcTrx2Label;
-  if (key == "TRX3_LABEL") return g_lcTrx3Label;
-  if (key == "RST_SSB") return g_lcRstSsb;
-  if (key == "RST_CW_RTTY") return g_lcRstCwRtty;
-  if (key == "MANUAL_MODE_FOR_PHONE_CHK") return g_lcManualModeForPhone ? "checked" : "";
-  if (key == "BLOCKED_DXCC") return g_lcBlockedDxcc;
-  if (key == "SSID_ERR") return setupSsidErr;
-  if (key == "PSWD_ERR") return setupPswdErr;
-  if (key == "SSID2_ERR") return setupSsid2Err;
-  if (key == "PSWD2_ERR") return setupPswd2Err;
-  if (key == "CIV_ADDR") {
-    String addr = String(configuredCivAddress, HEX);
-    addr.toUpperCase();
-    if (configuredCivAddress < 16) {
-      addr = "0" + addr;
-    }
-    return addr;
-  }
-  if (key == "CIV_ADDR_ERR") return setupCivAddrErr;
-  if (key == "TRX_IC705_SEL") return transceiverType == "IC-705-BT" ? "selected" : "";
-  if (key == "TRX_IC7610_SEL") return transceiverType == "IC-7610-CI-V" ? "selected" : "";
-  if (key == "CW_MEM1") return cwMemoryText[0];
-  if (key == "CW_MEM2") return cwMemoryText[1];
-  if (key == "CW_MEM3") return cwMemoryText[2];
-  if (key == "CW_MEM4") return cwMemoryText[3];
-  if (key == "FREQ_MEM1") return freqMemoryText[0];
-  if (key == "FREQ_MEM2") return freqMemoryText[1];
-  if (key == "FREQ_MEM3") return freqMemoryText[2];
-  if (key == "FREQ_MEM4") return freqMemoryText[3];
-  if (key == "FREQ_MEM5") return freqMemoryText[4];
-  if (key == "FREQ_MEM6") return freqMemoryText[5];
-  if (key == "FREQ_MEM7") return freqMemoryText[6];
-  if (key == "FREQ_MEM8") return freqMemoryText[7];
-  if (key == "FREQ_MEM9") return freqMemoryText[8];
-  if (key == "FREQ_MEM10") return freqMemoryText[9];
-  if (key == "BAUD1200_SEL") return BaudRate == 1200 ? "selected" : "";
-  if (key == "BAUD2400_SEL") return BaudRate == 2400 ? "selected" : "";
-  if (key == "BAUD4800_SEL") return BaudRate == 4800 ? "selected" : "";
-  if (key == "BAUD9600_SEL") return BaudRate == 9600 ? "selected" : "";
-  if (key == "BAUD115200_SEL") return BaudRate == 115200 ? "selected" : "";
-  if (key == "CW_IP_CHK") return cwIpOnConnect ? "checked" : "";
-  if (key == "DXC_HOST") return DxcHost;
-  if (key == "DXC_PORT") return DxcPort > 0 ? String(DxcPort) : "";
-  if (key == "DXC_CALL") return DxcCallsign;
-  if (key == "DXC_LOCATOR") return DxcLocator;
-  if (key == "BT_NAME") return BT_NAME;
-  return String();
-}
-
-bool sendTemplatedHtml(const char *path){
-  webQuietUntil = millis() + 1500;
-  webServer.sendHeader("Connection", "close");
-  webServer.client().setNoDelay(true);
-  if (!LittleFS.exists(path)) {
-    String msg = "Missing ";
-    msg += path;
-    msg += " in LittleFS";
-    webServer.send(500, "text/plain", msg);
-    return false;
-  }
-  File file = LittleFS.open(path, "r");
-  if (!file) {
-    webServer.send(500, "text/plain", "File open failed");
-    return false;
-  }
-
-  String page;
-  page.reserve(file.size() + 1024);
-  String line;
-  line.reserve(256);
-  file.setTimeout(10);
-
-  while (file.available()) {
-    #if defined(WDT)
-      esp_task_wdt_reset();
-    #endif
-    line = file.readStringUntil('\n');
-    int start = 0;
-    while (true) {
-      int p1 = line.indexOf('%', start);
-      if (p1 < 0) { page += line.substring(start); break; }
-      int p2 = line.indexOf('%', p1 + 1);
-      if (p2 < 0) { page += line.substring(start); break; }
-      page += line.substring(start, p1);
-      page += setupTemplateProcessor(line.substring(p1 + 1, p2));
-      start = p2 + 1;
-    }
-    if (file.available()) page += '\n';
-  }
-  file.close();
-
-  webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-  webServer.sendHeader("Pragma", "no-cache");
-  webServer.sendHeader("Connection", "close");
-  webServer.client().setNoDelay(true);
-  webServer.setContentLength(page.length());
-  webServer.send(200, "text/html", page);
-  webQuietUntil = millis() + 1500;
-  return true;
-}
-
 void renderSetupPage(){
   handleFileFromSPIFFS("/setup.html");
 }
@@ -1740,9 +1607,6 @@ void handleSetupData(){
   j += ",\"dxcport\":\""; j += DxcPort > 0 ? String(DxcPort) : ""; j += "\"";
   j += ",\"dxccall\":\""; j += configJsonEscape(DxcCallsign); j += "\"";
   j += ",\"dxclocator\":\""; j += configJsonEscape(DxcLocator); j += "\"";
-  j += ",\"rstSsb\":\""; j += configJsonEscape(g_lcRstSsb); j += "\"";
-  j += ",\"rstCwRtty\":\""; j += configJsonEscape(g_lcRstCwRtty); j += "\"";
-  j += ",\"manualModeForPhone\":"; j += g_lcManualModeForPhone ? "true" : "false";
   j += ",\"blockedDxcc\":\""; j += configJsonEscape(g_lcBlockedDxcc); j += "\"";
   for (uint8_t i = 0; i < CW_MEMORY_COUNT; i++) {
     j += ",\"cwmem"; j += (i + 1); j += "\":\""; j += configJsonEscape(cwMemoryText[i]); j += "\"";
@@ -3727,7 +3591,19 @@ void setupWebServer(void){
     if (setupSaveOk) {
       webServer.send(200, "application/json", "{\"ok\":true}");
     } else {
-      webServer.send(400, "application/json", "{\"ok\":false}");
+      // Why the save was refused. handleSet() has filled these in since the
+      // server-rendered setup page existed, but that page was replaced by one
+      // the browser fills from /config -- and nothing carried the reason across,
+      // so every refusal arrived as a bare 400. The page reads "error".
+      String err = setupSsidErr;
+      if (err.length() == 0) err = setupPswdErr;
+      if (err.length() == 0) err = setupSsid2Err;
+      if (err.length() == 0) err = setupPswd2Err;
+      if (err.length() == 0) err = setupCivAddrErr;
+      String body = "{\"ok\":false,\"error\":\"";
+      body += configJsonEscape(err);
+      body += "\"}";
+      webServer.send(400, "application/json", body);
     }
   });
   webServer.on("/setup",   HTTP_GET,  [](){ renderSetupPage(); });
@@ -7127,26 +7003,17 @@ void handleSet() {
       if (trx2Label.length() == 0) trx2Label = "TRX2";
       String trx3Label = trimMemoryValue(requestArg("trx3label"), 10);
       if (trx3Label.length() == 0) trx3Label = "TRX3";
-      String rstSsb = trimMemoryValue(requestArg("rstSsb"), 3);
-      if (rstSsb.length() == 0) rstSsb = "59";
-      String rstCwRtty = trimMemoryValue(requestArg("rstCwRtty"), 3);
-      if (rstCwRtty.length() == 0) rstCwRtty = "599";
-      bool manualModeForPhone = requestHasArg("manualModeForPhone");
       String blockedDxcc = requestArg("blockedDxcc");
 
       g_lcTrx1Label = trx1Label;
       g_lcTrx2Label = trx2Label;
       g_lcTrx3Label = trx3Label;
-      g_lcRstSsb = rstSsb;
-      g_lcRstCwRtty = rstCwRtty;
-      g_lcManualModeForPhone = manualModeForPhone;
       g_lcBlockedDxcc = blockedDxcc;
 
       String nextLogConfig = buildLogConfigJson(
         readLogConfigJson(),
         trx1Label, trx2Label, trx3Label,
-        rstSsb, rstCwRtty,
-        manualModeForPhone, blockedDxcc
+        blockedDxcc
       );
       if (!saveLogConfigJson(nextLogConfig)) {
         ERRdetect = 1;
