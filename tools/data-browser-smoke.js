@@ -323,8 +323,14 @@ f.onload=()=>{
         txSession:[...d.querySelectorAll('details[data-section="reply"] > summary span')].some(node=>node.textContent.trim()==='TX SESSION'),
         defaultDisclosures:defaultDisclosuresInitially,
         ownCallPanelsExpanded:d.querySelector('details[data-section="traffic"]').open&&d.querySelector('details[data-section="stations"]').open,
-        ownCallTraffic:[...d.querySelectorAll('#traffic [data-own-call="true"]')].some(node=>node.textContent==='OK1HRA'&&getComputedStyle(node).color==='rgb(255, 107, 107)'),
-        ownCallStation:(()=>{const node=d.querySelector('#stationRows tr[data-call="OK1HRA"] [data-own-call="true"]');return node?.textContent==='OK1HRA'&&getComputedStyle(node).color==='rgb(255, 107, 107)';})(),
+        // My own callsign, in the feed and in the stations table: one colour in both,
+        // amber (#ffbf69), which is the feed's "this came from me or is about me". These
+        // two checks asked for red (#ff6b6b) long after the rule had moved to green and
+        // were red at HEAD for it -- the value is spelled out here rather than read back
+        // from the stylesheet on purpose, so that changing the palette has to come past
+        // this line and say so.
+        ownCallTraffic:[...d.querySelectorAll('#traffic [data-own-call="true"]')].some(node=>node.textContent==='OK1HRA'&&getComputedStyle(node).color==='rgb(255, 191, 105)'),
+        ownCallStation:(()=>{const node=d.querySelector('#stationRows tr[data-call="OK1HRA"] [data-own-call="true"]');return node?.textContent==='OK1HRA'&&getComputedStyle(node).color==='rgb(255, 191, 105)';})(),
         // EMAIL and BIN are deliberately absent from the selector; both composers are
         // still shipped and still checked below through the test hook. CHAT alone is
         // nothing to choose from, so the row itself is hidden too.
@@ -1693,6 +1699,20 @@ f.onload=()=>{
                     // button that vanishes on some rows reads as a rendering fault.
                     checks.cqReplyRefusesStale=Boolean(staleReply)&&staleReply.disabled&&
                       /10 min old/.test(staleReply.title);
+                    // WHERE the button is, not just that it exists. A fourth child of a
+                    // three-track grid gets an implicit second ROW, so REPLY dropped under
+                    // the message text and read as a wrapped line rather than as a fault --
+                    // which is exactly why the two checks above stayed green through it.
+                    // Beside means: starts at or past the text's right edge, and overlaps it
+                    // vertically. align-self:center against a baseline row makes an equal
+                    // top a false requirement, so the test asks for intersection instead.
+                    const freshText=rowFor('S51FRESH')?.querySelector('.message-text');
+                    if(freshReply&&freshText){
+                      const rb=freshReply.getBoundingClientRect();
+                      const rt=freshText.getBoundingClientRect();
+                      checks.cqReplyKeepsItsRow=rb.width>0&&rb.left>=rt.right-1&&
+                        rb.top<rt.bottom&&rb.bottom>rt.top;
+                    } else checks.cqReplyKeepsItsRow=false;
                     // Addressed to us: its own row state and badge, and nothing transmitted.
                     const mineRow=rowFor('DL9ME');
                     checks.feedMarksCallsToMe=Boolean(mineRow)&&mineRow.classList.contains('message-for-me')&&

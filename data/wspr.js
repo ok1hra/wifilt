@@ -16,6 +16,14 @@
   const AUDIO_WS_PORT =
     Number(new URLSearchParams(location.search).get("audioPort")) || 83;
   const STATE_POLL_MS = 1000;
+  // Same abort deadline data.js carries (data.js:30): a fetch with no timeout
+  // parks a browser connection on a half-open socket for minutes after a WiFi
+  // burst, and at this page's 1 Hz poll rate the per-origin pool is exhausted
+  // within seconds -- after which every request, including a reload, queues
+  // behind dead ones. 8 s clears the ~5 s the firmware legitimately defers
+  // port 80 around a TX slot; flash-writing POSTs get a longer leash.
+  const FETCH_TIMEOUT_MS = 8000, FETCH_FLASH_TIMEOUT_MS = 12000;
+  const fetchDeadline = (ms = FETCH_TIMEOUT_MS) => AbortSignal.timeout(ms);
   const SESSION_PING_MS = 5000, SESSION_RETRY_MS = 3000, SESSION_PROBE_MS = 250;
   const SETTINGS_KEY = "wifilt.wspr.v1";
   const PREPARE_LEAD_MS = 10000;    // must match WsprTx's window
@@ -345,6 +353,7 @@
   async function sessionPost(path, extra) {
     try {
       const response = await fetch(path, {method: "POST", cache: "no-store",
+        signal: fetchDeadline(),
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({token: sessionToken(), ...extra})});
       if (response.status !== 409) return {granted: true};
@@ -408,9 +417,14 @@
 
   // ---- radio state ----------------------------------------------------------
 
+  // In-flight guard: at 1 Hz a stalled poll must skip ticks, not stack a new
+  // hung request each second on top of the last one.
+  let statePollInFlight = false;
   async function pollState() {
+    if (statePollInFlight) return;
+    statePollInFlight = true;
     try {
-      const response = await fetch(RADIO_STATE_URL, {cache: "no-store"});
+      const response = await fetch(RADIO_STATE_URL, {cache: "no-store", signal: fetchDeadline()});
       if (!response.ok) throw new Error(String(response.status));
       const json = await response.json();
       noteLinkState(json);
@@ -440,7 +454,7 @@
       // arrived says nothing about the radio, and treating it as a link drop
       // would re-arm the power write on every WiFi flutter.
       state.radio.connected = false;
-    }
+    } finally { statePollInFlight = false; }
     noteKnob();
     render();
   }
@@ -538,7 +552,7 @@
   // ---- CAT ------------------------------------------------------------------
 
   async function command(payload) {
-    const response = await fetch(RADIO_CMD_URL, {method: "POST",
+    const response = await fetch(RADIO_CMD_URL, {method: "POST", signal: fetchDeadline(),
       headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)});
     if (!response.ok) throw new Error(`${payload.type} failed (${response.status})`);
     return true;
@@ -548,7 +562,7 @@
   // the sequence number the caller has to watch for, and a read that threw away the
   // body could not tell a fresh answer from a repeat of the last one.
   async function commandJson(payload) {
-    const response = await fetch(RADIO_CMD_URL, {method: "POST",
+    const response = await fetch(RADIO_CMD_URL, {method: "POST", signal: fetchDeadline(),
       headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)});
     if (!response.ok) throw new Error(`${payload.type} failed (${response.status})`);
     return response.json().catch(() => ({ok: true}));
@@ -1763,8 +1777,10 @@
     // on bands the schedule knows nothing about.
     planBlockingReason: () => (state.beacon !== "stopped" ? `the beacon is ${state.beacon}` : ""),
     // The module names the outputs itself from /api/bd-config; the page only lends it
-    // a fetch so it opens no socket of its own.
-    fetchImpl: (...args) => fetch(...args),
+    // a fetch so it opens no socket of its own. The lent fetch carries the same
+    // deadline as everything else here; a caller-supplied signal still wins.
+    fetchImpl: (url, options = {}) =>
+      fetch(url, {signal: fetchDeadline(FETCH_FLASH_TIMEOUT_MS), ...options}),
     setModeFilter: (mode, filter) => command({type: "setMode", mode,
       filter: filter ? "FIL" + filter : undefined}),
     onPlanChange: running => { state.planRunning = running; render(); },
@@ -2374,7 +2390,8 @@
     dom.trxReconnect.addEventListener("click", async () => {
       dom.trxReconnect.disabled = true;
       try {
-        const response = await fetch("/lan/reconnect", {method: "POST"});
+        const response = await fetch("/lan/reconnect", {method: "POST",
+          signal: fetchDeadline(FETCH_FLASH_TIMEOUT_MS)});
         if (!response.ok) throw new Error(`reconnect failed (HTTP ${response.status})`);
         state.lastError = "";
       } catch (error) {

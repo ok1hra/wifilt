@@ -550,7 +550,12 @@ button { color: inherit; cursor: pointer; }
    Emitted stays the lighter of the two, so "it went out" is still the stronger mark. */
 .signal-stripe.stripe-tx-on-air { background:#2e3d39; }
 .signal-stripe.stripe-tx-off-air { background:#1c2724; }
-.restore-divider { margin:2px 0; padding:4px 10px; border-top:1px dashed var(--line); border-bottom:1px dashed var(--line); background:rgba(255,191,105,0.06); color:var(--amber); font-size:10px; letter-spacing:0.05em; text-transform:uppercase; text-align:center; }
+/* Where decoding was paused. Grey, for the same reason .rx-state is: this marks a stretch
+   of air nobody decoded, which is the "reception never happened" family, not a message
+   from or about my station. Two dashed rules across the full width carry it -- the shape
+   is the signal, so it loses nothing by giving up the colour, and it no longer competes
+   with the amber TO YOU rows it sits between. */
+.restore-divider { margin:2px 0; padding:4px 10px; border-top:1px dashed var(--line); border-bottom:1px dashed var(--line); color:var(--muted); font-size:10px; letter-spacing:0.05em; text-transform:uppercase; text-align:center; }
 .chat-resend { margin-left:8px; padding:1px 7px; border:1px solid var(--amber); border-radius:10px; background:transparent; color:var(--amber); font-size:9px; cursor:pointer; }
 .chat-resend:hover { background:rgba(255,191,105,0.12); }
 .chat-bubble[data-message-status="interrupted"] footer { color:var(--amber); }
@@ -573,14 +578,30 @@ button { color: inherit; cursor: pointer; }
    1fr one and re-flows the whole feed. A collapsed group is 0 wide; the 8px gap
    it leaves behind is a far cheaper price than that. */
 .message strong { color: var(--cyan); cursor: pointer; }
-/* Already logged on the band we are tuned to. Same hue, dimmer -- the feed's palette
-   is deliberately narrow (cyan = a callsign you can click, green = you, amber = a
-   directed frame), so "worked" is a shade of the colour it already had rather than a
-   fifth colour to learn. It never disables anything: answering a station a second
-   time is legitimate, this only says the eye can move on. */
+/* The feed's palette, and the whole of it. Four colours, each answering exactly one
+   question, so nothing down here needs a legend:
+     amber  -- it came from me or it is about me: my callsign, TO YOU, REPLY, RESEND,
+               the retry countdown, the unconfirmed "?"
+     red    -- physics: this really was on the air (an emitted TX row)
+     cyan   -- somebody else's callsign, and it is clickable · plus "receiving"
+     grey   -- the reception is damaged or never finished: incomplete, bad crc, gap,
+               and the struck-through characters that never left the radio
+   Amber stays a warning colour OUTSIDE this feed (a frequency write in flight, a
+   power mismatch, an uncalibrated band) -- up there it is the only alarm there is.
+   Inside the feed there is nothing to warn about, so the colour was free to mean
+   ownership instead, which is the one thing a hundred scrolling rows cannot say in
+   words without saying it a hundred times.
+   "Worked" is deliberately not a fifth colour: same hue as the callsign it dims,
+   because it never disables anything -- working a station twice is legitimate, this
+   only says the eye may move on. */
 .message strong.worked { color:#3f8578; }
 .message strong.worked:hover { color:var(--cyan); }
-.own-callsign { color: var(--green) !important; }
+/* My own callsign, wherever it surfaces: inside the decoded text, in the sender
+   column, and in the stations table. One colour for "this is me" across all three --
+   green used to do this job and also meant "switched on" (timetable active, group
+   joined, map layer on) elsewhere on the page; handing "me" to amber left green with
+   a single meaning instead of two. */
+.own-callsign { color: var(--amber) !important; }
 .message-text { min-width:0; color:#fff; white-space:normal; overflow-wrap:anywhere; }
 /* aprs.fi lookup on the sender's callsign as it appears inside the decoded text. Colour is
    inherited on purpose -- the row's palette already carries meaning and a link colour would
@@ -588,15 +609,15 @@ button { color: inherit; cursor: pointer; }
    in the feed. The <strong> column keeps its click for choosing whom to answer. */
 .call-lookup { color:inherit; text-decoration:underline dotted; text-underline-offset:2px; }
 .call-lookup:hover, .call-lookup:focus-visible { color:var(--cyan); text-decoration:underline; }
-.message.directed { border-left: 3px solid var(--amber); }
 /* Somebody is talking to us. The strongest row state in the feed, because it is
    the only one the operator has to act on -- and the only reaction there is: the
-   station never answers on its own, REPLY is a click. Green matches the own-callsign
-   rule already inside the text, so the row and the word it is about agree. */
-.message.message-for-me { border-left:3px solid var(--green); background:rgba(90,209,138,0.07); }
+   station never answers on its own, REPLY is a click. Amber matches the own-callsign
+   rule already inside the text, so the row, the badge and the word they are about all
+   agree -- and the wash is the same colour as the badge rather than a second tint. */
+.message.message-for-me { border-left:3px solid var(--amber); background:rgba(255,191,105,0.07); }
 .message.message-for-me.operational { opacity:1; }
-.forme-badge { display:inline-block; margin-right:6px; padding:0 5px; border:1px solid var(--green);
-  border-radius:3px; color:var(--green); font:800 9px/1.6 ui-monospace,monospace;
+.forme-badge { display:inline-block; margin-right:6px; padding:0 5px; border:1px solid var(--amber);
+  border-radius:3px; color:var(--amber); font:800 9px/1.6 ui-monospace,monospace;
   letter-spacing:.08em; vertical-align:1px; }
 /* Own TX in the recent-traffic feed. Red = went on air, grey = a link/TX failure kept
    it off air. A partly transmitted message is neither, so the strike-through sits on
@@ -626,14 +647,29 @@ button { color: inherit; cursor: pointer; }
 .tx-resend { align-self:center; padding:1px 8px; border:1px solid var(--amber); border-radius:10px;
   background:transparent; color:var(--amber); font-size:10px; cursor:pointer; white-space:nowrap; }
 .tx-resend:hover { background:rgba(255,191,105,0.12); }
-/* Answering a CQ. Same shape and place as RESEND -- both are "this row can put
-   something on the air" -- but cyan, because RESEND repeats a transmission that
-   already failed while this one starts a contact. Disabled rather than removed
-   when it cannot fire: the title says which of the guards refused, so a row that
-   will not answer never looks like a row that forgot to draw a button. */
-.cq-reply { align-self:center; padding:1px 8px; border:1px solid var(--cyan); border-radius:10px;
-  background:transparent; color:var(--cyan); font-size:10px; cursor:pointer; white-space:nowrap; }
-.cq-reply:hover:not(:disabled) { background:rgba(102,242,213,0.12); }
+/* The fourth track REPLY sits in. Without it the button is a fourth child of a
+   three-track grid, so the grid gives it an implicit second ROW and the control drops
+   underneath the message text -- which reads as a wrapped line, not as a bug, which is
+   why it survived a review and three green harness checks that only asked whether the
+   button existed. `.message-tx` needed exactly the same track for RESEND and got it;
+   this one was simply never added. Conditional, not on every `.message`: the 8px gap
+   applies to an empty track too, and a hundred rows do not owe REPLY that column.
+   The class is set whenever the button is RENDERED (see has-reply below, which is set
+   only when it can FIRE) -- a disabled REPLY needs the track just as much. */
+.message.has-reply-slot { grid-template-columns:auto auto minmax(0,1fr) auto; }
+/* Answering a CQ. Same shape, place and colour as RESEND -- both are "this row can
+   put something on the air from my transmitter", and that is one fact, so it gets one
+   colour. Transparent rather than TUNE's filled amber: a filled pill would be the only
+   block of colour in the feed and would out-shout the TO YOU rows, whose wash is
+   lighter than it -- "somebody is calling you" must never lose to a button.
+   Disabled rather than removed when it cannot fire: the title says which of the guards
+   refused, so a row that will not answer never looks like a row that forgot to draw a
+   button. The disabled pair stays the cool darkened cyan it has always been: those two
+   hexes are hand-darkened rather than `opacity`, because a refused REPLY sits on a row
+   still held at .48 by .operational and opacity would multiply into invisibility. */
+.cq-reply { align-self:center; padding:1px 8px; border:1px solid var(--amber); border-radius:10px;
+  background:transparent; color:var(--amber); font-size:10px; cursor:pointer; white-space:nowrap; }
+.cq-reply:hover:not(:disabled) { background:rgba(255,191,105,0.12); }
 .cq-reply:disabled { border-color:#33544d; color:#4f6b65; cursor:not-allowed; }
 /* A CQ counts as operational traffic (its kinds carry no "data"), so the row is
    dimmed to .48 with the rest of the machine chatter. Opacity applies to the whole
@@ -647,9 +683,12 @@ button { color: inherit; cursor: pointer; }
 .message.operational { opacity: .48; }
 .message.operational:hover { opacity: .82; }
 /* Reception state is carried by a word in the same meta slot where a TX row reports
-   completed/aborted, never by colour alone: colour stays a TX vocabulary (red = it was on
-   the air), so nothing in the feed needs a legend. */
-.rx-state { color: var(--amber); text-transform: uppercase; letter-spacing: .04em; }
+   completed/aborted, never by colour alone. Grey, and the same grey for all three states
+   receptionState() can put here (incomplete, bad crc, gap): what they share is that the
+   reception is damaged, and none of them is about my station -- which is what amber says
+   in this feed. A damaged decode is also nothing to act on, so it has no business being
+   the loudest word in the row. */
+.rx-state { color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 .message-receiving .rx-state { color: var(--cyan); }
 /* ♢ = the end of the message was confirmed, the same meaning as on a TX row. */
 .rx-eot { margin-left: 5px; color: var(--muted); }

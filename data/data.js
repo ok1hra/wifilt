@@ -27,6 +27,17 @@ const TRX_HELP_SEEN_KEY = "wifilt.data.trx-help-seen.v1";
 // and are what the log page, band decoder and WSPR read.
 const RADIO_STATE_URL = "/state?radio=lan";
 const RADIO_CMD_URL = "/cmd?radio=lan";
+// Every request this page makes carries an abort deadline. A fetch with no
+// timeout can sit on a half-open connection for many minutes after a WiFi
+// burst loss; each poller then parks one of the browser's ~6 connections per
+// origin until the pool is full and even a reload queues behind dead requests
+// -- the blinking OFFLINE that only closing the tab fixed. The deadline must
+// clear the longest LEGITIMATE server delay: port 80 is deliberately deferred
+// for up to ~5 s around a TX slot (txCriticalNow), so 4 s would fake a radio
+// disconnect on every transmission. Flash-writing POSTs get a longer leash
+// because LittleFS appends are themselves deferred out of TX windows.
+const FETCH_TIMEOUT_MS = 8000, FETCH_FLASH_TIMEOUT_MS = 12000;
+const fetchDeadline = (ms = FETCH_TIMEOUT_MS) => AbortSignal.timeout(ms);
 const AUDIO_WS_PORT = Number(new URLSearchParams(location.search).get("audioPort")) || 83;
 const RX_LOW = 500, RX_HIGH = 2700, HB_HIGH = 1000, AUDIO_RATE = 8000;
 const FFT_SIZE = 4096, HOP_SIZE = 2048;
@@ -228,7 +239,8 @@ function syncInbox() {
     console.info("[msgbox] evicted", outcome.evicted.length, "records to fit flash");
   msgBoxFull = outcome.full;
   const body = msgBox.toJsonl();
-  fetch("/msgbox", {method: "POST", headers: {"Content-Type": "text/plain"}, body})
+  fetch("/msgbox", {method: "POST", signal: fetchDeadline(FETCH_FLASH_TIMEOUT_MS),
+    headers: {"Content-Type": "text/plain"}, body})
     .then(response => { if (!response.ok) throw new Error(String(response.status)); })
     .catch(error => {
       // A refused write is a state the operator has to see, not a console line:
@@ -240,7 +252,7 @@ function syncInbox() {
     .finally(() => { inboxSyncPending = false; });
 }
 function loadInbox() {
-  fetch("/msgbox", {cache: "no-store"})
+  fetch("/msgbox", {cache: "no-store", signal: fetchDeadline(FETCH_FLASH_TIMEOUT_MS)})
     .then(response => response.ok ? response.text() : Promise.reject(new Error(String(response.status))))
     .then(text => {
       const result = msgBox.loadJsonl(text);
@@ -570,7 +582,7 @@ function createGainCal() {
         await new Promise(resolve => setTimeout(resolve, 100));
       if (state.radio.mode !== "USB-D") throw new Error("the radio did not confirm USB-D");
     },
-    setMode:mode => fetch(RADIO_CMD_URL,{method:"POST",
+    setMode:mode => fetch(RADIO_CMD_URL,{method:"POST", signal:fetchDeadline(),
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({type:"setMode", mode})}),
     onRunChange:running => { state.calRunning = running; renderControls(); },
@@ -602,7 +614,7 @@ function createGainPlan() {
     modelNumber:() => IcomModels.modelNumber(state.radio.radioName || ""),
     radio:() => state.radio,
     send:async payload => {
-      const response = await fetch(RADIO_CMD_URL,{method:"POST",
+      const response = await fetch(RADIO_CMD_URL,{method:"POST", signal:fetchDeadline(),
         headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
       if (!response.ok) throw new Error(`${payload.type} failed (${response.status})`);
       return response.json().catch(() => ({ok:true}));
@@ -622,7 +634,8 @@ function createGainPlan() {
       return out;
     },
     setFrequency:async hz => {
-      await fetch(RADIO_CMD_URL,{method:"POST",headers:{"Content-Type":"application/json"},
+      await fetch(RADIO_CMD_URL,{method:"POST", signal:fetchDeadline(),
+        headers:{"Content-Type":"application/json"},
         body:JSON.stringify({type:"setFrequency", frequency:String(hz)})});
       for (let waited = 0; waited < 9000 && state.radio.frequency !== hz; waited += 100)
         await new Promise(resolve => setTimeout(resolve, 100));
@@ -641,7 +654,7 @@ function createGainPlan() {
     // CI-V frame. And when it still does not agree, say what the radio reports.
     setPercent:async percent => {
       const level = WsprCore.percentToLevel(percent);
-      const post = payload => fetch(RADIO_CMD_URL,{method:"POST",
+      const post = payload => fetch(RADIO_CMD_URL,{method:"POST", signal:fetchDeadline(),
         headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
       await post({type:"civ.raw", data:WsprCore.civLevelCommand(level).data});
       const started = Date.now();
@@ -670,8 +683,11 @@ function createGainPlan() {
     // if the tab dies mid-run.
     planBlockingReason:() => (currentJs8().auto
       ? "turn unattended operation off first — the plan keys on other bands" : ""),
-    fetchImpl:(...args) => fetch(...args),
-    setModeFilter:(mode, filter) => fetch(RADIO_CMD_URL,{method:"POST",
+    // The plan UI's own requests inherit the deadline too; /txgain.json lands on
+    // flash, so it gets the longer one. A caller-supplied signal still wins.
+    fetchImpl:(url, options = {}) =>
+      fetch(url, {signal:fetchDeadline(FETCH_FLASH_TIMEOUT_MS), ...options}),
+    setModeFilter:(mode, filter) => fetch(RADIO_CMD_URL,{method:"POST", signal:fetchDeadline(),
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({type:"setMode", mode, filter:filter?"FIL"+filter:undefined})}),
     onPlanChange:running => { state.planRunning = running; renderControls(); },
@@ -1557,7 +1573,8 @@ function rfTargetPercent() {
 async function writeRfPercent(percent) {
   const command=WsprCore.civLevelCommand(WsprCore.percentToLevel(percent));
   const wanted=WsprCore.civPercent(command.level);
-  await fetch(RADIO_CMD_URL,{method:"POST",headers:{"Content-Type":"application/json"},
+  await fetch(RADIO_CMD_URL,{method:"POST", signal:fetchDeadline(),
+    headers:{"Content-Type":"application/json"},
     body:JSON.stringify({type:"civ.raw",data:command.data})});
   // Confirmed in whole percent, never on the raw level: the radio quantises to
   // its own step, so demanding an exact echo would fail a write that landed
@@ -2798,7 +2815,7 @@ function renderActivity() {
     // lands on the stations still worth working. The predicate is the same set the
     // LOG QSO button reads, rebuilt from the log's real content by refreshJs8Log(),
     // so it survives a reload and a write from the QRPLog window. Own call and a
-    // group are never "worked"; the green own-callsign rule wins by !important
+    // group are never "worked"; the amber own-callsign rule wins by !important
     // anyway, which is why an operator's own row can never dim.
     const workedHere=!ownCall && call && !call.startsWith("@")
       && state.loggedCalls.has(loggedKey(call,workedBand));
@@ -2821,8 +2838,13 @@ function renderActivity() {
     // reaction -- nothing is transmitted in answer, by design. REPLY is the single
     // path from this feed to the transmitter, and it is a click.
     const forMe=messageAddressesMe(message,currentJs8().myCall);
+    // Two classes, two different questions. has-reply-slot: the button was rendered at
+    // all, so the row needs the fourth grid track that holds it beside the text instead
+    // of underneath it -- true for a disabled REPLY too. has-reply: the button can fire,
+    // which is what lifts the row out of the .48 operational dim.
     const classes=`message${operational?" operational":""}${aprsReply?" aprs-reply":""}`
       +(forMe?" message-for-me":"")
+      +(reply?" has-reply-slot":"")
       +(reply&&reply.enabled?" has-reply":"")
       +(message.partial&&message.live?" message-receiving":"")
       +(status==="incomplete"?" message-incomplete":"")+(status==="bad crc"?" message-badcrc":"");
@@ -3907,7 +3929,9 @@ async function restoreFileTransfers() {
 async function requestFrequency(frequency) {
   state.pendingFrequency=frequency; closeFrequencyMenu(); renderHeader();
   try {
-    const response=await fetch(RADIO_CMD_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({type:"setFrequency",frequency:String(frequency)})});
+    const response=await fetch(RADIO_CMD_URL,{method:"POST", signal:fetchDeadline(),
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({type:"setFrequency",frequency:String(frequency)})});
     if (!response.ok) throw new Error(`TRX request ${response.status}`);
     await ensureUsbDataMode();
     return true;
@@ -3922,7 +3946,8 @@ async function ensureUsbDataMode() {
   if (!state.radio.connected || state.radio.mode === "USB-D") return;
   const filter=[1,2,3].includes(Number(state.radio.filter)) ? Number(state.radio.filter) : 1;
   const data="26000101"+String(filter).padStart(2,"0");
-  try { await fetch(RADIO_CMD_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({type:"civ.raw",data})}); }
+  try { await fetch(RADIO_CMD_URL,{method:"POST", signal:fetchDeadline(),
+    headers:{"Content-Type":"application/json"},body:JSON.stringify({type:"civ.raw",data})}); }
   catch (_error) {}
 }
 
@@ -4024,7 +4049,8 @@ function renderStatusAnswer(js8) {
 
 function armUnattended(action) {
   const hours = Number(currentJs8().armHours) || 1;
-  return fetch("/unattended", {method: "POST", headers: {"Content-Type": "application/json"},
+  return fetch("/unattended", {method: "POST", signal: fetchDeadline(),
+    headers: {"Content-Type": "application/json"},
     body: JSON.stringify({action, hours})})
     .then(response => response.ok ? response.json() : Promise.reject(new Error(String(response.status))))
     .then(result => {
@@ -4073,9 +4099,15 @@ function reconcileUnattended(reason) {
 // reload and can be revoked/extended from any device, so poll it to keep the
 // AUTO countdown honest even when this browser did not start the timer.
 let unattendedUpMs = null;   // firmware millis() at the last poll
+// In-flight guard, same shape as pollRadio's: without it every 5 s tick opened
+// a NEW request while the previous one still hung, and a single WiFi burst
+// stacked enough of them to exhaust the browser's connection pool for good.
+let unattendedPollInFlight = false;
 async function pollUnattended() {
+  if (unattendedPollInFlight) return;
+  unattendedPollInFlight = true;
   try {
-    const response = await fetch("/unattended", {cache: "no-store"});
+    const response = await fetch("/unattended", {cache: "no-store", signal: fetchDeadline()});
     if (!response.ok) return;
     const result = await response.json();
     // millis() only ever climbs while the ESP runs, so a drop means it rebooted
@@ -4086,6 +4118,7 @@ async function pollUnattended() {
     applyUnattendedState(result);
     if (rebooted) reconcileUnattended("firmware restart");
   } catch (_error) { /* transient; the last known expiry keeps ticking */ }
+  finally { unattendedPollInFlight = false; }
 }
 
 // Routes a decoded frame to whichever engine owns it. Any traffic at all pushes
@@ -5706,7 +5739,8 @@ async function pollRadio() {
   if (radioPollInFlight) return;
   radioPollInFlight=true;
   try {
-    const response=await fetch(RADIO_STATE_URL,{cache:"no-store"}); if (!response.ok) throw new Error();
+    const response=await fetch(RADIO_STATE_URL,{cache:"no-store", signal:fetchDeadline()});
+    if (!response.ok) throw new Error();
     const next=await response.json();
     noteRadioLink(next);
     state.radio={...state.radio,...next,frequency:Number(next.frequency)||0};
@@ -5730,7 +5764,7 @@ async function reconnectRadio() {
   if(state.reconnectPending)return;
   state.reconnectPending=true; renderHeader();
   try {
-    const response=await fetch("/lan/reconnect",{method:"POST"});
+    const response=await fetch("/lan/reconnect",{method:"POST", signal:fetchDeadline(FETCH_FLASH_TIMEOUT_MS)});
     if(!response.ok)throw new Error(`Reconnect failed (HTTP ${response.status})`);
     state.radio.lanStatus="connecting";
   } catch(error) {
@@ -5836,7 +5870,7 @@ function localHolderOutranks(holder) {
 // no way to dismiss.
 async function sessionPost(path, extra) {
   try {
-    const response = await fetch(path, {method:"POST", cache:"no-store",
+    const response = await fetch(path, {method:"POST", cache:"no-store", signal:fetchDeadline(),
       headers:{"Content-Type":"application/json"},
       body: JSON.stringify({token:sessionToken(), ...extra})});
     if (response.status !== 409) return {granted:true};

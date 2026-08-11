@@ -101,7 +101,10 @@
       query.set("fixture", params.get("lanFixture"));
     let ready = false, detail = "", slot = 0;
     try {
-      const response = await root.fetch(`/setup-data.json?${query}`, {cache: "no-store"});
+      // Deadline so a gate check caught by a WiFi burst fails into its own
+      // "not reachable" path instead of parking a pooled connection forever.
+      const response = await root.fetch(`/setup-data.json?${query}`,
+        {cache: "no-store", signal: AbortSignal.timeout(8000)});
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       config = await response.json();
       // LAN is exclusive to a single radio slot but the operator picks which one,

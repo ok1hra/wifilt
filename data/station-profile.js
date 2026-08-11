@@ -108,7 +108,11 @@
   }
 
   function read() {
-    return fetch(URL, {cache: "no-store"})
+    // Deadlines for the same reason station-identity.js carries them: a fetch
+    // that can hang forever parks a pooled connection on a dead socket, and the
+    // pages that load this module cannot afford to lose one. The POST rewrites
+    // a LittleFS file, so it gets the longer leash.
+    return fetch(URL, {cache: "no-store", signal: AbortSignal.timeout(8000)})
       .then(function (r) { return r.ok ? r.json() : null; })
       .catch(function () { return null; });
   }
@@ -126,7 +130,7 @@
 
   function post(doc) {
     return fetch(URL, {
-      method: "POST", cache: "no-store",
+      method: "POST", cache: "no-store", signal: AbortSignal.timeout(12000),
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify(doc)
     }).then(function (r) { return r.ok; }).catch(function () { return false; });

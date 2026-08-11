@@ -20,6 +20,15 @@
 
   var GRID_RE = /^[A-R]{2}[0-9]{2}([A-X]{2})?$/i;
 
+  // watch() re-reads once a minute for as long as the page lives, so its fetch
+  // must not be able to hang forever: after a WiFi burst a request with no
+  // deadline parks one of the browser's ~6 per-origin connections on a dead
+  // socket, and the pages that load this module poll enough other endpoints
+  // that the pool then never recovers. 8 s clears the ~5 s the firmware
+  // legitimately defers port 80 around a TX slot; the write lands on EEPROM,
+  // so it gets a longer leash.
+  function deadline(ms) { return AbortSignal.timeout(ms || 8000); }
+
   function normaliseCall(value) {
     return String(value == null ? "" : value).toUpperCase().replace(/[^A-Z0-9/]/g, "").slice(0, 16);
   }
@@ -78,7 +87,7 @@
   // fallback -- for an interface whose firmware predates the GET route, where a
   // 404 must not read as "this station has no callsign".
   function read() {
-    return fetch("/identity", {cache: "no-store"})
+    return fetch("/identity", {cache: "no-store", signal: deadline()})
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (data) {
         if (!data) return readFromSetupData();
@@ -88,7 +97,7 @@
   }
 
   function readFromSetupData() {
-    return fetch("/setup-data.json", {cache: "no-store"})
+    return fetch("/setup-data.json", {cache: "no-store", signal: deadline()})
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (data) {
         if (!data) return null;
@@ -113,6 +122,7 @@
     return fetch("/identity", {
       method: "POST",
       cache: "no-store",
+      signal: deadline(12000),
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify(body)
     }).then(function (r) { return r.ok ? r.json() : null; })

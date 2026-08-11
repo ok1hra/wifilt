@@ -150,6 +150,14 @@
 
   var GRID_RE = /^[A-R]{2}[0-9]{2}([A-X]{2})?$/i;
 
+  // Every fetch in this module carries an abort deadline: pollLive repeats for
+  // as long as the page lives, and a request with no timeout can hang on a
+  // half-open connection for minutes after a WiFi burst, parking one of the
+  // browser's ~6 per-origin connections each time until the whole page starves.
+  // 8 s clears the ~5 s the firmware legitimately defers port 80 around a TX
+  // slot; /lan/reconnect gets more because it tears the radio link down first.
+  function deadline(ms) { return AbortSignal.timeout(ms || 8000); }
+
   function el(tag, cls, text) {
     var node = document.createElement(tag);
     if (cls) node.className = cls;
@@ -359,7 +367,7 @@
 
     // What the device says it stored, not what was typed into the fields.
     function refresh() {
-      return fetch("/setup-data.json", {cache: "no-store"})
+      return fetch("/setup-data.json", {cache: "no-store", signal: deadline()})
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (data) { if (data) setData(data); })
         .catch(function () {});
@@ -723,9 +731,11 @@
           });
           var saved = options.save ? options.save() : Promise.resolve();
           saved.then(function () {
-            return fetch("/lan/reconnect", {method: "POST"}).catch(function () {});
+            return fetch("/lan/reconnect", {method: "POST", signal: deadline(12000)})
+              .catch(function () {});
           }).then(function () {
-            return fetch("/setup-data.json", {cache: "no-store"}).then(function (r) { return r.json(); });
+            return fetch("/setup-data.json", {cache: "no-store", signal: deadline()})
+              .then(function (r) { return r.json(); });
           }).then(function (data) {
             setData(data);
             // The radio answered and the settings are stored, so this step is
@@ -933,7 +943,7 @@
     function setData(data) { state.data = data; render(); }
 
     function loadTxGain() {
-      return fetch("/txgain.json", {cache: "no-store"})
+      return fetch("/txgain.json", {cache: "no-store", signal: deadline()})
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (j) { state.txgain = j; render(); })
         .catch(function () {});
@@ -959,7 +969,7 @@
       // so without ?radio=lan the dot would report a different radio than the one
       // the step is about. lan-gate.js and the DATA pages make the same request.
       var lan = state.data && derive(state).lanSlot;
-      fetch(lan ? "/state?radio=lan" : "/state", {cache: "no-store"})
+      fetch(lan ? "/state?radio=lan" : "/state", {cache: "no-store", signal: deadline()})
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (j) {
           state.live = j ? j.connected === true : null;
@@ -1033,8 +1043,10 @@
     function refresh() {
       if (dismissed) return;
       Promise.all([
-        fetch("/setup-data.json", {cache: "no-store"}).then(function (r) { return r.ok ? r.json() : null; }),
-        fetch("/txgain.json", {cache: "no-store"}).then(function (r) { return r.ok ? r.json() : null; })
+        fetch("/setup-data.json", {cache: "no-store", signal: deadline()})
+          .then(function (r) { return r.ok ? r.json() : null; }),
+        fetch("/txgain.json", {cache: "no-store", signal: deadline()})
+          .then(function (r) { return r.ok ? r.json() : null; })
       ]).then(function (both) {
         var data = both[0];
         if (!data) return;
