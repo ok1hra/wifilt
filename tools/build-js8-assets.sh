@@ -40,6 +40,10 @@ cp "${PROTOTYPE_DIR}/build-decoder-wasm/js8-decoder.js" "${DATA_DIR}/js8-decoder
 cp "${PROTOTYPE_DIR}/build-decoder-wasm/js8-decoder.wasm" "${DATA_DIR}/js8-decoder.wasm"
 cp "${PROTOTYPE_DIR}/build-protocol/jsc-map.bin" "${DATA_DIR}/js8-jsc.bin"
 
+# First: the modem blobs just landed, so ASSET_REV and every ?v= have to be
+# re-derived before anything is minified or compressed -- both later steps
+# consume the files this rewrites.
+node "${ROOT_DIR}/tools/stamp-asset-versions.js" "$DATA_DIR"
 "${ROOT_DIR}/tools/minify-spiffs-js.sh" "$DATA_DIR"
 "${ROOT_DIR}/tools/gzip-assets.sh" "$DATA_DIR"
 

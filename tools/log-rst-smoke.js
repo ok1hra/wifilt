@@ -24,6 +24,12 @@ const mime = {".html": "text/html", ".css": "text/css", ".js": "application/java
 let finished = false, chrome = null, timer = null;
 const commands = [];          // every /cmd body the page sent, in order
 let currentMode = "CW";
+// How long /cmd sits on its answer. The default 0 is the ordinary case; the S&P
+// test raises it to make the race it is about deterministic. The page captures
+// the report it transmitted when the acknowledgement arrives, and in S&P the same
+// Enter also writes the QSO -- so a slow answer is exactly the condition under
+// which a finished QSO's report can land on the next one.
+let cmdDelayMs = 0;
 
 function stateJson() {
   return {
@@ -73,9 +79,15 @@ const server = http.createServer((request, response) => {
     request.on("data", c => body += c);
     request.on("end", () => {
       try { commands.push(JSON.parse(body)); } catch (_) { commands.push({raw: body}); }
-      json({ok: true});
+      if (cmdDelayMs > 0) setTimeout(() => json({ok: true}), cmdDelayMs);
+      else json({ok: true});
     });
     return;
+  }
+
+  if (url.pathname === "/delay-cmd") {
+    cmdDelayMs = Number(url.searchParams.get("ms") || 0) || 0;
+    return json({ok: true, ms: cmdDelayMs});
   }
 
   // Lets the browser side read back what reached the firmware.
@@ -226,6 +238,115 @@ const PAGE_SCRIPT = `
       phone && phone.rstSent);
     check("the received field is logged in phone too", phone && phone.rstReceived === "55",
       phone && phone.rstReceived);
+
+    // The page's own view of the radio's mode. Waiting on it beats sleeping: the
+    // fields follow /state, which is polled twice a second.
+    const modeNow = () => (typeof app !== "undefined" ? app.mode : "");
+    const waitMode = async want => {
+      for (let i = 0; i < 40 && modeNow() !== want; i++) await sleep(100);
+      await sleep(150);
+    };
+
+    // ---- 7. S&P: a slow acknowledgement must not stamp the next QSO ---------
+    // In S&P the same Enter keys the exchange and writes the QSO, so the
+    // acknowledgement arrives after the form was cleared. It used to be taken for
+    // this QSO's transmitted report, which means every S&P contact logged the
+    // report of the one before it. The delay makes that race deterministic.
+    await fetch("/setMode?mode=CW");
+    await waitMode("CW");
+    type(call, "");
+    await fetch("/delay-cmd?ms=900");
+    $("btnRunMode").click();                       // RUN -> S&P
+    check("the page switched to S&P", $("btnRunMode").textContent.indexOf("S") === 0,
+      $("btnRunMode").textContent);
+
+    type(snt, "559");
+    type(call, "OK5SP1");
+    type(exch, "001");
+    enter(exch);                                   // keys TXEXCHSP, logs, ack pending
+    await sleep(1400);                             // the late ack lands in here
+    type(call, "OK5SP2");                          // report left at the default
+    type(exch, "002");
+    enter(exch);
+    await sleep(1400);
+    await fetch("/delay-cmd?ms=0");
+
+    const sp  = await LogDB.getQsosForLog(log.id);
+    const sp1 = sp.find(q => q.call === "OK5SP1"), sp2 = sp.find(q => q.call === "OK5SP2");
+    check("S&P logs the report it sent", sp1 && sp1.rstSent === "559", sp1 && sp1.rstSent);
+    check("a late acknowledgement does not reach the next QSO",
+      sp2 && sp2.rstSent === "599", sp2 && sp2.rstSent);
+    $("btnRunMode").click();                       // back to RUN
+
+    // ---- 8. an abandoned QSO takes its reports with it ----------------------
+    type(call, "OK6ABC");
+    type(snt, "339");
+    type(rcv, "449");
+    type(call, "");                                // the call is backspaced away
+    check("abandoning a QSO resets both reports",
+      snt.value === "599" && rcv.value === "599", snt.value + "/" + rcv.value);
+
+    // ---- 9. the received field is logged as it stands -----------------------
+    type(call, "OK7VRB");
+    type(rcv, "4");                                // unusable, and the truth
+    type(exch, "004");
+    enter(exch);
+    await sleep(700);
+    type(call, "OK7NNN");
+    type(rcv, "5NN");                              // CW spelling of 599
+    type(exch, "005");
+    enter(exch);
+    await sleep(700);
+    const vb  = await LogDB.getQsosForLog(log.id);
+    const vb1 = vb.find(q => q.call === "OK7VRB"), vb2 = vb.find(q => q.call === "OK7NNN");
+    check("an unusable received report is logged as typed",
+      vb1 && vb1.rstReceived === "4", vb1 && vb1.rstReceived);
+    check("N is folded to 9 in the log", vb2 && vb2.rstReceived === "599",
+      vb2 && vb2.rstReceived);
+
+    // ---- 10. Enter in a report field is routed into the flow ----------------
+    await clearCommands();
+    type(call, "OK8ENT");
+    type(snt, "339");
+    enter(snt);                                    // behaves as it would in EXCH
+    await settle();
+    const keyedFromRst = await lastSent();
+    check("Enter in a report field keys the exchange", /33n/.test(keyedFromRst), keyedFromRst);
+    check("and hands the cursor to EXCH", document.activeElement === exch,
+      document.activeElement && document.activeElement.id);
+    type(exch, "006");
+    enter(snt);                                    // both filled -> logs
+    await sleep(700);
+    const ent = (await LogDB.getQsosForLog(log.id)).find(q => q.call === "OK8ENT");
+    check("Enter in a report field logs the QSO once both fields are filled",
+      !!ent && ent.rstSent === "339", ent && ent.rstSent);
+
+    // ---- 11. the default follows the mode the radio actually reports --------
+    type(call, "");
+    await fetch("/setMode?mode=USB");
+    await waitMode("USB");
+    await fetch("/setMode?mode=USB-D");
+    await waitMode("USB-D");
+    check("a data mode reports three digits", snt.value === "599" && rcv.value === "599",
+      modeNow() + " " + snt.value + "/" + rcv.value);
+
+    // ---- 12. a mode with no keying path must not pretend to transmit --------
+    // EXCH is emptied deliberately: with an exchange left in it, Enter in Call is
+    // a no-op that sends nothing, and this check would pass without proving a
+    // thing. It has to be Enter in the state that does transmit.
+    await clearCommands();
+    type(exch, "");
+    type(call, "OK9DAT");
+    enter(call);
+    await settle();
+    const dataCmds = await commandsSince();
+    check("nothing is keyed in a data mode", dataCmds.length === 0, JSON.stringify(dataCmds));
+
+    type(call, "");
+    await fetch("/setMode?mode=WFM");
+    await waitMode("WFM");
+    check("WFM is phone, so two digits", snt.value === "59" && rcv.value === "59",
+      modeNow() + " " + snt.value + "/" + rcv.value);
   } catch (error) {
     check("the test script ran to the end", false, String(error && error.stack || error));
   }

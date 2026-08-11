@@ -13,6 +13,11 @@ if [[ ! -d "$SOURCE_DIR" ]]; then
   exit 1
 fi
 
+# Before both: every ?v= is derived from the content it points at, and .html and
+# data.js are what this rewrites -- so it has to run ahead of the minifier and
+# the compressor that consume them. A page whose script tag still carries the
+# previous version ships a browser cache entry that outlives the flash.
+node "${ROOT_DIR}/tools/stamp-asset-versions.js" "$SOURCE_DIR"
 "${ROOT_DIR}/tools/minify-spiffs-js.sh" "$SOURCE_DIR"
 "${ROOT_DIR}/tools/gzip-assets.sh" "$SOURCE_DIR"
 mkdir -p "$TARGET_DIR"

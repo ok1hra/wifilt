@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>JS8Call-ICOM — WIFILT</title>
-  <link rel="stylesheet" href="/data.css?v=20260808c">
+  <link rel="stylesheet" href="/data.css?v=b25c6217">
 </head>
 <body class="startup-pending lan-gate-checking">
   <header class="site-topbar">
@@ -363,8 +363,15 @@
             <output id="myCall" class="identity-value"></output></label>
           <label class="identity-field">My grid
             <output id="myGrid" class="identity-value"></output></label>
+          <!-- New tab, like the SETUP tab in the topbar. Leaving this page tears the
+               modem down: the worker dies, the lease goes back, and coming back costs
+               the whole 1.4 MB of decoder and dictionary again from a server that
+               answers one request at a time. Going to look up a callsign must not cost
+               that. The "no target=_blank" rule further down setup.html is about links
+               to /wspr.html, which claims the same single-operator lease and would land
+               on "session busy"; SETUP never asks for it. -->
           <p class="identity-note">Station identity, stored in the interface —
-            <a href="/setup#identitySection" id="identitySetupLink">change it in SETUP</a>.</p>
+            <a href="/setup#identitySection" id="identitySetupLink" target="_blank" rel="noopener">change it in SETUP</a>.</p>
           <label>Decode speeds <input value="E, A, B, C, I (automatic)" disabled></label>
           <label>Follow detected speed <input id="followSpeed" type="checkbox"></label>
           <label>Clock correction <input id="clockCorrection" type="number" min="-1000" max="1000" step="1"><span>ms</span></label>
@@ -410,7 +417,13 @@
             run &mdash; <b>CAL PLAN</b> in the bar at the top.</small>
           <label class="safety-setting">Enable radio TX <input id="txSafety" type="checkbox"><small>I will use safe RF power and a suitable load/antenna.</small></label>
           <label>INFO answer <input id="infoText" maxlength="40" autocomplete="off" placeholder="50W VERT"></label>
-          <label>STATUS answer <input id="statusText" maxlength="40" autocomplete="off" placeholder="MONITORING"></label>
+          <!-- A menu, not a bare field: the answer changes twice a year and this page is
+               operated from a tablet. The list is filled from Js8Settings.STATUS_PRESETS so
+               the menu and the stored value can never drift apart; the field below it is
+               the old free text, revealed only by the "Custom" entry. -->
+          <label>STATUS answer <select id="statusPreset"></select>
+            <input id="statusText" class="status-custom" maxlength="40" autocomplete="off" placeholder="MONITORING" hidden>
+            <small id="statusPreview" class="cal-hint"></small></label>
           <label class="safety-setting">Answer queries automatically <input id="autoReply" type="checkbox"><small>Replies to SNR?, GRID?, INFO?, STATUS?, HEARING? and AGN?. Off: the answer is placed in the message box for you to send.</small></label>
           <label>Unattended for <select id="armHours"></select><small id="autoState">disarmed</small></label>
           <label>Beep on a call to me <input id="alertBeep" type="checkbox"><small>A short tone when a station addresses your callsign directly. The row is highlighted either way. Sound needs one click on the page first — the browser will not play until then.</small></label>
@@ -450,13 +463,13 @@
     <a href="https://github.com/ok1hra/wifilt" target="_blank" rel="noopener">GitHub</a><span aria-hidden="true">|</span><a href="/THIRD-PARTY-NOTICES.txt" target="_blank" rel="noopener">Licenses</a>
   </footer>
 
-  <script src="/wake-lock.js?v=20260727a"></script>
-  <script src="/lan-gate.js?v=20260808d"></script>
-  <script src="/fw-version.js?v=20260719d"></script>
-  <script src="/js8-settings.js?v=20260806a"></script>
-  <script src="/station-identity.js?v=20260808b"></script>
-  <script src="/station-profile.js?v=20260808a"></script>
-<script src="/setup-spine.js?v=20260808c"></script>
+  <script src="/wake-lock.js?v=b487b3dc"></script>
+  <script src="/lan-gate.js?v=522dbb3b"></script>
+  <script src="/fw-version.js?v=4baaa0fe"></script>
+  <script src="/js8-settings.js?v=495a156c"></script>
+  <script src="/station-identity.js?v=53dcc2a1"></script>
+  <script src="/station-profile.js?v=549b3d7e"></script>
+<script src="/setup-spine.js?v=90159763"></script>
 <script>
   // The spine follows the operator here for one reason: the transmit check is
   // the only step of it that cannot be done on SETUP, because that page has no
@@ -484,49 +497,49 @@
     else mount();
   }());
 </script>
-  <script src="/js8-email.js?v=20260719d"></script>
-  <script src="/js8-aprs.js?v=20260731a"></script>
-  <script src="/js8-file-transfer.js?v=20260719d"></script>
-  <script src="/js8-presets.js?v=20260719d"></script>
-  <script src="/js8-scheduler.js?v=20260719d"></script>
-  <script src="/js8-inbox.js?v=20260806a"></script>
-  <script src="/js8-msgbox.js?v=20260804a"></script>
-  <script src="/js8-relay.js?v=20260723a"></script>
-  <script src="/js8-heartbeat.js?v=20260724b"></script>
-  <script src="/js8-txqueue.js?v=20260719d"></script>
-  <script src="/js8-restrictions.js?v=20260719d"></script>
-  <script src="/js8-autoreply.js?v=20260723a"></script>
-  <script src="/js8-protocol.js?v=20260806a"></script>
-  <script src="/js8-timebase.js?v=20260719d"></script>
-  <script src="/spectrum.js?v=20260728a"></script>
-  <script src="/js8-aud1.js?v=20260724c"></script>
+  <script src="/js8-email.js?v=122fdab7"></script>
+  <script src="/js8-aprs.js?v=3fc9aef1"></script>
+  <script src="/js8-file-transfer.js?v=6204c34d"></script>
+  <script src="/js8-presets.js?v=7131988f"></script>
+  <script src="/js8-scheduler.js?v=7264d5e6"></script>
+  <script src="/js8-inbox.js?v=b68d06ed"></script>
+  <script src="/js8-msgbox.js?v=3fcbb5c9"></script>
+  <script src="/js8-relay.js?v=4d395a18"></script>
+  <script src="/js8-heartbeat.js?v=2fb0a1da"></script>
+  <script src="/js8-txqueue.js?v=0c0a15c4"></script>
+  <script src="/js8-restrictions.js?v=80c0585c"></script>
+  <script src="/js8-autoreply.js?v=ca50f827"></script>
+  <script src="/js8-protocol.js?v=44687dc6"></script>
+  <script src="/js8-timebase.js?v=aeba99fa"></script>
+  <script src="/spectrum.js?v=4f749dd8"></script>
+  <script src="/js8-aud1.js?v=13d88b95"></script>
   <!-- The station's calibration table and the ALC limiter, shared with WSPR. -->
-  <script src="/tx-gain-cal.js?v=20260803a"></script>
-  <script src="/tx-alc-guard.js?v=20260803a"></script>
+  <script src="/tx-gain-cal.js?v=646b1d55"></script>
+  <script src="/tx-alc-guard.js?v=729fd4a6"></script>
 
-  <script src="/js8-audio.js?v=20260719d"></script>
-  <script src="/js8-tx.js?v=20260724b"></script>
-  <script src="/js8-core.js?v=20260719d"></script>
-  <script src="/js8-adapter.js?v=20260806a"></script>
+  <script src="/js8-audio.js?v=7be4a7f4"></script>
+  <script src="/js8-tx.js?v=26bed715"></script>
+  <script src="/js8-core.js?v=750ce261"></script>
+  <script src="/js8-adapter.js?v=51dc4a81"></script>
   <!-- Only for RADIO_FULL_POWER_W / fullPowerWatts: the header turns the CI-V
        level into watts and must never disagree with the WSPR page about how. -->
   <!-- One table of Icom models: watts for WSPR, menu paths for the setup guides. -->
-  <script src="/icom-models.js?v=20260802a"></script>
-  <script src="/trx-help.js?v=20260808d"></script>
+  <script src="/icom-models.js?v=484d9084"></script>
+  <script src="/trx-help.js?v=4767f20f"></script>
   <script>TrxHelp.mount(document, {kind: "js8"});</script>
-  <script src="/wspr-core.js?v=20260808c"></script>
+  <script src="/wspr-core.js?v=450a9679"></script>
   <!-- WsprTx joins WsprCore because the calibration carrier is a STREAMED single
        tone -- the only kind whose level can move while it plays, which is what
        the search needs eight or nine times inside one keying. Must follow both. -->
-  <script src="/wspr-tx.js?v=20260807a"></script>
-  <script src="/tx-gain-cal-ui.js?v=20260807b"></script>
+  <script src="/wspr-tx.js?v=20c527f9"></script>
+  <script src="/tx-gain-cal-ui.js?v=716218b5"></script>
   <!-- The batch plan, identical to the WSPR page's: the sequencer decides the order
        and the panel executes its intents. Both must follow tx-gain-cal-ui.js. -->
-  <script src="/tx-gain-mod-level.js?v=20260807a"></script>
-  <script src="/tx-gain-plan.js?v=20260807a"></script>
-  <script src="/tx-gain-plan-ui.js?v=20260807a"></script>
-  <script src="/dxcc.js?v=20260719d"></script>
-  <script src="/log-db.js?v=20260720a"></script>
-  <script src="/data.js?v=20260808c"></script>
+  <script src="/tx-gain-mod-level.js?v=42af6a2a"></script>
+  <script src="/tx-gain-plan.js?v=77bdd0a6"></script>
+  <script src="/tx-gain-plan-ui.js?v=0d493edc"></script>
+  <script src="/dxcc.js?v=c56ee081"></script>
+  <script src="/log-db.js?v=6055416f"></script>
+  <script src="/data.js?v=385e8f61"></script>
 </body>
 </html>

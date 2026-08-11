@@ -1182,6 +1182,50 @@ f.onload=()=>{
       checks.autoReplySettings=!!d.querySelector('#infoText')&&!!d.querySelector('#statusText')&&
         d.querySelector('#autoReply').checked===false&&
         [...d.querySelectorAll('#armHours option')].map(o=>o.value).join(',')==='1,6,12,24,168';
+      // The STATUS answer is a menu, because a forty-character field is the worst
+      // possible input on a tablet for a value that changes twice a year. What it
+      // stores is still a plain string, so an answer typed by hand stays reachable.
+      const statusMenu=d.querySelector('#statusPreset'),statusField=d.querySelector('#statusText');
+      const statusOptions=[...statusMenu.options].map(o=>o.value);
+      checks.statusMenuOffersPresets=statusOptions.includes('')&&
+        statusOptions.includes('MONITORING')&&statusOptions.includes('#auto')&&
+        statusOptions.includes('#custom')&&statusField.hidden===true;
+      statusMenu.value='MONITORING';
+      statusMenu.dispatchEvent(new f.contentWindow.Event('change',{bubbles:true}));
+      const presetPreview=d.querySelector('#statusPreview').textContent;
+      // The preview counts frames: air time is the only cost of a long answer, and it
+      // is invisible in the text itself.
+      checks.statusMenuStoresPreset=presetPreview.indexOf('Sends: STATUS MONITORING')===0&&
+        presetPreview.includes('frame')&&statusField.hidden===true;
+      statusMenu.value='#custom';
+      statusMenu.dispatchEvent(new f.contentWindow.Event('change',{bubbles:true}));
+      statusField.value='50W VERT QRV';
+      statusField.dispatchEvent(new f.contentWindow.Event('change',{bubbles:true}));
+      statusField.blur();
+      const customPreview=d.querySelector('#statusPreview').textContent;
+      // Round trip through a preset and back: picking one must not be how an operator
+      // discovers that a hand-written answer is gone.
+      statusMenu.value='QRT SOON';
+      statusMenu.dispatchEvent(new f.contentWindow.Event('change',{bubbles:true}));
+      statusMenu.value='#custom';
+      statusMenu.dispatchEvent(new f.contentWindow.Event('change',{bubbles:true}));
+      statusField.blur();
+      checks.statusCustomSurvivesAPreset=customPreview.includes('50W VERT QRV')&&
+        statusField.hidden===false&&statusField.value==='50W VERT QRV';
+      // "Follow the station" holds no text at all -- the answer is composed when it is
+      // asked for, and what the preview promises is what reaches the wire.
+      statusMenu.value='#auto';
+      statusMenu.dispatchEvent(new f.contentWindow.Event('change',{bubbles:true}));
+      const autoPreview=d.querySelector('#statusPreview').textContent;
+      const composedAnswer=autoPreview.replace('Sends: ','').split(' · ')[0];
+      const statusComposer=d.querySelector('#messageInput');
+      statusComposer.value='';
+      f.contentWindow.__dataTest.resetAutoReplyLock();
+      f.contentWindow.__dataTest.feedDirected({from:'K0OG',to:'OK1HRA',command:' STATUS?'});
+      checks.statusFollowsTheStation=
+        (composedAnswer==='STATUS MONITORING'||composedAnswer.indexOf('STATUS AUTO STATION ')===0)&&
+        statusComposer.value==='K0OG '+composedAnswer;
+      statusComposer.value='';
       // The reassembly/relay/HB tests can leave an auto-triggered TX in flight
       // (driveEncoder is async, so an immediate abort is a no-op). Settle to idle
       // before the manual TX test, which fails with "TX is busy" otherwise.

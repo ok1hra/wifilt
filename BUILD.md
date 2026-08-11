@@ -62,12 +62,27 @@ regenerated** — the firmware prefers the `.br` or `.gz` next to the file, and 
 `.min.js` / `.br` products are not tracked in git.
 
 ```bash
-./tools/minify-spiffs-js.sh     # produce data/*.js.min
-./tools/gzip-assets.sh          # produce the .br/.gz the device actually serves
+node ./tools/stamp-asset-versions.js  # re-derive every ?v= from the asset's content
+./tools/minify-spiffs-js.sh           # produce data/*.js.min
+./tools/gzip-assets.sh                # produce the .br/.gz the device actually serves
 ```
 
-Run these after every edit under `data/`, before uploading the filesystem or building the
-installer page.
+Run these **in this order** after every edit under `data/`, before uploading the filesystem
+or building the installer page. The order is not cosmetic: the stamper rewrites `data.js`
+(its `ASSET_REV`) and every `.html`, and those are exactly the files the other two consume.
+
+The stamper is what keeps a browser from running an old script against a new page. The
+firmware serves `.html` as `no-cache, no-store` but `.js`/`.css` as `public, max-age=3600`,
+so for up to an hour after a flash the two halves of a page can disagree. Hand-written
+version dates lost that race on 2026-08-11 — 21 of 41 tags on `data.html` were already
+pointing at a version older than their own source, and nine local assets carried no `?v=`
+at all. Every version is now the first 8 hex of the asset's own SHA-256, so only what
+actually changed is re-downloaded. `--check` writes nothing and fails if anything is out of
+date, which is the form to put in front of a release build:
+
+```bash
+node ./tools/stamp-asset-versions.js --check
+```
 
 ---
 

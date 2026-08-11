@@ -296,12 +296,18 @@ debug traffic never reaches the PA.
 The same output serves two modes, chosen by whatever mode the radio is in when a message
 is sent:
 
-- **CW** — the text is handed to the radio as a CI-V CW message and the radio generates the
-  Morse itself. The Status LED gives one 100 ms dark pulse.
-- **RTTY** — the interface keys it directly: PTT goes high, waits a 400 ms lead-in, shifts
-  the FSK line through the 5-bit Baudot code at **45.45 baud with 1.5 stop bits**, then
-  holds PTT for a 200 ms tail. Mark is the low level, space the high one. The Status LED is
-  dark for the whole transmission.
+- **CW**, in `CW` and in `CW-R` — the text is handed to the radio as a CI-V CW message and the
+  radio generates the Morse itself. The Status LED gives one 100 ms dark pulse.
+- **RTTY**, in `RTTY` and in `RTTY-R` — the interface keys it directly: PTT goes high, waits a
+  400 ms lead-in, shifts the FSK line through the 5-bit Baudot code at **45.45 baud with 1.5
+  stop bits**, then holds PTT for a 200 ms tail. Mark is the low level, space the high one. The
+  Status LED is dark for the whole transmission.
+
+The reverse modes key identically to their upright twins — only the sideband the radio listens
+on differs — and **those four are the only modes anything is keyed in**. On phone, in a data
+mode (`USB-D`, `LSB-D`) or in `WFM` nothing is keyed, and the interface now says so: before REV
+20260811 the request was accepted and silently dropped, so flipping to the reverse sideband to
+dodge a birdie transmitted nothing at all while the log recorded the report as sent.
 
 CW and RTTY text comes from the QRPLog macros — see the QRPLog chapter in
 [SOFTWARE.md](SOFTWARE.md).

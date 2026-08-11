@@ -710,7 +710,15 @@ button { color: inherit; cursor: pointer; }
 .traffic-table td.call.reacted { color: var(--red); }
 
 .settings { padding: 10px; display: grid; grid-template-columns: repeat(2, minmax(260px, 1fr)); gap: 8px 18px; }
-.settings label { display: grid; grid-template-columns: 130px minmax(0, 1fr) auto; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+/* Three columns: name, control, description. The control track has to keep a
+   floor. `auto` is greedy -- it claims its content width first -- so against a
+   long description a `minmax(0, 1fr)` control track collapsed to nothing, and the
+   checkbox below (a fixed 20px, so it cannot shrink with its track) spilled out
+   from under it and sat ON TOP of the description text. Every checkbox row on the
+   page did it once the panel was narrow, and "Beep on a call to me" did it even
+   at full width, because .settings puts two of these side by side.
+   The floor is the checkbox width, which is set a few rules down. */
+.settings label { display: grid; grid-template-columns: 130px minmax(20px, 1fr) auto; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
 .settings input:disabled { opacity: .5; }
 /* The station's identity: shown here, edited in SETUP. Deliberately NOT styled
    as a disabled input -- a greyed-out box reads as "this field is broken", while
@@ -839,7 +847,7 @@ button { color: inherit; cursor: pointer; }
   .summary-flags { gap: 3px; margin-left: 5px; }
   .summary-flag { padding: 2px 4px; font-size: 9px; }
   .station-country { max-width: 92px; }
-  .settings label { grid-template-columns: 118px minmax(0, 1fr) auto; }
+  .settings label { grid-template-columns: 118px minmax(20px, 1fr) auto; }
   .settings-storage { align-items: flex-start; }
   .keyboard-session > header div { display: block; }
   .keyboard-session > header small { display: block; }
@@ -943,6 +951,11 @@ button { color: inherit; cursor: pointer; }
 .group-mail { color:var(--amber); }
 .cal-hint { display:block; font-size:11px; color:var(--muted); line-height:1.5; }
 .cal-hint a { color:#9fd39f; }
+
+/* The free-text STATUS answer, revealed only by the "Custom…" entry. It takes a row of
+   its own under the menu rather than the third label column, which is sized for a word
+   like "disarmed" and would squeeze a 40-character answer into it. */
+.status-custom { grid-column: 2 / -1; width: 100%; }
 
 /* Same reason as on the WSPR page: these two are full-width sentences. */
 .modem-settings label > .cal-resolved,

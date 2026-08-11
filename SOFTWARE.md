@@ -81,8 +81,8 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
  · [7.3 Radio](#73-radio)
  · [7.4 DX Cluster](#74-dx-cluster)
  · [7.5 TrxNet](#75-trxnet)
- · [7.6 LOG & DATA settings](#76-log--data-settings)
- · [7.7 TX audio gain](#77-tx-audio-gain)
+ · [7.6 TX audio gain](#76-tx-audio-gain)
+ · [7.7 LOG](#77-log)
  · [7.8 Remote management of JS8 unattended operation](#78-remote-management-of-js8-unattended-operation)
  · [7.9 Save, download and upload the configuration](#79-save-download-and-upload-the-configuration)
 
@@ -325,7 +325,7 @@ until the ALC just begins to act. It proves the whole transmit chain in one go �
 audio path, PTT, power, SWR — and gives the digital modes the audio level to use.
 
 This step is **advice, not a gate**. Without it JS8 and WSPR still transmit, just worse. It
-opens the calibration on the WSPR page; see [section 7.7](#77-tx-audio-gain).
+opens the calibration on the WSPR page; see [section 7.6](#76-tx-audio-gain).
 
 On a CI-V or TrxNet radio the step shows `—`: there is no network audio path, so there is
 nothing to measure and nothing missing.
@@ -368,7 +368,7 @@ erased.
 | Store | Contents | Survives a firmware update | Survives clearing browser data |
 |---|---|---|---|
 | **NVS** on the interface (`eeprom` badge) | WiFi networks, callsign, locator, radio login, cluster host, TrxNet, baud rate | ✅ | ✅ |
-| **`cfg` partition** on the interface (`config` badge) | radio slots and the detected model, LOG & DATA settings, TX gain calibrations, CW and frequency memories, MSG BOX | ✅ | ✅ |
+| **`cfg` partition** on the interface (`config` badge) | radio slots and the detected model, LOG settings, TX gain calibrations, CW and frequency memories, MSG BOX | ✅ | ✅ |
 | **The browser's database** | **your QSO log** | ✅ (it was never on the device) | ❌ **gone permanently** |
 | Nothing (`live` badge) | the unattended-operation arming window — running state only | ❌ resets on restart | — |
 
@@ -473,9 +473,23 @@ station is not thanked twice.
 
 Between Call and EXCH sit **two report fields**, sent on the left and received on the right —
 the same order as the `Snt` and `Rcv` columns in the journal below them, which is the only
-legend they need. Both fill themselves in from the radio's mode (`59` on SSB, FM, AM and DV,
-`599` otherwise) and each stops doing so as soon as you type in it yourself. Enter never
-stops on either one; the cursor runs Call → EXCH.
+legend they need. Both fill themselves in from the radio's mode — `59` on SSB, LSB, FM, WFM,
+AM and DV, `599` on CW, RTTY and the data modes (`USB-D`, `LSB-D`), which carry a three-digit
+report like RTTY — and each stops following the mode as soon as you type in it yourself. A
+mode the radio reports as `UNK` changes nothing: an unreadable mode is no reason to overwrite
+a field you are working in.
+
+Both return to the default **when the QSO ends** — when it is logged, when you clear the form,
+and when you empty the Call field, which is what abandoning a QSO looks like. That last one
+matters: without it a `559` typed for a caller who faded away would be logged, silently, for
+whoever came next. The reset deliberately does *not* fire when you start typing a new call, so
+a report set before the callsign survives.
+
+The cursor skips both fields — Enter runs Call → EXCH — but they are one `Tab` away, and
+**Enter inside them is not a dead key**: it does what it would do in the field the flow is
+waiting on. With no callsign entered that is Call, which in RUN transmits CQ; otherwise it is
+EXCH, so it keys the exchange, or logs the QSO when both fields are filled. **Enter always
+transmits** — `Tab` is the way out of these fields that keys nothing.
 
 The sent report is also **what gets keyed**: change it to `579` and the macro goes out as
 `57n`, not `5nn`. A value that is not a complete report is ignored rather than transmitted,
@@ -484,7 +498,10 @@ so a half-typed field cannot reach the air when Enter fires in RUN mode.
 What the log records is **what was actually sent**, captured at the moment the macro was
 acknowledged. Changing the field after the exchange has gone out does not rewrite it — fix a
 genuine mistake by clicking the QSO in the journal instead. The received report has no such
-history to protect, so it is always taken from its field as it stands when you log.
+history to protect: it is taken from its field **as it stands**, including a value that is not
+a valid report. Logging `599` because the field read `4` would write down a report nobody sent
+and nobody heard, and it would look correct in the journal forever. `N` is folded to `9`
+(`5NN` is the CW spelling of 599), and an empty field takes the default.
 
 Two buttons sit inside the input fields:
 
@@ -533,9 +550,12 @@ In **SSB and FM there are no macros** — nothing is sent, and Enter only logs. 
 unconditional and there is nothing to switch. With no macro sent, the log takes the sent
 report straight from its field.
 
-CW is handed to the radio as a CI-V message and the radio generates the Morse itself. RTTY
-is keyed by the interface on its FSK and PTT outputs. **`Esc` aborts a CW or RTTY
-transmission immediately** — as long as no dialog is open.
+CW is handed to the radio as a CI-V message and the radio generates the Morse itself, in `CW`
+and in `CW-R`. RTTY is keyed by the interface on its FSK and PTT outputs, in `RTTY` and
+`RTTY-R`. **Those four modes are the only ones anything can be keyed in.** In a data mode
+(`USB-D`, `LSB-D`), in `WFM`, or in a mode the radio does not name, the page says so and sends
+nothing — the firmware has no keying path there and would drop the text. **`Esc` aborts a CW
+or RTTY transmission immediately** — as long as no dialog is open.
 
 ### 3.6 The status bar
 
@@ -544,7 +564,7 @@ The strip between the journal and the input row, reading left to right:
 | Field | Meaning |
 |---|---|
 | `--:--` | UTC time |
-| Frequency | what the radio reports — or, when no radio answers, an editable **kHz** box and a mode selector (`USB LSB CW CW-R RTTY FM AM`) so you can log by hand |
+| Frequency | what the radio reports — or, when no radio answers, an editable **kHz** box and a mode selector (`USB LSB CW CW-R RTTY FM AM`) so you can log by hand. The mode you pick there also decides the report default, exactly as the radio's own mode would |
 | Mode | the radio's current mode |
 | Continent · Country · Prefix · CQ · ITU · utc | DXCC data resolved from the callsign you are typing |
 | QRB · Az | distance and bearing from your locator |
@@ -618,6 +638,7 @@ The **?** button opens this list.
 | `Esc` (dialog open) | close the dialog |
 | `Esc` (no dialog) | **abort CW / RTTY transmission immediately** |
 | `Space` in Call | duplicate check and partial-call search |
+| `Enter` in Snt / Rcv | as if pressed in Call, or in EXCH once a callsign is entered — **it transmits**; `Tab` leaves without keying |
 
 ---
 
@@ -1185,8 +1206,9 @@ The tooltip gives the reason and the time left — *"Auto replies paused 8 min (
 **Worked example — a beacon that may answer for itself**
 
 1. SETTINGS → tick **Enable radio TX**.
-2. Set **INFO answer** to `50W VERT` and **STATUS answer** to `MONITORING` — these are what
-   `INFO?` and `STATUS?` will be answered with.
+2. Set **INFO answer** to `50W VERT`, and pick a **STATUS answer** — `AUTO STATION
+   UNATTENDED`, or **Follow the station**, which answers with the time left on the arming
+   window. These are what `INFO?` and `STATUS?` will be answered with.
 3. Tick **Answer queries automatically**.
 4. Tick **Send heartbeats**, leave **Heartbeat every** at 60 minutes, tick **Acknowledge
    heartbeats**.
@@ -1217,7 +1239,7 @@ currently active, so you can see the station's posture without opening the secti
 | *(calibration panel)* | the automatic gain measurement, identical to the one on the WSPR page — [section 6.8](#68-tx-audio-gain-and-cal-plan) |
 | **Enable radio TX** | **the master switch.** Off, and nothing transmits: HB, TUNE, auto-reply, heartbeats, CQ repeat and the calibration are all disabled, and their markers in the header go grey. The tickbox carries the pledge *"I will use safe RF power and a suitable load/antenna."* |
 | **INFO answer** | up to 40 characters, e.g. `50W VERT` |
-| **STATUS answer** | up to 40 characters, e.g. `MONITORING` |
+| **STATUS answer** | a menu — see [What the station answers to STATUS?](#what-the-station-answers-to-status) |
 | **Answer queries automatically** · **Unattended for** · **Repeat CQ** · **My groups** · **Send heartbeats** · **Heartbeat every** · **Acknowledge heartbeats** | see [section 5.12](#512-unattended-operation) |
 | **Beep on a call to me** | a short tone when a station addresses your callsign directly. **Off by default.** The line in Recent traffic is highlighted either way — see [section 5.7](#57-recent-traffic). Ticking it plays the tone once, which is also the click browsers require before they will allow any sound. Purely local to this browser; it never transmits anything. |
 | **Restore defaults** | reset every setting on this page |
@@ -1230,6 +1252,46 @@ its own. Until you press it, the heartbeat, groups, band schedule and power live
 this browser and another device would not have them. It is a button rather than an automatic
 upload on purpose: otherwise the first tablet to open the page would decide the whole
 station's schedule.
+
+#### What the station answers to STATUS?
+
+**STATUS answer** is a menu, not a text field. Any station may ask yours `STATUS?` at any
+time, and on an unattended station the answer goes out without you — so what it says is
+worth choosing from a list rather than typing once and forgetting.
+
+| Entry | What goes on the air |
+|---|---|
+| **No answer** | nothing. `STATUS?` is left unanswered, and the line under the menu says so. |
+| **AUTO STATION UNATTENDED** | the default in a fresh profile: says plainly that nobody is at the radio |
+| **MONITORING** | listening, operator present |
+| **QRV FOR QSO** | ready to work someone |
+| **QRT SOON** | about to shut down |
+| **Follow the station** | composed at the moment it is asked for — see below |
+| **Custom…** | reveals the old free-text field, up to 40 characters. Characters the protocol cannot carry are dropped and the text is upper-cased. |
+
+**Follow the station** holds no text of its own. While unattended operation is armed it
+answers `AUTO STATION 6H LEFT` — counting down the arming window, so the asking station
+learns how long yours will keep answering by itself. While it is disarmed it answers
+`MONITORING`, because then it is you who answers, not the software.
+
+> **This is not JS8Call's `<MYIDLE>`.** Upstream lets you write macros into the status text
+> and expands them when it sends; its `<MYIDLE>` measures how long nobody has touched the
+> program. This interface deliberately has no macro syntax and does not report idleness: the
+> browser may be closed on a tablet in another room, or open in front of nobody, and both
+> would report "someone is here". The arming window is the one thing the station can state
+> about itself and know to be true.
+
+The line under the menu shows exactly what will be sent, and how many frames it costs:
+
+| Answer | Frames | Air time (Normal) |
+|---|---|---|
+| `STATUS MONITORING` | 2 | 30 s |
+| `STATUS AUTO STATION UNATTENDED` | 3 | 45 s |
+| `STATUS MONITORING JN79 UNATTENDED 50W VERTICAL` | 4 | 60 s |
+
+Roughly every fourteenth character buys another frame, and a frame is a whole slot. That is
+why the presets are short — a chatty status is paid for on every single answer, at every
+speed, for as long as the station is on the air.
 
 ### 5.14 Timing and diagnostics
 
@@ -1690,31 +1752,7 @@ TrxNet is a peer-to-peer link between RemoteQTH devices on the same network.
 
 The protocol is documented in [docs/trxnet.md](docs/trxnet.md).
 
-### 7.6 LOG & DATA settings
-
-`config`
-
-![LOG settings](img/setup-log.png)
-
-| Field | Meaning |
-|---|---|
-| **Blocked DXCC list** | DXCC entity names to exclude, one per line. The field carries a sample list to show the format. |
-
-> This section used to carry three more fields — `RST default SSB/FM`, `RST default CW/RTTY`
-> and `Manual mode for Phone`. They were saved and served, and nothing ever read them: the
-> report prefill came from built-in defaults and phone was unconditionally manual. They were
-> removed in REV 20260810 rather than wired up. A report is either the convention — `59` on
-> phone, `599` elsewhere, nothing to set — or it is what the operator types into the QSO form,
-> and [§ 3.4](#34-working-a-station) covers that.
-
-The blocked list has two different effects, which is worth knowing before you use it:
-
-- In **QRPLog** a matching callsign is refused at logging time, with `⛔ BLOCKED: <country>`.
-- On the **DATA page** those stations are **hidden entirely** — from the stations table, the
-  traffic list, the map and every automatic function. They are discarded silently, with no
-  error, and transmission to them is refused outright.
-
-### 7.7 TX audio gain
+### 7.6 TX audio gain
 
 `config`
 
@@ -1732,6 +1770,31 @@ without the network audio path there is nothing to calibrate.
 Set the band and the power you want to measure **first** — a calibration describes the radio
 as it stands, and it is filed under that exact band and power. A whole matrix at once is what
 **CAL PLAN** in the DATA page top bar is for.
+
+### 7.7 LOG
+
+`config`
+
+![LOG settings](img/setup-log.png)
+
+| Field | Meaning |
+|---|---|
+| **Blocked DXCC list** | DXCC entity names to exclude, one per line. The field carries a sample list to show the format. |
+
+> This section used to carry three more fields — `RST default SSB/FM`, `RST default CW/RTTY`
+> and `Manual mode for Phone`. They were saved and served, and nothing ever read them: the
+> report prefill came from built-in defaults and phone was unconditionally manual. They were
+> removed in REV 20260810 rather than wired up. A report is either the convention — `59` on
+> phone, `599` on CW, RTTY and the data modes, read from the mode the radio reports and nothing
+> to set — or it is what the operator types into the QSO form, and
+> [§ 3.4](#34-working-a-station) covers that.
+
+The blocked list has two different effects, which is worth knowing before you use it:
+
+- In **QRPLog** a matching callsign is refused at logging time, with `⛔ BLOCKED: <country>`.
+- On the **DATA page** those stations are **hidden entirely** — from the stations table, the
+  traffic list, the map and every automatic function. They are discarded silently, with no
+  error, and transmission to them is refused outright.
 
 ### 7.8 Remote management of JS8 unattended operation
 

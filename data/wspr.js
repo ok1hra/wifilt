@@ -2564,5 +2564,30 @@
                          get editingSlot() { return editingSlot; },
                          get tx() { return tx; },
                          get sessionHeld() { return sessionHeld && sessionConfirmed; }};
+  // The whole page is built inside one .then callback, so anything that throws
+  // in it becomes an unhandled rejection and leaves a half-drawn beacon on
+  // screen -- controls present, nothing behind them, and not a word to say so.
+  // The DATA page died exactly this way on 2026-08-11 (a cached script against a
+  // freshly served page), and this file was one commit away from the same fault.
+  //
+  // __wspr is assigned last, so its absence is already how the smoke harness
+  // detects a page that did not finish; this makes the operator's copy of that
+  // signal visible too.
+  }).catch(error => {
+    console.error("[wspr] startup failed:", error);
+    const host = document.querySelector("main");
+    if (!host) return;
+    const card = document.createElement("section");
+    // .gate-card is styled by lan-gate.js, which has already injected its sheet:
+    // gate() runs before this chain can reject.
+    card.className = "gate-card";
+    card.setAttribute("role", "alert");
+    card.innerHTML = '<div class="gate-card-icon" aria-hidden="true">!</div><div>'
+      + "<h1>WSPR could not start</h1><p></p>"
+      + "<p class=\"gate-card-note\">If this followed a firmware update, reload with "
+      + "Ctrl+Shift+R: a script cached by the browser can be older than the page.</p>"
+      + "</div>";
+    card.querySelector("p").textContent = String((error && error.message) || error);
+    host.insertBefore(card, host.firstChild);
   });
 })();

@@ -5,7 +5,7 @@
 
 const PAGE_PARAMS = new URLSearchParams(location.search);
 const TEST_MODE = PAGE_PARAMS.has("test");
-const ASSET_REV = "20260719d";
+const ASSET_REV = "ce4552e0";
 // Two of the files the worker importScripts() are also loaded by this page with
 // its own <script> tag, and each carried an independent version: the tag in
 // data.html and ASSET_REV here. Nothing forced them to agree, and js8-protocol.js
@@ -171,7 +171,8 @@ const dom = {
   groupsButton:$("groupsButton"), stationGroupsButton:$("stationGroupsButton"),
   groupPanel:$("groupPanel"), groupPanelGrid:$("groupPanelGrid"), groupAddForm:$("groupAddForm"),
   cqRepeat:$("cqRepeat"), cqState:$("cqState"),
-  infoText:$("infoText"), statusText:$("statusText"), autoReply:$("autoReply"), alertBeep:$("alertBeep"),
+  infoText:$("infoText"), statusText:$("statusText"), statusPreset:$("statusPreset"),
+  statusPreview:$("statusPreview"), autoReply:$("autoReply"), alertBeep:$("alertBeep"),
   inboxRows:$("inboxRows"), inboxSummary:$("inboxSummary"), inboxQueryMsgs:$("inboxQueryMsgs"), inboxRefresh:$("inboxRefresh"),
   inboxFilters:$("msgBoxFilters"), inboxUndo:$("msgBoxUndo"), inboxUndoButton:$("msgBoxUndoButton"),
   inboxHint:$("msgBoxHint"), inboxSection:document.querySelector('[data-section="inbox"]'),
@@ -910,7 +911,15 @@ function loadTxModule() {
   txModulePromise = self.createJs8Prototype({locateFile:path =>
     path.endsWith(".wasm") ? assetUrl("/js8-core.wasm") : path})
     .then(module => { txWasm = module; state.txWasmReady = true; renderControls(); return module; })
-    .catch(error => { state.decoderStatus = `TX core error: ${error.message}`; renderControls(); });
+    .catch(error => {
+      state.decoderStatus = `TX core error: ${error.message}`;
+      // The repaint is the last thing standing between a fault and the operator,
+      // so it must not be able to swallow one. When renderControls() itself
+      // throws, this catch used to end in an unhandled rejection that replaced
+      // "TX core error: ..." with whatever the renderer tripped over -- reporting
+      // nothing, from the very handler whose job is to report.
+      try { renderControls(); } catch (renderError) { failStartup(renderError); }
+    });
   return txModulePromise;
 }
 
@@ -1978,7 +1987,7 @@ function renderControls() {
   renderResolvedGain();
   dom.txSafety.checked=js8.txSafetyAccepted;
   if(document.activeElement!==dom.infoText)dom.infoText.value=js8.infoText;
-  if(document.activeElement!==dom.statusText)dom.statusText.value=js8.statusText;
+  renderStatusAnswer(js8);
   dom.autoReply.checked=js8.auto===true;
   if(dom.alertBeep)dom.alertBeep.checked=js8.alertBeep===true;
   if(!dom.armHours.options.length)
@@ -3930,6 +3939,89 @@ function renderAutoState() {
     ? `armed, ${Math.max(1, Math.round(remaining / 60000))} min left`
     : "disarmed");
 }
+// The composed STATUS answer. It is the one dynamic value this station can state
+// honestly: while unattended is armed we know how much longer it will keep answering
+// by itself, and while it is not, the operator is the one who answers. Upstream
+// derives its equivalent (the <MYIDLE> macro) from operator inactivity in the GUI --
+// a measurement this page cannot make, because the browser is either closed on a
+// tablet nobody is holding, or open in front of nobody at all, and both would read
+// as "someone is here".
+function dynamicStatusText() {
+  const remainingMs = state.autoExpiryAt ? state.autoExpiryAt - Date.now() : 0;
+  if (!(remainingMs > 0)) return "MONITORING";
+  const hours = Math.floor(remainingMs / 3600000);
+  return hours >= 1 ? `AUTO STATION ${hours}H LEFT`
+    : `AUTO STATION ${Math.max(1, Math.round(remainingMs / 60000))}M LEFT`;
+}
+
+// The answer as it would go out right now -- the only value that may reach the air or
+// the message box. What sits in the profile is what the operator chose, which is not
+// the same thing once the composed entry is picked.
+function effectiveStatusText() {
+  const js8 = currentJs8();
+  return js8.statusAuto === true ? dynamicStatusText() : js8.statusText;
+}
+
+// Air time is what the operator actually spends and the only cost a text field hides:
+// roughly every fourteenth character buys another frame, and a frame is a whole slot.
+// Memoised because renderControls runs on the 500 ms radio poll.
+let statusFrameCache = {key:"", frames:0};
+function statusFrameCount(text) {
+  const js8 = currentJs8();
+  if (!text || !js8.myCall) return 0;
+  const toCall = state.selectedCall || js8.myCall;
+  const mode = selectedMode();
+  const key = `${text}|${js8.myCall}|${toCall}|${mode}`;
+  if (statusFrameCache.key === key) return statusFrameCache.frames;
+  let frames = 0;
+  try {
+    frames = Js8Protocol.buildReplyFrames(
+      {myCall:js8.myCall, toCall, text:`STATUS ${text}`, mode}).length;
+  } catch (_error) { frames = 0; }
+  statusFrameCache = {key, frames};
+  return frames;
+}
+
+// "Custom" is a screen state, not a stored setting: the profile holds one string and
+// the menu entry is derived from it. The draft is what makes a wrong click survivable
+// -- picking a preset overwrites the stored answer, so without it the hand-written one
+// would be gone before the operator noticed the menu had moved. Session-only on
+// purpose: an answer the operator left on a preset IS a preset, and a reload should
+// not resurrect something they moved away from days ago.
+let statusCustomDraft = "";
+let statusCustomOpen = false;
+
+function renderStatusAnswer(js8) {
+  if (!dom.statusPreset) return;
+  if (!dom.statusPreset.options.length) {
+    // "No answer" leads because it is what a station that must stay silent needs, and
+    // it is also what an older profile with an empty answer already means -- so that
+    // profile lands on a menu entry instead of on "Custom" with nothing in the box.
+    dom.statusPreset.innerHTML = ['<option value="">No answer</option>']
+      .concat(Js8Settings.STATUS_PRESETS.map(text => `<option value="${text}">${text}</option>`))
+      .concat([`<option value="${Js8Settings.STATUS_AUTO}">Follow the station</option>`,
+        `<option value="${Js8Settings.STATUS_CUSTOM}">Custom…</option>`]).join("");
+  }
+  const stored = js8.statusText || "";
+  // An answer that is not one of the presets can only have been typed, so a stored
+  // profile lands on "Custom" by itself -- the menu needs nothing remembered for it.
+  const typed = !js8.statusAuto && stored && !Js8Settings.STATUS_PRESETS.includes(stored);
+  if (typed) statusCustomDraft = stored;
+  const custom = !js8.statusAuto && (typed || statusCustomOpen);
+  const value = js8.statusAuto === true ? Js8Settings.STATUS_AUTO
+    : custom ? Js8Settings.STATUS_CUSTOM : stored;
+  if (document.activeElement !== dom.statusPreset) dom.statusPreset.value = value;
+  // The field appears only when it is the thing being edited: two visible copies of one
+  // answer read as two settings that could disagree.
+  dom.statusText.hidden = value !== Js8Settings.STATUS_CUSTOM;
+  if (document.activeElement !== dom.statusText) dom.statusText.value = stored;
+  const text = effectiveStatusText();
+  const frames = statusFrameCount(text);
+  dom.statusPreview.textContent = text
+    ? `Sends: STATUS ${text}${frames ? ` · ${frames} frame${frames === 1 ? "" : "s"}` : ""}`
+    : "STATUS? goes unanswered.";
+}
+
 function armUnattended(action) {
   const hours = Number(currentJs8().armHours) || 1;
   return fetch("/unattended", {method: "POST", headers: {"Content-Type": "application/json"},
@@ -4903,7 +4995,11 @@ function handleDirectedFrame(decoded) {
     {nowMs: now, myCall: js8.myCall, groups: myGroups(),
      selectedCall: isMyGroup(state.selectedCall) ? "" : state.selectedCall,
      auto: js8.auto === true, grid: js8.grid, infoText: js8.infoText,
-     statusText: js8.statusText, hearing: heard});
+     // The composed answer is built here rather than inside the reply engine, which is
+     // deliberately a pure decision layer: it has no clock and no station state of its
+     // own. Composing first also keeps the "needs" refusal honest -- an answer that
+     // comes out empty is refused instead of being transmitted as a bare STATUS.
+     statusText: effectiveStatusText(), hearing: heard});
   autoReply.noteDirectedFrame(now);
 
   if (outcome.action === "buffer") {
@@ -5970,7 +6066,19 @@ function bind() {
   dom.clockCorrection.addEventListener("change",()=>setJs8Setting("clockCorrectionMs",Number(dom.clockCorrection.value)||0));
   dom.autoTiming.addEventListener("change",()=>setJs8Setting("autoTiming",dom.autoTiming.checked));
   dom.infoText.addEventListener("change",()=>setJs8Setting("infoText",dom.infoText.value));
-  dom.statusText.addEventListener("change",()=>setJs8Setting("statusText",dom.statusText.value));
+  dom.statusText.addEventListener("change",()=>{setJs8Setting("statusText",dom.statusText.value);renderControls();});
+  // The menu IS the stored answer for every literal entry, so picking one writes it.
+  // "Custom" restores the last text typed this session instead, which is what makes a
+  // detour through a preset survivable rather than a way to lose the answer.
+  dom.statusPreset.addEventListener("change",()=>{
+    const value=dom.statusPreset.value;
+    statusCustomOpen=value===Js8Settings.STATUS_CUSTOM;
+    setJs8Setting("statusAuto",value===Js8Settings.STATUS_AUTO);
+    if(statusCustomOpen){if(statusCustomDraft)setJs8Setting("statusText",statusCustomDraft);}
+    else if(value!==Js8Settings.STATUS_AUTO)setJs8Setting("statusText",value);
+    renderControls();
+    if(statusCustomOpen)dom.statusText.focus();
+  });
   dom.armHours.addEventListener("change",()=>{setJs8Setting("armHours",Number(dom.armHours.value)||1);if(currentJs8().auto)armUnattended("extend");});
   // The field ADDS to what is already joined; it never replaces it. Anything else would
   // mean that picking a second name from the autocomplete silently unjoins the first,
@@ -6449,4 +6557,39 @@ async function init() {
   };
 }
 
-init();
+// init() is one long chain of awaits, and everything able to REPORT a fault sits
+// at the end of it: renderStartup(), selectMode() -- which is what arms the modem
+// stall watchdog -- and setMasterTick(), which starts the only clock that watchdog
+// can ever fire on. So anything that threw or never resolved above them left the
+// operator on the static "Loading JS8Call-ICOM modem" / "0%" markup in data.html
+// for ever, with RETRY hidden, because no failure had been declared yet.
+//
+// That is precisely what a browser running a CACHED data.js against a freshly
+// served data.html did on 2026-08-11: the older script looked up an element id
+// the new page had renamed, and the page died between the session claim and the
+// modem without a word on screen. The gate has to be able to speak for the whole
+// of init(), not just for the part after the modem starts.
+function failStartup(error) {
+  const message = String((error && error.message) || error || "unknown error");
+  console.error("[js8] startup failed:", error);
+  state.startup = {ready:false, failed:true, progress:0,
+    label:"JS8LAN could not start",
+    // Naming the stale-script case earns its line: it is the one cause the
+    // operator can clear unaided, and RETRY cannot -- an ordinary reload serves
+    // the very script that just broke, straight back out of the browser cache.
+    detail:`${message} — if this followed a firmware update, reload with Ctrl+Shift+R.`};
+  // renderStartup() is the normal painter, but it leans on the cached elements
+  // and, for a working RETRY, on bind() having run. A failure this early can
+  // predate both, so fall back to painting the gate by hand.
+  try { renderStartup(); }
+  catch (_error) {
+    document.body.classList.add("startup-pending");
+    if (dom.startup) dom.startup.hidden = false;
+    if (dom.startupLabel) dom.startupLabel.textContent = state.startup.label;
+    if (dom.startupDetail) dom.startupDetail.textContent = state.startup.detail;
+    if (dom.startupRetry) dom.startupRetry.hidden = false;
+  }
+  if (dom.startupRetry) dom.startupRetry.onclick = () => location.reload();
+}
+
+init().catch(failStartup);

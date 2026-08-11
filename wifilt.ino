@@ -114,7 +114,7 @@ bool cwIpOnConnect  = false;      // announce WiFi IP via CW on first full-CAT r
 volatile bool cwIpSendPending = false;
 
 #define LOOP_WARN_MS 200
-#define REV 20260810
+#define REV 20260811
 #define WIFI
 #define FSK_KEYING  // RTTY by keying the FSK + PTT outputs (was UDP_TO_FSK, from when a UDP port fed it)
 #define WDT         // watchdog timer
@@ -2212,8 +2212,14 @@ void handlePostCmd(){
     String text = extractJsonString(body, "text");
     if (text.length() == 0) { webServer.send(400, "application/json", "{\"error\":\"missing_text\"}"); return; }
     text.toCharArray(CwMsg, sizeof(CwMsg));
-    // mode is preserved — sendCW() routes to CW (CI-V) or RTTY (FSK GPIO) based on current mode
-    sendCW();
+    // mode is preserved — sendCW() routes to CW/CW-R (CI-V) or RTTY/RTTY-R (FSK
+    // GPIO) by the radio's current mode, and keys nothing in any other. This used
+    // to answer ok:true regardless, which is a lie every caller acted on: the log
+    // page recorded the report it believed it had sent while the radio sat silent.
+    if (!sendCW()) {
+      webServer.send(409, "application/json", "{\"error\":\"mode_cannot_key\"}");
+      return;
+    }
     webServer.send(200, "application/json", "{\"ok\":true}");
     return;
   }
@@ -4373,7 +4379,7 @@ void announceIpViaCw(){
   // 3. Play the IP (sidetone only — BK-IN is off, so this never goes on air).
   String ipStr = "IP " + WiFi.localIP().toString();
   ipStr.toCharArray(CwMsg, sizeof(CwMsg));
-  setModesText("CW"); // sendCW() routes CAT-CW only when the mode text is "CW"
+  setModesText("CW"); // sendCW() keys over CAT only in CW / CW-R, so say which one
   sendCW();
   cwAnnounceService(CW_ANNOUNCE_KEY_MS); // wait for the keyer to finish before touching the radio again
 
@@ -6127,12 +6133,25 @@ void civPollTick() {
 //-----------------------------------------------------------------------------------
 
 //-------------------------------------------------------------------------------------------------------
-void sendCW(){
+// Keys CwMsg in the radio's current mode. Returns false when that mode has no
+// keying path here, so a caller can tell a transmission from a silent drop --
+// /cmd used to answer ok:true either way, and the log page believed it.
+//
+// The reverse modes key exactly like their upright twins: CW-R and RTTY-R differ
+// only in which sideband the radio listens on, so the CI-V message and the FSK
+// bit stream are unchanged. Leaving them out meant a contester who flipped to
+// CW-R to dodge a birdie transmitted nothing at all, silently.
+bool sendCW(){
   int payloadLen = strnlen(CwMsg, sizeof(CwMsg) - 1);
   char modesSnapshot[sizeof(modes)];
   copyModesText(modesSnapshot, sizeof(modesSnapshot));
 
-  if(strcmp(modesSnapshot, "CW") == 0){  // CAT -----------------
+  const bool cwMode   = (strcmp(modesSnapshot, "CW")   == 0 || strcmp(modesSnapshot, "CW-R")   == 0);
+  const bool rttyMode = (strcmp(modesSnapshot, "RTTY") == 0 || strcmp(modesSnapshot, "RTTY-R") == 0);
+  // Phone, the data modes (USB-D, LSB-D), WFM, UNK: nothing to key with.
+  if(!cwMode && !rttyMode) return false;
+
+  if(cwMode){  // CAT -----------------
     uint8_t frame[sizeof(CwMsg) + 6];
     uint8_t frameLen = 0;
 
@@ -6156,10 +6175,10 @@ void sendCW(){
     catWriteFrame(frame, frameLen, true);
     if (Debug) Serial.println();
     statusFlashKick();
-  }else if(strcmp(modesSnapshot, "RTTY") == 0){ // GPIO FSK keying -----------------
+  }else{ // GPIO FSK keying -----------------
     int TheEnd = payloadLen - 1;
     if(TheEnd < 0){
-      return;
+      return false;
     }
     abortFskTransmission = false;
     // Dark for the whole transmission. The restore at the end of this branch had
@@ -6227,6 +6246,7 @@ void sendCW(){
 // #ifdef DEBUG
 //   Serial.println();
 // #endif
+  return true;
 }
 
 //-------------------------------------------------------------------------------------------------------

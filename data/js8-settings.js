@@ -33,6 +33,22 @@
   const MAX_GROUPS = 8;
   // Minutes between repeated CQ calls; 0 means the repeat is off.
   const CQ_REPEAT_MIN = [0, 2, 5, 10, 15];
+  // What this station answers to STATUS?. A menu rather than a bare field: the page
+  // is operated from a tablet, where typing forty characters is the worst possible
+  // input for a value that changes twice a year, and the list doubles as the
+  // documentation of what is worth saying. Entries are kept short on purpose --
+  // roughly fourteen characters buy another frame, so a chatty status costs fifteen
+  // seconds of air time on every single answer.
+  const STATUS_PRESETS = ["AUTO STATION UNATTENDED", "MONITORING", "QRV FOR QSO",
+    "QRT SOON"];
+  // Sentinels for the two menu entries that are not literal answers. Upstream solves
+  // the same problem with a macro language (<MYIDLE> and friends, expanded at send
+  // time); STATUS_AUTO buys the one dynamic value we can honestly derive -- the
+  // arming window -- without teaching the operator that angle brackets mean
+  // something. '#' is outside the character whitelist applied to a stored answer, so
+  // neither sentinel can ever collide with one.
+  const STATUS_AUTO = "#auto";
+  const STATUS_CUSTOM = "#custom";
 
   const clone = value => JSON.parse(JSON.stringify(value));
   const clamp = (value, low, high, fallback) => {
@@ -80,7 +96,12 @@
         followSpeed:true, txGain:0.25, txSafetyAccepted:false,
         // Unattended operation. `auto` is the operator's switch; `armHours` is
         // how long it stays on before the firmware lets it lapse by itself.
-        auto:false, armHours:1, infoText:"", statusText:"",
+        // A fresh profile answers STATUS? out of the box, the way upstream does with
+        // its "IDLE ... VERSION ..." default. An existing profile keeps whatever is
+        // stored, including an empty answer: turning transmission on for a station
+        // that was silent is not a decision an upgrade gets to make.
+        auto:false, armHours:1, infoText:"", statusText:STATUS_PRESETS[0],
+        statusAuto:false,
         // A short tone when a directed frame arrives for us. Off by default: the
         // page is meant to be left running for days next to a radio that is
         // already making noise, so a sound nobody asked for is a regression on
@@ -153,6 +174,10 @@
           .replace(/[^A-Z0-9 ./?+-]/g, "").slice(0, 40).trim(),
         statusText:String(js8.statusText ?? "").toUpperCase()
           .replace(/[^A-Z0-9 ./?+-]/g, "").slice(0, 40).trim(),
+        // The composed answer is a marker, not a text: `statusText` stays whatever the
+        // operator last chose by hand, so switching the menu back does not lose it.
+        // An absent key normalises to false, which is the default -- no schema bump.
+        statusAuto:js8.statusAuto === true,
         hb:js8.hb === true, hbAck:js8.hbAck !== false,
         hbMinutes:HB_MINUTES.includes(Number(js8.hbMinutes)) ? Number(js8.hbMinutes) : 60,
         // Custom groups only; the always-joined ones are added at use time so a
@@ -266,7 +291,8 @@
     return {settings: defaults(), status: "reset", label: label("reset")};
   }
 
-  return {STORAGE_KEY, SCHEMA_VERSION, ARM_HOURS, HB_MINUTES, CQ_REPEAT_MIN, ALWAYS_GROUPS,
+  return {STORAGE_KEY, SCHEMA_VERSION, ARM_HOURS, HB_MINUTES, CQ_REPEAT_MIN,
+    STATUS_PRESETS, STATUS_AUTO, STATUS_CUSTOM, ALWAYS_GROUPS,
     RESERVED_GROUPS, MAX_GROUPS, GROUP_RE, validateGroups,
     TIMETABLE_SLOTS, TIMETABLE_MIN_HZ, TIMETABLE_MAX_HZ, normalizeTimetable,
     defaults, normalize, migrate, load, save, reset, clone};

@@ -697,12 +697,18 @@
 
   // ── Mode classification ────────────────────────────────────────────────────
 
+  // Which keying path a radio mode belongs to. 'NONE' means the interface has no
+  // path at all: sendCW() in the firmware keys only in CW/CW-R (CI-V message) and
+  // RTTY/RTTY-R (FSK GPIO), so the data modes the radio reports with a -D suffix
+  // (USB-D, LSB-D), WFM and UNK cannot be transmitted from here. This used to
+  // fall back to 'CW', which built CW text, POSTed it, took the ok:true for an
+  // answer -- and logged a report that never left the box.
   function modeGroup(mode) {
     const m = (mode || '').toUpperCase();
-    if (['CW','CW-R','CWR'].includes(m))                  return 'CW';
-    if (['RTTY','RTTY-R','RTTYR','FSK'].includes(m))       return 'RTTY';
-    if (['SSB','LSB','USB','FM','AM','DV'].includes(m))     return 'PHONE';
-    return 'CW';  // safe default
+    if (['CW','CW-R','CWR'].includes(m))                        return 'CW';
+    if (['RTTY','RTTY-R','RTTYR','FSK'].includes(m))            return 'RTTY';
+    if (['SSB','LSB','USB','FM','WFM','AM','DV'].includes(m))    return 'PHONE';
+    return 'NONE';
   }
 
   function isVhfPlus(freqHz) {
@@ -909,6 +915,14 @@ const app = {
   // field — editing the field afterwards cannot rewrite what was already sent.
   rstSentTx:  '',
 
+  // Which QSO the capture above belongs to. Incremented whenever the reports are
+  // reset (a QSO logged, or a QSO abandoned). The acknowledgement of a macro is
+  // asynchronous: in S&P the same Enter that keys the exchange also writes the
+  // QSO, and the IndexedDB write usually wins the race against the round trip to
+  // the ESP32. Without this, that late ok:true stamped the finished QSO's report
+  // onto the next one, so every S&P contact logged the report before it.
+  qsoGeneration: 0,
+
   // Form state machine
   formState:      'IDLE',  // IDLE | CALL_ENTERED | EXCHANGE_ENTERED | LOGGED
   prevCallSent:   '',      // call as sent in TXEXCH, for TU/CALL-TU decision
@@ -967,10 +981,22 @@ function formatFreq(hz) {
   return `${mhz}.${String(khz).padStart(3, '0')}.${String(tens).padStart(2, '0')}`;
 }
 
+// The report convention for a mode: two digits on phone, three otherwise.
+//
+// The mode text from /state is richer than it looks. applyModeState() in the
+// firmware appends -D for the radio's data mode (USB-D, LSB-D), and it also
+// emits WFM and UNK. The old list named six phone modes and let everything else
+// fall through to 599, so WFM -- plain phone -- prefilled a CW report. Decide on
+// the base and let the -D suffix mean a data QSO, which is reported in three
+// digits like RTTY. UNK returns '' : an unreadable mode is no reason to overwrite
+// a field the operator is working in, so callers leave it alone.
 function rstDefault(mode) {
   if (!mode) return '59';
-  switch (mode.toUpperCase()) {
-    case 'SSB': case 'LSB': case 'USB': case 'FM': case 'AM': case 'DV':
+  const m = String(mode).trim().toUpperCase();
+  if (m === 'UNK') return '';
+  if (m.endsWith('-D')) return '599';
+  switch (m) {
+    case 'SSB': case 'LSB': case 'USB': case 'FM': case 'WFM': case 'AM': case 'DV':
       return '59';
     default:
       return '599';
@@ -986,12 +1012,37 @@ function validRst(raw) {
   return /^[1-5][1-9N]{1,2}$/.test(s) ? s.replace(/N/g, '9') : '';
 }
 
+// What a report field contributes to the log. The air needs a report it can key,
+// which is what validRst() is for; the log needs the truth, which is whatever the
+// operator left in the field. Substituting the default for an unusable value --
+// logging 599 for a field reading "4" -- writes a report nobody sent and nobody
+// heard, and it looks perfectly correct in the journal forever. N is folded to 9
+// because 5NN is the CW spelling of 599 and the log carries digits. An empty
+// field is the one case with nothing to be faithful to, so it takes the default.
+function rstForLog(raw, mode) {
+  const s = String(raw || '').trim().toUpperCase().replace(/N/g, '9');
+  return s || rstDefault(mode) || '599';
+}
+
 // Both RST fields follow the mode until the operator touches them.
 function resetRstFields() {
-  inpRst.value     = rstDefault(app.mode);
-  inpRstRcvd.value = rstDefault(app.mode);
+  const d = rstDefault(app.mode);
+  if (d) {
+    inpRst.value     = d;
+    inpRstRcvd.value = d;
+  }
   app.rstSentDirty = false;
   app.rstRcvdDirty = false;
+}
+
+// The report state that belongs to one QSO and must not outlive it: the fields,
+// the operator's edits, and the record of what went on the air. Bumping the
+// generation is what makes a macro acknowledgement that arrives after this point
+// harmless -- it belongs to a QSO that is already written.
+function resetReportsForNewQso() {
+  resetRstFields();
+  app.rstSentTx = '';
+  app.qsoGeneration++;
 }
 
 function utcHHMM() {
@@ -1055,8 +1106,9 @@ function applyState(data) {
     const newMode = (data.mode || 'USB').trim();
     if (newMode !== app.mode) {
       app.mode = newMode;
-      if (!app.rstSentDirty) inpRst.value     = rstDefault(app.mode);
-      if (!app.rstRcvdDirty) inpRstRcvd.value = rstDefault(app.mode);
+      const d = rstDefault(app.mode);   // '' on UNK — leave the fields as they are
+      if (d && !app.rstSentDirty) inpRst.value     = d;
+      if (d && !app.rstRcvdDirty) inpRstRcvd.value = d;
     }
   }
 
@@ -1420,7 +1472,15 @@ inpRstRcvd.addEventListener('input', () => { app.rstRcvdDirty = true; });
 
 inpCall.addEventListener('input', () => {
   updateDxccFromCall();
-  if (!inpCall.value.trim()) clearDupePanel();
+  // An emptied Call field is an abandoned QSO. Its reports must not follow the
+  // operator to the next station: a 559 typed for a caller that faded away would
+  // otherwise be logged, silently, for whoever comes next. The reset sits here
+  // and not on the first character of a new call on purpose — that would wipe a
+  // report deliberately set before the call was typed.
+  if (!inpCall.value.trim()) {
+    clearDupePanel();
+    resetReportsForNewQso();
+  }
 });
 
 function updateDxccFromCall() {
@@ -1485,8 +1545,7 @@ function formStateOf() {
 function clearForm() {
   inpCall.value    = '';
   inpExch.value    = '';
-  resetRstFields();
-  app.rstSentTx    = '';
+  resetReportsForNewQso();
   app.prevCallSent = '';
   app.skipNextTu   = false;
   app.formState    = 'IDLE';
@@ -1509,7 +1568,10 @@ function macroCtx(overrides) {
     call:         inpCall.value.trim(),
     exchangeType: ['NR','NRUTC','NRLOC'].includes(de) ? de : 'STATIC',
     exchange:     de,
-    rstSent:      validRst(inpRst.value) || rstDefault(app.mode),
+    // Never empty: rstDefault() has nothing to say about UNK, and a mode that
+    // cannot be read is still a mode nothing gets keyed in, so the value is only
+    // ever a placeholder for the preview.
+    rstSent:      validRst(inpRst.value) || rstDefault(app.mode) || '599',
     qsoNumber:    log.nextQsoNumber    || 1,
     prevQsoNumber:(log.nextQsoNumber   || 1) - 1,
     myLocator:    log.myLocator        || '',
@@ -1531,6 +1593,12 @@ function sendMacroText(macroType) {
     showHint('Phone mode — send manually');
     return;
   }
+  // No keying path for this mode (a data mode, WFM, UNK). Refuse here rather than
+  // POST into a firmware that would drop it and answer ok:true anyway.
+  if (mg === 'NONE') {
+    showHint(app.mode + ' cannot be keyed — send manually');
+    return;
+  }
   const trxIdx = app.activeTrx - 1;
   const isOi3  = app.trxOi3[trxIdx] && trxIdx > 0;
   if (!app.connected && !isOi3) {
@@ -1538,17 +1606,25 @@ function sendMacroText(macroType) {
     return;
   }
   const ctx = macroCtx();
+  const gen = app.qsoGeneration;
   LogMacros.sendMacro(macroType, ctx).then(ok => {
     if (!ok) { showHint('Send failed'); return; }
     // Only these three carry the report; CQ and TU do not. A failed POST is not
     // recorded — nothing left the interface.
-    if (RST_BEARING_MACROS.includes(macroType)) app.rstSentTx = ctx.rstSent;
+    if (!RST_BEARING_MACROS.includes(macroType)) return;
+    // The QSO this went out for is already logged or abandoned. Whatever it
+    // transmitted is history that belongs to that QSO, not to the one now on the
+    // screen.
+    if (gen !== app.qsoGeneration) return;
+    app.rstSentTx = ctx.rstSent;
   });
 }
 
 function sendRawText(text) {
   if (!text || !window.LogMacros) return;
-  if (LogMacros.modeGroup(app.mode) === 'PHONE') { showHint('Phone mode — send manually'); return; }
+  const mg = LogMacros.modeGroup(app.mode);
+  if (mg === 'PHONE') { showHint('Phone mode — send manually'); return; }
+  if (mg === 'NONE')  { showHint(app.mode + ' cannot be keyed — send manually'); return; }
   const trxIdx = app.activeTrx - 1;
   const isOi3  = app.trxOi3[trxIdx] && trxIdx > 0;
   if (!app.connected && !isOi3) { showHint('TRX not connected'); return; }
@@ -1563,6 +1639,25 @@ function sendRawText(text) {
 
 inpCall.addEventListener('keydown', handleCallEnter);
 inpExch.addEventListener('keydown', handleExchEnter);
+inpRst.addEventListener('keydown',     handleRstEnter);
+inpRstRcvd.addEventListener('keydown', handleRstEnter);
+
+// Enter in a report field used to be a dead key — no handler, and no <form> to
+// submit to, so an operator who corrected the report and pressed Enter got
+// silence. It is now routed into the ordinary flow: with no call entered yet it
+// behaves as it would in Call, otherwise as it would in EXCH, and it transmits
+// exactly as it would there. Tab is the way out of these fields that keys
+// nothing.
+function handleRstEnter(e) {
+  if (e.key !== 'Enter' || e.altKey) return;
+  if (!inpCall.value.trim()) { handleCallEnter(e); return; }
+  const exchEmpty = !inpExch.value.trim();
+  handleExchEnter(e);
+  // With EXCH still empty its handler only keys and hints, leaving the focus
+  // where it was — which would park the cursor in a report field and key the
+  // exchange again on every further Enter. Send it where the work continues.
+  if (exchEmpty) inpExch.focus();
+}
 
 function handleCallEnter(e) {
   if (e.key === ' ') {
@@ -1806,10 +1901,12 @@ function logQso(call, exch, options) {
   const timeUtc    = String(now.getUTCHours()).padStart(2,'0') + ':' +
                      String(now.getUTCMinutes()).padStart(2,'0');
   // Sent: what actually went on the air wins over the field, so a later edit
-  // cannot rewrite history. Falls back to the field when nothing was keyed at
-  // all (phone, S&P without a macro, "log without TX").
-  const rstSent    = app.rstSentTx || validRst(inpRst.value) || rstDefault(app.mode);
-  const rstRcvd    = validRst(inpRstRcvd.value) || rstDefault(app.mode);
+  // cannot rewrite history. Falls back to the field as it stands when nothing was
+  // keyed at all (phone, a mode with no keying path, "log without TX").
+  const rstSent    = app.rstSentTx || rstForLog(inpRst.value, app.mode);
+  // Received: nothing was ever transmitted for it, so the field is the only
+  // source there is — taken as it stands, not second-guessed.
+  const rstRcvd    = rstForLog(inpRstRcvd.value, app.mode);
 
   // DXCC lookup
   const dxcc = window.DXCC ? DXCC.lookupDxcc(call) : null;
@@ -2376,8 +2473,9 @@ function init() {
   });
   sbManualMode.addEventListener('change', () => {
     app.mode = sbManualMode.value;
-    if (!app.rstSentDirty) inpRst.value     = rstDefault(app.mode);
-    if (!app.rstRcvdDirty) inpRstRcvd.value = rstDefault(app.mode);
+    const d = rstDefault(app.mode);
+    if (d && !app.rstSentDirty) inpRst.value     = d;
+    if (d && !app.rstRcvdDirty) inpRstRcvd.value = d;
   });
 
   // Start WebSocket for macros

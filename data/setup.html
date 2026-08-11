@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Setup — WIFILT</title>
-  <link rel="stylesheet" href="/setup.css?v=20260808d">
+  <link rel="stylesheet" href="/setup.css?v=e64b8a9a">
 </head>
 <body>
   <header class="topbar">
@@ -50,13 +50,13 @@
            cursor. It only orients and links; the fields themselves stay in the
            sections they have always been in. -->
       <div id="setupSpineHost"></div>
-      <script src="/icom-models.js?v=20260808a"></script>
-      <script src="/icom-discovery.js?v=20260808a"></script>
-      <script src="/setup-spine.js?v=20260808c"></script>
+      <script src="/icom-models.js?v=484d9084"></script>
+      <script src="/icom-discovery.js?v=dc5654a5"></script>
+      <script src="/setup-spine.js?v=90159763"></script>
       <!-- The identity fields on this page are the only editable copy in the
            product, so the validation they use has to be the same one every other
            page trusts. -->
-      <script src="/station-identity.js?v=20260808b"></script>
+      <script src="/station-identity.js?v=53dcc2a1"></script>
       <script>
         // One way to put a section in front of the operator, wherever it now
         // lives. Two of the seven sections are moved into the spine's steps, and
@@ -455,18 +455,6 @@
           </div>
         </details>
 
-        <details class="setup-section" id="logSettingsSection">
-          <summary class="setup-section-title">LOG &amp; DATA settings <span class="setup-local-badge" title="Stored on the interface's own configuration partition, which a firmware flash does not write.">config</span></summary>
-          <div class="setup-section-body">
-            <label>Blocked DXCC list (one per line)
-              <div class="input-with-tip input-with-tip-top">
-                <textarea id="ls_blockedDxcc" name="blockedDxcc" form="setup-form" rows="3" placeholder="Russia&#10;Belarus&#10;Kaliningrad"></textarea>
-                <span class="help-tip" data-tip="DXCC entity names to block (one per line, e.g. Russia). In the QRPLog journal matching callsigns are highlighted red; on the DATA page they are hidden from stations, traffic and the MSG BOX, automatic functions never answer them, and manual TX to them is refused.">?</span>
-              </div>
-            </label>
-          </div>
-        </details>
-
         <!-- Measured ALC knees. This page only SHOWS them and links to where they
              are measured: calibration keys the transmitter, and the audio path,
              the TX pledge and the single-operator lock all live on the WSPR page
@@ -499,6 +487,18 @@
             <p class="footnote">A whole matrix at once: <b>CAL PLAN</b> in the bar at the
                top of the JS8Call or WSPR page. It tunes the radio and sets the power
                itself, and it asks about the antenna before every band.</p>
+          </div>
+        </details>
+
+        <details class="setup-section" id="logSettingsSection">
+          <summary class="setup-section-title">LOG <span class="setup-local-badge" title="Stored on the interface's own configuration partition, which a firmware flash does not write.">config</span></summary>
+          <div class="setup-section-body">
+            <label>Blocked DXCC list (one per line)
+              <div class="input-with-tip input-with-tip-top">
+                <textarea id="ls_blockedDxcc" name="blockedDxcc" form="setup-form" rows="3" placeholder="Russia&#10;Belarus&#10;Kaliningrad"></textarea>
+                <span class="help-tip" data-tip="DXCC entity names to block (one per line, e.g. Russia). In the QRPLog journal matching callsigns are highlighted red; on the DATA page they are hidden from stations, traffic and the MSG BOX, automatic functions never answer them, and manual TX to them is refused.">?</span>
+              </div>
+            </label>
           </div>
         </details>
 
@@ -1507,7 +1507,7 @@
       this.value = "";
     });
   </script>
-  <script src="/fw-version.js?v=20260718k"></script>
+  <script src="/fw-version.js?v=4baaa0fe"></script>
   <script>
     (function () {
       var form = document.querySelector('form[action="/setup"]');
