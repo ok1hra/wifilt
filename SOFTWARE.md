@@ -471,9 +471,20 @@ station is not thanked twice.
 3. **prev exch** appears after logging: press it to re-send the *previous* QSO's exchange
    (`TXEXCHSP2`) if the other station asks for a repeat.
 
-Between Call and EXCH sits the **RST** field — the report you *received*. It fills itself in
-from the radio's mode (`59` on SSB, FM, AM and DV, `599` otherwise) and stops doing so as
-soon as you type in it yourself.
+Between Call and EXCH sit **two report fields**, sent on the left and received on the right —
+the same order as the `Snt` and `Rcv` columns in the journal below them, which is the only
+legend they need. Both fill themselves in from the radio's mode (`59` on SSB, FM, AM and DV,
+`599` otherwise) and each stops doing so as soon as you type in it yourself. Enter never
+stops on either one; the cursor runs Call → EXCH.
+
+The sent report is also **what gets keyed**: change it to `579` and the macro goes out as
+`57n`, not `5nn`. A value that is not a complete report is ignored rather than transmitted,
+so a half-typed field cannot reach the air when Enter fires in RUN mode.
+
+What the log records is **what was actually sent**, captured at the moment the macro was
+acknowledged. Changing the field after the exchange has gone out does not rewrite it — fix a
+genuine mistake by clicking the QSO in the journal instead. The received report has no such
+history to protect, so it is always taken from its field as it stands when you log.
 
 Two buttons sit inside the input fields:
 
@@ -519,8 +530,8 @@ The same contest in RTTY, where everything is doubled for readability:
 | `TU` | `DL1XYZ tu OK1ABC` |
 
 In **SSB and FM there are no macros** — nothing is sent, and Enter only logs. This is
-unconditional; the *Manual mode for Phone* checkbox in SETUP describes what already happens
-rather than switching it on.
+unconditional and there is nothing to switch. With no macro sent, the log takes the sent
+report straight from its field.
 
 CW is handed to the radio as a CI-V message and the radio generates the Morse itself. RTTY
 is keyed by the interface on its FSK and PTT outputs. **`Esc` aborts a CW or RTTY
@@ -1318,7 +1329,7 @@ its own:
 |---|---|
 | **radio model** | the model the radio reported about itself |
 | **AUD1** | the state of the audio channel to the radio |
-| **LAN a·b·c** | link health since the interface booted: dropped sessions · loop stalls · retransmits answered with filler. All zeros is a healthy link; numbers climbing during transmission point at the network, not the radio. |
+| **LAN drop · stall · fill** | link health since the interface booted: dropped sessions, loop stalls, and retransmits answered with filler. **Shown only once one of them moves** — a clean link says nothing, because `LINKED` and `AUD1` already report it. Numbers climbing during transmission point at the network, not the radio. |
 
 Beside the waterfall sit **PTT** and **Beacon** as a pair, deliberately not merged: *beacon
 transmitting with PTT off* is a real failure mode, and one indicator could not show it.
@@ -1687,16 +1698,14 @@ The protocol is documented in [docs/trxnet.md](docs/trxnet.md).
 
 | Field | Meaning |
 |---|---|
-| **RST default SSB/FM** | intended as the pre-filled report for phone QSOs, e.g. `59` |
-| **RST default CW/RTTY** | intended as the pre-filled report for CW and digital QSOs, e.g. `599` |
-| **Manual mode for Phone (SSB/FM)** | intended to make Enter on an SSB or FM QSO log immediately without sending a macro |
 | **Blocked DXCC list** | DXCC entity names to exclude, one per line. The field carries a sample list to show the format. |
 
-> **Three of these four fields currently do nothing.** The values are saved and survive a
-> firmware update, but QRPLog does not read them back. The RST prefill uses built-in defaults
-> (`59` for SSB, LSB, USB, FM, AM and DV; `599` for everything else), and phone is *always*
-> manual — no macro is ever sent on SSB or FM whether the box is ticked or not. Only
-> **Blocked DXCC list** takes effect.
+> This section used to carry three more fields — `RST default SSB/FM`, `RST default CW/RTTY`
+> and `Manual mode for Phone`. They were saved and served, and nothing ever read them: the
+> report prefill came from built-in defaults and phone was unconditionally manual. They were
+> removed in REV 20260810 rather than wired up. A report is either the convention — `59` on
+> phone, `599` elsewhere, nothing to set — or it is what the operator types into the QSO form,
+> and [§ 3.4](#34-working-a-station) covers that.
 
 The blocked list has two different effects, which is worth knowing before you use it:
 

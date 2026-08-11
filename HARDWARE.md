@@ -196,16 +196,18 @@ set in `SETUP / Radio`, so changing that for a CI-V radio moves the console with
 | `L` | configure and test the ICOM-LAN connection: enter `IP user pass`, then `t` to test once, `s` to save and reboot into LAN mode, or `b` to go back |
 | `@` | restart the device |
 
-> **`E` and `@` ask twice, and the second question is inverted.** After `Erase whole eeprom?
-> (y/n)` comes `Stop erase? (y/n)` — answering `y` there *aborts*, and only `n` goes ahead.
-> Restart does the same. Both prompts give up after 30 seconds and do nothing.
+> **`E` and `@` ask twice, and the second question is not a `y/n`.** After `Erase whole
+> eeprom? (y/n)` comes `Press E again to erase, any other key aborts` — so a `y` held down on
+> the keyboard can never wipe the device. `@` asks for `@` the same way. Both prompts give up
+> after 30 seconds and do nothing.
+>
+> Until REV 20260810 that second question was a `y/n` that meant the opposite of the first
+> (`Stop erase?` — `n` went ahead), which protected the operator without telling them.
 
 The `?` status page is the fastest way to find a device whose address you have lost — it
 prints firmware revision, detected hardware revision with the raw ADC value, WiFi mode,
 both configured SSIDs, signal strength, MAC address, **the IP address**, the TrxNet device
 name and peers, and the current frequency and mode.
-
-`L` is not listed in the on-screen menu but works.
 
 Note that `A` is the only way back into AP mode once the device has joined a network: the
 web UI deliberately has no button for it, because pressing it remotely would strand the
@@ -220,16 +222,23 @@ The LED is on GPIO 5. Its whole vocabulary:
 | Pattern | Meaning |
 |---|---|
 | Slow fade in and out, continuously | AP mode — the device is showing its own `WIFILT-AP` hotspot |
-| Dark | Station mode, still trying to join a WiFi network |
+| Dark | Station mode, waiting for a WiFi network — before the first connection **and after a link is lost** |
 | Steady on | Station mode, connected — this is the normal resting state |
 | One 100 ms dark pulse | a CW message was just keyed out to the radio |
+| Dark for as long as the transmission lasts | an RTTY message is being keyed on the FSK and PTT outputs |
 
 A steadily lit LED is the signal that the device is on the network and ready. If it stays
 dark, the WiFi credentials are wrong or neither configured network is on the air; if it
 fades, no credentials were ever stored — connect to `WIFILT-AP` and set them.
 
-Because the LED sits lit the whole time WiFi is up, the CW indication has to be the other
-way round: a short *gap* in the light rather than a flash.
+Because the LED sits lit the whole time WiFi is up, both transmit indications have to be the
+other way round: a *gap* in the light rather than a flash. CW gets a pulse because the radio
+generates the Morse itself and the interface only hands over the message; RTTY is keyed here,
+bit by bit, so the LED stays dark for the whole of it.
+
+Until REV 20260810 the LED was written exactly twice — dark at boot, lit on the first
+successful connection — so it went on claiming a link long after WiFi had dropped, and RTTY
+had no indication at all.
 
 ---
 
@@ -288,10 +297,11 @@ The same output serves two modes, chosen by whatever mode the radio is in when a
 is sent:
 
 - **CW** — the text is handed to the radio as a CI-V CW message and the radio generates the
-  Morse itself. The Status LED gives one short flash.
+  Morse itself. The Status LED gives one 100 ms dark pulse.
 - **RTTY** — the interface keys it directly: PTT goes high, waits a 400 ms lead-in, shifts
   the FSK line through the 5-bit Baudot code at **45.45 baud with 1.5 stop bits**, then
-  holds PTT for a 200 ms tail. Mark is the low level, space the high one.
+  holds PTT for a 200 ms tail. Mark is the low level, space the high one. The Status LED is
+  dark for the whole transmission.
 
 CW and RTTY text comes from the QRPLog macros — see the QRPLog chapter in
 [SOFTWARE.md](SOFTWARE.md).
