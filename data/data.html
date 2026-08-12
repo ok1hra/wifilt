@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>JS8Call-ICOM — WIFILT</title>
-  <link rel="stylesheet" href="/data.css?v=1af648a2">
+  <link rel="stylesheet" href="/data.css?v=0c78c99e">
 </head>
 <body class="startup-pending lan-gate-checking">
   <header class="site-topbar">
@@ -122,6 +122,10 @@
       <p id="aprsParamError" class="form-error" role="alert"></p>
       <label class="aprs-param-preview">JS8Call-ICOM payload <output id="aprsParamPreview"></output></label>
       <p id="aprsParamCost" class="aprs-param-cost"></p>
+      <!-- Only shown when the window was opened from the GPS button. Tracking is
+           deliberately session-only: a page reload turns it off, switching it on is
+           always a conscious action here. -->
+      <label id="aprsTrackingRow" class="aprs-tracking" hidden><input id="aprsTracking" type="checkbox"> Tracking — beacon again whenever the first 6 characters of the GPS locator change, at most once per 10 minutes. Turns off with the GPS button or a page reload.</label>
       <footer><button type="button" data-aprs-dialog-close>Cancel</button><button id="aprsParamInsert" class="primary" type="submit">Insert</button></footer>
     </form>
   </dialog>
@@ -200,6 +204,11 @@
           <label>TX offset <input id="txOffset" type="number" min="500" max="2700" step="1"><span>Hz</span></label>
           <span class="inline-status">Audio <b id="audioLevel">-- dBFS</b></span>
           <div class="tx-actions">
+            <!-- Hidden until the radio answers CI-V 23 00 at all; locked until the fix is
+                 live (the firmware's stamp-movement test) AND GPS Select is not Manual.
+                 While tracking runs the same button turns it off, so it stays visible
+                 even across a radio reconnect that briefly hides the GPS fields. -->
+            <button id="gpsBeaconButton" class="gps-beacon" type="button" hidden disabled>GPS <small id="gpsBeaconGrid">--</small></button>
             <button id="heartbeatButton" class="heartbeat" type="button" disabled>HB <small id="heartbeatOffset">1500 Hz</small></button>
             <button id="tuneButton" class="tune" type="button" disabled><span id="tuneLabel">TUNE</span><small id="tuneOffset">1500 Hz</small></button>
           </div>
@@ -465,7 +474,7 @@
 
   <script src="/wake-lock.js?v=b487b3dc"></script>
   <script src="/lan-gate.js?v=085d5bd5"></script>
-  <script src="/fw-version.js?v=4baaa0fe"></script>
+  <script src="/fw-version.js?v=dc3c2b33"></script>
   <script src="/js8-settings.js?v=495a156c"></script>
   <script src="/station-identity.js?v=a1a20249"></script>
   <script src="/station-profile.js?v=ecfd3023"></script>
@@ -540,6 +549,6 @@
   <script src="/tx-gain-plan-ui.js?v=0d493edc"></script>
   <script src="/dxcc.js?v=c56ee081"></script>
   <script src="/log-db.js?v=6055416f"></script>
-  <script src="/data.js?v=fa5bc9a6"></script>
+  <script src="/data.js?v=332f502e"></script>
 </body>
 </html>

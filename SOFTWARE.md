@@ -205,6 +205,22 @@ The right end of the bar carries the firmware revision, the **WiFi signal streng
 amber `→ <revision> ▲` link to the web installer. That check is the one part of the interface
 that reaches the internet; without a connection it simply does not appear.
 
+On a radio that reports a GPS position over CI-V (the IC-705), the same corner starts with
+the station's locator — `GPS JO60WC`. It is dimmed to `GPS --` while the receiver waits for
+its first fix, dims again showing the last known square when the fix is lost (the tooltip
+says how long ago), reads `GPS off` when the receiver is disabled in the radio menu, and is
+marked `·MAN` in amber when the position was entered by hand in the radio. On a radio
+without GPS the segment does not exist at all — that absence is how you tell "no GPS on
+this model" from "waiting for a fix".
+
+**Click the locator** and a small panel opens below it — the same idiom as the About panel
+behind the logo — with everything the radio's GPS reports: the 8-character locator, latitude
+and longitude in degrees and minutes (hover for the decimal form), altitude, course, speed,
+the UTC time of the fix, whether the fix is live or how long ago it was lost, and where the
+position comes from (GPS receiver, manual entry, or off). It refreshes every 5 seconds while
+open — the pace the radio itself is polled — and a click anywhere else closes it. A field
+the radio does not fill, such as altitude without a 3D fix, is simply not listed.
+
 If the browser loses contact with the interface, a red **OFFLINE** warning appears there.
 
 ---
@@ -826,10 +842,12 @@ filling as the slot runs — and the quick controls:
 | **TX speed** | `AUTO`, or force a submode: `A` (15 s, normal), `B`, `C`, `E` (slow), `I` (fast). The resolved choice is spelled out beside it. |
 | **TX offset** | your transmit frequency in Hz, 500–2700 |
 | **Audio** | the received audio level in dBFS |
+| **GPS** | beacon the radio's GPS position to APRS-IS — see [section 5.6](#56-aprsis-command-builder). Only present on a radio that answers GPS queries; the small line carries the current 6-character square. |
 | **HB** | send one heartbeat now, at the offset shown |
 | **TUNE** | key a steady tone at the offset shown |
 
-**TUNE turns into STOP** while the carrier is up.
+**TUNE turns into STOP** while the carrier is up, and **GPS glows red** while position
+tracking is armed.
 
 *Enable radio TX* is the reason these buttons are greyed out most often, but not the only
 one. Transmission is also refused while a calibration or a calibration plan is running, while
@@ -908,6 +926,32 @@ Two top-level commands:
 **GRID** takes one parameter, and the popup pre-fills it from your station locator:
 
 ![GRID parameters](img/js8call-tx-session-aprsis-grid-window.png)
+
+#### GPS position beacon
+
+On a radio with a GPS receiver (the IC-705), the interface reads the position over CI-V
+and a **GPS** button appears beside **HB** under the waterfall, its second line showing the
+current 6-character square. The button unlocks only while the position is **current**: the
+fix's UTC stamp is still moving — a test that works whatever the browser's own clock says —
+and the radio's **GPS Select** is set to GPS. A position entered manually in the radio
+shows in the navigation bar but never unlocks the button. On top of that it is a
+transmission like any other, so **every condition that greys out HB greys out GPS too** —
+*Enable radio TX* first among them. Hover it and the tooltip names whichever reason keeps
+it locked.
+
+Pressing it opens this same GRID window, pre-filled with the live **8-character** locator,
+and its confirm button — **Send**, not Insert — transmits immediately, through the same
+gates as SEND.
+
+The window carries one extra choice here: **Tracking**. Ticked, the station beacons again
+on its own whenever the **first six characters** of the locator change — crossing into a
+neighbouring square — but never more than **once per 10 minutes**, counted from the last
+GRID beacon of any origin, hand-sent ones included. Whatever cannot go out right now simply
+waits: a square crossed during those 10 minutes beacons the moment they expire, a lost fix
+pauses tracking until the fix returns, a busy transmitter defers to the next opportunity.
+The button glows red while tracking is armed and pressing it again turns tracking off — as
+does **a page reload**: tracking is deliberately never remembered, switching it on is
+always a conscious action in this window.
 
 Under **CMD** the menu offers the services APRS-IS actually runs, each with its own
 parameter form and validation:

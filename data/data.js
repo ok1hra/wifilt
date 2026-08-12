@@ -115,6 +115,7 @@ const dom = {
   txSpeedResolved:$("txSpeedResolved"), recipientClear:$("recipientClear"),
   txOffset:$("txOffset"), audioLevel:$("audioLevel"), txSummary:$("txSummary"),
   heartbeat:$("heartbeatButton"), heartbeatOffset:$("heartbeatOffset"),
+  gpsBeacon:$("gpsBeaconButton"), gpsBeaconGrid:$("gpsBeaconGrid"),
   tune:$("tuneButton"), tuneLabel:$("tuneLabel"), tuneOffset:$("tuneOffset"),
   sessionCall:$("sessionCall"), sessionMeta:$("sessionMeta"), abort:$("abortButton"), logQso:$("logQsoButton"),
   txSessionMode:$("txSessionMode"), txSessionModeHint:$("txSessionModeHint"),
@@ -158,6 +159,7 @@ const dom = {
   aprsParamTitle:$("aprsParamTitle"), aprsParamGrid:$("aprsParamGrid"),
   aprsParamError:$("aprsParamError"), aprsParamPreview:$("aprsParamPreview"),
   aprsParamCost:$("aprsParamCost"), aprsParamInsert:$("aprsParamInsert"),
+  aprsTrackingRow:$("aprsTrackingRow"), aprsTracking:$("aprsTracking"),
   aprsRecentCalls:$("aprsRecentCalls"),
   traffic:$("traffic"), trafficSummary:$("trafficSummary"), stationRows:$("stationRows"),
   trafficHistogram:$("trafficHistogram"),
@@ -2063,6 +2065,7 @@ function renderControls() {
   }
   dom.heartbeat.disabled=heartbeatBlocks.length>0; dom.heartbeat.title=heartbeatBlocks.join("; ");
   dom.heartbeatOffset.textContent=`${js8.txOffsetHz} Hz`;
+  renderGpsButton(heartbeatBlocks);
   dom.tune.disabled=!state.tuneActive && tuneBlocks.length>0;
   dom.tune.title=state.tuneActive ? "Stop tuning carrier" : tuneBlocks.join("; ");
   dom.tune.classList.toggle("active",state.tuneActive);
@@ -5339,6 +5342,9 @@ function failOutgoing(item,error) {
 // feeds state.selectedCall, which drives the chat thread, LOG QSO, the SNR
 // preset and followSpeed, none of which a group call can serve.
 function startTx(text, source="operator") {
+  // Every @APRSIS GRID leaving the station feeds the tracking lockout, whatever
+  // initiated it -- the GPS window, the tracking tick, or a hand-typed draft.
+  noteGridBeaconSent(text);
   const aprs=Js8Aprs.splitForTx(text);
   if(aprs)return startTxTo(aprs.toCall, aprs.text, null, Js8Aprs.normalize(text), source);
   startTxTo(state.selectedCall, text, null, text, source);
@@ -5483,7 +5489,9 @@ function messagePresetValue(key) {
 // on every render it re-derives which branch of the catalogue the draft is in,
 // so a hand-edited command can never disagree with the menu that built it.
 
-const aprsState={node:null,recent:Js8Aprs.loadRecent(localStorage)};
+// gpsMode: the same dialog serves two flows -- Insert into the composer (preset
+// menu) and Send straight away (GPS button). The flag decides which submit runs.
+const aprsState={node:null,recent:Js8Aprs.loadRecent(localStorage),gpsMode:false};
 // Six frames is a minute and a half at NORMAL speed -- past that the operator is
 // warned, never refused. The 67-character APRS limit is the only hard stop.
 const APRS_FRAME_WARNING=6;
@@ -5654,6 +5662,7 @@ function insertAprsParams(event) {
   event.preventDefault();
   const node=aprsState.node;
   if(!node)return;
+  if(aprsState.gpsMode){gpsBeaconSubmit();return;}
   const values=aprsParamValues();
   const check=Js8Aprs.checkParams(node,values);
   if(!check.ok)return;
@@ -5665,6 +5674,128 @@ function insertAprsParams(event) {
   }
   dom.aprsParamDialog.close();
   setMessageDraft(check.payload);
+}
+
+// ---- GPS position beacon ----------------------------------------------------
+// docs/gps-poloha-implementace.md. The radio's own GPS (CI-V 23 00, surfaced by
+// the firmware in /state as gpsGrid + gpsFixAgeMs + gpsSel) feeds a button next
+// to HB: one press opens the familiar GRID window prefilled with the live
+// 8-character locator and its confirm transmits straight away. A Tracking
+// checkbox in that window re-beacons whenever the first 6 characters change.
+//
+// Freshness is the firmware's stamp-movement age, never the browser clock. The
+// button unlocks only on a live fix with GPS Select = ON (01) -- a manual
+// position (03) is a valid locator but not a position report worth beaconing.
+const GPS_FRESH_MS=30000;
+const GPS_TRACK_MIN_INTERVAL_MS=600000;   // one GRID beacon per 10 min, any origin
+// Session-only by decision: no persistence, a reload turns tracking off.
+const gpsTrack={enabled:false,lastSentPrefix:"",lastBeaconAtMs:0};
+
+function gpsRadio() {
+  const grid=typeof state.radio.gpsGrid==="string" ? state.radio.gpsGrid : null;
+  const ageMs=Number(state.radio.gpsFixAgeMs);
+  const sel=Number(state.radio.gpsSel);
+  return {grid,ageMs:Number.isFinite(ageMs)?ageMs:null,sel:Number.isFinite(sel)?sel:null};
+}
+
+// "Current" in the sense the interview fixed: live fix (stamp moved within 30 s)
+// AND the position actually comes from the GPS receiver.
+function gpsCurrent(g=gpsRadio()) {
+  return Boolean(g.grid) && g.sel===1 && g.ageMs!==null && g.ageMs<GPS_FRESH_MS;
+}
+
+// The 10-minute lockout counts from the last @APRSIS GRID that left this page,
+// manual or automatic -- one hook in startTx() catches every path, including a
+// hand-typed beacon in the composer. Stamped at initiation, not completion:
+// under-beaconing on a faulted TX is safer than double-beaconing.
+function noteGridBeaconSent(text) {
+  const match=/^@APRSIS\s+GRID\s+([A-R]{2}[0-9]{2}(?:[A-X]{2}(?:[0-9]{2})?)?)\s*$/i
+    .exec(String(text||"").trim());
+  if(!match)return;
+  gpsTrack.lastSentPrefix=match[1].toUpperCase().slice(0,6);
+  gpsTrack.lastBeaconAtMs=Date.now();
+}
+
+// The dialog's GPS flavour, reset on every path that leaves it. dialog.close()
+// fires its "close" event on a QUEUED task, so anything that must be true the
+// moment the dialog is gone -- the preset menu reopening it plain -- cannot
+// wait for that event alone; the open path and the close buttons reset too.
+function resetGpsDialogChrome() {
+  aprsState.gpsMode=false;
+  dom.aprsTrackingRow.hidden=true;
+  dom.aprsParamInsert.textContent="Insert";
+}
+
+function openGpsBeaconDialog() {
+  const g=gpsRadio();
+  if(!gpsCurrent(g))return;
+  aprsState.gpsMode=true;
+  openAprsParams(Js8Aprs.GRID,{locator:g.grid});
+  dom.aprsParamTitle.textContent="GPS position — beacon your locator to APRS-IS";
+  dom.aprsTrackingRow.hidden=false;
+  dom.aprsTracking.checked=gpsTrack.enabled;
+  dom.aprsParamInsert.textContent="Send";
+}
+
+function gpsBeaconSubmit() {
+  const check=Js8Aprs.checkParams(aprsState.node,aprsParamValues());
+  if(!check.ok)return;
+  // The same gate SEND sits behind. Checked at the moment of firing because the
+  // dialog may sit open across a slot boundary or a link drop.
+  const blocks=txBlockReasons(false);
+  if(blocks.length){dom.aprsParamError.textContent=`Cannot transmit now: ${blocks.join("; ")}`;return;}
+  const track=dom.aprsTracking.checked;
+  dom.aprsParamDialog.close();
+  startTx(check.payload,"gps");
+  gpsTrack.enabled=track;
+  renderControls();
+}
+
+// Patient by decision: every blocked condition simply defers to a later 500 ms
+// poll tick -- a square crossed during the lockout beacons when it expires, a
+// lost fix pauses (never disarms) tracking, a busy or gated TX waits its turn.
+function gpsTrackTick() {
+  if(!gpsTrack.enabled)return;
+  const g=gpsRadio();
+  if(!gpsCurrent(g))return;
+  if(g.grid.slice(0,6)===gpsTrack.lastSentPrefix)return;
+  if(Date.now()-gpsTrack.lastBeaconAtMs<GPS_TRACK_MIN_INTERVAL_MS)return;
+  if(state.activeOutgoing)return;
+  if(txBlockReasons(false).length)return;
+  const check=Js8Aprs.checkParams(Js8Aprs.GRID,{locator:g.grid});
+  if(!check.ok)return;
+  startTx(check.payload,"gps");   // the startTx hook stamps prefix + lockout
+  renderControls();
+}
+
+// txBlocks is the HB gate -- txBlockReasons(false), passed in by renderControls
+// rather than recomputed, so the two buttons can never disagree about whether
+// the station may transmit.
+function renderGpsButton(txBlocks=txBlockReasons(false)) {
+  if(!dom.gpsBeacon)return;
+  const g=gpsRadio();
+  const supported=g.grid!==null;
+  // While tracking runs the button must stay reachable even through a radio
+  // reconnect that briefly hides the GPS fields -- it is the only off switch.
+  dom.gpsBeacon.hidden=!supported&&!gpsTrack.enabled;
+  dom.gpsBeacon.classList.toggle("active",gpsTrack.enabled);
+  dom.gpsBeaconGrid.textContent=g.grid?g.grid.slice(0,6):"--";
+  const reasons=[];
+  if(!supported)reasons.push("radio not answering GPS queries");
+  else if(g.sel===3)reasons.push("radio position is entered manually (GPS Select: Manual)");
+  else if(g.sel===0)reasons.push("GPS Select is OFF in the radio menu");
+  else if(!g.grid)reasons.push("waiting for a GPS fix");
+  else if(!gpsCurrent(g))reasons.push("GPS fix lost — position not current");
+  // A position beacon is a transmission, so it sits behind exactly the same gate
+  // as HB -- "Enable radio TX" above all. Without this the button invited a click
+  // that the submit path would then refuse, which is a worse way to say no.
+  reasons.push(...txBlocks);
+  dom.gpsBeacon.disabled=!gpsTrack.enabled&&reasons.length>0;
+  dom.gpsBeacon.title=gpsTrack.enabled
+    ?(reasons.length?`Tracking on but paused: ${reasons.join("; ")} — click to turn off`
+      :"Tracking on — beacons @APRSIS GRID when the first 6 locator characters change (at most every 10 min). Click to turn off.")
+    :(reasons.length?`Position beacon locked: ${reasons.join("; ")}`
+      :"Send my GPS position to APRS-IS — opens the GRID window");
 }
 
 function insertMessagePreset(key) {
@@ -5744,12 +5875,16 @@ async function pollRadio() {
     const next=await response.json();
     noteRadioLink(next);
     state.radio={...state.radio,...next,frequency:Number(next.frequency)||0};
+    // The merge above keeps keys the reply no longer carries. For GPS that is a
+    // trap: absence IS the answer (radio reconnected, support re-probing), and a
+    // frozen gpsFixAgeMs from minutes ago would keep looking "fresh" forever.
+    if(!("gpsGrid" in next)){delete state.radio.gpsGrid;delete state.radio.gpsFixAgeMs;delete state.radio.gpsSel;}
     // The setup guide follows the radio, not the page: whatever model this reports
     // is the procedure the help dialog opens on. No-op when unchanged.
     if(root_TrxHelp())root_TrxHelp().setReportedModel(state.radio.radioName);
     const activityFrequencyChanged=selectActivityFrequency(state.radio.frequency);
     if (state.pendingFrequency && state.radio.frequency===state.pendingFrequency) state.pendingFrequency=null;
-    noteRfKnob(); applyAutoRfPower();
+    noteRfKnob(); applyAutoRfPower(); gpsTrackTick();
     ensureAudio(); if(activityFrequencyChanged)renderActivity(); renderHeader(); renderControls();
   } catch (_error) {
     // Deliberately not through noteRadioLink(): a fetch that never arrived says
@@ -6043,7 +6178,18 @@ function bind() {
   dom.aprsParamGrid.addEventListener("input",renderAprsParams);
   dom.aprsParamForm.addEventListener("submit",insertAprsParams);
   dom.aprsParamDialog.querySelectorAll("[data-aprs-dialog-close]").forEach(button=>
-    button.addEventListener("click",()=>dom.aprsParamDialog.close()));
+    button.addEventListener("click",()=>{dom.aprsParamDialog.close();resetGpsDialogChrome();}));
+  // Escape and form-submit close without touching the buttons above; the queued
+  // "close" event catches those. See resetGpsDialogChrome() for why it is not
+  // the only reset site.
+  dom.aprsParamDialog.addEventListener("close",resetGpsDialogChrome);
+  dom.gpsBeacon.addEventListener("click",()=>{
+    if(dom.gpsBeacon.disabled)return;
+    // The same button that armed tracking is the one that disarms it -- without
+    // reopening the window, so the off switch works even mid-lockout.
+    if(gpsTrack.enabled){gpsTrack.enabled=false;renderControls();return;}
+    openGpsBeaconDialog();
+  });
   // Picking an @APRSIS node rebuilds the menu, which detaches the very button
   // that was clicked -- closest() would then walk an orphaned subtree, find no
   // .message-field and close the menu the operator is still working in.
@@ -6473,6 +6619,16 @@ async function init() {
       retryVisible:!dom.startupRetry.hidden, status:state.decoderStatus,
       gateVisible:!dom.startup.hidden};},
     selectedCall(){return state.selectedCall;},
+    // GPS beacon + tracking. setGps writes the same state.radio fields the
+    // /state poll does (the next poll overwrites them from the fixture, so a
+    // test mutates and asserts inside one synchronous block); gpsTick runs the
+    // very tick the poll runs, not a copy of it.
+    setGps(fields){state.radio={...state.radio,...fields};renderControls();},
+    gpsTick(){gpsTrackTick();return {...gpsTrack};},
+    gpsSetTrack(fields){Object.assign(gpsTrack,fields);renderControls();return {...gpsTrack};},
+    gpsState(){return {...gpsTrack,hidden:dom.gpsBeacon.hidden,disabled:dom.gpsBeacon.disabled,
+      active:dom.gpsBeacon.classList.contains("active"),label:dom.gpsBeaconGrid.textContent,
+      title:dom.gpsBeacon.title};},
     feedDirected(frame){handleDirectedFrame({kind:"directed",...frame});},
     txQueueState(){return txQueue.snapshot(js8Clock.now());},
     heartbeatState(){return heartbeat.snapshot(js8Clock.now());},

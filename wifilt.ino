@@ -217,7 +217,9 @@ volatile bool cwIpSendPending = false;
   uint8_t  radio_address;     //Transiever address
   uint16_t  baud_rate;        //Current baud speed
   uint32_t readtimeout = 2000;
-  uint8_t  read_buffer[12];   //Read buffer
+  // 40, not 12: the GPS position reply (23 00) is 34 bytes on the wire, and both
+  // delivery paths drop any frame that does not fit this buffer whole.
+  uint8_t  read_buffer[40];   //Read buffer
   // uint8_t  read_buffer_snapshot[12];   //Buffer snapshot
   uint32_t  frequency;        //Current frequency in Hz
   uint32_t  frequencyTmp;        //Current frequency in Hz
@@ -745,13 +747,41 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   // Absence is the answer for an address the radio does not have: no reply means
   // civReadSeq never moves, and the caller reports "the radio did not confirm
   // that address" instead of writing to it. See docs/tx-audio-gain-plan-*.md.
-  static const size_t CIV_READ_MAX = 16;
+  // 32 covers the longest reply a page has asked for so far: 23 00 MY position,
+  // cmd + sub + 27 data bytes = 29.
+  static const size_t CIV_READ_MAX = 32;
   uint8_t  civReadPrefix[CIV_READ_MAX] = {0};   // cmd + subaddress bytes to match
   uint8_t  civReadPrefixLen = 0;
   uint8_t  civReadReply[CIV_READ_MAX] = {0};   // cmd + payload of the matching frame
   uint8_t  civReadReplyLen = 0;
   uint32_t civReadSeq = 0;
   uint32_t civReadAtMs = 0;
+
+  // GPS position from the radio -- CI-V 23 00 (MY position, read-only) and 23 01
+  // (GPS Select), polled by gpsPollTick() on the slot the JS8 pages drive. Support
+  // is probed, never configured: three unanswered 23 00 after link-up mean "this
+  // model has no GPS" until the next (re)connect, so /state can omit the fields
+  // entirely and a page can tell "no GPS on this radio" from "waiting for a fix".
+  //
+  // Freshness is "the UTC stamp inside the reply moved between reads", never a
+  // comparison against anyone's clock -- the tablet running the page may be
+  // minutes off NTP and the radio's stamp would still be honest. The first reply
+  // after (re)connect deliberately does not count as movement: a frozen
+  // last-known position must not unlock the position-beacon TX for even one poll.
+  enum GpsSupport : uint8_t { GPS_UNKNOWN = 0, GPS_SUPPORTED, GPS_UNSUPPORTED };
+  GpsSupport gpsSupport = GPS_UNKNOWN;
+  uint8_t  gpsProbesSent = 0;
+  uint8_t  gpsSel = 0;              // 23 01: 00=OFF, 01=GPS, 03=Manual
+  char     gpsGrid[9] = "";         // 8-char Maidenhead locator, "" = no position yet
+  uint8_t  gpsStamp[7] = {0};       // BCD UTC yyyymmddHHMMSS from the last 23 00
+  uint8_t  gpsData[27] = {0};       // the full 23 00 data block, decoded on demand by /gps
+  bool     gpsDataSeen = false;
+  bool     gpsStampSeen = false;
+  uint32_t gpsStampChangedMs = 0;   // millis() of the last stamp advance, 0 = never
+  uint32_t gpsPosSentMs = 0;
+  uint32_t gpsSelSentMs = 0;
+  bool     gpsSelAsked = false;     // first 23 01 goes right after the probe succeeds
+  bool     gpsWasLinked = false;
 
   String requestArg(const char *name);
   bool requestHasArg(const char *name);
@@ -829,6 +859,10 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void handleGetCivRead(void);
   void civReadArm(const uint8_t *prefix, size_t prefixLen);
   void civReadCapture(const uint8_t *frame, size_t len);
+  uint8_t gpsTargetSlot(void);
+  void gpsCivCapture(uint8_t slot, const uint8_t *frame, size_t len);
+  void gpsPollTick(void);
+  void handleGetGps(void);
   void handleOi3State(void);
   void handleOi3Send(void);
   void handleOi3SetHz(void);
@@ -1923,6 +1957,19 @@ void buildStateJson(char *buf, size_t bufSize, bool lanView){
   float viewSwr = snapView ? lanRadioSnap.swr : stateSwr;
   const char *viewType = snapView ? (primaryTransport == RADIO_LAN ? "ICOM-LAN" : "TRXNET")
                                   : transceiverType.c_str();
+  // GPS belongs to the radio gpsPollTick() watches -- the same one the JS8 pages
+  // drive -- so both views carry it, like the LAN health counters below. The
+  // fields exist only when the radio has answered 23 00 at all; their absence is
+  // how a page tells "no GPS on this model" from "waiting for a fix". gpsGrid is
+  // computed from BCD digits and cannot carry JSON metacharacters.
+  char gpsFrag[64] = "";
+  if (gpsSupport == GPS_SUPPORTED) {
+    uint32_t gpsAge = gpsStampChangedMs ? (millis() - gpsStampChangedMs) : 999999999u;
+    if (gpsAge > 999999999u) gpsAge = 999999999u;
+    snprintf(gpsFrag, sizeof(gpsFrag),
+             ",\"gpsGrid\":\"%s\",\"gpsFixAgeMs\":%u,\"gpsSel\":%u",
+             gpsGrid, (unsigned)gpsAge, (unsigned)gpsSel);
+  }
   // lanDrops/lanStalls/lanFilled are link health since boot, reported on every
   // view rather than only the LAN one: an operator watching an unattended beacon
   // should not have to know which slot carries LAN to see whether it has been
@@ -1943,7 +1990,7 @@ void buildStateJson(char *buf, size_t bufSize, bool lanView){
     "\"audioTxQueued\":%u,\"audioTxPackets\":%u,\"audioTxReplays\":%u,"
     "\"audioTxReplayMisses\":%u,\"audioTxSendFailures\":%u,\"audioTxMaxLateMs\":%u,"
     "\"audioRxDropped\":%u,\"audioMaxSendUs\":%u,"
-    "\"dxcConnected\":%s}",
+    "\"dxcConnected\":%s%s}",
     radioLinked ? "true" : "false", lanCatHealthy ? "true" : "false",
     lanAudioReady ? "true" : "false", lanAudioTxReady ? "true" : "false",
     lanStatus, btStat, wifiStat,
@@ -1963,14 +2010,15 @@ void buildStateJson(char *buf, size_t bufSize, bool lanView){
     (unsigned)lanAudioTx.sendFailures, (unsigned)lanAudioTx.maxLatenessMs,
     (unsigned)(client ? client->audioRxDropped() : 0),
     (unsigned)(client ? client->audioMaxSendUs() : 0),
-    DxcTelnetStatus ? "true" : "false"
+    DxcTelnetStatus ? "true" : "false",
+    gpsFrag
   );
 }
 
 void handleGetState(){
   // CAT page polls /state?fast=1 — hold the fast BT poll cadence while it's open
   if (webServer.arg("fast") == "1") catFastUntil = millis() + CAT_FAST_HOLD_MS;
-  static char stateBuf[1100];
+  static char stateBuf[1200];
   // ?radio=lan -> the radio JS8 drives; anything else keeps meaning TRX1.
   buildStateJson(stateBuf, sizeof(stateBuf), webServer.arg("radio") == "lan");
   webServer.sendHeader("Cache-Control", "no-cache");
@@ -3563,6 +3611,7 @@ void setupWebServer(void){
   webServer.on("/txgain.json", HTTP_GET,  handleGetTxGain);
   webServer.on("/txgain.json", HTTP_POST, handlePostTxGain);
   webServer.on("/civread",     HTTP_GET,  handleGetCivRead);
+  webServer.on("/gps",         HTTP_GET,  handleGetGps);
   webServer.on("/oi3/state",    HTTP_GET,  handleOi3State);
   webServer.on("/oi3/send",     HTTP_POST, handleOi3Send);
   webServer.on("/oi3/abort-cw", HTTP_POST, handleOi3AbortCw);
@@ -4221,6 +4270,7 @@ void loop(){
   if(aud1TxState == AUD1_TX_STREAM) aud1TxTick(false);
   _TIMED("CLI",             serialPump())
   _TIMED("CIV",             civPollTick())
+  _TIMED("GpsPoll",         gpsPollTick())
   handleWebServerLoop();
   _TIMED("NetIdentity",     NetworkIdentityLoop())
   _TIMED("RadioModel",      radioModelLearnTick())
@@ -5456,6 +5506,7 @@ void civReadCapture(const uint8_t *frame, size_t len) {
 // and LAN (lanCivFrameHandler). Caller ensures the frame is from the radio.
 void processCivBuffer(uint8_t len) {
   civReadCapture(read_buffer, len);
+  gpsCivCapture(0, read_buffer, len);
   // to-addr: broadcast (00), BT controller (0xE0) or LAN controller (0xE1).
   // LAN poll replies are addressed to 0xE1 — without it, freq/mode from a poll
   // (as opposed to a transceive broadcast) would be dropped.
@@ -5569,6 +5620,7 @@ void lanRadioCivSnapshot(const uint8_t *frame, size_t len) {
   if (!frame || len < 7) return;
   // The second of the two capture sites. See civReadCapture().
   civReadCapture(frame, len);
+  gpsCivCapture(lanRadioSnap.slot, frame, len);
   const uint8_t cmd = frame[4];
   const uint8_t *pl = frame + 5;
   const size_t plLen = len - 6;
@@ -5939,8 +5991,9 @@ static uint8_t  civAwaitSlot   = 0xFF;     // slot we sent the current query to
 static uint8_t  civAwaitCmd    = 0;
 static bool     civGotReply    = false;
 
-// frame parser
-static uint8_t  civRxBuf[20];
+// frame parser. 40, not 20: a 23 00 GPS reply carries 27 data bytes and the
+// framer drops (not truncates) anything longer than this buffer.
+static uint8_t  civRxBuf[40];
 static uint8_t  civRxLen       = 0;
 static bool     civInFrame     = false;
 static uint8_t  civPreCount    = 0;        // consecutive START_BYTE seen
@@ -6128,6 +6181,246 @@ void civPollTick() {
 
   civSeq = (civSeq + 1) % 6;
   if (roundEnd) civNextRun = now + CIV_POLL_INTERVAL_MS;  // pace whole round
+}
+
+//-------------------------------------------------------------------------------------------------------
+// GPS position from the radio. 23 00 reads MY position (read-only, 27 BCD data
+// bytes), 23 01 the GPS Select setting; both per the IC-705 CI-V reference
+// guide p. 12/21/25 (docs/IC-705_ENG_CI-V_1_20200721.pdf). The nibble layouts
+// below are transcribed from the p. 21 diagram, which is the only place the
+// guide states them.
+
+// The slot whose GPS the station reports: the LAN radio when one is configured
+// -- that is the radio the JS8/WSPR pages drive -- else a serial CI-V TRX1.
+// TrxNet is deliberately out: that transport carries no arbitrary CAT.
+uint8_t gpsTargetSlot(void) {
+  uint8_t lanSlot = lanRadioSlotIndex();
+  if (lanSlot != 0xFF) return lanSlot;
+  if (civSlotEnabled(0)) return 0;
+  return 0xFF;
+}
+
+static void gpsReset(void) {
+  gpsSupport = GPS_UNKNOWN;
+  gpsProbesSent = 0;
+  gpsSel = 0;
+  gpsGrid[0] = 0;
+  gpsDataSeen = false;
+  gpsStampSeen = false;
+  gpsStampChangedMs = 0;
+  gpsSelAsked = false;
+}
+
+// One BCD nibble pair per byte, high nibble first. Any nibble above 9 rejects
+// the block -- that is also how the FF fill of "no fix since power-on" lands
+// here, so a reject is a normal answer, not corruption.
+static bool gpsNibbles(const uint8_t *bytes, size_t count, uint8_t *out) {
+  for (size_t i = 0; i < count; i++) {
+    uint8_t hi = bytes[i] >> 4, lo = bytes[i] & 0x0F;
+    if (hi > 9 || lo > 9) return false;
+    out[2 * i] = hi;
+    out[2 * i + 1] = lo;
+  }
+  return true;
+}
+
+// Latitude, 5 bytes: [d10 d1][m10 m1][m.1 m.01][m.001 0][0 N=1/S=0].
+static bool gpsDecodeLat(const uint8_t *b, double *out) {
+  uint8_t n[8];
+  if (!gpsNibbles(b, 4, n)) return false;
+  uint8_t sign = b[4] & 0x0F;
+  if ((b[4] >> 4) != 0 || sign > 1) return false;
+  double minutesThousandths = (n[2] * 10 + n[3]) * 1000.0
+                            + n[4] * 100 + n[5] * 10 + n[6];
+  double v = (n[0] * 10 + n[1]) + minutesThousandths / 60000.0;
+  *out = sign ? v : -v;
+  return true;
+}
+
+// Longitude, 6 bytes: [0 d100][d10 d1][m10 m1][m.1 m.01][m.001 0][0 E=1/W=0].
+static bool gpsDecodeLon(const uint8_t *b, double *out) {
+  uint8_t n[10];
+  if (!gpsNibbles(b, 5, n)) return false;
+  uint8_t sign = b[5] & 0x0F;
+  if ((b[5] >> 4) != 0 || sign > 1) return false;
+  double minutesThousandths = (n[4] * 10 + n[5]) * 1000.0
+                            + n[6] * 100 + n[7] * 10 + n[8];
+  double v = (n[1] * 100 + n[2] * 10 + n[3]) + minutesThousandths / 60000.0;
+  *out = sign ? v : -v;
+  return true;
+}
+
+// 8-character Maidenhead locator, uppercase throughout -- the APRS builder's
+// LOCATOR_RE accepts only capitals, and the SETUP identity grid is stored the
+// same way.
+static void gpsLatLonToGrid(double lat, double lon, char out[9]) {
+  double x = lon + 180.0, y = lat + 90.0;
+  if (x < 0) x = 0; else if (x >= 360.0) x = 359.9999;
+  if (y < 0) y = 0; else if (y >= 180.0) y = 179.9999;
+  out[0] = 'A' + (int)(x / 20.0);
+  out[1] = 'A' + (int)(y / 10.0);
+  out[2] = '0' + (int)fmod(x / 2.0, 10.0);
+  out[3] = '0' + (int)fmod(y, 10.0);
+  out[4] = 'A' + (int)fmod(x * 12.0, 24.0);
+  out[5] = 'A' + (int)fmod(y * 24.0, 24.0);
+  out[6] = '0' + (int)fmod(x * 120.0, 10.0);
+  out[7] = '0' + (int)fmod(y * 240.0, 10.0);
+  out[8] = 0;
+}
+
+// Both delivery paths land here -- processCivBuffer() for TRX1, and
+// lanRadioCivSnapshot() for a LAN radio in another slot -- one function called
+// twice, for the same reason as civReadCapture(). Any 23 reply proves the model
+// has GPS commands at all, which is what ends the probe.
+void gpsCivCapture(uint8_t slot, const uint8_t *frame, size_t len) {
+  if (slot != gpsTargetSlot()) return;
+  if (len < 8 || frame[4] != 0x23) return;
+  gpsSupport = GPS_SUPPORTED;
+  const uint8_t sub = frame[5];
+  const uint8_t *pl = frame + 6;
+  const size_t plLen = len - 7;             // data between sub and FD
+  if (sub == 0x01) {
+    if (plLen >= 1) gpsSel = pl[0];
+    return;
+  }
+  if (sub != 0x00 || plLen < 27) return;
+  memcpy(gpsData, pl, sizeof(gpsData));     // altitude/course/speed decode on demand in /gps
+  gpsDataSeen = true;
+  double lat, lon;
+  if (gpsDecodeLat(pl, &lat) && gpsDecodeLon(pl + 5, &lon))
+    gpsLatLonToGrid(lat, lon, gpsGrid);     // FF fill decodes false -> keep last known
+  // Movement of the UTC stamp (data bytes 21-27) is the freshness signal. The
+  // first stored stamp is observation, not movement -- see the globals block.
+  if (memcmp(gpsStamp, pl + 20, sizeof(gpsStamp)) != 0) {
+    if (gpsStampSeen) gpsStampChangedMs = millis();
+    memcpy(gpsStamp, pl + 20, sizeof(gpsStamp));
+  }
+  gpsStampSeen = true;
+}
+
+static void gpsSendQuery(uint8_t slot, uint8_t sub) {
+  // Not buildSimpleCatFrame(): that helper requires TRX1's learned
+  // radio_address, and the GPS target may be a LAN radio in another slot.
+  // catWriteFrameSlot() re-addresses the frame per transport anyway.
+  uint8_t frame[7] = { START_BYTE, START_BYTE, civSlotAddr(slot),
+                       CONTROLLER_ADDRESS, 0x23, sub, STOP_BYTE };
+  catWriteFrameSlot(slot, frame, sizeof(frame));
+}
+
+// One frame per 500 ms tick at most: 23 00 every 5 s once supported, 23 01
+// every 60 s (the operator can flip GPS Select in the radio menu at any time).
+// Three probes 2 s apart decide "no GPS" -- an NG reply is not parsed, a radio
+// that answers FA simply times out into the same verdict. On the serial bus a
+// query waits for the freq/mode poller's idle gap so two frames never collide;
+// the LAN client queues and paces its CI-V channel internally.
+void gpsPollTick(void) {
+  static uint32_t lastTick = 0;
+  uint32_t now = millis();
+  if (now - lastTick < 500) return;
+  lastTick = now;
+  uint8_t slot = gpsTargetSlot();
+  bool linked = slot != 0xFF && radioSlotConnected(slot);
+  if (!linked) {
+    if (gpsSupport != GPS_UNKNOWN || gpsStampSeen || gpsGrid[0]) gpsReset();
+    gpsWasLinked = false;
+    return;
+  }
+  if (!gpsWasLinked) { gpsReset(); gpsWasLinked = true; }  // fresh probe per link-up
+  if (gpsSupport == GPS_UNSUPPORTED) return;
+  if (radioSlots[slot].transport == RADIO_CIV && civState != CIV_IDLE) return;
+
+  if (gpsSupport == GPS_UNKNOWN) {
+    if (now - gpsPosSentMs < 2000) return;
+    if (gpsProbesSent >= 3) {
+      gpsSupport = GPS_UNSUPPORTED;
+      Serial.println("GPS | no answer to 23 00 -- radio has no GPS");
+      return;
+    }
+    gpsSendQuery(slot, 0x00);
+    gpsProbesSent++;
+    gpsPosSentMs = now;
+    return;
+  }
+  if (!gpsSelAsked || now - gpsSelSentMs >= 60000) {
+    gpsSendQuery(slot, 0x01);
+    gpsSelAsked = true;
+    gpsSelSentMs = now;
+    return;
+  }
+  if (now - gpsPosSentMs >= 5000) {
+    gpsSendQuery(slot, 0x00);
+    gpsPosSentMs = now;
+  }
+}
+
+// Everything the 23 00 reply carries, decoded field by field. The guide allows
+// any block to arrive as FF fill (documented for altitude, observed convention
+// elsewhere), so each field is null on its own rather than the document failing
+// whole. 404 when the radio has no GPS: absence is the answer, exactly like the
+// missing gps fields in /state -- the topbar only asks while the segment exists.
+void handleGetGps() {
+  webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  webServer.sendHeader("Connection", "close");
+  webServer.client().setNoDelay(true);
+  if (gpsSupport != GPS_SUPPORTED) {
+    webServer.send(404, "application/json", "{\"error\":\"no_gps\"}");
+    return;
+  }
+  uint32_t age = gpsStampChangedMs ? (millis() - gpsStampChangedMs) : 999999999u;
+  if (age > 999999999u) age = 999999999u;
+  String json = "{\"grid\":\"";
+  json += gpsGrid;
+  json += "\",\"sel\":" + String((unsigned)gpsSel);
+  json += ",\"fixAgeMs\":" + String((unsigned long)age);
+  char field[40];
+  double lat, lon;
+  if (gpsDataSeen && gpsDecodeLat(gpsData, &lat) && gpsDecodeLon(gpsData + 5, &lon)) {
+    snprintf(field, sizeof(field), ",\"lat\":%.6f,\"lon\":%.6f", lat, lon);
+    json += field;
+  } else {
+    json += ",\"lat\":null,\"lon\":null";
+  }
+  // Altitude 4 B: [0 m10000][m1000 m100][m10 m1][m0.1 sign(0=+,1=-)].
+  uint8_t n[8];
+  if (gpsDataSeen && gpsNibbles(gpsData + 11, 3, n)
+      && (gpsData[14] >> 4) <= 9 && (gpsData[14] & 0x0F) <= 1 && n[0] == 0) {
+    double alt = n[1] * 10000.0 + n[2] * 1000.0 + n[3] * 100.0 + n[4] * 10.0 + n[5]
+               + (gpsData[14] >> 4) * 0.1;
+    if (gpsData[14] & 0x0F) alt = -alt;
+    snprintf(field, sizeof(field), ",\"altM\":%.1f", alt);
+    json += field;
+  } else {
+    json += ",\"altM\":null";
+  }
+  // Course 2 B, four BCD digits, 1-degree steps (0360 = 360).
+  if (gpsDataSeen && gpsNibbles(gpsData + 15, 2, n)) {
+    unsigned course = n[0] * 1000u + n[1] * 100u + n[2] * 10u + n[3];
+    snprintf(field, sizeof(field), ",\"courseDeg\":%u", course);
+    json += field;
+  } else {
+    json += ",\"courseDeg\":null";
+  }
+  // Speed 3 B, six BCD digits in 0.1 km/h steps.
+  if (gpsDataSeen && gpsNibbles(gpsData + 17, 3, n)) {
+    double speed = (n[0] * 100000.0 + n[1] * 10000.0 + n[2] * 1000.0
+                  + n[3] * 100.0 + n[4] * 10.0 + n[5]) * 0.1;
+    snprintf(field, sizeof(field), ",\"speedKmh\":%.1f", speed);
+    json += field;
+  } else {
+    json += ",\"speedKmh\":null";
+  }
+  // Date 7 B BCD: yyyymmddHHMMSS, UTC.
+  uint8_t d[14];
+  if (gpsDataSeen && gpsNibbles(gpsData + 20, 7, d)) {
+    snprintf(field, sizeof(field), ",\"utc\":\"%u%u%u%u-%u%u-%u%u %u%u:%u%u:%u%u\"",
+             d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7],
+             d[8], d[9], d[10], d[11], d[12], d[13]);
+    json += field;
+  } else {
+    json += ",\"utc\":null";
+  }
+  json += "}";
+  webServer.send(200, "application/json", json);
 }
 
 //-----------------------------------------------------------------------------------

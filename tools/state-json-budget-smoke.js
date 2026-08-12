@@ -89,6 +89,9 @@ const ARGUMENT_BOUNDS = [
   [/^rssi$/, 5, "-999 .. 0"],
   [/^\(unsigned\)/, 10, "uint32"],
   [/^(state|view)(SupplyVolts|Swr)$/, 8, '"%.2f"'],
+  // ,"gpsGrid":"JO60WC28","gpsFixAgeMs":999999999,"gpsSel":255 -- or empty when
+  // the radio has no GPS. Built by its own bounded snprintf in buildStateJson.
+  [/^gpsFrag$/, 59, "GPS fields, present only when the radio answered 23 00"],
 ];
 
 function splitArguments(text) {

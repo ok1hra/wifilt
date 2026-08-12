@@ -332,7 +332,7 @@ button { color: inherit; cursor: pointer; }
 .quick-controls { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 8px; padding: 8px 10px; }
 .quick-controls label, .inline-status { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
 .tx-actions { display: flex; gap: 8px; min-width: 0; }
-.tx-actions .heartbeat, .tx-actions .tune { flex: 1 1 auto; }
+.tx-actions .heartbeat, .tx-actions .tune, .tx-actions .gps-beacon { flex: 1 1 auto; }
 .inline-status b { color: var(--amber); }
 .heartbeat {
   min-width: 86px; padding: 5px 12px; border: 1px solid var(--cyan); border-radius: 5px;
@@ -340,6 +340,14 @@ button { color: inherit; cursor: pointer; }
 }
 .heartbeat small { display: block; color: var(--muted); font-size: 9px; font-weight: 500; letter-spacing: 0; }
 .heartbeat:disabled { cursor: not-allowed; opacity: .4; }
+.gps-beacon { min-width:86px; padding:5px 12px; border:1px solid var(--cyan); border-radius:5px; color:var(--cyan); background:#0a201c; font-weight:900; letter-spacing:.06em; }
+.gps-beacon small { display:block; color:var(--muted); font-size:9px; font-weight:500; letter-spacing:0; }
+/* Tracking armed = the same red glow as an active TUNE carrier: both mean "this
+   button is currently allowed to key the radio on its own". */
+.gps-beacon.active { color:#fff; border-color:var(--red); background:#6b1720; box-shadow:0 0 8px #ff183866; }
+.gps-beacon:disabled { cursor:not-allowed; opacity:.4; }
+.aprs-tracking { display:flex; gap:8px; align-items:flex-start; margin:8px 0 0; font-size:12px; color:var(--muted); }
+.aprs-tracking input { margin-top:2px; }
 .tune { min-width:86px; padding:5px 12px; border:1px solid var(--amber); border-radius:5px; color:var(--amber); background:#241a0b; font-weight:900; letter-spacing:.06em; }
 .tune small { display:block; color:var(--muted); font-size:9px; font-weight:500; letter-spacing:0; }
 .tune.active { color:#fff; border-color:var(--red); background:#6b1720; box-shadow:0 0 8px #ff183866; }

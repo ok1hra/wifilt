@@ -93,7 +93,8 @@ const server=http.createServer((req,res)=>{
   if(url.pathname==="/txgain.json"){
     if(req.method==="POST"){let body="";req.on("data",c=>body+=c);req.on("end",()=>{txgainDoc=body;res.setHeader("Content-Type","application/json");res.end('{"ok":true}');});return;}
     res.setHeader("Content-Type","application/json");res.setHeader("Cache-Control","no-store");res.end(txgainDoc);return;}
-  if(url.pathname==="/state"){if(url.searchParams.get("radio")==="lan")lanStateRequests++;else primaryStateRequests++;/* fw-version.js badge, shared by every page */res.setHeader("Content-Type","application/json");res.end(JSON.stringify({connected:radioConnected,lanStatus:radioConnected?"linked":"disconnected",transceiverType:"ICOM-LAN",power:true,frequency:7078000,mode:"USB",tx:false,rfPower:radioRfPower,rfPowerSeen:true,radioName:"IC-705",fwRev:"20260718",wifiRssi:-51,bdSupported:true}));return;}
+  if(url.pathname==="/gps"){res.setHeader("Content-Type","application/json");res.end(JSON.stringify({grid:"JO60WC28",sel:1,fixAgeMs:1200,lat:50.104167,lon:12.891667,altM:512.3,courseDeg:123,speedKmh:45.6,utc:"2026-08-12 19:04:33"}));return;}
+  if(url.pathname==="/state"){if(url.searchParams.get("radio")==="lan")lanStateRequests++;else primaryStateRequests++;/* fw-version.js badge, shared by every page */res.setHeader("Content-Type","application/json");res.end(JSON.stringify({connected:radioConnected,lanStatus:radioConnected?"linked":"disconnected",transceiverType:"ICOM-LAN",power:true,frequency:7078000,mode:"USB",tx:false,rfPower:radioRfPower,rfPowerSeen:true,radioName:"IC-705",fwRev:"20260718",wifiRssi:-51,bdSupported:true,gpsGrid:"JO60WC28",gpsFixAgeMs:1200,gpsSel:1}));return;}
   // fixture=trx2 moves LAN to the second slot with one credential still blank:
   // the page must name TRX 2 and read that slot's fields, while staying gated so
   // it never competes with the main frame for the single-operator lease.
@@ -1549,6 +1550,82 @@ f.onload=()=>{
           checks.aprsTxNotInThread=d.querySelectorAll('.chat-row.outgoing').length===threadRowsBefore&&
             f.contentWindow.__dataTest.selectedCall()==='K0OG';
           d.querySelector('#abortButton').click();
+          // ---- GPS position beacon + tracking (docs/gps-poloha-implementace.md) ----
+          // The fixture /state reports a live fix (JO60WC28, GPS Select ON, stamp
+          // moved 1.2 s ago), so the button must be visible, unlocked, and show
+          // the 6-character square.
+          const gpsBtn=d.querySelector('#gpsBeaconButton');
+          // A position beacon transmits, so the master TX switch locks it exactly
+          // like HB. Checked before the ready assertion, and restored right after.
+          d.querySelector('#txSafety').checked=false;change('#txSafety');
+          checks.gpsNeedsTxEnabled=gpsBtn.disabled&&gpsBtn.title.includes('Enable radio TX')&&
+            d.querySelector('#heartbeatButton').disabled;
+          d.querySelector('#txSafety').checked=true;change('#txSafety');
+          checks.gpsButtonReady=!gpsBtn.hidden&&!gpsBtn.disabled&&
+            d.querySelector('#gpsBeaconGrid').textContent==='JO60WC';
+          // fw-version.js puts the 6-char square in front of the RSSI badge on
+          // every page; a live fix renders it undimmed.
+          const gpsTopbar=d.querySelector('#topbarFw .topbar-gps');
+          checks.gpsTopbar=gpsTopbar?.textContent==='GPS JO60WC'&&
+            !gpsTopbar.classList.contains('topbar-gps-muted');
+          // Clicking the locator opens the details panel (the About-panel idiom):
+          // every field the 23 00 reply carries, fed by /gps. This first click
+          // starts the fetch; the harness clicks other buttons right after, and
+          // any outside click legitimately closes the panel -- so the assertion
+          // REOPENS it on a timeout, when the fetched document is already cached
+          // and the panel renders synchronously with data.
+          gpsTopbar.click();
+          setTimeout(()=>{
+            d.querySelector('#topbarFw .topbar-gps')?.click();
+            const gpsRows=[...d.querySelectorAll('#topbarFw .topbar-gps-panel div')].map(node=>node.textContent);
+            checks.gpsPanelData=gpsRows.some(t=>t.includes('JO60WC28'))&&
+              gpsRows.some(t=>t.includes('50°06.250′ N'))&&gpsRows.some(t=>t.includes('12°53.500′ E'))&&
+              gpsRows.some(t=>t.includes('512.3 m'))&&gpsRows.some(t=>t.includes('123°'))&&
+              gpsRows.some(t=>t.includes('45.6 km/h'))&&gpsRows.some(t=>t.includes('2026-08-12 19:04:33'))&&
+              gpsRows.some(t=>t.includes('GPS receiver'));
+            d.body.click();
+            checks.gpsPanelCloses=!d.querySelector('#topbarFw .topbar-gps-panel');
+          },700);
+          gpsBtn.click();
+          const gpsInput=d.querySelector('#aprsParamGrid [data-aprs-param="locator"]');
+          checks.gpsDialogPrefill=d.querySelector('#aprsParamDialog').open===true&&
+            gpsInput?.value==='JO60WC28'&&d.querySelector('#aprsTrackingRow').hidden===false&&
+            d.querySelector('#aprsParamInsert').textContent==='Send';
+          // Every close path must hand the plain Insert dialog back to the preset menu.
+          d.querySelector('#aprsParamDialog [data-aprs-dialog-close]').click();
+          checks.gpsDialogChromeReset=d.querySelector('#aprsTrackingRow').hidden===true&&
+            d.querySelector('#aprsParamInsert').textContent==='Insert';
+          // Arm through the window: Send transmits the full 8 characters at once
+          // and the checkbox arms tracking on the same click.
+          gpsBtn.click();
+          d.querySelector('#aprsTracking').checked=true;
+          d.querySelector('#aprsParamInsert').click();
+          checks.gpsBeaconSent=d.querySelector('#txPayload')?.textContent.includes('OK1HRA: @APRSIS GRID JO60WC28')&&
+            d.querySelector('#aprsParamDialog').open===false;
+          checks.gpsTrackingArmed=test.gpsState().enabled===true&&gpsBtn.classList.contains('active')&&!gpsBtn.disabled;
+          test.txFail('gps smoke cleanup','aborted');test.txQueueClear();
+          // Tracking decisions, through the same tick the /state poll runs. All
+          // mutations sit inside this synchronous block, so the next poll cannot
+          // interleave and put the fixture values back mid-assertion.
+          const gpsRowsBefore=test.outgoingRows().length;
+          test.setGps({gpsGrid:'JO60XD11'});          // crossed into a new 6-char square
+          test.gpsTick();
+          const gpsLockoutHeld=test.outgoingRows().length===gpsRowsBefore;  // beacon above was seconds ago
+          test.gpsSetTrack({lastBeaconAtMs:Date.now()-601000});
+          test.gpsTick();                              // lockout expired -> exactly one beacon, CURRENT 8 chars
+          const gpsRowsAfter=test.outgoingRows();
+          checks.gpsTrackingBeacon=gpsLockoutHeld&&gpsRowsAfter.length===gpsRowsBefore+1&&
+            gpsRowsAfter[gpsRowsAfter.length-1].text.includes('@APRSIS GRID JO60XD11');
+          checks.gpsTrackingLockout=(test.gpsTick(),test.outgoingRows().length===gpsRowsBefore+1);
+          test.txFail('gps smoke cleanup','aborted');test.txQueueClear();
+          // A Manual source pauses tracking -- armed but silent -- and relocks the button
+          // for new sends; the off switch must keep working through the pause.
+          test.setGps({gpsGrid:'JO60XE11',gpsSel:3});
+          test.gpsSetTrack({lastBeaconAtMs:Date.now()-601000});
+          test.gpsTick();
+          checks.gpsManualPause=test.outgoingRows().length===gpsRowsBefore+1&&test.gpsState().enabled===true;
+          gpsBtn.click();                              // the same button that armed it
+          checks.gpsTrackingOff=test.gpsState().enabled===false&&!gpsBtn.classList.contains('active');
           d.querySelector('#heartbeatButton').click();
           checks.heartbeatQueued=!d.querySelector('#txSummary').textContent.toLowerCase().includes('completed');
           checks.heartbeatPayload=d.querySelector('#txPayload')?.textContent.includes('OK1HRA: @HB JO70')&&!d.querySelector('#txPayload')?.textContent.includes('HEARTBEAT');
