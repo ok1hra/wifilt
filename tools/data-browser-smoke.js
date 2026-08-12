@@ -93,7 +93,9 @@ const server=http.createServer((req,res)=>{
   if(url.pathname==="/txgain.json"){
     if(req.method==="POST"){let body="";req.on("data",c=>body+=c);req.on("end",()=>{txgainDoc=body;res.setHeader("Content-Type","application/json");res.end('{"ok":true}');});return;}
     res.setHeader("Content-Type","application/json");res.setHeader("Cache-Control","no-store");res.end(txgainDoc);return;}
-  if(url.pathname==="/gps"){res.setHeader("Content-Type","application/json");res.end(JSON.stringify({grid:"JO60WC28",sel:1,fixAgeMs:1200,lat:50.104167,lon:12.891667,altM:512.3,courseDeg:123,speedKmh:45.6,utc:"2026-08-12 19:04:33"}));return;}
+  // altM 459.9 is the real IC-705 reading (bytes 00 45 99 00) that caught the
+  // firmware decoding altitude ten times too high; keep it as the fixture value.
+  if(url.pathname==="/gps"){res.setHeader("Content-Type","application/json");res.end(JSON.stringify({grid:"JO60WC28",sel:1,fixAgeMs:1200,lat:50.104167,lon:12.891667,altM:459.9,courseDeg:123,speedKmh:45.6,utc:"2026-08-12 19:04:33"}));return;}
   if(url.pathname==="/state"){if(url.searchParams.get("radio")==="lan")lanStateRequests++;else primaryStateRequests++;/* fw-version.js badge, shared by every page */res.setHeader("Content-Type","application/json");res.end(JSON.stringify({connected:radioConnected,lanStatus:radioConnected?"linked":"disconnected",transceiverType:"ICOM-LAN",power:true,frequency:7078000,mode:"USB",tx:false,rfPower:radioRfPower,rfPowerSeen:true,radioName:"IC-705",fwRev:"20260718",wifiRssi:-51,bdSupported:true,gpsGrid:"JO60WC28",gpsFixAgeMs:1200,gpsSel:1}));return;}
   // fixture=trx2 moves LAN to the second slot with one credential still blank:
   // the page must name TRX 2 and read that slot's fields, while staying gated so
@@ -1580,9 +1582,11 @@ f.onload=()=>{
             const gpsRows=[...d.querySelectorAll('#topbarFw .topbar-gps-panel div')].map(node=>node.textContent);
             checks.gpsPanelData=gpsRows.some(t=>t.includes('JO60WC28'))&&
               gpsRows.some(t=>t.includes('50°06.250′ N'))&&gpsRows.some(t=>t.includes('12°53.500′ E'))&&
-              gpsRows.some(t=>t.includes('512.3 m'))&&gpsRows.some(t=>t.includes('123°'))&&
+              gpsRows.some(t=>t.includes('459.9 m'))&&gpsRows.some(t=>t.includes('123°'))&&
               gpsRows.some(t=>t.includes('45.6 km/h'))&&gpsRows.some(t=>t.includes('2026-08-12 19:04:33'))&&
-              gpsRows.some(t=>t.includes('GPS receiver'));
+              gpsRows.some(t=>t.includes('GPS receiver'))&&
+              // The device, not just how it got the fix -- both rows are present.
+              gpsRows.some(t=>t.includes('Source')&&t.includes('IC-705'));
             d.body.click();
             checks.gpsPanelCloses=!d.querySelector('#topbarFw .topbar-gps-panel');
           },700);

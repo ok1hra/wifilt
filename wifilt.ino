@@ -6380,12 +6380,16 @@ void handleGetGps() {
   } else {
     json += ",\"lat\":null,\"lon\":null";
   }
-  // Altitude 4 B: [0 m10000][m1000 m100][m10 m1][m0.1 sign(0=+,1=-)].
+  // Altitude 4 B: six BCD digits counting 0.1 m steps, then a fixed 0 nibble and
+  // the sign (0=+, 1=-). One number in tenths, exactly like speed below -- NOT
+  // whole metres with the tenth kept in the last byte, which is how the p. 21
+  // diagram first read and which made every altitude come out ten times too big.
+  // Verified against a real IC-705: 00 45 99 00 is 459.9 m.
   uint8_t n[8];
   if (gpsDataSeen && gpsNibbles(gpsData + 11, 3, n)
-      && (gpsData[14] >> 4) <= 9 && (gpsData[14] & 0x0F) <= 1 && n[0] == 0) {
-    double alt = n[1] * 10000.0 + n[2] * 1000.0 + n[3] * 100.0 + n[4] * 10.0 + n[5]
-               + (gpsData[14] >> 4) * 0.1;
+      && (gpsData[14] >> 4) == 0 && (gpsData[14] & 0x0F) <= 1) {
+    double alt = (n[0] * 100000.0 + n[1] * 10000.0 + n[2] * 1000.0
+                + n[3] * 100.0 + n[4] * 10.0 + n[5]) * 0.1;
     if (gpsData[14] & 0x0F) alt = -alt;
     snprintf(field, sizeof(field), ",\"altM\":%.1f", alt);
     json += field;

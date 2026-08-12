@@ -23,6 +23,10 @@
   // document, null when the fetch failed or has not landed yet.
   var gpsPanelOpen = false;
   var gpsInfo   = null;
+  // The radio the position comes from, as the radio itself reports it. /state
+  // carries it already, so the panel names the device rather than making the
+  // operator remember which transceiver this interface is driving.
+  var radioName = '';
   var failCount = 0;
   var OFFLINE_AFTER = 2;      // consecutive failed polls before warning
   var FETCH_TIMEOUT = 4000;   // ms; hung request counts as a failed poll
@@ -126,7 +130,9 @@
 
   function gpsPanelRows() {
     if (!gpsInfo) return [['GPS details', 'not answering']];
-    var source = ({0: 'OFF in the radio menu', 1: 'GPS receiver', 3: 'manual entry'})[gpsInfo.sel] || '?';
+    // Two different questions, so two rows: which device the position came from,
+    // and how that device arrived at it.
+    var from = ({0: 'receiver off', 1: 'GPS receiver', 3: 'manual entry'})[gpsInfo.sel] || '?';
     var rows = [
       ['Locator', gpsInfo.grid || 'no fix yet'],
       ['Latitude', gpsDegMin(gpsInfo.lat, 'N', 'S')],
@@ -136,7 +142,8 @@
       ['Speed', isFinite(Number(gpsInfo.speedKmh)) && gpsInfo.speedKmh !== null ? Number(gpsInfo.speedKmh).toFixed(1) + ' km/h' : null],
       ['Fix time (UTC)', gpsInfo.utc || null],
       ['Fix', gpsFixText(gpsInfo.fixAgeMs)],
-      ['Source', source]
+      ['Position from', from],
+      ['Source', radioName || null]
     ];
     // A field the radio filled with FF simply is not there -- the guide allows
     // that for altitude explicitly -- so its row disappears instead of lying.
@@ -283,6 +290,7 @@
           bdSupported = d.bdSupported === true;
           renderHardwareNavigation();
         }
+        if (d && typeof d.radioName === 'string') radioName = d.radioName;
         if (d && typeof d.gpsGrid === 'string') {
           gpsGrid = d.gpsGrid;
           gpsFixAgeMs = Number.isFinite(Number(d.gpsFixAgeMs)) ? Number(d.gpsFixAgeMs) : null;

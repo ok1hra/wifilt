@@ -216,8 +216,9 @@ this model" from "waiting for a fix".
 **Click the locator** and a small panel opens below it — the same idiom as the About panel
 behind the logo — with everything the radio's GPS reports: the 8-character locator, latitude
 and longitude in degrees and minutes (hover for the decimal form), altitude, course, speed,
-the UTC time of the fix, whether the fix is live or how long ago it was lost, and where the
-position comes from (GPS receiver, manual entry, or off). It refreshes every 5 seconds while
+the UTC time of the fix, whether the fix is live or how long ago it was lost, how the radio
+arrived at the position (GPS receiver, manual entry, or receiver off) and which radio it
+was. It refreshes every 5 seconds while
 open — the pace the radio itself is polled — and a click anywhere else closes it. A field
 the radio does not fill, such as altitude without a 3D fix, is simply not listed.
 

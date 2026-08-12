@@ -90,7 +90,15 @@
       // Ages out partial receptions when audio has stopped and no decode window is being
       // produced. An older cached worker ignores the unknown type and keeps the
       // audio-driven expiry, so this degrades instead of breaking.
-      expire(nowMs) { this._worker.postMessage({type: "expire", nowMs}); }
+      //
+      // The page ticks this once a second from the moment the decoder object
+      // exists, which is some seconds before the worker has a runtime. There is
+      // nothing to age out that early and nothing to gain from queueing ticks
+      // behind a download, so the caller's clock is simply ignored until ready.
+      expire(nowMs) {
+        if (this._status !== "ready") return;
+        this._worker.postMessage({type: "expire", nowMs});
+      }
 
       _receive(message) {
         if (message.type === "loading" && this._onEvent)

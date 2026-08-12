@@ -136,21 +136,44 @@
   }
 
   let runtime;
+  // The worker's message queue does not wait for `init` to finish, and `init` is
+  // three fetches and two WASM instantiations deep -- seconds, over a link that
+  // carries one HTTP request at a time. An `async` handler hands control back at
+  // its first await, so the very next message is dispatched into a worker whose
+  // `runtime` is still undefined. The DATA page ticks `expire` once a second
+  // from page load, which meant the first tick landed while init was at 2 %
+  // ("Loading Brotli decoder") and threw "runtime is undefined" -- reported
+  // through the same channel as a dropped download, so a modem that was loading
+  // perfectly well announced "Modem loading failed". It stayed invisible from
+  // 2026-08-01 until the derived `?v=` finally evicted the cached pre-`expire`
+  // worker, which had simply ignored the unknown message type.
+  //
+  // Awaiting the gate keeps message order and drops nothing; the `runtime` check
+  // is for the other half -- an init that failed, whose failure is already
+  // reported and must not be re-reported once per tick.
+  let markInitSettled;
+  const initSettled = new Promise(resolve => { markInitSettled = resolve; });
   subscribe(async (message) => {
     try {
       if (message.type === "init") {
-        loading("runtime", "Starting JS8Call-ICOM modem", 1);
-        const Runtime = loadRuntime(message.runtimeJs);
-        const brotli = await loadBrotli(message);
-        const modules = await loadModules(message, brotli);
-        const protocol = await loadProtocol(message, brotli);
-        runtime = new Runtime(modules.audio, modules.decoder,
-                              BigInt(message.anchorUtcMs || 0), protocol,
-                              {strictEpochAnchoring:
-                                Boolean(message.strictEpochAnchoring)});
-        loading("ready", "JS8Call-ICOM modem ready", 100);
-        post({type: "ready", state: runtime.state()});
-      } else if (message.type === "epoch") {
+        try {
+          loading("runtime", "Starting JS8Call-ICOM modem", 1);
+          const Runtime = loadRuntime(message.runtimeJs);
+          const brotli = await loadBrotli(message);
+          const modules = await loadModules(message, brotli);
+          const protocol = await loadProtocol(message, brotli);
+          runtime = new Runtime(modules.audio, modules.decoder,
+                                BigInt(message.anchorUtcMs || 0), protocol,
+                                {strictEpochAnchoring:
+                                  Boolean(message.strictEpochAnchoring)});
+          loading("ready", "JS8Call-ICOM modem ready", 100);
+          post({type: "ready", state: runtime.state()});
+        } finally { markInitSettled(); }
+        return;
+      }
+      await initSettled;
+      if (!runtime) return;
+      if (message.type === "epoch") {
         post({type: "epoch", state: runtime.beginEpoch(
           message.streamId, message.anchorUtcMs)});
       } else if (message.type === "audio") {

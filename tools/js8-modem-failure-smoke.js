@@ -72,6 +72,20 @@ const checks = {};
   checks.defaultPrevented = event.defaultPrevented === true;
 }
 
+// The page's reassembly tick starts with the decoder object, seconds before the
+// worker has a runtime. Ticking into a loading worker has nothing to age out and
+// used to be actively harmful -- see tools/js8-modem-init-race-smoke.js.
+{
+  const {adapter, worker} = makeAdapter();
+  const decoder = new adapter.Decoder(8000).onText(() => {}).onEvent(() => {});
+  const posted = () => worker.posted.filter(message => message.type === "expire").length;
+  decoder.expire(1000);
+  checks.expireHeldWhileLoading = posted() === 0;
+  worker.onmessage({data: {type: "ready", state: {}}});
+  decoder.expire(2000);
+  checks.expireRunsWhenReady = posted() === 1;
+}
+
 const failed = Object.entries(checks).filter(([, ok]) => !ok).map(([name]) => name);
 const report = `JS8 MODEM FAILURE ${failed.length ? "FAIL" : "PASS"} ${JSON.stringify(checks)}`;
 (failed.length ? console.error : console.log)(report);

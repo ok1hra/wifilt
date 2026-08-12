@@ -11,6 +11,31 @@ published.
 
 ## Working tree — not committed
 
+### The modem reported its own heartbeat as a download failure — REV 20260811, not verified on air
+
+* **`Modem loading failed` at 2 %, on a modem whose download was fine.** The worker's `init` is
+  three fetches and two WASM instantiations deep — seconds, over a link that carries one HTTP
+  request at a time — and an `async` message handler hands control back to the queue at its first
+  await. The DATA page ticks `expire` once a second from the moment the decoder object exists, so
+  the first tick was dispatched into a worker whose `runtime` was still `undefined`, threw
+  `runtime is undefined`, and left through the same channel a dropped download uses. The page
+  believed it, called `failModem()`, stopped the audio, and its one free retry hit the same race.
+  2 % is where `init` first suspends: `loadBrotli()` posts its progress and then awaits.
+* **Written on 2026-08-01 with the `expire` message itself, and invisible until 2026-08-12.**
+  `ASSET_REV` was a hand-typed `20260719d` — older than the worker it versioned — so every browser
+  that had opened the DATA page kept serving the *previous* `js8-worker.js` from its hour-long
+  cache, and that worker simply ignored the unknown message type. The content-derived `?v=` of the
+  entry above finally shipped the new worker, and the latent fault fired on the first load. The
+  cache-busting fix did not cause this; it revealed it.
+* **Both halves fixed.** `data/js8-worker.js` gates every non-`init` message on an init promise, so
+  early messages keep their order and none is dropped, and refuses silently when `init` failed —
+  one broken download must not become one failure report per second. `data/js8-adapter.js` holds
+  `expire()` until the worker is ready, because there is nothing to age out before then.
+* Verified by the new `tools/js8-modem-init-race-smoke.js`, which drives the real worker through
+  its Node branch in the order the page produces (10/10, and 7 of them red against the previous
+  worker via `JS8_WORKER=`), plus two checks in `tools/js8-modem-failure-smoke.js` (9/9).
+  `data-browser-smoke` red set unchanged — a subset of the six known reds.
+
 ### STATUS answer: a menu, and one entry the station composes about itself — REV 20260811, not verified on air
 
 `STATUS answer` was a bare 40-character field, empty by default — so a fresh station answered
@@ -126,6 +151,7 @@ four defects, one of them silent and on the air.
   `clamp(frames_rx − 1, 1, 4)`, the timer initiates and the model may only veto, key in
   `localStorage` because `crypto.subtle` does not exist on an insecure origin.
 * **Test harnesses** in `tools/`: `stamp-asset-versions.js`, `js8-modem-failure-smoke.js`,
+  `js8-modem-init-race-smoke.js`,
   `js8-groups-smoke.js`, `js8-data-frames-smoke.js`, `js8-aprs-smoke.js`, `js8-txqueue-smoke.js`,
   `civread-smoke.js`, `check-page-scripts.js`, `fixtures/`.
 * **`mercury/`** — Rhizomatica Mercury v2 evaluated as a second file-transfer modem beside JS8 and
