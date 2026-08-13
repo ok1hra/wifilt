@@ -114,7 +114,7 @@ bool cwIpOnConnect  = false;      // announce WiFi IP via CW on first full-CAT r
 volatile bool cwIpSendPending = false;
 
 #define LOOP_WARN_MS 200
-#define REV 20260811
+#define REV 20260812
 #define WIFI
 #define FSK_KEYING  // RTTY by keying the FSK + PTT outputs (was UDP_TO_FSK, from when a UDP port fed it)
 #define WDT         // watchdog timer

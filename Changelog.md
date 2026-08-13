@@ -11,7 +11,35 @@ published.
 
 ## Working tree — not committed
 
-### The modem reported its own heartbeat as a download failure — REV 20260811, not verified on air
+* The only uncommitted change is the `REV` bump to **20260812** in `wifilt.ino`.
+
+### Still untracked
+
+* **Design notes in `docs/`**, including `first-run-plan.md`,
+  `tx-audio-gain-plan-implementace.md`, `tx-auto-gain-implementace.md`,
+  `js8-skupiny-implementace.md`, `msgbox-implementace.md`, `js8-signal-stripe-plan.md`,
+  `js8-rx-partial-display-plan.md`, `js8-llm-implementace.md`, `aprsis-*.md`, the `js8call-*`
+  guides, `docs/agents/` and the radio CI-V manuals in PDF.
+* **Agreed but not implemented:** the JS8 LLM chat (`docs/js8-llm-implementace.md`) — budget
+  `clamp(frames_rx − 1, 1, 4)`, the timer initiates and the model may only veto, key in
+  `localStorage` because `crypto.subtle` does not exist on an insecure origin.
+* **Test harnesses** in `tools/`: `stamp-asset-versions.js`, `js8-modem-failure-smoke.js`,
+  `js8-modem-init-race-smoke.js`,
+  `js8-groups-smoke.js`, `js8-data-frames-smoke.js`, `js8-aprs-smoke.js`, `js8-txqueue-smoke.js`,
+  `civread-smoke.js`, `check-page-scripts.js`, `fixtures/`.
+* **`mercury/`** — Rhizomatica Mercury v2 evaluated as a second file-transfer modem beside JS8 and
+  WSPR; the WASM build exists and passes a loopback test (~230 kB Brotli). Airtime, not flash, is the
+  limiting factor. Notes in `docs/mercury-implementace.md`.
+* `backups/` and `AGENTS.md`.
+
+---
+
+## REV 20260811 — 2026-08-11 … 2026-08-12
+
+### `a49fdde` gps vew + modem load bugfix
+
+* **The GPS panel reached the shared topbar**, so position, time and fix age are visible from every
+  page rather than only from DATA (`data/fw-version.js`, `data/data.html`).
 
 * **`Modem loading failed` at 2 %, on a modem whose download was fine.** The worker's `init` is
   three fetches and two WASM instantiations deep — seconds, over a link that carries one HTTP
@@ -36,7 +64,46 @@ published.
   worker via `JS8_WORKER=`), plus two checks in `tools/js8-modem-failure-smoke.js` (9/9).
   `data-browser-smoke` red set unchanged — a subset of the six known reds.
 
-### STATUS answer: a menu, and one entry the station composes about itself — REV 20260811, not verified on air
+### `d48f42d` ic-705 gps
+
+* **The radio's own GPS is read over CI-V and published in `/state`.** `wifilt.ino` (+307) decodes
+  the `23 00` reply field by field — BCD position, altitude as
+  `[0 m10000][m1000 m100][m10 m1][m0.1 sign]`, course in four BCD digits, and a UTC
+  `yyyymmddHHMMSS` stamp — and treats an all-`FF` field as *absent*, which the guide allows, so a
+  partial reply keeps the last known value instead of overwriting it with nonsense. Both delivery
+  paths land in the same decoder: `processCivBuffer()` for TRX1 and the LAN snapshot for a radio in
+  another slot. GPS belongs to whichever radio `gpsPollTick()` watches — the same one the JS8 pages
+  drive.
+* **Freshness is the firmware's own stamp-movement age, never the browser clock**: the question is
+  whether the UTC stamp inside the reply moved between two reads. A *manual* position (radio menu
+  `GPS Select = Manual`) is a valid position but not a fix, and is reported as such — the locator is
+  usable, the "position came from the receiver" claim is not.
+* **`@APRSIS GRID` beacon and tracking** built on it: a position beacon is a transmission, so it
+  sits behind exactly the same TX gate as everything else, and every `@APRSIS GRID` leaving the
+  station feeds the tracking lockout whatever composed it. The locator appears in the page's
+  identity bar, and an open GPS panel follows the firmware's 5 s poll.
+* `SOFTWARE.md` documents it; `tools/data-browser-smoke.js` +79 and a `/state` size check
+  (`state-json-budget-smoke.js`) guard the added fields.
+
+### `732900e` fix reply, ip stream
+
+* **Every fetch the DATA and WSPR pages make now carries an abort deadline.** A hung request has no
+  timeout of its own, and a browser allows about six connections per origin: a handful of fetches
+  that never answered exhausted the pool, so the page flashed `OFFLINE`, `F5` hung, and cycling
+  tabs appeared to help. The firmware was innocent. Deadlines are `AbortSignal.timeout` (8 s for
+  the fast polls, 12 s for the slower ones) plus an in-flight guard of the same shape `pollRadio()`
+  already used — without it every 5 s tick opened another connection. The calibration plan UI
+  inherits the deadline, so `/txgain.json` cannot wedge the page either.
+* **The REPLY button's layout fault fixed**: a `1fr` track with no `minmax(0, …)` let a long line
+  blow the grid out sideways. Two classes now answer two different questions — whether the button
+  was rendered at all, and whether it can currently be pressed.
+* **The call alert transmits nothing.** It is a notification only; the station still never answers a
+  CQ by itself, and `js8-autoreply.js` remains untouched. Escape and form submit close the dialog
+  without touching the buttons behind it.
+
+### `5d4e372` bugfix
+
+#### STATUS answer: a menu, and one entry the station composes about itself
 
 `STATUS answer` was a bare 40-character field, empty by default — so a fresh station answered
 `STATUS?` with nothing at all, which is quieter than JS8Call itself (upstream ships the default
@@ -75,7 +142,7 @@ without any of that.
 * `SOFTWARE.md` 5.13 gains **What the station answers to STATUS?**. The settings screenshot still
   shows the old text field.
 
-### QRPLog reports: one per QSO, and only what really went out — REV 20260811, not verified on air
+#### QRPLog reports: one per QSO, and only what really went out
 
 Eight decisions from a grilling session on the two report fields added in `36c62f9`. The rules the
 operator asked for read as if they were already implemented; finding out why they were not turned up
@@ -119,7 +186,7 @@ four defects, one of them silent and on the air.
   one of them passed at first for the wrong reason (a stale exchange made Enter a no-op) and was
   tightened until it bit.
 
-### Asset versions are derived from content, not typed by hand — REV 20260811, not verified on air
+#### Asset versions are derived from content, not typed by hand
 
 * **`tools/stamp-asset-versions.js` (new, untracked) computes every `?v=` from the *content* of the
   asset it points at.** The firmware serves the two halves of a page under opposite cache policies:
@@ -139,25 +206,6 @@ four defects, one of them silent and on the air.
   `tools/prepare-spiffs-tree.sh`; `tools/data-browser-smoke.js` +44 lines,
   `tools/log-rst-smoke.js` +123.
 * `BUILD.md`, `SOFTWARE.md` and `HARDWARE.md` updated alongside it.
-
-### Still untracked
-
-* **Design notes in `docs/`**, including `first-run-plan.md`,
-  `tx-audio-gain-plan-implementace.md`, `tx-auto-gain-implementace.md`,
-  `js8-skupiny-implementace.md`, `msgbox-implementace.md`, `js8-signal-stripe-plan.md`,
-  `js8-rx-partial-display-plan.md`, `js8-llm-implementace.md`, `aprsis-*.md`, the `js8call-*`
-  guides, `docs/agents/` and the radio CI-V manuals in PDF.
-* **Agreed but not implemented:** the JS8 LLM chat (`docs/js8-llm-implementace.md`) — budget
-  `clamp(frames_rx − 1, 1, 4)`, the timer initiates and the model may only veto, key in
-  `localStorage` because `crypto.subtle` does not exist on an insecure origin.
-* **Test harnesses** in `tools/`: `stamp-asset-versions.js`, `js8-modem-failure-smoke.js`,
-  `js8-modem-init-race-smoke.js`,
-  `js8-groups-smoke.js`, `js8-data-frames-smoke.js`, `js8-aprs-smoke.js`, `js8-txqueue-smoke.js`,
-  `civread-smoke.js`, `check-page-scripts.js`, `fixtures/`.
-* **`mercury/`** — Rhizomatica Mercury v2 evaluated as a second file-transfer modem beside JS8 and
-  WSPR; the WASM build exists and passes a loopback test (~230 kB Brotli). Airtime, not flash, is the
-  limiting factor. Notes in `docs/mercury-implementace.md`.
-* `backups/` and `AGENTS.md`.
 
 ---
 
