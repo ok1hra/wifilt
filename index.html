@@ -178,7 +178,7 @@
     <div class="card">
       <h1>WIFILT<span class="tagline">Web interface for Icom LAN Transceivers</span></h1>
       <p class="subtitle">
-        Firmware installer &mdash; version <code>20260812</code> &nbsp;&bull;&nbsp;
+        Firmware installer &mdash; version <code>20260813</code> &nbsp;&bull;&nbsp;
         <a href="https://github.com/ok1hra/wifilt" target="_blank">GitHub</a>
       </p>
 
@@ -299,7 +299,7 @@
       </ul>
 
       <div class="cta gate" id="flashGate" data-locked="1">
-        <esp-web-install-button manifest="manifest.json?v=20260812" baudrate="9600"></esp-web-install-button>
+        <esp-web-install-button manifest="manifest.json?v=20260813" baudrate="9600"></esp-web-install-button>
       </div>
       <p class="gate-note" id="gateNote">Answer the question above to continue.</p>
 
@@ -354,7 +354,7 @@
         lets your settings survive an update.
       </p>
       <p class="muted">
-        For manual flashing there is <code>wifilt-20260812-full.bin</code> at offset <code>0x0</code>
+        For manual flashing there is <code>wifilt-20260813-full.bin</code> at offset <code>0x0</code>
         with <code>esptool.py</code>. <strong>That one erases everything</strong> — it is a whole-chip
         image, so it overwrites the WiFi credentials in NVS and the configuration partition
         as well. Use it to recover a board that will not boot, not to update a working one.
