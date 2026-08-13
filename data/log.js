@@ -1382,6 +1382,19 @@ document.getElementById('helpModal').addEventListener('click', e => {
 
 // ── Global hotkeys ────────────────────────────────────────────────────────────
 
+// Under Alt the browser reports the character the *layout* produced, not the
+// letter printed on the keycap. With CapsLock on, Alt+U arrives as key "U"; on
+// macOS Option+U is a dead key ("Dead"), Option+W is "∑" and Option+1 is "¡".
+// Matching on key alone therefore killed exactly the letter shortcuts while the
+// digits and Enter went on working. e.code names the physical key, which no
+// layout and no CapsLock can move; key stays as the fallback for the rare input
+// method that reports no code at all.
+function altHotkey(e, codes, key) {
+  if (!e.altKey || e.ctrlKey || e.shiftKey) return false;   // AltGr is Ctrl+Alt
+  if (e.code) return codes.includes(e.code);
+  return typeof e.key === 'string' && e.key.toLowerCase() === key;
+}
+
 document.addEventListener('keydown', e => {
   // Esc — close help modal, then QSO edit dialog
   if (e.key === 'Escape') {
@@ -1399,20 +1412,22 @@ document.addEventListener('keydown', e => {
     return;
   }
   // Alt+1/2/3 — select TRX
-  if (e.altKey && !e.ctrlKey && !e.shiftKey && (e.key === '1' || e.key === '2' || e.key === '3')) {
-    e.preventDefault();
-    selectTrx(Number(e.key));
-    return;
+  for (const n of [1, 2, 3]) {
+    if (altHotkey(e, ['Digit' + n, 'Numpad' + n], String(n))) {
+      e.preventDefault();
+      selectTrx(n);
+      return;
+    }
   }
   // Alt+U — toggle RUN / S&P
-  if (e.altKey && !e.ctrlKey && !e.shiftKey && e.key === 'u') {
+  if (altHotkey(e, ['KeyU'], 'u')) {
     e.preventDefault();
     setRunMode(app.runMode === 'RUN' ? 'SP' : 'RUN');
     inpCall.focus();
     return;
   }
   // Alt+W — clear all input fields
-  if (e.altKey && !e.ctrlKey && !e.shiftKey && e.key === 'w') {
+  if (altHotkey(e, ['KeyW'], 'w')) {
     e.preventDefault();
     clearForm();
     renderDxccStatus(null);
@@ -1420,7 +1435,7 @@ document.addEventListener('keydown', e => {
     return;
   }
   // Alt+Enter — log current QSO without sending any memory
-  if (e.altKey && !e.ctrlKey && !e.shiftKey && e.key === 'Enter') {
+  if (altHotkey(e, ['Enter', 'NumpadEnter'], 'enter')) {
     e.preventDefault();
     logCurrentQsoOnly();
   }
