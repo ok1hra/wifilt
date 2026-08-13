@@ -38,6 +38,15 @@
     settleBytes: 4000,    // 500 ms of the new level before a reading counts
     rampBytes: 960,       // 120 ms ramp, same as the calibration carrier
     witnessesToPersist: 2,
+    // The asymmetry the header describes, made explicit rather than guessed from
+    // whether the id happens to move. WSPR is one streamed transmission under one
+    // id, where a reduction reaches the air inside `settleBytes` and every later
+    // reading describes the new level. JS8 bakes the gain into a whole frame and
+    // keys once per frame: a reduction decided here plays only from the NEXT
+    // frame, so every further reading in THIS one still describes the level we
+    // already decided against -- and charging a second dB for it takes one gust
+    // of ALC six dB down. One reduction per frame, then listen again next frame.
+    levelBakedPerFrame: false,
   };
 
   const fromDb = db => Math.pow(10, db / 20);
@@ -63,6 +72,10 @@
         liveFromBytes: 0,
         reductions: 0,
         atFloor: false,
+        // Which frame the counters below belong to. One transmission in the
+        // sense this module means it -- one message, one witness -- can be many
+        // frames, and the firmware restarts its counters at each of them.
+        txId: 0,
       };
       return this.gain;
     }
@@ -71,8 +84,27 @@
     get active() { return Boolean(this.tx); }
 
     // One tx-level frame. Returns the gain the caller should be producing.
-    noteLevel({consumed, alc, alcSeq} = {}) {
+    noteLevel({txId, consumed, alc, alcSeq} = {}) {
       if (!this.tx) return 0;
+      // A new frame is a new pair of counters: the firmware nulls alcSeq and
+      // consumed in tx.prepare, which fires once per FRAME, while this guard
+      // brackets the whole message. Following the id is what keeps the second
+      // frame's sequence from reading as a repeat of the first frame's -- which
+      // left the limiter blind from frame two onward, and whatever it decided in
+      // frame one on the air for the rest of the message, unexamined.
+      //
+      // The gain deliberately survives the boundary. The reduction is the point;
+      // only the evidence window restarts.
+      const id = Number(txId) || 0;
+      if (id !== this.tx.txId) {
+        this.tx.txId = id;
+        this.tx.lastSeq = 0;
+        this.tx.consumed = 0;
+        // The level this frame is playing started WITH the frame, so the settle
+        // window starts there too -- not at a byte count from a frame whose
+        // counter no longer exists.
+        this.tx.liveFromBytes = 0;
+      }
       const played = Number(consumed);
       if (Number.isFinite(played) && played > this.tx.consumed) this.tx.consumed = played;
 
@@ -94,7 +126,13 @@
       } else {
         this.tx.gain = next;
       }
-      this.tx.liveFromBytes = this.tx.consumed + this.config.rampBytes;
+      // Streaming: the new level is on the air after the ramp, so listen again
+      // once it has settled. Baked: nothing this frame can still say describes
+      // the level we just chose, so close the window and reopen it at the next
+      // frame boundary above.
+      this.tx.liveFromBytes = this.config.levelBakedPerFrame
+        ? Infinity
+        : this.tx.consumed + this.config.rampBytes;
       return this.tx.gain;
     }
 
@@ -111,7 +149,7 @@
         // good transmissions between them, would count as corroboration.
         this.witnesses.delete(tx.key);
         return {key: tx.key, reduced: false, witnesses: 0, persistGain: null,
-                needsRecalibration: false, gain: tx.gain};
+                needsRecalibration: false, gain: tx.gain, startGain: tx.startGain};
       }
       const witnesses = (this.witnesses.get(tx.key) || 0) + 1;
       this.witnesses.set(tx.key, witnesses);
@@ -121,11 +159,22 @@
         key: tx.key,
         reduced: true,
         witnesses,
-        // Only ever the level this transmission actually finished at, and only
-        // ever downwards -- the caller never has to check the direction.
+        // Only ever the level this transmission decided on, and only ever
+        // downwards -- the caller never has to check the direction.
+        //
+        // With baked frames that level may be one step below anything that flew:
+        // the last frame went out before the readings taken during it. Filing it
+        // anyway is right, not sloppy. Each reduction answers a frame that was
+        // ALREADY transmitting at the level above it and still drove the ALC, so
+        // that level is disproved even though its successor is untested -- and
+        // "untested" is exactly what the two-witness rule is for.
         persistGain: persist ? Math.min(tx.gain, tx.startGain) : null,
         needsRecalibration: tx.atFloor,
         gain: tx.gain,
+        // What it was measured against. The caller reports the trim in dB, and
+        // after a persist the table itself has moved -- so the reference has to
+        // come from the transmission, not from re-reading the store.
+        startGain: tx.startGain,
       };
     }
 

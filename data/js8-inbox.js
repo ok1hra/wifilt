@@ -60,6 +60,16 @@
   const isCallsign = v => CALL_RE.test(String(v || "").toUpperCase().trim());
   const isGroup = v => GROUP_RE.test(String(v || "").toUpperCase().trim());
   const norm = v => String(v || "").toUpperCase().trim();
+  // OK1BT/P is OK1BT working portable, and their mail is theirs whichever way
+  // they sign today -- upstream hands a message over when the asker matches the
+  // stored callsign OR its base (processCommandActivity.cpp, QUERY MSG branch).
+  // The longest slash-separated segment is the base, same heuristic as
+  // Radio::base_callsign for the prefix/suffix forms that reach us.
+  const baseCall = v => norm(v).split("/")
+    .reduce((best, segment) => segment.length > best.length ? segment : best, "");
+  const sameStation = (left, right) =>
+    norm(left) === norm(right) || (Boolean(left) && Boolean(right) &&
+      !isGroup(left) && !isGroup(right) && baseCall(left) === baseCall(right));
   const formatSnr = value => {
     const measured = Math.round(Number(value));
     const snr = Number.isFinite(measured)
@@ -75,9 +85,17 @@
     return `${seconds - (seconds % 15)}s`;
   };
 
-  // "TO:OK1ABC HELLO" -> {to:"OK1ABC", text:"HELLO"}; null when malformed.
+  // "OK1ABC HELLO" -> {to:"OK1ABC", text:"HELLO"}; null when malformed.
+  //
+  // The wire payload of a genuine " MSG TO:" frame carries NO "TO:" prefix --
+  // the prefix is part of the command token, and JS8Call's receiver simply takes
+  // the first word as the target (processCommandActivity.cpp, MSG TO: branch).
+  // The prefixed form is still accepted: our own transmitter used to emit
+  // " MSG" + "TO:CALL text" (both halves mirrored the mistake, so it was
+  // invisible between two WIFILT stations), and frames from stations running
+  // that firmware are still on the air.
   function parseMsgTo(payload) {
-    const match = /^TO:\s*(@?[A-Z0-9/]+)\s+([\s\S]+)$/i.exec(String(payload || "").trim());
+    const match = /^(?:TO:)?\s*(@?[A-Z0-9/]+)\s+([\s\S]+)$/i.exec(String(payload || "").trim());
     if (!match) return null;
     const to = norm(match[1]);
     if (!isCallsign(to) && !isGroup(to)) return null;
@@ -98,10 +116,11 @@
     // handing somebody their own message back is what the type separates.
     // Group mail counts too: it is addressed to a group this station belongs to, so any
     // member may come for it -- but only once each, which is what deliveredTo records.
+    // Matching is by station, not by string: OK1BT/P collects mail left for OK1BT.
     forCall(call) {
       const who = norm(call);
       return this.items.filter(i => i.type === TYPE.STORE &&
-        (i.to === who || (isGroup(i.to) && !(i.deliveredTo || []).includes(who) &&
+        (sameStation(i.to, who) || (isGroup(i.to) && !(i.deliveredTo || []).includes(who) &&
                           i.from !== who)));
     }
     // Only the group half of the above, for the answers that name a group explicitly.
@@ -170,7 +189,7 @@
      * feed is capped and CLEAR wipes it, so the MSG BOX is the only place a
      * message can wait. No ACK: nothing was promised, we simply keep it.
      *
-     * @param frame {from, to, text}
+     * @param frame {from, to, text, via}
      * @param ctx   {nowMs, myCall}
      */
     fileIncoming(frame, ctx) {
@@ -180,12 +199,17 @@
       const text = String(frame && frame.text || "").trim();
       if (!from || !myCall) return this._refuse("invalid", "missing callsign");
       if (to !== myCall) return this._refuse("not-addressed", `for ${to || "nobody"}`);
-      const outcome = this._store(from, myCall, text, ctx, TYPE.UNREAD);
+      const outcome = this._store(from, myCall, text, ctx, TYPE.UNREAD,
+        norm(frame && frame.via));
       return outcome.ack ? {...outcome, ack: null} : outcome;
     }
 
     /**
-     * @param frame {from, to, command, text, complete}
+     * `via` is the station that handed the message over when it came through a
+     * relay: the sender is the originator, but the only address that reaches
+     * them is the intermediary, so the record has to remember both.
+     *
+     * @param frame {from, to, command, text, complete, via}
      * @param ctx   {nowMs, myCall, armed, hearing:[calls]}
      */
     handle(frame, ctx) {
@@ -194,6 +218,7 @@
       const myCall = norm(ctx && ctx.myCall);
       const command = String(frame && frame.command || "").trim().toUpperCase();
       const payload = String(frame && frame.text || "").trim();
+      const via = norm(frame && frame.via);
 
       if (!from || !myCall) return this._refuse("invalid", "missing callsign");
       // A command addressed to a group we belong to is addressed to us: that is what
@@ -204,22 +229,34 @@
       // Checksummed commands: acting on half a message would store or transmit
       // corrupted text.
       if (frame.complete === false) return this._refuse("incomplete", `${command} still arriving`);
+      // Which group it came in on, "" for a question asked of us by name. Every
+      // answer below has to consider it, because a group question is heard by
+      // every member at once and an answer they would ALL give is not an answer,
+      // it is a pile-up in one slot.
+      const group = isGroup(to) ? to : "";
+      // @ALLCALL is the whole band, and mail is a two-station affair. Upstream
+      // excludes it from MSG, MSG TO: and QUERY outright (`!isAllCall`), and so
+      // do we: storing for everybody, or handing a message over because anyone
+      // asked, is not something a group call can be allowed to trigger.
+      if (group === "@ALLCALL" &&
+          (command === "MSG" || command === "MSG TO:" || command === "QUERY MSG"))
+        return this._refuse("allcall", `${command} to @ALLCALL is not answered`);
 
       switch (command) {
         // A bare MSG is mail for this operator: filed under my own callsign as
         // UNREAD, not as third-party stock. Upstream files the whole command the
         // same way and looks it up by sender.
-        case "MSG":       return this._store(from, myCall, payload, ctx, TYPE.UNREAD);
-        case "MSG TO:":   return this._storeFor(from, payload, ctx);
+        case "MSG":       return this._store(from, myCall, payload, ctx, TYPE.UNREAD, via);
+        case "MSG TO:":   return this._storeFor(from, payload, ctx, via);
         case "QUERY MSGS":
-        case "QUERY MSGS?": return this._queryMsgs(from, ctx);
+        case "QUERY MSGS?": return this._queryMsgs(from, ctx, group);
         case "QUERY MSG": return this._queryMsg(from, payload, ctx);
         case "QUERY CALL": return this._queryCall(from, payload, ctx);
         default: return this._refuse("unsupported", `inbox does not handle ${command}`);
       }
     }
 
-    _store(from, to, text, ctx, type = TYPE.STORE) {
+    _store(from, to, text, ctx, type = TYPE.STORE, via = "") {
       if (!text) return this._refuse("empty", "no message text");
       if (text.length > this.config.maxTextLength)
         return this._refuse("too-long", `${text.length} characters, limit ${this.config.maxTextLength}`);
@@ -249,9 +286,13 @@
         }
       }
 
-      const record = this.store.add({type, from, to, text, atMs: ctx.nowMs, delivered: false});
+      // `via` is only written when there is one: every record is serialized into
+      // a 24 KiB budget, so an empty field on every message is real airtime-free
+      // storage spent on nothing.
+      const record = this.store.add({type, from, to, text, atMs: ctx.nowMs,
+        delivered: false, ...(via ? {via} : {})});
       this.stats.stored += 1;
-      this._emit({type: "stored", id: record.id, from, to, text});
+      this._emit({type: "stored", id: record.id, from, to, text, ...(via ? {via} : {})});
       // Storing costs nothing to transmit, so it works while disarmed; only the
       // acknowledgement needs the radio, and the caller decides that.
       // The local storage id is advertised by HEARTBEAT SNR / QUERY MSGS. A
@@ -259,7 +300,7 @@
       return {action: "store", record, ack: {to: from, text: "ACK"}};
     }
 
-    _storeFor(from, payload, ctx) {
+    _storeFor(from, payload, ctx, via = "") {
       const parsed = parseMsgTo(payload);
       if (!parsed) {
         const skip = this._refuse("malformed", "expected MSG TO:CALL text");
@@ -267,7 +308,7 @@
       }
       // Addressed to us it is our own mail, not stock we hold for a stranger.
       if (parsed.to === norm(ctx.myCall))
-        return this._store(from, parsed.to, parsed.text, ctx, TYPE.UNREAD);
+        return this._store(from, parsed.to, parsed.text, ctx, TYPE.UNREAD, via);
       // Mail for a group we have joined is worth holding: the members are people we are
       // on the air with. A group we are not in has nobody here to collect it, so the box
       // would be a public noticeboard paid for out of our own flash -- upstream accepts
@@ -280,12 +321,21 @@
       return this._store(from, parsed.to, parsed.text, ctx, TYPE.STORE);
     }
 
-    _queryMsgs(from, ctx) {
+    _queryMsgs(from, ctx, group = "") {
       if (!ctx.armed)
         return this._refuse("not-armed", "QUERY MSGS requires AUTO");
       const waiting = this.store.forCall(from);
-      if (!waiting.length)
+      if (!waiting.length) {
+        // "Nothing here" is worth saying to a station that asked US. Asked of a
+        // group, every member holding nothing would say it in the same slot --
+        // a chorus of NO that buries the one station with an answer. Upstream
+        // draws the same line (`if (!isAllCall && reply.isEmpty())`); we draw it
+        // for every group, because the pile-up does not care which one it is.
+        if (group)
+          return this._refuse("group-silence",
+            `nothing for ${from}; a NO to ${group} would be answered by everybody`);
         return {action: "reply", to: from, text: "NO", detail: "nothing stored"};
+      }
       // Upstream answers with the id of the oldest message still to be
       // delivered; the asker then requests it explicitly.
       const oldest = waiting[0];
@@ -314,7 +364,7 @@
         return this._refuse("already-delivered", `${from} already had message ${id}`);
       if (forGroup && record.from === from)
         return this._refuse("not-yours", `message ${id} came from ${from}`);
-      if (!forGroup && record.to !== from)
+      if (!forGroup && !sameStation(record.to, from))
         return this._refuse("not-yours", `message ${id} is not addressed to ${from}`);
       // Handing over a message we are holding for somebody else is transmitting
       // third-party content, exactly like a relay hop.
@@ -383,7 +433,7 @@
     snapshot() {
       return {...this.stats, size: this.store.size(),
         items: this.store.all().map(i => ({id: i.id, type: i.type || TYPE.STORE,
-          from: i.from, to: i.to, text: i.text, atMs: i.atMs,
+          from: i.from, to: i.to, text: i.text, atMs: i.atMs, via: i.via || "",
           deliveredTo: (i.deliveredTo || []).slice(),
           delivered: Boolean(i.delivered)}))};
     }

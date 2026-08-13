@@ -936,6 +936,11 @@ button { color: inherit; cursor: pointer; }
 /* What is waiting to transmit, and why it has not gone yet. */
 .tx-queue{font-size:.8rem;opacity:.85;margin-right:.5rem;cursor:help}
 
+/* The ALC limiter taking level off the air. It belongs here rather than beside
+   the gain field, which lives inside a settings section nobody has open while
+   transmitting -- and an unexplained quiet frame is exactly what this prevents. */
+.alc-trim{font-size:.8rem;color:var(--amber);margin-right:.5rem;cursor:help}
+
 /* Inbox reader. */
 .inbox-actions{display:flex;gap:.4rem;margin:.3rem 0;flex-wrap:wrap;align-items:center}
 .inbox-text{max-width:16rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -949,6 +954,9 @@ button { color: inherit; cursor: pointer; }
 .msgbox-unread .msgbox-state{color:var(--red)}
 .msgbox-read td,.msgbox-delivered td{opacity:.55}
 .msgbox-state{white-space:nowrap;font-size:.85em;text-transform:uppercase;letter-spacing:.03em}
+/* The station that carried the message, under the one that wrote it: secondary,
+   but never hidden -- a direct answer to the sender may never arrive. */
+.msgbox-via{display:block;font-size:.8em;font-weight:400;opacity:.7}
 .msgbox-actions{white-space:nowrap;text-align:right}
 .msgbox-actions button{font-size:.75rem;padding:.1rem .35rem;margin-left:.25rem}
 .msgbox-undo{display:flex;gap:.5rem;align-items:center;margin:.3rem 0;font-size:.85em;opacity:.85}
@@ -957,6 +965,11 @@ button { color: inherit; cursor: pointer; }
    be mistaken for something already in hand. */
 .msgbox-pickup td{border-bottom:1px dashed currentColor;opacity:.8}
 .msgbox-pickup .msgbox-state{font-style:italic}
+/* A message we know exists but could not read. Same dashed treatment as a
+   pickup -- it is a promise, not mail -- with the state amber while the station
+   is still being asked. */
+.msgbox-repeat td{border-bottom:1px dashed currentColor;opacity:.8}
+.msgbox-repeat .msgbox-state{font-style:italic;color:var(--amber)}
 
 /* The level actually in force, beside the manual field. Amber when nothing is
    on file for this band and power: not an error, but not what was asked for

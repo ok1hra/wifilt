@@ -220,7 +220,8 @@ the UTC time of the fix, whether the fix is live or how long ago it was lost, ho
 arrived at the position (GPS receiver, manual entry, or receiver off) and which radio it
 was. It refreshes every 5 seconds while
 open — the pace the radio itself is polled — and a click anywhere else closes it. A field
-the radio does not fill, such as altitude without a 3D fix, is simply not listed.
+the radio does not fill, such as altitude without a 3D fix, is simply not listed. The panel
+is pictured, open over a moving station, in [section 5.6](#56-aprsis-command-builder).
 
 If the browser loses contact with the interface, a red **OFFLINE** warning appears there.
 
@@ -954,6 +955,44 @@ The button glows red while tracking is armed and pressing it again turns trackin
 does **a page reload**: tracking is deliberately never remembered, switching it on is
 always a conscious action in this window.
 
+![GPS tracking](img/js8call-gps-tracking.png)
+
+Tracking running in a moving vehicle, with the position panel from the navigation bar open
+over it. **GPS** is red — armed — and Recent traffic holds the trail it left: `JO60WA25` at
+10:06, `JN69XW74` at 10:16, `JN69XW62` at 10:26. Nothing was typed for any of them; each
+went out because the six-character square had changed, and they stand exactly ten minutes
+apart because that is the floor.
+
+The picture also shows the waiting half of the rule. The radio has since moved on again —
+the bar and the button both read `JN69XV`, the panel confirms a live fix at 10:33:41 — but
+the last beacon went at 10:26:18, so that square cannot be announced before 10:36:18. It is
+not lost; it goes out when the window opens, and if the square changes twice more before
+then, only the one the station is actually in is transmitted.
+
+![The same run on aprs.fi](img/js8call-gps-tracking-aprs.fi-map.png)
+
+Where those beacons end up. This is the same run an hour later on **aprs.fi**, the trail
+drawn from the squares the station announced on 20 m — no APRS transmitter, no VHF, no
+internet at the vehicle end; every point on that line arrived as JS8 audio.
+
+The popup is worth reading closely, because most of it was written by other people:
+
+- **`#JS8 14,079067MHz -01dB`** — the comment is the *gateway's* work, not ours. The station
+  sends nothing but `@APRSIS GRID <locator>`; the dial frequency and the signal report are
+  what the gateway heard, added on the way through.
+- **`[APJ8CL via qAS,HB9BV]`** — the path. `APJ8CL` marks the packet as coming from JS8, and
+  **HB9BV** is the station that decoded it and put it into APRS-IS. It is the same HB9BV
+  whose heartbeats sit in the traffic list of the previous picture: on the air it was simply
+  another station being heard, and it was carrying the position onward at the same time.
+- The timestamp is aprs.fi in local time — `12:27:50` there is `10:27:50` UTC, about a
+  minute and a half after the 10:26 beacon of the previous picture was keyed. That gap is
+  the transmission itself plus the gateway's decode.
+
+The shape of the trail follows from the two locator lengths. Points appear roughly every
+**six-character square** — a few kilometres, because that is what arms a beacon — while each
+individual point is placed to the **eight characters** actually transmitted, some hundreds
+of metres. So the line is a coarse but honest chain of real fixes, not an interpolated road.
+
 Under **CMD** the menu offers the services APRS-IS actually runs, each with its own
 parameter form and validation:
 
@@ -1151,6 +1190,14 @@ The same stations plotted by locator.
   means half the distance and a plot without a scale is just a picture. The corner reading
   is prefixed `LOG`. Off by default; the choice is remembered.
 
+![Stations map on the logarithmic scale](img/js8call-stations-map-log.png)
+
+The same 39 stations, the same moment, with **LOG** on. On the linear plot above they are
+three clumps around the centre — `×14`, `×12`, `×6` — and the links between them have nowhere
+to be drawn; here the decade rings pull them apart into individual dots and the 33 hearing
+links become readable. The clump counts that survive are the stations genuinely sharing one
+locator square.
+
 ### 5.10 MSG BOX
 
 ![MSG BOX](img/js8call-msg-box.png)
@@ -1173,11 +1220,75 @@ your decision. Clicking a message is what marks it read.
 | **QUERY MSGS** | ask the selected station whether it holds anything for you |
 | **Refresh** | re-read the box |
 
+**Answering somebody else's `QUERY MSGS`.** Asked by name, this station answers either
+`YES MSG ID n` or `NO`. Asked through a group — `@ALLCALL QUERY MSGS`, which is how a station
+canvasses the whole band — it answers **only if it actually holds mail** for the asker. A
+`NO` there would be sent by every station hearing the call, all in the same slot, burying the
+one answer worth having. When several members do hold mail, each answers on a free offset of
+its own rather than on its usual one. `MSG`, `MSG TO:` and `QUERY MSG` sent to `@ALLCALL` are
+ignored outright: storing mail for everybody, or handing a message over because anyone asked,
+is not something a call to the whole band may trigger.
+
+A station signing **portable collects its own mail**: a message left for `OK1BT` is handed
+over when `OK1BT/P` asks for it, the same way JS8Call matches the base callsign.
+
 The table lists `ID · State · Station · Message · Age`. The buttons on a row depend on what
-that row is: **FETCH** and **DEL** on a message somebody has advertised, **REPLY** only on
-one addressed to you, and **SEND NOW** only on your own deferred message — it sends it
-immediately instead of waiting for the recipient to appear. A deletion can be taken back with
-**UNDO** for a moment afterwards.
+that row is: **FETCH** and **DEL** on a message somebody has advertised, **ASK** and **DEL**
+on a message that arrived unreadable, **REPLY** only on one addressed to you, and **SEND
+NOW** only on your own deferred message — it sends it immediately instead of waiting for the
+recipient to appear. A deletion can be taken back with **UNDO** for a moment afterwards.
+
+**Mail that arrived through somebody else.** A station that cannot reach you directly can
+hand its message to a third station, which passes it on. Such a message is filed under the
+callsign that **wrote** it, with the station that carried it shown underneath as
+`via OK1XYZ`, and it is acknowledged back along the same path — the sender may not be within
+reach of your signal at all. That is also why **REPLY** on such a row warns you: an answer
+addressed straight to the sender may never arrive, and going through the intermediary again
+is often the only way back. Machine traffic that came the same way — a relayed `ACK`, a
+signal report — shows in the conversation but is never filed as mail.
+
+**When a message for you arrives damaged.** A fading path can leave a message half-decoded
+or with a failed checksum. It still appears in Recent traffic, marked `incomplete` or
+`bad crc` — and, because you can see that something was addressed to you, the station now
+asks for it again instead of dropping it in silence. The pending request gets its own row in
+the box: *Unreadable MSG from OK1BT (bad crc) · 3 asks*.
+
+It asks in the order that survives a collision. The first question is **`QUERY MSGS`** —
+*do you hold anything for me?* — because it is answered out of the other station's message
+store, which means the answer is the same an hour later. If it answers `YES MSG ID 7`, the
+message is then fetched **by that id** with `QUERY MSG 7` and acknowledged, the same
+addressed exchange used for any other stored mail. Only if the station answers `NO`, or does
+not answer twice, does it fall back to **`AGN?`** — *say that again*.
+
+That order matters more than the interval, because `AGN?` is answered with the other
+station's **last transmission, whatever it was**. If your question happens to land on top of
+their slot, a lost `QUERY MSGS` costs one turn and can simply be asked again; a lost `AGN?`
+usually costs the message, because by the next attempt their last transmission is a heartbeat
+or somebody else's reply.
+
+| State on the row | Meaning |
+|---|---|
+| **asking** | asking `QUERY MSGS` on its own: after 1, 2, 5, 10, 20 and then every 30 minutes, paused while the station is not being heard and resumed when it is, for up to a day |
+| **collecting** | the station said `YES` — the message is being fetched by id |
+| **asking AGN?** | the station holds nothing, so the fallback is running |
+| **operator** | automatic asking has stopped, and the row says why |
+
+There is no limit on the number of attempts: knowing a message exists is a standing reason to
+keep asking. What ends the automatic part is the answer becoming unavailable — and only in
+the `AGN?` phase, because once the station has transmitted anything else, that question can
+no longer return your message. `QUERY MSGS` is never invalidated this way. **ASK** overrules
+all of it and asks once immediately, including when the row has gone to **operator**: you may
+know something the station does not, such as that the other end is still repeating the same
+message. **DEL** gives up on it.
+
+The station will not ask **into** somebody else's transmission: a question is held back while
+a message is still arriving, and while the one-minute quiet period after any directed traffic
+is running — the same rule that keeps automatic replies from talking over a conversation. A
+held-back question shows the reason on the row and goes out at the next opportunity.
+
+Asking is automatic only while the station is armed (see [section
+5.12](#512-unattended-operation)); with `Answer queries automatically` off, the row is there
+and **ASK** works, but nothing goes out by itself.
 
 **How SEND LATER actually delivers.** A deferred message waits until either the recipient
 shows up on the band themselves — a heartbeat, a CQ — in which case it goes **direct**; or
@@ -1212,7 +1323,8 @@ answers nothing and relays nothing, whatever the other boxes say.
 
 | Setting | Effect |
 |---|---|
-| **Answer queries automatically** | **arms unattended operation**, and replies to `SNR?`, `GRID?`, `INFO?`, `STATUS?`, `HEARING?` and `AGN?`. With it **off**, an answer is placed in the message box for you to send by hand instead. |
+| **Answer queries automatically** | **arms unattended operation**, and replies to `SNR?`, `GRID?`, `INFO?`, `STATUS?`, `HEARING?` and `AGN?`. It is also what lets the station send `AGN?` *itself* when a message addressed to you arrives unreadable — see [section 5.10](#510-msg-box). With it **off**, an answer is placed in the message box for you to send by hand instead. |
+| | `AGN?` repeats what was last sent **to the asking station**, or — matching JS8Call — the station's last transmission of any kind when there was none, so a station that copied your CQ garbled can ask for it again. Asked through a group, `AGN?` is never answered: every member would repeat a different message into the same slot. |
 | **Unattended for** | how long the arming lasts: 1, 6, 12, 24 or 168 hours. It only sets the length — it does not arm anything by itself. The state beside it counts down, and reads `disarmed` when off. |
 | **Repeat CQ** | calls CQ on an interval. **The exception:** this one runs whether or not the station is armed. |
 | **Send heartbeats** / **Heartbeat every** / **Acknowledge heartbeats** | announce the station on the `@HB` network, and answer other stations' heartbeats with `HEARTBEAT SNR` |

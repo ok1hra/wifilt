@@ -228,6 +228,15 @@ f.onload=()=>{
       const guardAfterDecay=T.gainState().guard.gain;
       // And it reaches the air: the next frame is modulated at the reduced level.
       const frameGainDuring=T.gainState().frame;
+      // Which the operator can see WHILE it happens -- beside ABORT, not inside a
+      // settings section nobody has open during a transmission.
+      const trimBadgeDuring=T.gainState().trimBadge;
+      // A JS8 message is several frames and the firmware restarts alcSeq and
+      // consumed at each one. Frame two must still be heard: without this the
+      // limiter went blind after frame one and a two-frame GPS beacon transmitted
+      // its second frame at whatever frame one decided, unwatched.
+      T.alcFeed({txId:8,consumed:8000,alc:30,alcSeq:1});
+      const guardAfterSecondFrame=T.gainState().guard.gain;
       const firstWitness=T.alcEnd();
       // One witness is not evidence: the stored level is untouched.
       await T.gainReload();
@@ -298,6 +307,9 @@ f.onload=()=>{
         alcLimiterTakesOneDbOff:Math.abs(guardAfterOne-0.62*Math.pow(10,-1/20))<1e-6&&guardStart===0.62,
         alcLimiterIgnoresAFallingMeter:guardAfterDecay===guardAfterOne,
         alcLimiterReachesTheNextFrame:Math.abs(frameGainDuring-guardAfterOne)<1e-9,
+        alcLimiterHearsTheSecondFrame:
+          Math.abs(guardAfterSecondFrame-0.62*Math.pow(10,-2/20))<1e-6,
+        alcTrimIsVisibleWhileItHappens:trimBadgeDuring==='ALC -1.0 dB',
         alcOneWitnessDoesNotRewriteTheTable:firstWitness&&firstWitness.witnesses===1&&Math.abs((tableAfterOne.gain||0)-0.62)<1e-9,
         alcTwoWitnessesDo:Math.abs((tableAfterTwo.gain||0)-0.62*Math.pow(10,-1/20))<5e-4&&tableAfterTwo.autoTrimmed===true,
         reconnectVisible,
@@ -1068,6 +1080,39 @@ f.onload=()=>{
       // BIN and TX checks that follow.
       d.querySelector('#abortButton').click();
       await new Promise(resolve=>setTimeout(resolve,150));
+
+      // The ACK window has to be counted from the END of our transmission. Mail is
+      // multi-frame -- four frames of Normal is a full minute of keying -- so a window
+      // opened when the message was QUEUED had already closed by the time the other
+      // station could answer, and every ACK was discarded as too late. Seen on the air
+      // 2026-08-13: the record stayed "waiting" after its ACK had arrived. The clock
+      // has to move here, because no browser can wait out a real exchange.
+      dt.clearTxQueue(); dt.clearTxCaptured();
+      dt.msgBoxDefer('OK4LAT','LATE ACK TEST');
+      dt.feedHeartbeat({from:'OK4LAT',to:'@HB',command:'HEARTBEAT',grid:'JO70'});
+      const lateSent=dt.txCaptured().find(item=>item.to==='OK4LAT'&&
+        item.text==='MSG LATE ACK TEST');
+      await new Promise(resolve=>setTimeout(resolve,60));
+      dt.clockShift(60000);                     // four frames on the air
+      const lateTxDone=dt.txComplete();
+      dt.clockShift(75000);                     // its ACK, one slot after we stopped
+      dt.feedInbox({from:'OK4LAT',to:'OK1HRA',command:' ACK'});
+      await new Promise(resolve=>setTimeout(resolve,60));
+      const lateLeft=dt.msgBoxDeferred().find(item=>item.to==='OK4LAT');
+      checks.msgBoxAckWindowRunsFromTxEnd=Boolean(lateSent)&&lateTxDone===true&&!lateLeft;
+      // The other half of the same fix -- a failed transmission closes the exchange,
+      // because nothing can acknowledge a carrier that never went out -- has no check
+      // here on purpose: the only way to fail a transmission in a browser is the
+      // txFail hook, which sets the verdict itself instead of going through
+      // updateOutgoingTxProgress. A check built on it would grade the hook.
+      dt.clockShift(0);
+      // Anything left waiting would turn up in the E4 parking checks further down as
+      // a message they never parked.
+      for(const item of dt.msgBoxDeferred())
+        if(item.to==='OK4LAT')dt.msgBoxDelete(item.id);
+      dt.clearTxQueue();
+      d.querySelector('#abortButton').click();
+      await new Promise(resolve=>setTimeout(resolve,150));
       if(!txSafetyWas){txSafetyBox.checked=false;txSafetyBox.dispatchEvent(new f.contentWindow.Event('change',{bubbles:true}));}
       d.querySelector('#autoReply').click();
       // Heartbeat: an incoming beacon must produce an ACK, and the station's own
@@ -1093,8 +1138,201 @@ f.onload=()=>{
       dt.clearTxCaptured();
       dt.feedAssembled({directed:{from:'KN4CRD',to:'OK1HRA',command:'>'},
         payload:'OH8STN>HELLO JULIAN',checksumOk:true});
-      const fwd=dt.txCaptured().find(item=>item.to==='OH8STN'&&item.text==='>HELLO JULIAN DE KN4CRD');
+      // "*DE*", asterisks included: the only attribution JS8Call's
+      // parseRelayPathCallsigns reads. A bare "DE" broke the ACK chain there.
+      const fwd=dt.txCaptured().find(item=>item.to==='OH8STN'&&item.text==='>HELLO JULIAN *DE* KN4CRD');
       checks.relayForward=Boolean(fwd);
+      d.querySelector('#abortButton').click();
+      await new Promise(resolve=>setTimeout(resolve,120));
+      // JS8Call separates the next hop with a SPACE and only rewrites it to ">"
+      // when it forwards, so reading ">" alone left us as the end of a chain we
+      // were supposed to pass on.
+      dt.clearTxCaptured();
+      dt.feedAssembled({directed:{from:'KN4CRD',to:'OK1HRA',command:'>'},
+        payload:'OH8STN HELLO AGAIN',checksumOk:true});
+      checks.relayHopSpace=Boolean(dt.txCaptured().find(item=>item.to==='OH8STN'&&
+        item.text==='>HELLO AGAIN *DE* KN4CRD'));
+      d.querySelector('#abortButton').click();
+      await new Promise(resolve=>setTimeout(resolve,120));
+      // Mail that arrives through an intermediary, exactly as it comes off the
+      // air: "HB9BV: OK1HRA> MSG <text> *DE* OK1BT". It must be filed against the
+      // ORIGINATOR (with the relay recorded beside it) and acknowledged back the
+      // way it came. Routing it through the per-frame engines instead is how it
+      // used to end up displayed and nothing else -- no ACK, no MSG BOX entry.
+      dt.clearTxCaptured();
+      dt.feedAssembled({directed:{from:'HB9BV',to:'OK1HRA',command:'>'},
+        payload:'MSG TEST FROM OK1BT ;)) *DE* OK1BT',checksumOk:true});
+      checks.relayedMsgAck=Boolean(dt.txCaptured().find(item=>item.to==='HB9BV'&&
+        item.text==='>OK1BT>ACK'));
+      const relayedMail=dt.inboxState().items.find(item=>item.from==='OK1BT'&&
+        item.type==='UNREAD');
+      checks.relayedMsgFiled=Boolean(relayedMail)&&relayedMail.via==='HB9BV'&&
+        relayedMail.text.indexOf('TEST FROM OK1BT')===0;
+      // ...and the operator can see the detour: answering OK1BT directly may
+      // never reach them, which is not deducible from the sender column alone.
+      dt.renderInboxNow();
+      const viaCell=[...d.querySelectorAll('#inboxRows .msgbox-via')]
+        .find(node=>node.textContent.indexOf('HB9BV')>=0);
+      checks.relayedMsgShowsVia=Boolean(viaCell)&&
+        Boolean(viaCell.closest('tr').textContent.indexOf('OK1BT')>=0);
+      d.querySelector('#abortButton').click();
+      await new Promise(resolve=>setTimeout(resolve,120));
+      // Machine chatter that came through a relay is not mail: the hop reduced
+      // its command to " ", so the word filter is the only thing standing
+      // between a relayed signal report and an UNREAD badge.
+      {const before=dt.inboxState().items.length;
+      dt.feedAssembled({directed:{from:'HB9BV',to:'OK1HRA',command:'>'},
+        payload:'SNR +05 *DE* OK1BT',checksumOk:true});
+      checks.relayedMachineNotFiled=dt.inboxState().items.length===before;
+      // The delivery still acknowledges through the relay; drop that queue
+      // entry (30 min TTL) before it can key up inside a later timing check.
+      dt.clearTxQueue();}
+      // A genuine " MSG TO:" frame carries NO "TO:" prefix in its payload -- the
+      // prefix is part of the command token. This is the JS8Call wire shape and
+      // it used to be NACKed as malformed.
+      dt.clearTxCaptured();
+      dt.feedAssembled({directed:{from:'OK5MSG',to:'OK1HRA',command:' MSG TO:'},
+        payload:'OK9TGT PLEASE PASS THIS ON',checksumOk:true});
+      const storedForThird=dt.inboxState().items.find(item=>item.to==='OK9TGT'&&
+        item.type==='STORE'&&item.text==='PLEASE PASS THIS ON');
+      checks.msgToUnprefixedStored=Boolean(storedForThird)&&
+        Boolean(dt.txCaptured().find(item=>item.to==='OK5MSG'&&item.text==='ACK'));
+      // The ACK this check provoked has a store-and-forward TTL of 30 minutes:
+      // abort alone stops the active transmission but leaves the queue entry,
+      // and the leftover then keys up in the middle of the txCompleted section.
+      dt.clearTxQueue();
+      d.querySelector('#abortButton').click();
+      await new Promise(resolve=>setTimeout(resolve,120));
+      // A message aimed at us that could not be put back together is the one case
+      // where silence is wrong: the sender cannot tell. The FIRST question is the
+      // addressed one -- QUERY MSGS is answered out of the store, so it survives a
+      // collision, while AGN? returns whatever the station transmitted last.
+      dt.clearTxCaptured();
+      dt.resetAutoReplyLock();   // earlier checks leave the QSO lock armed
+      dt.feedAssembled({directed:{from:'OK2ABC',to:'OK1HRA',command:' MSG'},
+        payload:'HALF A MESS',incomplete:true});
+      checks.repeatRequest=Boolean(dt.txCaptured().find(item=>item.to==='OK2ABC'&&
+        item.text==='QUERY MSGS'));
+      // ...but not twice in the same minute: the backoff is dense at the start,
+      // not absent. A second broken copy is the same request, not a new one.
+      dt.clearTxCaptured();
+      dt.feedAssembled({directed:{from:'OK2ABC',to:'OK1HRA',command:' MSG'},
+        payload:'HALF AGAIN',incomplete:true});
+      checks.repeatOncePerWindow=dt.txCaptured().length===0;
+      // The request is visible while it stands, with the station and how many
+      // times it has been asked. An operator who is never told assumes nothing
+      // is happening.
+      dt.renderInboxNow();
+      const askRow=[...d.querySelectorAll('#inboxRows tr[data-repeat-call]')]
+        .find(node=>node.dataset.repeatCall==='OK2ABC');
+      checks.repeatRowVisible=Boolean(askRow)&&askRow.textContent.indexOf('1 ask')>=0&&
+        Boolean(askRow.querySelector('[data-msg-action="ask"]'));
+      // The whole point of asking the addressed question: if the station DOES
+      // hold it, "YES MSG ID n" hands the exchange to the pickup path, which
+      // fetches it by id with an ACK -- no dependence on what was transmitted
+      // last, and a collision costs a turn rather than the message.
+      dt.clearTxCaptured();
+      dt.resetAutoReplyLock();
+      dt.feedAssembled({directed:{from:'OK3XYZ',to:'OK1HRA',command:' MSG'},
+        payload:'ALSO BROKEN',incomplete:true});
+      dt.feedAssembled({directed:{from:'OK3XYZ',to:'OK1HRA',command:' YES'},
+        payload:'MSG ID 12',checksumOk:true});
+      checks.repeatPicksUpOnYes=Boolean(dt.txCaptured().find(item=>
+        item.to==='OK3XYZ'&&item.text==='QUERY MSG 12'));
+      dt.renderInboxNow();
+      const askCollect=[...d.querySelectorAll('#inboxRows tr[data-repeat-call]')]
+        .find(node=>node.dataset.repeatCall==='OK3XYZ');
+      let collectEntry=null;
+      try{collectEntry=dt.repeatState().find(item=>item.station==='OK3XYZ');}catch(_e){}
+      checks.repeatShowsCollecting=Boolean(askCollect)&&
+        askCollect.querySelector('.msgbox-state').textContent==='collecting';
+      checks.repeatPhaseIsPickup=Boolean(collectEntry)&&collectEntry.phase==='pickup'&&
+        collectEntry.pending===true;
+      d.querySelector('#abortButton').click();
+      await new Promise(resolve=>setTimeout(resolve,120));
+      // ...and the id is not where it ends: the delivery that comes back carries
+      // the TEXT, which is filed and acknowledged. This is the whole point of the
+      // addressed route, so it is asserted end to end rather than at the QUERY.
+      dt.clearTxCaptured();
+      dt.feedAssembled({directed:{from:'OK3XYZ',to:'OK1HRA',command:' MSG'},
+        payload:'THE WHOLE TEXT FROM OK3XYZ',checksumOk:true});
+      const collected=dt.inboxState().items.find(item=>item.from==='OK3XYZ'&&
+        item.type==='UNREAD');
+      checks.repeatDeliversText=Boolean(collected)&&
+        collected.text.indexOf('THE WHOLE TEXT')===0;
+      checks.repeatAcksDelivery=Boolean(dt.txCaptured().find(item=>
+        item.to==='OK3XYZ'&&item.text==='ACK'));
+      dt.renderInboxNow();
+      checks.repeatRowGoneAfterPickup=
+        ![...d.querySelectorAll('#inboxRows tr[data-repeat-call]')]
+          .some(node=>node.dataset.repeatCall==='OK3XYZ')&&
+        ![...d.querySelectorAll('#inboxRows tr[data-pickup-key]')]
+          .some(node=>node.dataset.pickupKey.indexOf('OK3XYZ')===0);
+      d.querySelector('#abortButton').click();
+      await new Promise(resolve=>setTimeout(resolve,120));
+      // "NO" means the station holds nothing for us -- upstream only stores mail
+      // it was explicitly told to store -- so the addressed route is spent and
+      // AGN? is what is left.
+      dt.feedAssembled({directed:{from:'OK2ABC',to:'OK1HRA',command:' NO'},
+        payload:'',checksumOk:true});
+      dt.renderInboxNow();
+      const askFallback=[...d.querySelectorAll('#inboxRows tr[data-repeat-call]')]
+        .find(node=>node.dataset.repeatCall==='OK2ABC');
+      checks.repeatFallsBackToAgn=Boolean(askFallback)&&
+        askFallback.querySelector('.msgbox-state').textContent==='asking AGN?';
+      // AGN? returns the station's LAST transmission, so once it has sent
+      // something else the question can no longer fetch our message. The asking
+      // stops being automatic and says so; ASK by hand still works. (A heartbeat
+      // counts -- and would displace nothing for QUERY MSGS, which is why the
+      // verdict only applies in this phase.)
+      dt.clearTxCaptured();
+      dt.feedHeartbeat({from:'OK2ABC',to:'@HB',command:'HEARTBEAT',grid:'JO70'});
+      // A heartbeat from an armed station draws an HB ACK; leaving that keyed
+      // would hand the next check a busy transmitter.
+      d.querySelector('#abortButton').click();
+      await new Promise(resolve=>setTimeout(resolve,120));
+      dt.renderInboxNow();
+      const askStale=[...d.querySelectorAll('#inboxRows tr[data-repeat-call]')]
+        .find(node=>node.dataset.repeatCall==='OK2ABC');
+      checks.repeatStopsWhenDisplaced=Boolean(askStale)&&
+        askStale.querySelector('.msgbox-state').textContent==='operator';
+      // The message arriving in one piece ends the request, whatever state it
+      // was in.
+      dt.feedAssembled({directed:{from:'OK2ABC',to:'OK1HRA',command:' MSG'},
+        payload:'ALL OF IT NOW',checksumOk:true});
+      dt.renderInboxNow();
+      // Only this station's row: earlier checks feed broken traffic of their own,
+      // and those requests are legitimately still standing.
+      checks.repeatClearedOnArrival=
+        ![...d.querySelectorAll('#inboxRows tr[data-repeat-call]')]
+          .some(node=>node.dataset.repeatCall==='OK2ABC');
+      d.querySelector('#abortButton').click();
+      await new Promise(resolve=>setTimeout(resolve,120));
+      // A QUERY MSGS put to a group is heard by every member at once, so a "NO"
+      // from each of them is a pile-up in one slot that buries the one station
+      // with an actual answer. Silence is the answer; asked by name it still
+      // says NO, and a member that DOES hold mail still speaks up.
+      dt.clearTxCaptured();
+      dt.resetAutoReplyLock();
+      dt.feedAssembled({directed:{from:'N0IPA',to:'@ALLCALL',command:' QUERY MSGS'},
+        payload:'',checksumOk:true});
+      checks.queryMsgsGroupSilent=dt.txCaptured().length===0;
+      dt.feedAssembled({directed:{from:'N0IPA',to:'OK1HRA',command:' QUERY MSGS'},
+        payload:'',checksumOk:true});
+      checks.queryMsgsDirectSaysNo=Boolean(dt.txCaptured().find(item=>
+        item.to==='N0IPA'&&item.text==='NO'));
+      dt.clearTxCaptured();
+      dt.storeInboxDirect({from:'OK7DEP',to:'N0IPA',text:'HELD FOR YOU'});
+      dt.feedAssembled({directed:{from:'N0IPA',to:'@ALLCALL',command:' QUERY MSGS'},
+        payload:'',checksumOk:true});
+      checks.queryMsgsGroupAnswersWhenHolding=Boolean(dt.txCaptured().find(item=>
+        item.to==='N0IPA'&&item.text.indexOf('YES MSG ID ')===0));
+      // Inbox answers carry a 30-minute store-and-forward TTL: abort stops the
+      // active keying but a QUEUED reply survives and keys up at random inside
+      // whichever timing check runs next (seen as heartbeatTx/txCompleted
+      // flapping). Every block that provokes an inbox reply must clear the
+      // queue, not only abort.
+      dt.clearTxQueue();
       d.querySelector('#abortButton').click();
       await new Promise(resolve=>setTimeout(resolve,120));
       if(!rAutoWas){rAuto.click();}
@@ -1470,7 +1708,7 @@ f.onload=()=>{
         const hasActive=Boolean(outgoing?.querySelector('.tx-copy-active'));
         if(sentLength>0&&hasPending)sawPartialTx=true;
         if(summary.toLowerCase().includes('waiting-slot')&&sentLength>0&&hasPending&&!hasActive)sawPausedTx=true;
-        if(completed||++tries>110){
+        if(completed||++tries>170){
           clearInterval(poll);checks.txCompleted=completed;
           if(!completed){const pass=false;return fetch('/result',{method:'POST',body:JSON.stringify({pass,text:'DATA BROWSER FAIL '+JSON.stringify(checks)+' station='+JSON.stringify(stationObserved)+' sort='+JSON.stringify({sortAscObserved,sortDescObserved})+' gate='+gate+' tx='+summary})});}
           const completedText=d.querySelector('.chat-row.outgoing:last-child .tx-copy-sent');
@@ -2180,4 +2418,4 @@ wsConnections++;wsOpenedAt=Date.now();if(!jscComplete)earlyWsConnections++;const
 // makes the wake lock checks meaningful: the video fallback is a mobile technique
 // and a desktop user agent would (correctly) refuse to use it.
 const ANDROID_UA="Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36";
-server.listen(0,"127.0.0.1",()=>{chrome=spawn("google-chrome",["--headless=new","--no-sandbox","--disable-gpu","--disable-dev-shm-usage","--no-proxy-server",`--user-agent=${ANDROID_UA}`,"--host-resolver-rules=MAP wifilt.test 127.0.0.1",`http://wifilt.test:${server.address().port}/smoke.html`]);let errors="";chrome.stderr.on("data",c=>errors+=c);chrome.on("close",code=>{if(!finished)finish(false,`DATA BROWSER FAIL Chrome exited ${code}\n${errors}`);});timer=setTimeout(()=>finish(false,`DATA BROWSER FAIL timeout prepares=${txPrepares} packets=${txPackets}`),55000);});
+server.listen(0,"127.0.0.1",()=>{chrome=spawn("google-chrome",["--headless=new","--no-sandbox","--disable-gpu","--disable-dev-shm-usage","--no-proxy-server",`--user-agent=${ANDROID_UA}`,"--host-resolver-rules=MAP wifilt.test 127.0.0.1",`http://wifilt.test:${server.address().port}/smoke.html`]);let errors="";chrome.stderr.on("data",c=>errors+=c);chrome.on("close",code=>{if(!finished)finish(false,`DATA BROWSER FAIL Chrome exited ${code}\n${errors}`);});timer=setTimeout(()=>finish(false,`DATA BROWSER FAIL timeout prepares=${txPrepares} packets=${txPackets}`),120000);});

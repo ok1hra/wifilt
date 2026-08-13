@@ -178,7 +178,7 @@ const dom = {
   txGain:$("txGain"), calResolved:$("calResolved"), calField:$("calField"),
   planField:$("planField"), planButton:$("planButton"),
   txSafety:$("txSafety"), storageState:$("storageState"),
-  txQueueState:$("txQueueState"),
+  txQueueState:$("txQueueState"), alcTrimState:$("alcTrimState"),
   hbEnabled:$("hbEnabled"), hbMinutes:$("hbMinutes"), hbAck:$("hbAck"), hbState:$("hbState"),
   groups:$("groups"), groupNames:$("groupNames"), groupsHint:$("groupsHint"),
   groupsButton:$("groupsButton"), stationGroupsButton:$("stationGroupsButton"),
@@ -526,7 +526,11 @@ function currentJs8() { return settings.modems.js8call; }
 // deliberately measures the radio as it stands -- so calibrating for JS8 means
 // setting this page's band and power first, then calibrating there.
 const gainStore = new TxGainCal.TxGainStore();
-const alcGuard = new TxAlcGuard.TxAlcGuard();
+// One JS8 message is several frames, each keyed separately and each with its
+// level already baked in by the modulator -- so the limiter gets one reduction
+// per frame and re-reads the ALC at every frame boundary. See the flag's comment
+// in tx-alc-guard.js; the WSPR beacon, one streamed transmission, leaves it off.
+const alcGuard = new TxAlcGuard.TxAlcGuard({levelBakedPerFrame:true});
 
 // What the table says for the radio's CURRENT band and power, or the manual
 // value with a reason. Never a guess: a level filed under a model we have not
@@ -723,8 +727,13 @@ function beginAlcGuard() {
 
 function endAlcGuard() {
   const outcome = alcGuard.endTx();
-  if (!outcome || !outcome.reduced) return;
-  state.alcTrim = {key:outcome.key, gain:outcome.gain, witnesses:outcome.witnesses,
+  if (!outcome) return;
+  // A clean message clears the indicator for the same reason it clears the
+  // guard's witness: it is evidence that the level holds. Leaving the last trim
+  // on screen would keep accusing a setup that has since behaved.
+  if (!outcome.reduced) { state.alcTrim = null; renderControls(); return; }
+  state.alcTrim = {key:outcome.key, gain:outcome.gain, startGain:outcome.startGain,
+                   witnesses:outcome.witnesses,
                    needsRecalibration:outcome.needsRecalibration};
   if (outcome.persistGain === null) { renderControls(); return; }
   // Second witness: the stored level really does not hold any more. Only ever
@@ -735,6 +744,41 @@ function endAlcGuard() {
                               autoTrimmed:true, at:Date.now()})
     .catch(() => {})
     .then(() => renderControls());
+}
+
+// The limiter takes level off the air without asking, and it used to say so only
+// through calResolved -- which sits inside a settings section nobody has open
+// while transmitting, and only after a trim was written to the table, which takes
+// two separate messages. A single dB, the common case, was invisible: a quieter
+// second frame and no reason given. This says it beside ABORT, while it happens.
+function alcTrimDb(gain, reference) {
+  return gain > 0 && reference > 0 && gain < reference
+    ? 20 * Math.log10(gain / reference) : 0;
+}
+
+function renderAlcTrim() {
+  if (!dom.alcTrimState) return;
+  const resolved = resolvedGain();
+  // In flight the guard is the truth; afterwards the last outcome is, until the
+  // next message replaces or clears it. The reference differs too: the guard was
+  // begun from the table as it stood, and a persisted trim has since moved it.
+  const live = alcGuard.active;
+  const trim = state.alcTrim && state.alcTrim.key === resolved.key ? state.alcTrim : null;
+  const gain = live ? alcGuard.gain : (trim ? trim.gain : 0);
+  const reference = live ? resolved.gain : (trim ? trim.startGain : 0);
+  const db = alcTrimDb(gain, reference);
+  if (!db) { dom.alcTrimState.hidden = true; return; }
+  const amount = `${Math.abs(db).toFixed(1)} dB`;
+  dom.alcTrimState.textContent = `ALC -${amount}${live ? "" : " last msg"}`;
+  dom.alcTrimState.title = live
+    ? `The ALC limiter has taken ${amount} off the calibrated ${reference}. JS8 bakes the ` +
+      `level into a whole frame, so this reaches the air from the next frame onwards.`
+    : `The last message finished ${amount} below the calibrated ${reference}. ` +
+      (trim && trim.needsRecalibration
+        ? "Six dB down and the ALC was still acting -- recalibrate this band and power."
+        : `Two messages agreeing rewrite the stored level; this was witness ` +
+          `${trim ? trim.witnesses : 1} of 2. A clean message clears it.`);
+  dom.alcTrimState.hidden = false;
 }
 
 // Read-only, beside the manual field and never inside it: a calibrated level can
@@ -767,8 +811,10 @@ function onAudioControl(message) {
   if (gainCal && gainCal.running) { gainCal.onControl(message); return; }
   if (!message || message.type !== "tx-level" || !alcGuard.active) return;
   const before = alcGuard.gain;
-  const after = alcGuard.noteLevel({consumed:message.consumed, alc:message.alc,
-                                    alcSeq:message.alcSeq});
+  // txId matters as much as the readings do: the firmware restarts consumed and
+  // alcSeq at every frame, and without it the guard discards frame two onward.
+  const after = alcGuard.noteLevel({txId:message.txId, consumed:message.consumed,
+                                    alc:message.alc, alcSeq:message.alcSeq});
   // No mid-frame correction on this page: the modulator has already baked the
   // level into the frame that is playing. The reduction reaches the air on the
   // next frame, through frameGain().
@@ -2004,6 +2050,7 @@ function renderControls() {
   dom.autoTiming.checked=js8.autoTiming;
   if(document.activeElement!==dom.txGain)dom.txGain.value=state.settingsDraft.txGain===null?js8.txGain:state.settingsDraft.txGain;
   renderResolvedGain();
+  renderAlcTrim();
   dom.txSafety.checked=js8.txSafetyAccepted;
   if(document.activeElement!==dom.infoText)dom.infoText.value=js8.infoText;
   renderStatusAnswer(js8);
@@ -4145,6 +4192,10 @@ function handleDecodedFrame(decoded, {live = true} = {}) {
     if (mine && (decoded.command === " ACK" || decoded.command === " NACK"))
       noteMailAck(decoded.from, now, {negative: decoded.command === " NACK"});
   }
+  // A beacon is a transmission too, so it displaces whatever AGN? would have
+  // returned -- the same reason a directed message to somebody else does.
+  if (decoded.kind === "heartbeat" || decoded.kind === "cq")
+    noteRepeatTransmission(decoded.from, `it sent a ${decoded.kind} since`);
   if (decoded.kind === "heartbeat") { handleHeartbeatFrame(decoded, now); return; }
   // Single-frame queries (SNR?/GRID?/...) are answered here per frame. MSG, MSG
   // TO:, QUERY MSG/CALL and relay carry a multi-frame payload and are dispatched
@@ -4157,20 +4208,26 @@ function handleDecodedFrame(decoded, {live = true} = {}) {
 // real traffic -- the per-frame path only ever sees the header.
 function dispatchAssembledMessage(message) {
   if (!message || !message.directed) return;
-  // Never act on a reception that never ended. The CRC would refuse it anyway (the check
-  // bytes ride at the very end), but relaying half of somebody else's traffic under my
-  // callsign is bad enough to deserve its own guard.
-  if (message.incomplete) {
-    console.info("[js8-reassembly] incomplete, display only", message.directed.command);
-    return;
-  }
   const js8 = currentJs8();
   if (!js8.myCall) return;
-  if (message.checksumOk === false) {
-    console.info("[js8-reassembly] checksum failed, dropping", message.directed.command);
+  const now = js8Clock.now();
+  // Never act on a reception that never ended. The CRC would refuse it anyway (the check
+  // bytes ride at the very end), but relaying half of somebody else's traffic under my
+  // callsign is bad enough to deserve its own guard. Broken mail addressed to US is the
+  // one case where dropping it silently is wrong -- the sender cannot tell.
+  if (message.incomplete) {
+    console.info("[js8-reassembly] incomplete, display only", message.directed.command);
+    requestRepeat(message, now, "incomplete");
     return;
   }
-  const now = js8Clock.now();
+  if (message.checksumOk === false) {
+    console.info("[js8-reassembly] checksum failed, dropping", message.directed.command);
+    requestRepeat(message, now, "bad crc");
+    return;
+  }
+  // A message we were waiting to hear again either arrived, or was displaced by
+  // whatever this station is sending now.
+  noteRepeatOutcome(message);
   // Mail somebody is holding for us is announced inside ordinary traffic --
   // "HEARTBEAT SNR -12 MSG ID 32", "YES MSG ID 7 +2" -- so the whole payload is
   // inspected before it is routed by command.
@@ -4189,19 +4246,241 @@ function dispatchAssembledMessage(message) {
 // Machine chatter carries no message: filing an SNR report as mail would bury
 // the one line the operator actually has to read. Free text is command " ".
 const MSGBOX_MACHINE_COMMANDS = new Set([" SNR", " HEARTBEAT SNR", " ACK", " NACK",
-  " GRID", " INFO", " STATUS", " HEARING", " YES", " NO", " RR", " QSL", " 73",
-  " SK", " FB", " AGN?", " DIT DIT", " HW CPY?", " QUERY", " QUERY MSGS",
-  " QUERY MSGS?", " QUERY CALL", " SNR?", " GRID?", " INFO?", " STATUS?", " HEARING?"]);
-function fileIncomingMessage(directed, payload, now) {
+  " GRID", " INFO", " STATUS", " HEARING", " YES", " NO", " RR", " QSL", " QSL?",
+  " 73", " SK", " FB", " AGN?", " DIT DIT", " HW CPY?", " CMD", " QUERY",
+  " QUERY MSGS", " QUERY MSGS?", " QUERY CALL", " SNR?", " GRID?", " INFO?",
+  " STATUS?", " HEARING?"]);
+// The same judgement for text that arrived THROUGH a relay: the relay hop
+// swallowed the command (everything reaches us as command " "), so the machine
+// filter has to look at the words instead. Longest token first, or "SNR +05"
+// would be read as free text starting with the callsign "SNR".
+const MSGBOX_MACHINE_TOKENS = [...MSGBOX_MACHINE_COMMANDS]
+  .map(command => command.trim()).filter(Boolean)
+  .sort((left, right) => right.length - left.length);
+function isMachineText(text) {
+  const clean = String(text || "").trim().toUpperCase();
+  return MSGBOX_MACHINE_TOKENS.some(token =>
+    clean === token || clean.startsWith(`${token} `));
+}
+function fileIncomingMessage(directed, payload, now, {via = ""} = {}) {
   const js8 = currentJs8();
   const text = String(payload || "").trim();
   if (!text || !js8.myCall) return;
   if (!sameCall(directed.to, js8.myCall)) return;   // group traffic is not mail
   if (MSGBOX_MACHINE_COMMANDS.has(directed.command)) return;
   if (isBlockedCall(directed.from)) return;
-  const outcome = inbox.fileIncoming({from: directed.from, to: directed.to, text},
+  const outcome = inbox.fileIncoming({from: directed.from, to: directed.to, text, via},
     {nowMs: now, myCall: js8.myCall});
   if (outcome.action === "store") { syncInbox(); renderInbox(); }
+}
+
+// ---- asking for a broken message again --------------------------------------
+// Upstream simply drops what it cannot reassemble, which is survivable when a
+// human is watching the waterfall and can type AGN? themselves. Unattended it
+// means a message addressed to this station is lost with nobody the wiser at
+// either end. So we ask, and we keep asking -- knowing that a message exists is
+// a standing reason, not a one-off event.
+//
+// WHAT we ask matters more than how often, because the two available questions
+// fail differently when a question collides with the other station's slot:
+//
+//   QUERY MSGS -> YES MSG ID n -> QUERY MSG n     addressed, stateful, resumable
+//   AGN?                                          returns their LAST transmission
+//
+// Upstream answers AGN? with `m_lastTxMessage` (processCommandActivity.cpp) --
+// whatever it sent last, not what it sent us. So a collided AGN? is not merely a
+// lost turn: by the time we ask again the answer has usually been replaced by a
+// heartbeat or somebody else's reply, and the message can never be recovered
+// that way. QUERY MSGS is answered from the store (`getNextMessageIdForCallsign`)
+// and is therefore just as valid an hour later, which is exactly the property a
+// question needs when transmissions overlap. So it is asked FIRST, and AGN? is
+// the fallback for when the station holds nothing -- upstream only files mail it
+// was explicitly asked to store, so "NO" is a real and common answer.
+//
+// The backoff is dense at the start because that is when AGN? can still work,
+// and the collision guards below are what keep the question out of the other
+// station's transmission in the first place.
+const REPEAT_BACKOFF_MS = [60000, 120000, 300000, 600000, 1200000, 1800000];
+// Two unanswered QUERY MSGS is enough to conclude the station is not answering
+// queries at all (upstream needs autoreply enabled to answer one).
+const REPEAT_QUERY_TRIES = 2;
+// A station we have not decoded in this long is not there to ask. The request is
+// only paused -- it resumes from noteStationAppearance() the moment it is heard.
+const REPEAT_HEARD_MS = 30 * 60000;
+// After a day the band, the operator and probably the message have all moved on.
+// The row stays and ASK still works; only the automatic asking stops.
+const REPEAT_AUTO_MS = 24 * 3600000;
+// station -> {station, atMs, attempts, phase, phaseTries, lastMs, reason,
+//             command, stale}
+// phase: "query" -> asking QUERY MSGS | "pickup" -> it said YES and the mail
+// pickup path owns it now | "agn" -> it holds nothing, fall back to AGN?
+const repeatWaiting = new Map();
+
+function requestRepeat(message, now, reason) {
+  const js8 = currentJs8();
+  const directed = message.directed || {};
+  const from = String(directed.from || "").toUpperCase();
+  // Whoever transmitted it is who can repeat it -- the relay, if it came through
+  // one. Nothing else about the message is trustworthy at this point: half of it
+  // is missing or its checksum failed.
+  if (!from || !js8.myCall) return;
+  if (!sameCall(directed.to, js8.myCall)) return;   // not ours to chase
+  if (sameCall(from, js8.myCall)) return;           // our own transmission, heard back
+  if (isBlockedCall(from)) return;
+  // The addressee of a directed frame is packed into 28 bits, so a callsign we
+  // cannot pack is one we can never ask (packDirectedHeader throws).
+  if (!Js8Inbox.isCallsign(from)) return;
+  const existing = repeatWaiting.get(from);
+  // A second broken reception from the same station is the same request, not a
+  // new one -- but it does prove the message is still what they are sending, so
+  // the "they have moved on" verdict is lifted.
+  repeatWaiting.set(from, {station: from, atMs: existing ? existing.atMs : now,
+    attempts: existing ? existing.attempts : 0, lastMs: existing ? existing.lastMs : 0,
+    phase: existing ? existing.phase : "query",
+    phaseTries: existing ? existing.phaseTries : 0,
+    reason, command: String(directed.command || "").trim(), stale: false});
+  // heardNow: the station is transmitting at this very moment -- we just failed
+  // to read what it said. The heard-recently gate is for the retries that come
+  // later, not for this one.
+  const refused = askRepeat(from, now, {heardNow: true});
+  if (refused) console.info("[js8-repeat] not asking", from, "--", refused);
+  renderInbox();
+}
+
+// Same shape as fetchWaitingMail: the reason it did not transmit, or "" when the
+// question went out. Decision 13 -- silence with no reason is not allowed.
+function askRepeat(station, now, {manual = false, probe = false, heardNow = false} = {}) {
+  const js8 = currentJs8();
+  const call = String(station || "").toUpperCase();
+  const entry = repeatWaiting.get(call);
+  if (!entry) return "nothing to ask for";
+  if (!js8.txSafetyAccepted || !activeEncoder) return "tx not enabled";
+  if (!manual && js8.auto !== true) return "waiting for AUTO";
+  // Once the station has said YES, the pickup path owns the exchange: asking
+  // anything else would open a second transaction with a station that is already
+  // sending us the message. But a pickup can end WITHOUT delivering -- it gives
+  // up after five tries, and the operator can drop it by hand -- and a request
+  // parked in this phase would then wait for a fetch that is never coming. So
+  // this phase is driven, not merely observed: the tick pushes the fetch along,
+  // and when the pickup is gone the request goes back to asking for itself.
+  if (entry.phase === "pickup") {
+    if (mailPending.has(call)) return "collecting the message";
+    const pickup = [...mailWaiting.values()].find(item => item.station === call);
+    if (pickup && !mailAttempts.exhausted(mailKey(call, pickup.id)))
+      return fetchWaitingMail(call, now, {manual, probe});
+    // A probe answers questions, it never changes anything -- renderInbox() calls
+    // this for every row on every paint. Leaving the phase change here made the
+    // render undo the phase in the instant between "it said YES" and the pickup
+    // being registered, which is exactly when the panel repaints.
+    if (probe) return pickup ? "pickup gave up" : "waiting for the pickup";
+    setRepeatPhase(entry, "query", pickup ? "pickup gave up" : "pickup is gone");
+  }
+  // Never transmit into somebody else's turn. A question that lands on top of
+  // the answer costs both -- and the whole reason this station is asking is that
+  // a transmission was already lost once.
+  if (hasActiveReassembly(now)) return "a message is still arriving";
+  if (autoReply.qsoLockRemainingMs(now) > 0)
+    return `conversation in progress, ${Math.ceil(autoReply.qsoLockRemainingMs(now) / 1000)} s`;
+  // The operator clicking IS the attendance, and they may know something we do
+  // not -- so a manual ASK ignores the backoff and the staleness verdict.
+  if (!manual) {
+    // Staleness only disqualifies AGN?. QUERY MSGS is answered from the store,
+    // so it stays valid however much the station has transmitted since.
+    if (entry.stale && entry.phase === "agn")
+      return `${call} has transmitted since -- AGN? would fetch that`;
+    if (now - entry.atMs > REPEAT_AUTO_MS) return "asked for a day, ASK to keep trying";
+    const wait = REPEAT_BACKOFF_MS[Math.min(entry.attempts, REPEAT_BACKOFF_MS.length - 1)];
+    if (entry.attempts && now - entry.lastMs < wait) return "waiting for the retry window";
+    if (!heardNow && !stationHeardSince(call, now - REPEAT_HEARD_MS))
+      return "not heard recently";
+  }
+  if (probe) return "";
+
+  const text = entry.phase === "agn" ? "AGN?" : "QUERY MSGS";
+  entry.attempts += 1;
+  entry.phaseTries += 1;
+  entry.lastMs = now;
+  console.info("[js8-repeat]", text, "to", call,
+    `(${entry.reason}, try ${entry.attempts})`);
+  txQueue.push({source: "msgbox", text, to: call, nowMs: now,
+    submode: selectedMode(), meta: {command: text, msgboxRepeat: call}});
+  // A station that never answers the query is either not answering queries at
+  // all or not hearing us; either way the addressed route is spent and AGN? is
+  // what is left.
+  if (entry.phase === "query" && entry.phaseTries >= REPEAT_QUERY_TRIES)
+    setRepeatPhase(entry, "agn", "no answer to QUERY MSGS");
+  drainTxQueue(); renderTxQueue(); renderInbox();
+  return "";
+}
+
+function setRepeatPhase(entry, phase, detail) {
+  if (!entry || entry.phase === phase) return;
+  entry.phase = phase;
+  entry.phaseTries = 0;
+  console.info("[js8-repeat]", entry.station, "->", phase, `(${detail})`);
+}
+
+function stationHeardSince(call, sinceMs) {
+  const station = (state.activity.calls || []).find(item => item && item.call === call);
+  return Boolean(station) && Number(station.lastSlotUtcMs || 0) >= sinceMs;
+}
+
+// Anything else the station puts on the air overwrites what AGN? would return,
+// so the automatic asking stops here rather than at a try count. A heartbeat
+// counts: it is a transmission like any other.
+function noteRepeatTransmission(call, detail) {
+  const from = String(call || "").toUpperCase();
+  const entry = repeatWaiting.get(from);
+  if (!entry || entry.stale) return;
+  entry.stale = true;
+  console.info("[js8-repeat] no more automatic asks to", from, "--", detail);
+  renderInbox();
+}
+
+// A complete reception from a station we are chasing answers the question one
+// way or the other: the message itself, and we are done -- the answer to our
+// query, which steers what we ask next -- or traffic for somebody else, which
+// means AGN? has nothing left to fetch for us.
+function noteRepeatOutcome(message) {
+  const from = String(message.directed && message.directed.from || "").toUpperCase();
+  const entry = repeatWaiting.get(from);
+  if (!entry) return;
+  if (!sameCall(message.directed.to, currentJs8().myCall))
+    return noteRepeatTransmission(from, "it has transmitted to somebody else since");
+  const command = String(message.directed.command || "");
+  // "NO" and "YES MSG ID n" are the two answers to QUERY MSGS. Neither is the
+  // message, so neither ends the request -- they decide how it continues.
+  if (command.trim() === "NO") {
+    setRepeatPhase(entry, "agn", "station holds nothing for us");
+    renderInbox();
+    return;
+  }
+  if (command.trim() === "YES" && Js8MsgBox.parseMailAdvert(message.payload)) {
+    // noteMailAdvert (further down this same dispatch) turns it into a pickup
+    // and asks for the message by id, which is the addressed route working. It
+    // repaints the panel itself once the pickup exists -- painting here would
+    // show a phase whose pickup has not been created yet.
+    setRepeatPhase(entry, "pickup", "station named the message id");
+    return;
+  }
+  // Any other machine answer is not the message either, but it IS a
+  // transmission, so it displaces what AGN? could return.
+  if (MSGBOX_MACHINE_COMMANDS.has(command))
+    return noteRepeatTransmission(from, "it has sent other traffic since");
+  repeatWaiting.delete(from);
+  console.info("[js8-repeat] got it from", from, "after", entry.attempts, "asks");
+  renderInbox();
+}
+
+// The backoff is measured in minutes, so nothing would retry on its own without
+// a tick: a request would only advance when the station happened to be decoded
+// again. Cheap -- almost every call returns a refusal string.
+function tickRepeatRequests(now) {
+  if (!repeatWaiting.size) return;
+  for (const entry of [...repeatWaiting.values()]) {
+    if (isBlockedCall(entry.station)) { repeatWaiting.delete(entry.station); continue; }
+    askRepeat(entry.station, now);
+  }
 }
 
 // ---- mail somebody else is holding for us ----------------------------------
@@ -4256,6 +4535,32 @@ function mailTransactionOpen(station, now) {
     return false;
   }
   return true;
+}
+
+// The window measuring an answer can only start when an answer becomes possible:
+// at the END of our transmission, not when the message was queued. Mail is
+// multi-frame -- "MSG TO:<call> <text>" is four frames, a full minute of keying
+// in Normal -- so a window opened at enqueue time had already run out before the
+// other station could key up, and every ACK was thrown away as too late. Seen on
+// the air 2026-08-13: parked at M9LOV 19:38:30, its ACK at 19:39:45, the record
+// still "waiting" afterwards.
+//
+// Only a transmission that reached the antenna moves the window. One that failed
+// closes the transaction instead: nothing went out, so nothing can acknowledge
+// it, and keeping the station blocked for another four periods would only delay
+// the next attempt.
+function noteMailTxSettled(item, status) {
+  const meta = item && item.txMeta;
+  if (!meta) return;
+  if (!meta.msgboxDeferredId && !meta.msgboxHandoffId && !meta.msgboxHeldId &&
+      !meta.msgboxFetch) return;
+  const call = String(item.to || "").toUpperCase();
+  const open = mailPending.get(call);
+  if (!open) return;
+  if (!["completed", "unconfirmed"].includes(status)) { mailPending.delete(call); return; }
+  if (open.txDoneMs) return;   // completion may be reported more than once
+  open.txDoneMs = js8Clock.now();
+  open.sinceMs = open.txDoneMs;
 }
 
 function mailChainRoom(station, now) {
@@ -4354,6 +4659,10 @@ function deferMessage(toCall, text) {
 function noteStationAppearance(call, now) {
   const station = String(call || "").toUpperCase();
   if (!station || isBlockedCall(station)) return;
+  // A station that went away with our question unanswered is worth asking again
+  // the moment it is back -- that is what "keep asking" means on a band where
+  // the other end is absent most of the time.
+  if (repeatWaiting.has(station)) askRepeat(station, now);
   if (mailWaiting.size) fetchWaitingMail(station, now);
   sendDeferredTo(station, now);
   pushHeldMailTo(station, now);
@@ -4711,12 +5020,44 @@ function renderInbox() {
       `<button type="button" data-msg-action="forget">DEL</button></td></tr>`;
   }).join("");
 
-  dom.inboxRows.innerHTML = pickupRows + (items.length
+  // A message we know exists but could not read. It is not mail yet, so it rides
+  // with the pickups -- and it says out loud when the asking has stopped being
+  // automatic, because an operator who is never told will assume it is still
+  // trying.
+  const repeats = (msgBoxFilter === "all" || msgBoxFilter === "mine")
+    ? [...repeatWaiting.values()].filter(item => !isBlockedCall(item.station))
+      .sort((left, right) => left.atMs - right.atMs)
+    : [];
+  const repeatRows = repeats.map(item => {
+    const held = askRepeat(item.station, js8Clock.now(), {probe: true});
+    const tries = item.attempts === 1 ? "1 ask" : `${item.attempts} asks`;
+    // What it is doing right now, in the station's own vocabulary -- the point
+    // of the row is that the operator can tell asking from waiting from stuck.
+    const state = item.phase === "pickup" ? "collecting"
+      : item.phase === "agn" && item.stale ? "operator"
+      : item.phase === "agn" ? "asking AGN?" : "asking";
+    return `<tr class="msgbox-row msgbox-repeat" data-repeat-call="${esc(item.station)}">` +
+      `<td>—</td>` +
+      `<td class="msgbox-state">${state}</td>` +
+      `<td class="call" data-call="${esc(item.station)}">${esc(item.station)}</td>` +
+      `<td class="inbox-text">Unreadable ${esc(item.command || "message")} from ` +
+        `${esc(item.station)} (${esc(item.reason)}) · ${tries}` +
+        `${held ? ` · ${esc(held)}` : ""}</td>` +
+      `<td>${age(item.atMs)}</td>` +
+      `<td class="msgbox-actions"><button type="button" data-msg-action="ask">ASK</button>` +
+      `<button type="button" data-msg-action="dropask">DEL</button></td></tr>`;
+  }).join("");
+
+  dom.inboxRows.innerHTML = repeatRows + pickupRows + (items.length
     ? items.map(item => {
         const type = item.type || "STORE";
         const mine = type === "UNREAD" || type === "READ";
         // The other station: whoever wrote to me, or whoever the message is for.
         const peer = mine ? item.from : item.to;
+        // Mail that came the roundabout way can usually only be answered the same
+        // way, so the intermediary belongs on the row. Without it the box shows a
+        // callsign that may never have been on the band at all.
+        const via = mine && item.via && !sameCall(item.via, peer) ? String(item.via) : "";
         const label = type === "DEFERRED"
           ? (item.state === "handed" ? `via ${esc(item.via || "?")}`
             : item.state === "attention" ? "attention" : "waiting")
@@ -4724,16 +5065,20 @@ function renderInbox() {
         return `<tr class="msgbox-row msgbox-${type.toLowerCase()}" data-msg-id="${item.id}">` +
           `<td>${item.id}</td>` +
           `<td class="msgbox-state">${label}</td>` +
-          `<td class="call" data-call="${esc(peer)}">${esc(peer)}</td>` +
+          `<td class="call" data-call="${esc(peer)}">${esc(peer)}` +
+            (via ? `<span class="msgbox-via" title="Relayed by ${esc(via)}">via ${esc(via)}</span>` : "") +
+          `</td>` +
           `<td class="inbox-text">${esc(item.text)}</td>` +
           `<td>${age(item.atMs)}</td>` +
           `<td class="msgbox-actions">` +
-            (mine ? `<button type="button" data-msg-action="reply" title="Answer ${esc(item.from)}">REPLY</button>` : "") +
+            (mine ? `<button type="button" data-msg-action="reply" title="${via
+              ? `Answer ${esc(item.from)} -- it reached us through ${esc(via)}, so a direct reply may not get there`
+              : `Answer ${esc(item.from)}`}">REPLY</button>` : "") +
             (type === "DEFERRED" ? `<button type="button" data-msg-action="sendnow" title="Send it now instead of waiting for ${esc(item.to)} to show up">SEND NOW</button>` : "") +
             `<button type="button" data-msg-action="delete" title="Delete this message">DEL</button>` +
           `</td></tr>`;
       }).join("")
-    : (pickupRows ? "" : `<tr><td colspan="6" class="inbox-empty">${
+    : (pickupRows || repeatRows ? "" : `<tr><td colspan="6" class="inbox-empty">${
         msgBoxFilter === "all" ? "No messages." : "Nothing under this filter."}</td></tr>`));
 
   // Why a fetch is not happening, in the panel rather than the console.
@@ -4832,7 +5177,17 @@ function queryStoredMessages() {
 // Store-and-forward. Accepting mail costs no airtime and works while disarmed;
 // handing somebody else's message over is transmitting for a third party and
 // needs unattended mode, exactly like a relay hop.
-function handleInboxAssembled(directed, norm, now) {
+// A command that reached us through a relay must be answered the way it came:
+// the originator is not on the band -- the intermediary is -- so the answer is
+// wrapped as a relay hop back through it. Upstream does the same thing, sending
+// "<relayPath> ACK" rather than a bare one (processCommandActivity.cpp, MSG).
+function routeReplyVia(send, relayCtx) {
+  const via = relayCtx && String(relayCtx.via || "").toUpperCase();
+  if (!via || sameCall(via, send.to)) return send;
+  return {to: via, text: `>${send.to}>${send.text}`};
+}
+
+function handleInboxAssembled(directed, norm, now, relayCtx = null) {
   const js8 = currentJs8();
   if (!js8.myCall) return;
   // Only stations decoded here may be offered as heard -- a callsign we merely saw named
@@ -4841,7 +5196,7 @@ function handleInboxAssembled(directed, norm, now) {
   const text = unwrapDeliveredMail(directed.from, norm, now);
   const outcome = inbox.handle(
     {from: directed.from, to: directed.to, command: norm.command,
-     text, complete: true},
+     text, complete: true, via: relayCtx ? relayCtx.via : ""},
     // Groups make a command addressed to @NET as much ours as one addressed to our
     // callsign; the inbox needs the list to tell that from somebody else's net.
     {nowMs: now, myCall: js8.myCall, groups: myGroups(), armed: js8.auto === true,
@@ -4849,13 +5204,15 @@ function handleInboxAssembled(directed, norm, now) {
 
   if (outcome.action === "skip") {
     if (outcome.nack && js8.txSafetyAccepted && activeEncoder) {
-      txQueue.push({source: "inbox", text: outcome.nack.text, to: outcome.nack.to,
+      const nack = routeReplyVia(outcome.nack, relayCtx);
+      txQueue.push({source: "inbox", text: nack.text, to: nack.to,
         nowMs: now, meta: {command: "NACK"}});
       drainTxQueue(); renderTxQueue();
     }
     return;
   }
   syncInbox();
+  renderInbox();
   const send = outcome.ack || (outcome.action === "reply" || outcome.action === "deliver"
     ? {to: outcome.to, text: outcome.text} : null);
   if (!send) return;
@@ -4863,8 +5220,17 @@ function handleInboxAssembled(directed, norm, now) {
     console.info("[js8-inbox] cannot answer: tx-not-enabled");
     return;
   }
-  txQueue.push({source: "inbox", text: send.text, to: send.to, nowMs: now,
-    meta: {command: norm.command, inboxDeliveryId: outcome.deliveryId || null}});
+  const routed = routeReplyVia(send, relayCtx);
+  // A question put to a group is heard by every member in the same slot, so the
+  // members that DO have an answer have to spread out -- otherwise the only
+  // stations that should reply are precisely the ones that collide. Same rule
+  // and same offset picker as the auto-reply path.
+  const groupTone = isMyGroup(directed.to) ? groupReplyToneHz() : null;
+  txQueue.push({source: "inbox", text: routed.text, to: routed.to, nowMs: now,
+    meta: groupTone === null
+      ? {command: norm.command, inboxDeliveryId: outcome.deliveryId || null}
+      : {command: norm.command, inboxDeliveryId: outcome.deliveryId || null,
+         toneHz: groupTone}});
   drainTxQueue(); renderTxQueue();
 }
 
@@ -4885,15 +5251,36 @@ function handleRelayAssembled(directed, relayText, now) {
     // If the relayed payload is itself a directed command, act on it and answer
     // the originator, rather than only filing the text.
     const relayed = parseRelayedCommand(outcome.text, directed.from);
-    // Not a live appearance: the relay is on the band, the originator may not be.
-    if (relayed) { handleDecodedFrame(relayed, {live: false}); return; }
+    if (relayed) {
+      // MSG, MSG TO: and the QUERYs are multi-frame commands owned by the
+      // ASSEMBLED path -- the per-frame engines have no handler for them at all.
+      // Sending them down the per-frame path is how a relayed MSG used to vanish
+      // between the two engines: no ACK, no MSG BOX entry, display only.
+      const norm = Js8Protocol.normalizeAssembledCommand(relayed.command, relayed.text);
+      if (norm && norm.kind === "inbox") {
+        handleInboxAssembled({from: relayed.from, to: js8.myCall, command: relayed.command},
+          norm, now, {via: directed.from});
+        return;
+      }
+      // Not a live appearance: the relay is on the band, the originator may not be.
+      handleDecodedFrame(relayed, {live: false});
+      return;
+    }
     // Mail for us arrives regardless of unattended mode; only the ACK needs a
     // working transmitter.
     appendRelayMessage(directed.from, outcome.text);
     // A relayed message is somebody writing to us the hard way -- it belongs in
-    // the MSG BOX for exactly the same reason a direct one does.
-    fileIncomingMessage({from: directed.from, to: js8.myCall, command: " "},
-      outcome.text, now);
+    // the MSG BOX for exactly the same reason a direct one does. It is filed
+    // against the ORIGINATOR, with the intermediary kept beside it: filing it
+    // against the relay names somebody who never wrote a word of it. Machine
+    // chatter is the exception -- a relayed ACK or signal report stays in the
+    // conversation but is not mail (upstream skips a relayed ACK outright); the
+    // usual command filter cannot catch it because the relay hop reduced every
+    // command to " ".
+    const {origin, body} = splitRelayOrigin(outcome.text, directed.from);
+    if (!isMachineText(body))
+      fileIncomingMessage({from: origin, to: js8.myCall, command: " "}, body, now,
+        sameCall(origin, directed.from) ? {} : {via: directed.from});
     if (js8.txSafetyAccepted && activeEncoder && outcome.ack) {
       txQueue.push({source: "relay", text: outcome.ack.text, to: outcome.ack.to,
         nowMs: now, meta: {command: "ACK"}});
@@ -4917,11 +5304,23 @@ function handleRelayAssembled(directed, relayText, now) {
 // (the DE callsign), so the normal engines answer it via the relay reply.
 const RELAYED_COMMANDS = [" SNR?", " GRID?", " INFO?", " STATUS?", " HEARING?",
   " AGN?", " MSG", " MSG TO:", " QUERY MSGS", " QUERY MSG", " QUERY CALL"];
-function parseRelayedCommand(text, fallbackFrom) {
+
+// Attribution as it is actually written on the air. JS8Call marks the originator
+// with "*DE*" (asterisks included) and the older/manual forms "DE" and "VIA" also
+// occur -- js8-relay.js has always read all three, this side used to read a bare
+// "DE" only. The cost of the mismatch was invisible and total: the originator
+// fell back to the relay, so the ACK never left the intermediary and the MSG BOX
+// credited the message to a station that only carried it.
+const RELAY_ORIGIN_RE = /(?:^|\s)(?:\*DE\*|DE|VIA)\s+([A-Z0-9/]+)\s*$/i;
+function splitRelayOrigin(text, fallbackFrom) {
   const clean = String(text || "").trim();
-  const deMatch = /\bDE\s+([A-Z0-9/]+)\s*$/i.exec(clean);
-  const origin = deMatch ? deMatch[1].toUpperCase() : fallbackFrom;
-  const body = deMatch ? clean.slice(0, deMatch.index).trim() : clean;
+  const match = RELAY_ORIGIN_RE.exec(clean);
+  if (!match) return {origin: String(fallbackFrom || "").toUpperCase(), body: clean};
+  return {origin: match[1].toUpperCase(), body: clean.slice(0, match.index).trim()};
+}
+
+function parseRelayedCommand(text, fallbackFrom) {
+  const {origin, body} = splitRelayOrigin(text, fallbackFrom);
   for (const command of RELAYED_COMMANDS) {
     const token = command.trim();
     if (body === token || body.startsWith(token + " ")) {
@@ -5103,7 +5502,9 @@ function drainTxQueue() {
   }
   // A repeat attaches to the row it came from instead of opening a new one.
   if (entry.meta && entry.meta.resendItem) { releaseTxRetry(entry.meta.resendItem, entry); return; }
-  if (entry.to) autoReply.noteSent(entry.to, entry.text);
+  // Unconditional: a CQ or a heartbeat has no addressee, but it is still the
+  // "last transmission" an AGN? asks us to repeat.
+  autoReply.noteSent(entry.to || "", entry.text);
   if (entry.to) startTxTo(entry.to, entry.text, entry.meta, entry.text, entry.source);
   else startTx(entry.text, entry.source);
 }
@@ -5226,7 +5627,7 @@ function releaseTxRetry(item,entry){
   // behind the operator's back -- that is the whole point of the expiry.
   if(entry.source!=="operator"&&!currentJs8().auto)
     return expireTxRetry(item,"unattended mode disarmed");
-  if(entry.to)autoReply.noteSent(entry.to,entry.text);
+  autoReply.noteSent(entry.to||"",entry.text);
   restartOutgoing(item);
 }
 
@@ -5330,6 +5731,9 @@ function failOutgoing(item,error) {
   item.status="fault";
   item.activeFraction=0;
   noteTxOutcome(item,"fault",error.message);
+  // Encoding never even started, so no ACK can be coming: close the mail
+  // transaction instead of leaving the station blocked for four periods.
+  noteMailTxSettled(item,item.status);
   if(state.activeOutgoing===item)state.activeOutgoing=null;
   renderControls();
   renderConversation();
@@ -5850,6 +6254,12 @@ function updateOutgoingTxProgress(txState) {
   if(Number.isFinite(txState.mode))item.submode=Number(txState.mode);
   // Before the render key, because the verdict may rewrite the status to "unconfirmed".
   if(["aborted","fault"].includes(txState.status))noteTxOutcome(item,txState.status,txState.error);
+  // The mail ACK window opens at the END of the transmission, not when the message
+  // was queued (noteMailTxSettled). Read item.status rather than txState: the verdict
+  // above may have turned a fault into "unconfirmed", which means the carrier did go
+  // out and an ACK is still to be expected.
+  if(["aborted","fault","completed","unconfirmed"].includes(item.status))
+    noteMailTxSettled(item,item.status);
   const renderKey=`${item.status}|${item.sentChars}|${Math.round(item.activeFraction*20)}`;
   if(renderKey!==item.txRenderKey){
     // The feed only shows status (colour), so redraw it on status transitions
@@ -6315,6 +6725,20 @@ function bind() {
       }else if(call)chooseCall(call.dataset.call);
       return;
     }
+    // A message we could not read: ask again by hand (manual overrules both the
+    // backoff and the "they have moved on" verdict -- the operator may know the
+    // station is still repeating it), or give up on it.
+    const repeatRow=event.target.closest("tr[data-repeat-call]");
+    if(repeatRow){
+      const station=repeatRow.dataset.repeatCall;
+      if(action&&action.dataset.msgAction==="ask"){
+        const refused=askRepeat(station,js8Clock.now(),{manual:true});
+        if(refused)console.info("[js8-repeat] ask refused:",refused);
+      }else if(action&&action.dataset.msgAction==="dropask"){
+        repeatWaiting.delete(station);renderInbox();
+      }else if(call)chooseCall(call.dataset.call);
+      return;
+    }
     const row=event.target.closest("tr[data-msg-id]");
     if(!row)return;
     const id=Number(row.dataset.msgId);
@@ -6565,6 +6989,11 @@ async function init() {
     if(activeDecoder && activeDecoder.expire)activeDecoder.expire(js8Clock.now());
   });
   scheduler.every("heartbeat",5000,()=>{checkHeartbeat();renderHeartbeatState();});
+  // Messages that arrived unreadable: the retry windows are minutes long, and
+  // the collision guards mean a due attempt is routinely postponed, so the
+  // request needs a clock of its own rather than the next decode from that
+  // station.
+  scheduler.every("repeatAsk",15000,()=>tickRepeatRequests(js8Clock.now()));
   // Group mail is the one record with a clock on it. A minute is often enough: the TTL is
   // a day, and expiring visibly is the point, not expiring promptly.
   scheduler.every("groupMail",60000,()=>{
@@ -6634,6 +7063,8 @@ async function init() {
     heartbeatState(){return heartbeat.snapshot(js8Clock.now());},
     relayState(){return relay.snapshot(js8Clock.now());},
     inboxState(){return inbox.snapshot();},
+    repeatState(){return [...repeatWaiting.values()].map(item=>({...item,
+      pending:mailPending.has(item.station)}));},
     myGroups(){return myGroups();},
     chooseCall(call){chooseCall(call);},
     feedInbox(frame){handleDecodedFrame({kind:"directed",...frame});},
@@ -6645,6 +7076,8 @@ async function init() {
     gainState(){return {resolved:resolvedGain(), frame:frameGain({}),
                         guard:{active:alcGuard.active, gain:alcGuard.gain},
                         trim:state.alcTrim||null,
+                        trimBadge:dom.alcTrimState&&!dom.alcTrimState.hidden
+                          ?dom.alcTrimState.textContent:"",
                         text:dom.calResolved?dom.calResolved.textContent:"",
                         amber:Boolean(dom.calResolved&&dom.calResolved.classList.contains("uncalibrated"))};},
     gainReload(){return gainStore.load().then(()=>{renderResolvedGain();return gainStore.doc;});},
@@ -6671,6 +7104,24 @@ async function init() {
       return true;
     },
     txDropLink(){onAudioStatus({type:"closed"});return true;},
+    // The other half of the same problem: no browser can key a radio, so a
+    // transmission can never SUCCEED here either. Completion is reported through
+    // the very function the modem calls, which is where the mail ACK window opens.
+    txComplete(){
+      const item=state.activeOutgoing;
+      if(!item)return false;
+      updateOutgoingTxProgress({status:"completed",frames:[],frameIndex:0,
+        frameCount:Number(item.frameCount)||1});
+      return true;
+    },
+    // Mail exchanges are minutes long and their windows are counted in slot
+    // periods, so the only way to test them is to move the clock. The swap is the
+    // one the page is built for (see js8Clock); clockShift(0) puts it back.
+    clockShift(ms){
+      const shift=Number(ms)||0;
+      js8Clock.now=shift?()=>Date.now()+shift:()=>Date.now();
+      return shift;
+    },
     outgoingRows(){return state.outgoingLog.map(item=>({id:item.id,status:item.status,
       outcome:item.outcome||"",attempts:Number(item.attempts)||1,text:item.text,to:item.to||"",
       kind:item.recipe?item.recipe.kind:"",frequencyHz:Number(item.frequencyHz)||0,
@@ -6720,6 +7171,9 @@ async function init() {
       js8Clock.now(),options||{});},
     msgBoxHeardBy(station){return stationsHeardBy(station,js8Clock.now());},
     msgBoxSetFilter(filter){msgBoxFilter=filter;renderInbox();},
+    // Cleanup between checks: a record left waiting would turn up in the parking
+    // checks further down as a message they never parked.
+    msgBoxDelete(id){const record=msgBox.remove(Number(id));syncInbox();renderInbox();return Boolean(record);},
     autoReplyState(){return {...autoReply.snapshot(),
       restrictions:restrictions.snapshot(js8Clock.now())};},
     fileProtocol(){return {prepared:binState.prepared,active:binState.active,lastProtocol:binState.lastProtocol};},

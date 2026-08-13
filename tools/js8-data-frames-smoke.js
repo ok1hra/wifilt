@@ -87,6 +87,25 @@ const checks = {
       toCall: "@OK", text: "HELLO NET", mode: 1});
     return frames[0].raw === CAPTURED_COMPOUND &&
       frames[1].raw === CAPTURED_COMPOUND_DIRECTED;
+  })(),
+  // "MSG TO:OK1BT HI" must pack as the " MSG TO:" command (10) with the target
+  // as the FIRST PAYLOAD WORD -- JS8Call's wire shape (its regex reads `MSG
+  // TO[:]` with no space before the target). The old tokenizer required a space
+  // after every token, fell through to " MSG", and left "TO:OK1BT HI" in the
+  // data frames; a JS8Call intermediary then filed the whole thing as its own
+  // operator's mail and the message was never stored for the third party.
+  msgToWireShape: (() => {
+    const frames = Js8Protocol.buildTxFrames({myCall: "OK1HRA", toCall: "HB9BV",
+      text: "MSG TO:OK1BT HELLO", dictionary});
+    const store = new Js8Protocol.ActivityStore(dictionary);
+    let message = null;
+    frames.forEach((frame, index) => {
+      for (const event of store.push({raw: frame.raw, frameType: frame.frameType,
+          submode: 0, offsetHz: 1500, snr: 0, dtMs: 0, slotUtcMs: index * 15000}))
+        if (event.type === "message") message = event.message;
+    });
+    return Boolean(message) && message.directed.command === " MSG TO:" &&
+      message.payload === "OK1BT HELLO" && message.checksumOk === true;
   })()
 };
 

@@ -11,7 +11,196 @@ published.
 
 ## Working tree — not committed
 
-* The only uncommitted change is the `REV` bump to **20260812** in `wifilt.ino`.
+**REV 20260813.** Browser only — no firmware behaviour changed.
+
+* **A deferred message stayed `waiting` after its ACK had arrived.** Seen on the air
+  2026-08-13: OK1BT was heard on a −22 dB heartbeat, the direct `MSG` drew no answer, and the
+  message was then parked at M9LOV — which had reported OK1BT at +03 dB — as
+  `MSG TO:OK1BT DELAYED MESSAGE TEST`. Its ACK came back 75 s later and was discarded. `ACK`
+  carries no message id, so it is matched by a window of four slot periods (decision 12 of
+  [`docs/msgbox-implementace.md`](docs/msgbox-implementace.md)) — but the window was started
+  when the message was **queued**, and mail is multi-frame: that `MSG TO:` is four frames, a
+  full minute of keying, so the 60 s had run out before M9LOV could key up. Not an edge case
+  either — the shortest mail there is could not have made it. The window now opens when the
+  transmission **ends** ([`data.js`](data/data.js) `noteMailTxSettled`), and a transmission
+  that never reached the antenna closes the exchange instead of blocking the station for four
+  more periods. What the bug cost was not only a wrong label: the record stayed live, so the
+  hourly retry would have parked the same message again and again — the duplicates decision 5
+  exists to prevent — and a real delivery ACK could never have closed a record either.
+  `data-browser-smoke` gains `msgBoxAckWindowRunsFromTxEnd` (green; red with the fix backed
+  out, checked both ways) plus the `txComplete` / `clockShift` / `msgBoxDelete` hooks it needs.
+
+Audit of the whole message stack against JS8Call (`processCommandActivity.cpp`,
+`Varicode.cpp`), prompted by the relayed-message and `@ALLCALL NO` findings below — same
+class of bug, hunted deliberately. Seven findings, all fixed:
+
+* **`MSG TO:` had the wrong wire shape in BOTH directions — the parked-message path never
+  worked against a real JS8Call station.** On the wire the `TO:` prefix is part of the
+  command token (JS8Call's regex reads `MSG TO[:]`), so the payload of a genuine frame is
+  `CALL text`, no prefix. Our receiver demanded `TO:` and NACKed real frames as malformed;
+  our transmitter required a space after every token, so `MSG TO:OK1BT HI` fell through to
+  the plain ` MSG` command with `TO:OK1BT HI` left in the data — which a JS8Call intermediary
+  files as its **own operator's** mail and never stores for the third party. Its ACK then let
+  us mark the record `parked`: a false success. Invisible between two WIFILT stations,
+  because both halves mirrored the same mistake ([`js8-protocol.js`](data/js8-protocol.js)
+  tokenizer now takes `:`-terminated tokens without a space; [`js8-inbox.js`](data/js8-inbox.js)
+  `parseMsgTo` accepts both payload forms, so frames from older WIFILT builds still store).
+* **Relay forwarding attributed the originator as ` DE `, which JS8Call cannot see** — its
+  `parseRelayPathCallsigns` reads only `*DE*` and `VIA`. A chain through us therefore lost
+  its originator at the next JS8Call hop: the ACK died at the intermediary and the
+  recipient's inbox credited the wrong station. We now write ` *DE* `, exactly what JS8Call
+  writes when it forwards ([`js8-relay.js`](data/js8-relay.js)).
+* **`AGN?` sent to a group is now refused**, matching upstream's `!isGroupCall`: every member
+  would repeat a *different* message into the same slot — the same pile-up the `@ALLCALL
+  QUERY MSGS` fix stopped, with a rarer trigger.
+* **`AGN?` from a station we never wrote to is now answered** with our last transmission of
+  any kind (upstream's `m_lastTxMessage` semantics) — the station that copied our CQ garbled
+  and asked for a repeat used to get silence. One deliberate difference: the answer is
+  addressed to the asker, not re-broadcast verbatim.
+* **Machine chatter that arrived through a relay is no longer filed as mail.** The relay hop
+  reduces every command to plain text, so a relayed `ACK` or `SNR +05` sailed past the
+  command-based filter into the MSG BOX as an UNREAD message. A word-level filter
+  (`isMachineText`) now catches it; the conversation view still shows it.
+* **` CMD` and ` QSL?` joined the machine-command list** — a buffered `CMD` with a payload
+  used to become mail; upstream drops it outright.
+* **A portable station collects its own mail:** `OK1BT/P` asking `QUERY MSGS`/`QUERY MSG`
+  now matches mail stored for `OK1BT` (longest-segment base call, upstream's
+  `base_callsign` comparison). A stranger asking for somebody else's message is still
+  refused.
+* Verified in parity (no change needed): `NEXT MSG ID` tail, checksum table
+  {5,9,10,11,12,13,24}=16 bit, HB advert `HEARTBEAT SNR ±nn MSG ID n` (our parser also
+  tolerates upstream's stray `)` in the `+n` variant), `YES MSG ID n +m`, delivery format,
+  `QUERY CALL` answer/silence, ACK correlation, armed gates.
+* Harness: three new checks (`msgToUnprefixedStored`, `relayedMachineNotFiled`,
+  `msgToWireShape` in `js8-data-frames-smoke` — a full encoder→ActivityStore round trip),
+  `relayForward`/`relayHopSpace` expectations updated to `*DE*`. Chased a real harness bug
+  the new checks exposed: **inbox replies carry a 30-minute TTL, so a check that provokes
+  one and only clicks ABORT leaves it queued**, and it keys up at random inside a later
+  timing check (`txCompleted`/`heartbeatTx` flapping) — every such block now calls
+  `clearTxQueue()`; the `txCompleted` poll budget and the harness timeout grew with the run
+  (110→170 tries, 90→120 s). Known reds unchanged.
+* **A message relayed to us was displayed and nothing else — no ACK, no MSG BOX entry.**
+  Found on real traffic: OK1BT sent mail through HB9BV, it decoded cleanly (CRC verified, EOT
+  seen) and then fell between two engines. `MSG`, `MSG TO:` and the `QUERY`s are multi-frame
+  commands owned by the ASSEMBLED path ([`data.js`](data/data.js) `handleInboxAssembled`), but
+  `handleRelayAssembled` handed anything starting with a command token to the PER-FRAME path,
+  where the only handler table is the auto-reply one — and it has no entry for `MSG`. The
+  relayed command is now normalized and routed to the engine that owns it; only the
+  single-frame queries still go the per-frame way. This is what upstream does too
+  (`processCommandActivity.cpp` puts the relayed command back into its own RX queue, and
+  ` MSG` is in `autoreply_cmds`).
+* **The ACK now goes back the way the message came.** A reply is wrapped as a relay hop
+  through the intermediary (`>OK1BT>ACK` to HB9BV) rather than sent to a station that is not
+  on the band — upstream sends `<relayPath> ACK` for the same reason.
+* **The originator was being read wrong, silently.** JS8Call writes the attribution as
+  `*DE* OK1BT`; [`data.js`](data/data.js) matched a bare `DE` only (`js8-relay.js` had always
+  read all three forms). The originator therefore fell back to the relay, so even a correct
+  ACK would have stopped at the intermediary and the MSG BOX would have credited the message
+  to a station that merely carried it. Relayed mail is now filed against the sender with the
+  intermediary kept beside it — new `via` field, shown under the callsign in the MSG BOX,
+  named in the REPLY tooltip because a direct answer may never arrive.
+* **A broken message addressed to us is no longer dropped in silence** — and it asks the
+  question that survives a collision. `QUERY MSGS` goes first, because upstream answers it
+  out of the store (`getNextMessageIdForCallsign`), so the answer holds an hour later; a
+  `YES MSG ID n` then hands the exchange to the existing pickup path, which fetches the
+  message by id and ACKs it. `AGN?` is only the fallback for `NO` or two unanswered queries.
+  The order is what matters: `AGN?` is answered with `m_lastTxMessage`, **the station's last
+  transmission, whatever it was**, so a question that collides with their slot costs one turn
+  in the addressed route and usually the whole message in the `AGN?` one.
+* **And it no longer transmits into their turn.** The first version pushed straight onto the
+  TX queue, bypassing both the QSO lock and the reassembly check — asking a station to repeat
+  itself while it was mid-transmission. A question is now held while a message is still
+  arriving (`hasActiveReassembly`) and during the one-minute quiet window after any directed
+  frame, with the reason on the row.
+* **It keeps asking, and what stops it is not a try count.** Knowing a message exists is a
+  standing reason, so there is no attempt limit: 1, 2, 5, 10, 20 and then every 30 minutes,
+  paused while the station is not heard and resumed when it reappears, for up to a day of
+  automatic asking — driven by a 15 s scheduler job, since the retry windows are minutes long
+  and a due attempt is routinely postponed by the collision guards. The "it has transmitted
+  since" verdict applies **only in the `AGN?` phase**; `QUERY MSGS` is never invalidated that
+  way. **ASK** overrules everything for one immediate try, and a complete message from that
+  station clears the request.
+* **We answered `NO` to `@ALLCALL QUERY MSGS`** — seen on the air: N0IPA canvassed the band
+  and this station told it, personally, that it had nothing. Every station hearing that call
+  would send the same thing in the same slot, burying the one station that does hold mail.
+  `_queryMsgs` now knows which group the question arrived on and stays silent when it has
+  nothing to offer; asked by callsign it still answers `NO`. Upstream draws the line only at
+  `@ALLCALL` (`if (!isAllCall && reply.isEmpty())`); we draw it at every group, because the
+  pile-up does not care which one it is.
+* **`MSG`, `MSG TO:` and `QUERY MSG` to `@ALLCALL` are now refused**, matching upstream's
+  `!isAllCall` guards. Ours accepted them because `@ALLCALL` is an always-joined group, so a
+  call to the whole band could make this station store mail or hand a message over.
+* **A `YES` to a group question goes out on a free offset**, through the same picker the
+  auto-reply path already uses: the members that have an answer are exactly the ones that
+  would otherwise collide with each other.
+* **The pickup phase is driven, not just watched.** A `YES` hands the exchange to the mail
+  pickup path — but a pickup can end without delivering (it gives up after five tries, and
+  the operator can drop it), and a request parked in that phase would then wait for a fetch
+  that is never coming. The tick now pushes the fetch along and falls back to asking for
+  itself when the pickup is gone. Found by following the id-to-text chain end to end after
+  the question *"does it not just get the message number instead of the content?"* — the
+  chain does deliver the text (`repeatDeliversText`), but this was the hole in it.
+* **A probe must not change anything.** `renderInbox()` asks each row *could this go out?*
+  on every paint, and that path was allowed to change the phase — so the panel undid the
+  `pickup` phase in the instant between the `YES` and the pickup being registered. Two fixes:
+  the probe branch returns a reason instead of writing, and the phase change no longer
+  repaints before the state it describes exists.
+* The browser harness budget went 55 s → 90 s: this work added ten checks and several
+  transmissions, and the run started timing out intermittently — which looks nothing like a
+  failing check, it looks like the page hanging.
+* **The request is visible the whole time** — its own row in the MSG BOX beside the pickups:
+  *Unreadable MSG from OK1BT (bad crc) · 3 asks*, with the state naming what it is actually
+  doing (`asking` / `collecting` / `asking AGN?` / `operator`) plus **ASK** / **DEL**. An
+  operator who is never told assumes nothing is happening.
+* **We can be an intermediary for JS8Call again.** JS8Call separates the next hop with a
+  SPACE and only rewrites it to `>` when it forwards (`[> ]` in its relay regex);
+  [`js8-relay.js`](data/js8-relay.js) read `>` alone, so a chain we were meant to pass on
+  ended at us. The space form is read more strictly than the `>` one — after `>` the protocol
+  says the token IS a callsign, after a space it is only the first word, and `isCallsign`
+  alone would have hopped "MSG TEST …" to a station called `MSG`.
+* Manual: `SOFTWARE.md` §5.10 gains the relayed-mail and unreadable-message sections and
+  §5.12 says that arming is also what lets the station ask for a repeat;
+  `ui-inventory --check` 256/256, undocumented status strings 14 → 12.
+* Tests: `data-browser-smoke` gains `relayedMsgAck`, `relayedMsgFiled`, `relayedMsgShowsVia`,
+  `relayHopSpace`, `repeatRequest`, `repeatOncePerWindow`, `repeatRowVisible`,
+  `repeatPicksUpOnYes`, `repeatShowsCollecting`, `repeatPhaseIsPickup`, `repeatDeliversText`,
+  `repeatAcksDelivery`, `repeatRowGoneAfterPickup`, `repeatFallsBackToAgn`,
+  `repeatStopsWhenDisplaced`, `repeatClearedOnArrival`, `queryMsgsGroupSilent`,
+  `queryMsgsDirectSaysNo`, `queryMsgsGroupAnswersWhenHolding` (all green, known reds unchanged
+  — `presetStable`, `removedPagesAbsentFromNav`, `setupRemovedPagesAbsentFromNav`,
+  `txSlotPauseVisual`, `setupSave`); `js8-txqueue`,
+  `js8-groups`, `js8-aprs`, `js8-data-frames` unchanged. Not verified on the radio.
+* **The ALC limiter went blind after the first frame of every message.** A JS8 message is
+  several frames, each its own keying and its own `tx.prepare` — and `tx.prepare` nulls
+  `alcSeq` and `consumed` in the firmware ([`wifilt.ino`](wifilt.ino) `aud1AlcReset()`),
+  while `TxAlcGuard` brackets the whole message. From frame two on, the restarted sequence
+  read as a repeat of frame one's and every ALC reading was discarded. Whatever frame one
+  decided stayed on the air unwatched. Found from a two-frame `@APRSIS GRID` beacon whose
+  second transmission was visibly quieter. `noteLevel()` now follows `txId` and restarts
+  the evidence window — never the decision — at each frame boundary.
+* **And inside one frame it could take six dB off for one gust.** JS8 bakes the level into a
+  whole frame, so a reduction reaches the air only on the NEXT one; every further reading in
+  the current frame still describes the level already decided against. The guard charged a
+  dB for each of them. New `levelBakedPerFrame` option (on for JS8, off for the WSPR beacon,
+  which is one streamed transmission where a reduction lands within the settle window) caps
+  it at one reduction per frame.
+* **The trim is now visible while it happens** — `ALC -1.0 dB` beside ABORT, with the reason
+  in its tooltip. It used to be reported only through `calResolved`, inside a settings
+  section nobody has open during a transmission, and only after two witnesses rewrote the
+  table. A single-dB trim, the common case, was a quieter frame with no explanation. A clean
+  message clears it, exactly as it clears the guard's witness.
+* **What the table learns did NOT change**, and now says why in the code: with baked frames
+  the persisted level is a step below anything that flew, because the last frame went out
+  before the readings taken during it. Filing it is still right — each reduction answers a
+  frame that was already transmitting one step higher and still drove the ALC, so that level
+  is disproved; "untested successor" is what the two-witness rule covers. Filing only what
+  flew would mean a single-frame message — a heartbeat, a CQ, most of what this station sends
+  — could never teach the table anything.
+* Tests: `tools/tx-gain-cal-smoke.js` 105/105 (seven new cases: the frame boundary, the
+  baked-frame cap, what a two-frame and a single-frame message persist, the untouched
+  streaming path, `txId`-less callers), `data-browser-smoke` `alcLimiterHearsTheSecondFrame`
+  + `alcTrimIsVisibleWhileItHappens` green with its known reds unchanged, `wspr-browser-smoke`
+  274/274 unchanged. Not verified on the radio.
 
 ### Still untracked
 

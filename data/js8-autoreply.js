@@ -64,7 +64,8 @@
       this.restrictions = restrictions;
       this.onEvent = onEvent;
       this.lastDirectedFrameMs = 0;   // drives the QSO lock
-      this.lastSentByCall = new Map(); // for AGN?
+      this.lastSentByCall = new Map(); // for AGN? from a station we wrote to
+      this.lastTransmission = null;    // {to, text} -- for AGN? from anybody else
       this.stats = {replied: 0, skipped: 0};
     }
 
@@ -77,10 +78,16 @@
       return result;
     }
 
-    // Remember what we last sent to a station so AGN? can repeat it.
+    // Remember what we last sent so AGN? can repeat it. Two records on purpose:
+    // per-station for the QSO case (repeat what I wrote to YOU), and the last
+    // transmission of any kind -- a CQ, a heartbeat -- because upstream answers
+    // AGN? out of m_lastTxMessage, its last transmission full stop, and a
+    // station that copied our CQ garbled asks exactly that way.
     noteSent(call, text) {
+      if (!text) return;
       const normalized = normalizeCall(call);
-      if (normalized && text) this.lastSentByCall.set(normalized, text);
+      this.lastTransmission = {to: normalized, text: String(text)};
+      if (normalized) this.lastSentByCall.set(normalized, text);
     }
 
     // Any directed frame arriving -- to us or not -- arms the QSO lock, matching
@@ -117,6 +124,13 @@
       // @ALLCALL. Other explicitly joined groups remain eligible.
       if (to === "@ALLCALL")
         return this._skip("allcall", "automatic queries to @ALLCALL are suppressed");
+      // AGN? is refused for ANY group, matching upstream's `!isGroupCall`
+      // (processCommandActivity.cpp:629): "say that again" asked of a group
+      // would have every member repeat a DIFFERENT message into the same slot.
+      // The other queries survive a group because the answers can spread out;
+      // these answers cannot even agree on what they are repeating.
+      if (command === "AGN?" && to.startsWith("@"))
+        return this._skip("group-query", "AGN? to a group is never answered");
 
       const handler = HANDLERS[command];
       if (!handler) return this._skip("unsupported", `no auto reply for ${command}`);
@@ -134,9 +148,16 @@
       // caused by missing configuration does not also consume a window slot.
       let text;
       if (command === "AGN?") {
-        const previous = this.lastSentByCall.get(from);
+        // First choice: what we last wrote to THIS station. Fallback: our last
+        // transmission of any kind, which is what upstream always answers with
+        // (m_lastTxMessage) -- the station asking heard us send SOMETHING and
+        // wants it again; a garbled CQ is the common case. One deliberate
+        // difference: upstream re-transmits it verbatim to its original
+        // addressee, we address the answer to the asker.
+        const previous = this.lastSentByCall.get(from) ||
+          (this.lastTransmission && this.lastTransmission.text);
         if (!previous)
-          return this._skip("nothing-to-repeat", `no earlier message to ${from}`);
+          return this._skip("nothing-to-repeat", "no earlier transmission to repeat");
         text = previous;
       } else {
         if (handler.needs) {

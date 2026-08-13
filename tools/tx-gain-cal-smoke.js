@@ -322,6 +322,116 @@ function runCalibration(radio, options = {}, {maxFrames = 400, seed = 0} = {}) {
   checkNear("a repeated reading reduces once", end.gain, 0.5 * fromDb(-1), 0.01);
 }
 
+// ---- one message, several frames -------------------------------------------
+//
+// A JS8 message is several frames, each its own keying and its own tx.prepare --
+// and tx.prepare nulls alcSeq and consumed in the firmware. The guard brackets the
+// whole message, so without following txId the second frame's sequence starts
+// below the first frame's high-water mark and every reading in it is discarded as
+// a repeat. That is what left a two-frame GPS beacon transmitting its second frame
+// at whatever frame one decided, with nothing watching. See gps-position-plan.
+
+{
+  // The bug itself: frame two restarts both counters, and the guard must still
+  // be listening.
+  const guard = new TxAlcGuard({levelBakedPerFrame: true});
+  guard.beginTx({key: "k", gain: 0.5});
+  guard.noteLevel({txId: 7, consumed: 8000, alc: 30, alcSeq: 1});
+  const afterFirstFrame = guard.gain;
+  checkNear("frame one trims one dB", afterFirstFrame, 0.5 * fromDb(-1), 0.01);
+  guard.noteLevel({txId: 8, consumed: 8000, alc: 30, alcSeq: 1});
+  checkNear("frame two is heard despite the reset counters",
+            guard.gain, 0.5 * fromDb(-2), 0.01);
+}
+
+{
+  // And the other half: inside one baked frame a reduction cannot reach the air,
+  // so every further reading there still describes the level already decided
+  // against. Charging a second dB for it takes one gust of ALC to the floor.
+  const guard = new TxAlcGuard({levelBakedPerFrame: true});
+  guard.beginTx({key: "k", gain: 0.5});
+  let consumed = 0;
+  for (let seq = 1; seq <= 12; seq++) {
+    consumed += 8000;                                // 1 Hz, the normal TX rate
+    guard.noteLevel({txId: 7, consumed, alc: 30, alcSeq: seq});
+  }
+  checkNear("a baked frame costs exactly one dB however long it screams",
+            guard.gain, 0.5 * fromDb(-1), 0.01);
+  guard.noteLevel({txId: 8, consumed: 8000, alc: 30, alcSeq: 1});
+  checkNear("and the next frame may cost one more", guard.gain, 0.5 * fromDb(-2), 0.01);
+}
+
+{
+  // The streaming consumer is untouched: WSPR is one transmission under one id,
+  // where a reduction is on the air within the settle window and later readings
+  // really do describe the new level.
+  const guard = new TxAlcGuard();
+  guard.beginTx({key: "k", gain: 0.5});
+  guard.noteLevel({txId: 7, consumed: 8000, alc: 30, alcSeq: 1});
+  guard.noteLevel({txId: 7, consumed: 16000, alc: 30, alcSeq: 2});
+  checkNear("streaming still steps once per settled reading",
+            guard.gain, 0.5 * fromDb(-2), 0.01);
+}
+
+{
+  // Frame boundaries restart the evidence window, never the decision. A message
+  // that has already been trimmed keeps transmitting trimmed.
+  const guard = new TxAlcGuard({levelBakedPerFrame: true});
+  guard.beginTx({key: "k", gain: 0.5});
+  guard.noteLevel({txId: 7, consumed: 8000, alc: 30, alcSeq: 1});
+  guard.noteLevel({txId: 8, consumed: 0, alc: 0, alcSeq: 1});   // clean frame two
+  checkNear("a clean later frame does not restore the level",
+            guard.gain, 0.5 * fromDb(-1), 0.01);
+  const end = guard.endTx();
+  check("the message is still one witness", end.witnesses, 1);
+  checkNear("and it reports what it was measured against", end.startGain, 0.5, 0.0001);
+}
+
+{
+  // The table learns the level DECIDED, which with baked frames is a step below
+  // anything that flew -- the last frame went out before the readings taken
+  // during it. That is right, not sloppy: each reduction answers a frame already
+  // transmitting at the level above it and still driving the ALC, so that level
+  // is disproved even though its successor is untested. Two witnesses is the rule
+  // that covers "untested". Getting this wrong the other way is worse than it
+  // looks: file only what flew, and a single-frame message -- a heartbeat, a CQ,
+  // most of what this station sends -- can never persist anything at all.
+  const guard = new TxAlcGuard({levelBakedPerFrame: true});
+  let end = null;
+  for (let message = 0; message < 2; message++) {
+    guard.beginTx({key: "k", gain: 0.5});
+    guard.noteLevel({txId: 7, consumed: 8000, alc: 30, alcSeq: 1});   // frame one trips
+    guard.noteLevel({txId: 8, consumed: 8000, alc: 30, alcSeq: 1});   // so does frame two
+    end = guard.endTx();
+  }
+  checkNear("a two-frame message that trips twice persists two dB down",
+            end.persistGain, 0.5 * fromDb(-2), 0.01);
+}
+
+{
+  // The single-frame case the rule above has to keep working: one keying, one
+  // trip, nothing after it -- and it still teaches the table.
+  const guard = new TxAlcGuard({levelBakedPerFrame: true});
+  let end = null;
+  for (let message = 0; message < 2; message++) {
+    guard.beginTx({key: "k", gain: 0.5});
+    guard.noteLevel({txId: 3 + message, consumed: 8000, alc: 30, alcSeq: 1});
+    end = guard.endTx();
+  }
+  checkNear("a heartbeat can persist a trim too", end.persistGain, 0.5 * fromDb(-1), 0.01);
+}
+
+{
+  // Callers that send no txId (the WSPR beacon path, and every test written
+  // before this existed) must behave exactly as they did.
+  const guard = new TxAlcGuard();
+  guard.beginTx({key: "k", gain: 0.5});
+  guard.noteLevel({consumed: 8000, alc: 30, alcSeq: 1});
+  guard.noteLevel({consumed: 9600, alc: 30, alcSeq: 2});
+  checkNear("an absent txId is one continuous transmission",
+            guard.gain, 0.5 * fromDb(-1), 0.01);
+}
+
 // ---- schema v2: a knee is a knee AT A MOD LEVEL ----------------------------
 //
 // Writing the radio's MOD level moves every stored knee, so the schema has to

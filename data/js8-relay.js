@@ -36,18 +36,42 @@
   const CALL_RE = /^[A-Z0-9]{2,6}(?:\/[A-Z0-9]{1,2})?$/;
   const isCallsign = value => CALL_RE.test(String(value || "").toUpperCase().trim());
 
+  // A hop may arrive separated by a SPACE rather than ">", which is what JS8Call
+  // actually puts on the air: its relay regex accepts `[> ]` and only rewrites
+  // the separator to ">" when it forwards. Reading ">" alone made us the end of a
+  // chain we were meant to pass on.
+  //
+  // The space form must be read more strictly than the ">" one. After ">" the
+  // protocol says the token IS a callsign; after a space it is merely the first
+  // word, and `isCallsign` alone would promote it -- "MSG TEST ..." would hop to
+  // the station "MSG". Requiring the shape of a real callsign (a digit between
+  // letters) is what upstream's regex does too. A relayed text that genuinely
+  // starts with a callsign is still ambiguous, exactly as it is upstream; the
+  // arming, hop and hourly limits below are what keep that harmless.
+  const STRICT_CALL_RE =
+    /^(?:[A-Z0-9]{1,4}\/)?[A-Z0-9]{1,2}[0-9][A-Z]{1,3}(?:\/[A-Z0-9]{1,2})?$/;
+
   /**
    * Splits a relay payload into the next hop and the rest.
    * "OH8STN>HELLO" -> {nextHop:"OH8STN", rest:"HELLO"}
+   * "OH8STN HELLO" -> {nextHop:"OH8STN", rest:"HELLO"}
    * "HELLO DE X"   -> {nextHop:null, rest:"HELLO DE X"}
    */
   function splitHop(payload) {
     const text = String(payload || "").trim();
     const index = text.indexOf(">");
-    if (index <= 0) return {nextHop: null, rest: text};
-    const candidate = text.slice(0, index).toUpperCase().trim();
-    if (!isCallsign(candidate)) return {nextHop: null, rest: text};
-    return {nextHop: candidate, rest: text.slice(index + 1).trim()};
+    if (index > 0) {
+      const candidate = text.slice(0, index).toUpperCase().trim();
+      if (isCallsign(candidate))
+        return {nextHop: candidate, rest: text.slice(index + 1).trim()};
+    }
+    const space = text.indexOf(" ");
+    if (space > 0) {
+      const candidate = text.slice(0, space).toUpperCase();
+      if (isCallsign(candidate) && STRICT_CALL_RE.test(candidate))
+        return {nextHop: candidate, rest: text.slice(space + 1).trim()};
+    }
+    return {nextHop: null, rest: text};
   }
 
   // How many hops are still ahead, used for the depth limit.
@@ -144,9 +168,15 @@
           `${this.config.maxPerHour} relays in the last hour`);
 
       // Append the originator so every hop stays attributable. If the chain
-      // already carries a DE we leave it alone -- it names the true origin.
+      // already carries an attribution we leave it alone -- it names the true
+      // origin. The marker must be "*DE*", asterisks included: that is what
+      // JS8Call itself writes when forwarding, and the ONLY forms its
+      // parseRelayPathCallsigns reads are *DE* and VIA. A bare "DE" was
+      // invisible to it -- the recipient built the return path from the
+      // immediate hop alone, so the ACK died at the intermediary and the
+      // originator was never credited in the recipient's inbox.
       const body = /(?:\*DE\*|DE|VIA)\s+[A-Z0-9/]+\s*$/i.test(rest)
-        ? rest : `${rest} DE ${from}`;
+        ? rest : `${rest} *DE* ${from}`;
       // Keep the relay command on every hop. Without the leading ">", the TX
       // encoder emits ordinary directed free text and the next station never
       // invokes its relay handler.

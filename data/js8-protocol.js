@@ -291,8 +291,16 @@
     const source = String(input).trim().toUpperCase();
     for (const item of DIRECTED_COMMANDS) {
       const token = item.token;
+      // A token ending in ":" continues without a space -- "MSG TO:OK1BT HI" is
+      // how it is typed and how JS8Call's regex (`MSG TO[:]`) matches it. The
+      // space-only rule made that text fall through to the shorter " MSG" token
+      // with "TO:..." left in the data frames; a JS8Call receiver then filed the
+      // whole thing as the intermediary's OWN mail and never stored it for the
+      // third party. Only ever visible against a real JS8Call station, because a
+      // WIFILT receiver mirrored the same wrong shape on RX.
       if (source !== token && !source.startsWith(`${token} `) &&
-          !(token === ">" && source.startsWith(">"))) continue;
+          !(token === ">" && source.startsWith(">")) &&
+          !(token.endsWith(":") && source.startsWith(token))) continue;
       let consumed = token.length;
       let packedNumber = 0;
       let suffix = "";
