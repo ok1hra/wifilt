@@ -188,6 +188,8 @@ const dom = {
   cqRepeat:$("cqRepeat"), cqState:$("cqState"),
   infoText:$("infoText"), statusText:$("statusText"), statusPreset:$("statusPreset"),
   statusPreview:$("statusPreview"), autoReply:$("autoReply"), alertBeep:$("alertBeep"),
+  aprsGate:$("aprsGate"), aprsGateCall:$("aprsGateCall"), aprsGatePass:$("aprsGatePass"),
+  aprsGateHost:$("aprsGateHost"), aprsGatePort:$("aprsGatePort"), aprsGateState:$("aprsGateState"),
   inboxRows:$("inboxRows"), inboxSummary:$("inboxSummary"), inboxQueryMsgs:$("inboxQueryMsgs"), inboxRefresh:$("inboxRefresh"),
   inboxFilters:$("msgBoxFilters"), inboxUndo:$("msgBoxUndo"), inboxUndoButton:$("msgBoxUndoButton"),
   inboxHint:$("msgBoxHint"), inboxSection:document.querySelector('[data-section="inbox"]'),
@@ -299,6 +301,12 @@ const autoReply = new Js8AutoReply.Js8AutoReply({restrictions,
     if (event.type === "skip") console.info("[js8-autoreply] skip:", event.reason, event.detail || "");
     else console.info("[js8-autoreply]", event.type, event.to, event.text);
   }});
+// The JS8 -> APRS-IS gate. Everything it decides is logged: the exact frame that
+// left the station is otherwise invisible the moment the row scrolls away, and
+// "why did OK2ABC not appear on aprs.fi" has to be answerable afterwards.
+const aprsGate = new Js8AprsGate.Js8AprsGate({storage: localStorage,
+  onEvent: event => console.info("[js8-aprs-gate]", event.type,
+    event.entry ? `${event.entry.from} ${event.entry.kind}` : "", event.detail || "")});
 let masterTimer = null, masterPeriodMs = 0;
 function setMasterTick(periodMs) {
   if (masterTimer && masterPeriodMs === periodMs) return;
@@ -2077,7 +2085,14 @@ const SETTINGS_FLAGS=[
     detail:js8=>`every ${Number(js8.cqRepeatMin)} min`},
   {key:"HB",   label:"Heartbeat transmission",  on:js8=>js8.hb===true, needsTx:true,
     detail:()=>hbNextLabel(), inline:true, tip:js8=>`every ${Number(js8.hbMinutes)} min`},
-  {key:"ACK",  label:"Heartbeat acknowledgements", on:js8=>js8.hbAck!==false, needsTx:true}
+  {key:"ACK",  label:"Heartbeat acknowledgements", on:js8=>js8.hbAck!==false, needsTx:true},
+  // Deliberately without needsTx: the gate carries other stations to the internet
+  // and never keys the transmitter, so Radio TX being off must not grey it out.
+  // The count is of VERIFIED packets against the hourly cap -- a gate delivering
+  // nothing because of a bad passcode has to read as 0, not as a busy station.
+  {key:"IGATE", label:"APRS-IS gate", on:()=>Js8AprsGate.readiness(aprsGateConfig()).ready,
+    detail:()=>aprsGateCountLabel(), inline:true,
+    tip:()=>`${aprsGateConfig().call} at ${aprsGateConfig().host}`}
 ];
 
 function renderSettingsFlags(js8) {
@@ -2128,6 +2143,7 @@ function renderControls() {
   renderStatusAnswer(js8);
   dom.autoReply.checked=js8.auto===true;
   if(dom.alertBeep)dom.alertBeep.checked=js8.alertBeep===true;
+  renderAprsGate(js8);
   if(!dom.armHours.options.length)
     dom.armHours.innerHTML=Js8Settings.ARM_HOURS.map(h=>`<option value="${h}">${h} h</option>`).join("");
   dom.armHours.value=String(js8.armHours);
@@ -2966,6 +2982,9 @@ function renderActivity() {
     // nothing else in the row would tell the operator it came back for them.
     const aprsReply=Js8Aprs.replyForMe(message,currentJs8().myCall)
       ? '<span class="aprs-badge" title="APRS-IS reply to your command">APRS</span>' : "";
+    // The other direction: what THIS station carried to APRS-IS on somebody
+    // else's behalf, and whether the network took it.
+    const igate=aprsGateBadge(message);
     // ♢ means the same on both sides of the feed: the end of the message was confirmed. Its
     // absence is therefore evidence, which is why every intact reception carries it.
     const status=receptionState(message);
@@ -2990,7 +3009,7 @@ function renderActivity() {
       +(reply&&reply.enabled?" has-reply":"")
       +(message.partial&&message.live?" message-receiving":"")
       +(status==="incomplete"?" message-incomplete":"")+(status==="bad crc"?" message-badcrc":"");
-    return divider+`<article class="${classes}"${status?` data-rx-state="${esc(status)}"`:""}><span class="message-meta"><span class="meta-time">${when}</span><span class="meta-speed">${MODE_TO_SPEED[message.submode]||"?"}</span><span class="meta-hz">${Math.round(message.offsetHz)} Hz</span>${snrText?`<span class="meta-snr" title="Signal report this row was decoded at">${snrText} dB</span>`:""}${status?`<span class="rx-state">${esc(status)}</span>`:""}</span><strong${sender.clickable?` data-call="${esc(call)}"`:""}${senderClass?` class="${senderClass}"`:""}${ownCall?' data-own-call="true"':""}${workedHere?` title="${esc(call)} already logged on ${esc(workedBand||"this band")}"`:""}>${esc(call || "JS8")}</strong><span class="message-text">${forMe?'<span class="forme-badge" title="Addressed to your callsign">TO YOU</span>':""}${aprsReply}${renderReceivedText(message,currentJs8().myCall)}${ended?'<span class="rx-eot" title="End of message confirmed">♢</span>':""}</span>${replyButton}${renderSignalStripe(message)}</article>`;
+    return divider+`<article class="${classes}"${status?` data-rx-state="${esc(status)}"`:""}><span class="message-meta"><span class="meta-time">${when}</span><span class="meta-speed">${MODE_TO_SPEED[message.submode]||"?"}</span><span class="meta-hz">${Math.round(message.offsetHz)} Hz</span>${snrText?`<span class="meta-snr" title="Signal report this row was decoded at">${snrText} dB</span>`:""}${status?`<span class="rx-state">${esc(status)}</span>`:""}</span><strong${sender.clickable?` data-call="${esc(call)}"`:""}${senderClass?` class="${senderClass}"`:""}${ownCall?' data-own-call="true"':""}${workedHere?` title="${esc(call)} already logged on ${esc(workedBand||"this band")}"`:""}>${esc(call || "JS8")}</strong><span class="message-text">${forMe?'<span class="forme-badge" title="Addressed to your callsign">TO YOU</span>':""}${aprsReply}${igate}${renderReceivedText(message,currentJs8().myCall)}${ended?'<span class="rx-eot" title="End of message confirmed">♢</span>':""}</span>${replyButton}${renderSignalStripe(message)}</article>`;
   }).join("") : '<div class="empty-row">Waiting for JS8 activity…</div>';
   // Built from `recent`, the rows actually on screen, so the histogram and the list can
   // never disagree -- change the filter and the strip follows.
@@ -4418,6 +4437,13 @@ function handleDecodedFrame(decoded, {live = true} = {}) {
 // real traffic -- the per-frame path only ever sees the header.
 function dispatchAssembledMessage(message) {
   if (!message || !message.directed) return;
+  // The APRS-IS gate runs FIRST and outside the identity guard below. It acts on
+  // traffic addressed to @APRSIS -- a group this station is not in and cannot
+  // join -- so carrying somebody else's position to the internet needs the
+  // APRS-IS login, not our own callsign. It makes its own judgement about an
+  // incomplete or checksum-failed reception, for the same reasons the code below
+  // does, and the two must not be tangled together.
+  gateToAprsIs(message);
   const js8 = currentJs8();
   if (!js8.myCall) return;
   const now = js8Clock.now();
@@ -4482,6 +4508,184 @@ function fileIncomingMessage(directed, payload, now, {via = ""} = {}) {
   const outcome = inbox.fileIncoming({from: directed.from, to: directed.to, text, via},
     {nowMs: now, myCall: js8.myCall});
   if (outcome.action === "store") { syncInbox(); renderInbox(); }
+}
+
+// ---- APRS-IS gate -----------------------------------------------------------
+//
+// When a station asks @APRSIS to put its position on the network, some IGate has
+// to hear it and carry it. From here on this station is that IGate.
+//
+// The judgement lives in data/js8-aprs-gate.js, which knows nothing about the
+// DOM and can be run in node; what is here is the wiring: the two facts only
+// this page has (which callsigns are blocked, what the radio is tuned to), the
+// queue pump, and the badge. The firmware builds and signs the frame -- see
+// docs/aprsis-igate-implementace.md for why a finished line never crosses that
+// boundary.
+const APRS_GATE_TICK_MS = 3000;
+// How long a written packet is still worth asking the firmware about. It keeps a
+// single last result, so once a newer packet has overwritten the slot the verdict
+// is gone for good; after this the badge simply stays on "sent" rather than
+// claiming an outcome nobody observed.
+const APRS_GATE_VERDICT_MS = 60000;
+let aprsGatePumping = false;
+
+// Station level, beside freqTimetable and not inside modems.js8call: there is one
+// gate for the station, and settingsSnapshot()/normalize() only carry what the
+// schema declares -- a copy parked on the modem object would be dropped on the
+// next save without a word.
+function aprsGateConfig() {
+  return Js8AprsGate.normalizeConfig(settings.aprsis);
+}
+
+// Blocked on the air, blocked to the internet: the same list that hides a station
+// from the feed and refuses to answer it also refuses to gate it.
+function aprsGateBlockedReason(call) {
+  const country = blockedCountryForCall(call);
+  return country ? `blocked DXCC: ${country}` : "";
+}
+
+function gateToAprsIs(message) {
+  const entry = aprsGate.consider(message, {nowMs: js8Clock.now(),
+    config: aprsGateConfig(), blockedReason: aprsGateBlockedReason,
+    // What the sender's signal was actually on: dial plus its place in the
+    // passband, which is what the APRS comment reports.
+    freqHz: (Number(state.radio.frequency) || 0) + Math.round(Number(message.offsetHz) || 0)});
+  // Fire and forget, but never unhandled: this is called from the decode path,
+  // and a rejected promise there would take the whole page's error handler with
+  // it over a packet that can simply be retried on the next tick.
+  if (entry && entry.state === "queued")
+    pumpAprsGate().catch(error => console.info("[js8-aprs-gate] pump failed", error));
+  return entry;
+}
+
+async function pumpAprsGate() {
+  if (aprsGatePumping) return;
+  const config = aprsGateConfig();
+  const now = js8Clock.now();
+  if (!Js8AprsGate.readiness(config).ready) { aprsGate.expire(now); return; }
+  aprsGatePumping = true;
+  try {
+    // One packet per tick. A burst of decodes must not turn into a burst of
+    // blocking connects in the firmware, which is where the audio stream lives.
+    const [entry] = aprsGate.due(now);
+    if (entry) {
+      aprsGate.markSending(entry, now);
+      let result;
+      try {
+        // Every fetch on this page carries a timeout: a request left hanging
+        // costs one of the browser's six connections to this origin, and six of
+        // those is a page that looks dead for reasons nobody can see.
+        const response = await fetch("/aprsis/spot", {method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(aprsGate.body(entry, config)),
+          signal: AbortSignal.timeout(8000)});
+        const data = await response.json().catch(() => ({}));
+        result = {ok: response.ok && data.ok === true, seq: data.seq, sent: data.sent,
+          error: data.error || `http ${response.status}`};
+      } catch (error) {
+        result = {ok: false, error: error.name === "TimeoutError" ? "timeout" : "unreachable"};
+      }
+      aprsGate.noteSend(entry, {...result, nowMs: js8Clock.now()});
+      renderActivity();
+    }
+    await pollAprsGateVerdict();
+  } finally {
+    aprsGatePumping = false;
+    renderSettingsFlags(currentJs8());
+  }
+}
+
+// "The bytes left the box" and "APRS-IS took them" are different claims. Only the
+// server's `# logresp ... verified` supports the second one, and a wrong passcode
+// is indistinguishable from success without it -- the server drops packets from
+// an unverified connection in silence.
+async function pollAprsGateVerdict() {
+  const now = js8Clock.now();
+  const waiting = aprsGate.awaiting()
+    .filter(entry => now - Number(entry.createdMs) < APRS_GATE_VERDICT_MS);
+  if (!waiting.length) return;
+  let data;
+  try {
+    const response = await fetch("/aprsis/status",
+      {cache: "no-store", signal: AbortSignal.timeout(4000)});
+    if (!response.ok) return;
+    data = await response.json();
+  } catch (_error) { return; }
+  for (const entry of waiting) {
+    // The firmware remembers one result. A mismatched seq means this packet's
+    // verdict has been overwritten by a later one; the badge stays where it is,
+    // because reporting somebody else's outcome under this row would be a lie.
+    if (Number(data.seq) !== Number(entry.seq)) continue;
+    aprsGate.noteStatus(entry, {state: data.state, server: data.server,
+      line: data.line, nowMs: now});
+  }
+  renderActivity();
+}
+
+function aprsGateEntryFor(message) {
+  if (!message) return null;
+  if (message.id) {
+    const byId = aprsGate.entryFor(message.id);
+    if (byId) return byId;
+  }
+  const shape = Js8AprsGate.describe(message);
+  return shape && shape.key ? aprsGate.entryFor(shape.key) : null;
+}
+
+// Five states, not two, because "sent" and "accepted" are not the same fact and
+// the difference is exactly what a silent gate looks like from the outside.
+const APRS_GATE_MARKS = {
+  queued:     {mark: "…", word: "queued"},
+  sending:    {mark: "…", word: "sending"},
+  sent:       {mark: "↑", word: "written, waiting for the server"},
+  verified:   {mark: "✓", word: "accepted by APRS-IS"},
+  unverified: {mark: "✗", word: "APRS-IS refused the login"},
+  failed:     {mark: "✗", word: "not delivered"},
+  skipped:    {mark: "–", word: "not gated"}
+};
+
+function aprsGateBadge(message) {
+  const entry = aprsGateEntryFor(message);
+  if (!entry) return "";
+  const look = APRS_GATE_MARKS[entry.state] || {mark: "–", word: entry.state};
+  // The frame itself goes in the tooltip. Nothing else on this page ever shows
+  // the bytes that were published under this station's callsign.
+  const title = [`IGATE: ${look.word}`, entry.reason, entry.sent,
+    entry.server ? `server ${entry.server}` : ""].filter(Boolean).join(" · ");
+  const text = `IGATE ${look.mark}`;
+  if (entry.state === "verified") {
+    // Straight to the raw packet view: the only page that can prove the position
+    // really is on the network, path and all.
+    const call = encodeURIComponent(Js8AprsGate.sourceCall(entry.from));
+    return `<a class="igate-badge verified" href="https://aprs.fi/?c=raw&call=${call}"`
+      + ` target="_blank" rel="noopener noreferrer" title="${esc(title)}">${esc(text)}</a>`;
+  }
+  return `<span class="igate-badge ${esc(entry.state)}" title="${esc(title)}">${esc(text)}</span>`;
+}
+
+function aprsGateCountLabel() {
+  return `${aprsGate.sentLastHour(js8Clock.now())}/${aprsGateConfig().maxPerHour}`;
+}
+
+function renderAprsGate(js8) {
+  if (!dom.aprsGate) return;
+  const config = aprsGateConfig();
+  const ready = Js8AprsGate.readiness(config);
+  dom.aprsGate.checked = config.enabled;
+  // The same focus guard every field on this panel needs: renderControls runs on
+  // the 500 ms radio poll and would otherwise eat a keystroke at a time.
+  if (document.activeElement !== dom.aprsGateCall) dom.aprsGateCall.value = config.call;
+  if (document.activeElement !== dom.aprsGatePass) dom.aprsGatePass.value = config.passcode;
+  if (document.activeElement !== dom.aprsGateHost) dom.aprsGateHost.value = config.host;
+  if (document.activeElement !== dom.aprsGatePort) dom.aprsGatePort.value = String(config.port);
+  // A proposal, never a silent write: -10 is the IGate convention, but the
+  // operator may already have that SSID connected from somewhere else.
+  dom.aprsGateCall.placeholder = Js8AprsGate.suggestCall(js8.myCall) || "OK1ABC-10";
+  const hourly = aprsGateCountLabel();
+  dom.aprsGateState.textContent = !config.enabled ? "off"
+    : ready.ready ? `passcode matches ${config.call} · ${hourly} gated this hour`
+    : ready.reason;
+  dom.aprsGateState.dataset.state = !config.enabled ? "off" : ready.ready ? "ok" : "bad";
 }
 
 // ---- asking for a broken message again --------------------------------------
@@ -7004,6 +7208,15 @@ function releaseJs8Session() {
 // ---- bindings ---------------------------------------------------------------
 
 function setJs8Setting(key,value) { currentJs8()[key]=value; persistSettings(); }
+// One nested object, so it is patched rather than assigned key by key -- and
+// normalised on the way in, because these fields are typed by hand and the next
+// thing that reads them is a TCP connection carrying this station's callsign.
+function setAprsGateSetting(patch) {
+  settings.aprsis=Js8AprsGate.normalizeConfig({...aprsGateConfig(),...patch});
+  persistSettings();
+  renderAprsGate(currentJs8());
+  renderSettingsFlags(currentJs8());
+}
 function confirmJs8Leave(event) {
   // Received data now survives the round-trip via the session snapshot, so a bare
   // navigation is silent. Confirm only when a transmission is actively going out:
@@ -7282,6 +7495,21 @@ function bind() {
     // instead of leaving the operator to wonder until the next call arrives.
     if(dom.alertBeep.checked)alertBeep();
   });
+  if(dom.aprsGate){
+    dom.aprsGate.addEventListener("change",()=>{
+      const js8=currentJs8(), config=aprsGateConfig();
+      // Switching the gate on with no callsign fills in the -10 proposal, because
+      // that is the moment it stops being a guess and becomes a decision. It is
+      // never written behind the operator's back before that.
+      const call=config.call || (dom.aprsGate.checked
+        ? Js8AprsGate.suggestCall(js8.myCall) : "");
+      setAprsGateSetting({enabled:dom.aprsGate.checked, call});
+    });
+    dom.aprsGateCall.addEventListener("change",()=>setAprsGateSetting({call:dom.aprsGateCall.value}));
+    dom.aprsGatePass.addEventListener("change",()=>setAprsGateSetting({passcode:dom.aprsGatePass.value}));
+    dom.aprsGateHost.addEventListener("change",()=>setAprsGateSetting({host:dom.aprsGateHost.value}));
+    dom.aprsGatePort.addEventListener("change",()=>setAprsGateSetting({port:dom.aprsGatePort.value}));
+  }
   dom.txGain.addEventListener("change",()=>{const value=state.settingsDraft.txGain===null?dom.txGain.value:state.settingsDraft.txGain;state.settingsDraft.txGain=null;setJs8Setting("txGain",Number(value)||.25);});
   dom.txSafety.addEventListener("change",()=>setJs8Setting("txSafetyAccepted",dom.txSafety.checked));
   dom.resetSettings.addEventListener("click",()=>{const reset=Js8Settings.reset(localStorage);settings=reset.settings;state.settingsDraft={txGain:null};state.activeMode=settings.activeModem;dom.storageState.textContent=reset.label;applySettingsToRuntime();renderActivity();renderControls();closeTimetablePopover();if(!dom.freqTimetablePanel.hidden)renderTimetableGrid();reconcileTimetable();});
@@ -7519,6 +7747,10 @@ async function init() {
   });
   pollRadio(); scheduler.every("pollRadio",500,pollRadio);
   scheduler.every("txQueue",1000,()=>{drainTxQueue();renderTxQueue();renderRetryCountdowns();});
+  // Retries and the server's verdict. A new packet pumps itself the moment it is
+  // queued; this tick is what carries one that was refused because the station
+  // was transmitting, and it is why the queue survives a quiet band.
+  scheduler.every("aprsGate",APRS_GATE_TICK_MS,()=>pumpAprsGate());
   // Audio windows normally age out partial receptions inside the worker; when audio stops
   // for good no window is produced, and without this tick the torso would never reach
   // messages[] to be persisted. Only finalizations post an activity change, so a quiet
@@ -7558,6 +7790,15 @@ async function init() {
     setRadioMode(mode){state.radio.mode=mode;renderHeader();},
     setRadioPower(rfPower,rfPowerSeen=true,radioName=""){state.radio.rfPower=Number(rfPower)||0;state.radio.rfPowerSeen=rfPowerSeen===true;state.radio.radioName=radioName;renderHeader();},
     setRadioTx(tx){state.radio.tx=Boolean(tx);renderHeader();},
+    // The APRS-IS gate. Configuration goes in through the same setter the panel
+    // uses, and the entries come out raw, because what the harness has to be able
+    // to assert is the decision -- gated or refused, and why.
+    aprsGateSet(patch){setAprsGateSetting(patch);},
+    aprsGateConfig(){return aprsGateConfig();},
+    aprsGateEntries(){return aprsGate.entries.map(entry=>({...entry}));},
+    aprsGateSentLastHour(){return aprsGate.sentLastHour(js8Clock.now());},
+    aprsGateReset(){aprsGate.clear();renderActivity();renderSettingsFlags(currentJs8());},
+    async aprsGatePump(){await pumpAprsGate();},
     ttSlotNow(){return slotIndexNow();},
     ttSet(index,hz,band){setTimetableSlot(Number(index),Number(hz),band||null);},
     ttEnable(on){setTimetableEnabled(Boolean(on));},

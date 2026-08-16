@@ -11,6 +11,59 @@ published.
 
 ## Working tree — not committed
 
+**REV 20260816.**
+
+* **The station can now be an APRS-IS IGate for the JS8 band.** When any station on the
+  air addresses `@APRSIS` — `GRID JN79NX` to put its position on the map, or
+  `CMD :SMSGTE   :…` to reach a gateway robot — an IGate somewhere has to carry that to
+  the internet or it goes nowhere. From this revision this interface can be that IGate.
+  Nothing is transmitted on the radio; the traffic goes out over the network, under your
+  callsign, and only while the DATA page is open, because that is where JS8 is decoded.
+
+  Switched off by default and configured in **JS8 settings → Gate @APRSIS to the
+  internet**: an APRS-IS callsign (proposed as your own with SSID `-10`, because APRS-IS
+  allows one connection per callsign-SSID and a WX station or JS8Call elsewhere may
+  already hold yours), the passcode, and the server. The passcode is checked against the
+  callsign as you type it: a wrong one is the worst failure APRS-IS has, because the
+  server accepts the connection and then drops every packet in silence. The gate refuses
+  to open at all in that case and the line under the field says so.
+
+  Each gated row in Recent traffic carries an **IGATE** badge with five states, and the
+  distinction they draw is the point of the feature: `↑` means the bytes reached the
+  socket, `✓` means APRS-IS answered `logresp … verified`, `✗` means it refused the login,
+  `–` means the message was deliberately not gated and why. The tooltip holds the exact
+  frame that was published under your callsign; a green badge links straight to the raw
+  packet view on aprs.fi. The header pill counts **verified** packets against the hourly
+  cap, so a gate delivering nothing can never read as a busy one.
+
+  Four filters stand between "somebody transmitted" and "our callsign published it": a
+  reception with a lost end-of-message is displayed but never gated (a truncated `JN89HK`
+  becomes `JN89`, a valid locator tens of kilometres away), blocked callsigns and DXCC
+  entities get no gateway either, the same station with the same content is gated once per
+  ten minutes, and thirty packets an hour is the ceiling. All four survive a page reload.
+  A packet that could not be sent — the interface refuses to open a socket while it is
+  transmitting — is retried for five minutes and then dropped rather than delivered late,
+  because a position report carries no timestamp and a late one claims to be current.
+
+  Two deliberate differences from JS8Call, both verified against the APRS specification:
+
+  * **The position is the centre of the locator's cell, not its south-west corner.**
+    JS8Call never adds the half cell, so its spots sit about 1.2 km south and 1.6 km west
+    of the station — tens of kilometres on a four-character locator. The consequence is
+    honest and worth knowing: a station gated by both will appear twice on the map.
+  * **The path says `qAR`, not `qAS`.** `qAR` means "an IGate received this on the radio",
+    which is what happened; `qAS` claims a server injected it. The IGate callsign after it
+    is yours, so a packet can be traced back to this box.
+
+  Design, packet format and the decisions behind them: `docs/aprsis-igate-implementace.md`.
+
+  Verified in software only — `tools/js8-aprs-gate-smoke.js` (the four filters, the queue
+  and the frame), `tools/aprsis-conversion-parity.js` (16 543 conversions compiled out of
+  `wifilt.ino` and compared against the browser's, so the C++ and the JavaScript cannot
+  drift apart), ten new checks in `tools/data-browser-smoke.js`, and
+  `tools/aprsis-fake-server.js` for pointing the device at a server on your own desk.
+  **Nothing has been through a real APRS-IS server or off the air yet.**
+
 **REV 20260815.** Browser only — no firmware behaviour changed.
 
 * **Messages can now be routed through a station that hears the addressee.** The stations

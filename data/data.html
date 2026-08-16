@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>JS8Call-ICOM — WIFILT</title>
-  <link rel="stylesheet" href="/data.css?v=9f3a5b90">
+  <link rel="stylesheet" href="/data.css?v=4746b90c">
 </head>
 <body class="startup-pending lan-gate-checking">
   <header class="site-topbar">
@@ -458,6 +458,16 @@
           <label class="safety-setting">Send heartbeats <input id="hbEnabled" type="checkbox"><small>Announces the station to the @HB network. Slow, Normal and Fast only; a random offset in 500–1000 Hz.</small></label>
           <label>Heartbeat every <select id="hbMinutes"></select><small id="hbState">off</small></label>
           <label class="safety-setting">Acknowledge heartbeats <input id="hbAck" type="checkbox"><small>Replies HEARTBEAT SNR to stations you hear, at most once per 55 minutes each.</small></label>
+          <!-- The IGate. It sits with the JS8 settings and not on SETUP because it
+               only ever acts on @APRSIS traffic this modem decoded, and because the
+               firmware stores none of it: the login travels with every packet. The
+               passcode is not a secret (it is a checksum of the callsign) but a
+               wrong one has APRS-IS drop everything in silence, so it is checked
+               here and the state line says so out loud. -->
+          <label class="safety-setting">Gate @APRSIS to the internet <input id="aprsGate" type="checkbox"><small>Carries positions and messages other stations address to @APRSIS onto the APRS-IS network, under your callsign. Nothing is transmitted on the radio. Needs this page open.</small></label>
+          <label>APRS-IS callsign <input id="aprsGateCall" maxlength="9" autocomplete="off" placeholder="OK1ABC-10"><small>Your callsign with an SSID of its own &mdash; APRS-IS allows one connection per callsign-SSID, so it must differ from a WX station or a JS8Call already logged in elsewhere.</small></label>
+          <label>APRS-IS passcode <input id="aprsGatePass" maxlength="6" autocomplete="off" inputmode="numeric" placeholder="12345"><small id="aprsGateState" class="cal-hint">off</small></label>
+          <label>APRS-IS server <input id="aprsGateHost" maxlength="40" autocomplete="off" placeholder="czech.aprs2.net"> <input id="aprsGatePort" class="port-field" maxlength="5" autocomplete="off" inputmode="numeric" placeholder="14580"></label>
           <div class="settings-storage"><span id="storageState"></span><button id="resetSettings" type="button">Restore defaults</button></div>
           <!-- Shown only while the interface has no profile of its own: these are
                the operator's settings from before the profile moved off the
@@ -489,7 +499,7 @@
   <script src="/wake-lock.js?v=b487b3dc"></script>
   <script src="/lan-gate.js?v=085d5bd5"></script>
   <script src="/fw-version.js?v=64ac42ff"></script>
-  <script src="/js8-settings.js?v=495a156c"></script>
+  <script src="/js8-settings.js?v=646d46d0"></script>
   <script src="/station-identity.js?v=a1a20249"></script>
   <script src="/station-profile.js?v=ecfd3023"></script>
 <script src="/setup-spine.js?v=a9af5fb9"></script>
@@ -522,6 +532,8 @@
 </script>
   <script src="/js8-email.js?v=122fdab7"></script>
   <script src="/js8-aprs.js?v=3fc9aef1"></script>
+  <!-- The other direction: what we do with somebody ELSE's @APRSIS traffic. -->
+  <script src="/js8-aprs-gate.js?v=e7b46ff5"></script>
   <script src="/js8-file-transfer.js?v=6204c34d"></script>
   <script src="/js8-presets.js?v=7131988f"></script>
   <script src="/js8-scheduler.js?v=7264d5e6"></script>
@@ -563,7 +575,7 @@
   <script src="/tx-gain-plan-ui.js?v=0d493edc"></script>
   <script src="/dxcc.js?v=c56ee081"></script>
   <script src="/log-db.js?v=6055416f"></script>
-  <script src="/data.js?v=8dc7a17b"></script>
+  <script src="/data.js?v=87172acf"></script>
   <script src="/compression.js?v=83837925"></script>
 </body>
 </html>

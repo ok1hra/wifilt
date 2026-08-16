@@ -6,7 +6,7 @@
   else root.Js8Settings = value;
 })(typeof globalThis !== "undefined" ? globalThis : self, function () {
   const STORAGE_KEY = "wifilt.data.js8-settings";
-  const SCHEMA_VERSION = 9;
+  const SCHEMA_VERSION = 10;
   // Frequency timetable: 48 half-hour UTC slots (index 0 = 00:00, 47 = 23:30).
   // Global to the station (one radio), independent of the active modem.
   const TIMETABLE_SLOTS = 48;
@@ -117,6 +117,14 @@
         rfPercent:null}},
       ui: {disclosures: {spectrum: true, reply: true, traffic: false,
         stations: false, inbox: false, settings: false, timing: false}},
+      // The APRS-IS gate. It lives in the profile and not in SETUP because it is
+      // a JS8 function: it only ever acts on @APRSIS traffic this modem decoded.
+      // The firmware stores none of it -- the login travels with every packet --
+      // so this object is the single place the whole feature is configured.
+      // Off by default, and deliberately: an upgrade must never start publishing
+      // other stations' positions under this callsign on its own.
+      aprsis: {enabled: false, call: "", passcode: "", host: "czech.aprs2.net",
+        port: 14580, maxPerHour: 30, dedupMinutes: 10},
       // Sparse schedule: only the slots the operator filled are stored. `enabled`
       // is the ON/OFF switch that lets the browser apply changes on slot bounds.
       freqTimetable: {enabled: false, slots: {}}};
@@ -138,6 +146,32 @@
       slots[index] = band ? {hz, band} : {hz};
     }
     return {enabled: source.enabled === true, slots};
+  }
+
+  // The gate's own module validates this too (Js8AprsGate.normalizeConfig): one
+  // guards the stored profile, the other guards what is about to be transmitted,
+  // and neither may assume the other ran. Limits are kept identical on purpose --
+  // a value this store accepts and the gate rejects would be a setting the
+  // operator can save and never use.
+  function normalizeAprsis(input, fallback) {
+    const source = input && typeof input === "object" ? input : {};
+    const port = Math.round(Number(source.port));
+    const perHour = Math.round(Number(source.maxPerHour));
+    const dedup = Math.round(Number(source.dedupMinutes));
+    return {
+      enabled: source.enabled === true,
+      // Uppercase with an SSID, the way APRS-IS wants a login; nine characters is
+      // the longest an AX.25 source field can carry.
+      call: String(source.call ?? "").toUpperCase().replace(/[^A-Z0-9-]/g, "").slice(0, 9),
+      passcode: String(source.passcode ?? "").replace(/[^0-9-]/g, "").slice(0, 6),
+      host: String(source.host ?? fallback.host).trim()
+        .replace(/[^A-Za-z0-9.\-]/g, "").slice(0, 40) || fallback.host,
+      port: Number.isFinite(port) && port > 0 && port <= 65535 ? port : fallback.port,
+      maxPerHour: Number.isFinite(perHour) && perHour >= 1 && perHour <= 240
+        ? perHour : fallback.maxPerHour,
+      dedupMinutes: Number.isFinite(dedup) && dedup >= 1 && dedup <= 120
+        ? dedup : fallback.dedupMinutes
+    };
   }
 
   function normalize(input) {
@@ -191,6 +225,7 @@
         rfPercent:Number.isFinite(Number(js8.rfPercent)) && Number(js8.rfPercent) >= 1
           ? Math.min(100, Math.round(Number(js8.rfPercent))) : null}},
       ui: {disclosures},
+      aprsis: normalizeAprsis(source.aprsis, fallback.aprsis),
       freqTimetable: normalizeTimetable(source.freqTimetable)};
   }
 
@@ -229,6 +264,12 @@
       migrated.modems.js8call.hbMinutes = 60;
       return {settings:migrated, status:"migrated-v8"};
     }
+    // v9 -> v10 only adds the APRS-IS gate, and normalize() fills it from the
+    // defaults -- which have it switched off. Unlike the v8 heartbeat migration
+    // there is nothing here to rewrite in a stored profile: starting to publish
+    // other stations' positions is not a decision an upgrade gets to make.
+    if (input.schemaVersion === 9)
+      return {settings:normalize(input), status:"migrated-v9"};
     if (Number(input.schemaVersion) > SCHEMA_VERSION)
       return {settings: defaults(), status: "unsupported-future"};
     return {settings: defaults(), status: "invalid"};
@@ -237,6 +278,7 @@
   function label(status) {
     return ({default: "Defaults · not saved", loaded: "Saved locally",
       saved: "Saved locally", reset: "Defaults restored",
+      "migrated-v9": "Migrated from schema v9",
       "migrated-v8": "Migrated from schema v8",
       "migrated-v1": "Migrated from schema v1",
       "migrated-v2": "Migrated from schema v2",

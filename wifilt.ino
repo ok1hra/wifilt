@@ -114,7 +114,7 @@ bool cwIpOnConnect  = false;      // announce WiFi IP via CW on first full-CAT r
 volatile bool cwIpSendPending = false;
 
 #define LOOP_WARN_MS 200
-#define REV 20260815
+#define REV 20260816
 #define WIFI
 #define FSK_KEYING  // RTTY by keying the FSK + PTT outputs (was UDP_TO_FSK, from when a UDP port fed it)
 #define WDT         // watchdog timer
@@ -857,6 +857,13 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void handleGetTxGain(void);
   void handlePostTxGain(void);
   void handleGetCivRead(void);
+  uint16_t aprsisPasscode(const String &call);
+  String aprsisSourceCall(const String &call);
+  bool aprsisGridToAprs(const String &grid, String &latOut, String &lonOut);
+  bool aprsisSendLine(const String &host, uint16_t port, const String &login, const String &line);
+  void aprsisLoop(void);
+  void handleAprsisSpot(void);
+  void handleAprsisStatus(void);
   void civReadArm(const uint8_t *prefix, size_t prefixLen);
   void civReadCapture(const uint8_t *frame, size_t len);
   uint8_t gpsTargetSlot(void);
@@ -3574,6 +3581,331 @@ void handleOi3SetHz() {
   webServer.send(200, "application/json", "{\"ok\":true}");
 }
 
+// ---- APRS-IS igate ----------------------------------------------------------
+//
+// The browser decodes JS8, hears somebody address @APRSIS, and asks us to put
+// that station's position (or its third-party text) on APRS-IS. Everything about
+// the decision -- the four filters, the dedup, the hourly cap -- happens up
+// there in data/js8-aprs-gate.js, because that is where the blocked-callsign list
+// and the DXCC table live. What is down here is the part the browser cannot do:
+// a TCP socket, and the frame that carries OUR callsign.
+//
+// The frame is built here for that reason. A raw line accepted over HTTP would
+// let anything on the LAN transmit under this station's licence.
+//
+// data/js8-aprs-gate.js is the reference implementation of every conversion
+// below; tools/js8-aprs-gate-smoke.js pins the expected strings and
+// tools/aprsis-fake-server.js compares what really leaves this box against them.
+// Change one side and the other has to move with it.
+//
+// See docs/aprsis-igate-implementace.md.
+
+static const char *APRSIS_TOCALL = "APJ8CL";
+static const uint16_t APRSIS_CONNECT_TIMEOUT_MS = 500;   // not 1500 like DXC: see below
+static const uint32_t APRSIS_LINGER_MS = 700;            // window for the server's logresp
+static const size_t   APRSIS_RESP_MAX = 200;
+
+WiFiClient AprsClient;
+IPAddress  aprsHostIp(0, 0, 0, 0);
+String     aprsHostResolved = "";
+uint32_t   aprsSeq = 0;              // 0 = nothing has been sent since boot
+uint8_t    aprsResultState = 0;      // 0 idle, 1 pending, 2 verified, 3 unverified, 4 error
+String     aprsResultServer = "";
+String     aprsResultLine = "";
+String     aprsRespBuf = "";
+uint32_t   aprsCloseAtMs = 0;        // 0 = no socket waiting to be closed
+uint32_t   aprsBackoffUntil = 0;
+uint16_t   aprsBackoffStep = 0;
+
+// The aprsc passcode hash. Not a secret -- it is a checksum of the callsign --
+// but an unverified connection has its packets dropped in silence, so refusing
+// here is the difference between a red field and hours of wondering why nothing
+// shows up on aprs.fi. Odd-length callsigns XOR their last character into the
+// high byte alone (the C original pairs it with the string's NUL terminator);
+// N0CALL must come out 13023.
+uint16_t aprsisPasscode(const String &call) {
+  String root = call;
+  int dash = root.indexOf('-');
+  if (dash >= 0) root = root.substring(0, dash);
+  root.toUpperCase();
+  uint32_t hash = 0x73E2;
+  int n = root.length();
+  for (int i = 0; i < n; i += 2) {
+    hash ^= ((uint32_t)(uint8_t)root[i]) << 8;
+    if (i + 1 < n) hash ^= (uint32_t)(uint8_t)root[i + 1];
+  }
+  return (uint16_t)(hash & 0x7FFF);
+}
+
+// AX.25 has no room for "/P": a numeric suffix becomes an SSID, anything else is
+// dropped. What gets dropped reappears at the head of the comment, so portable
+// operation stays visible on aprs.fi.
+String aprsisSourceCall(const String &call) {
+  String clean = call;
+  clean.toUpperCase();
+  int slash = clean.indexOf('/');
+  if (slash < 0) return clean.substring(0, 9);
+  String base = clean.substring(0, slash);
+  String suffix = clean.substring(slash + 1);
+  bool numeric = suffix.length() >= 1 && suffix.length() <= 2;
+  for (unsigned i = 0; numeric && i < suffix.length(); i++)
+    if (!isdigit((unsigned char)suffix[i])) numeric = false;
+  return (numeric ? base + "-" + suffix : base).substring(0, 9);
+}
+
+// Locator -> APRS coordinate, CENTRE of the cell, in integer thousandths of a
+// minute. Both halves of that sentence are load-bearing:
+//
+//   centre   JS8Call's grid2deg accumulates south-west corners and never adds
+//            the half cell, so its spots sit ~1.2 km south and ~1.6 km west --
+//            tens of kilometres on a four-character locator.
+//   integer  half of the smallest cell is 0.125', so a position can land on an
+//            exact x.xx5 rounding tie (JN79NX28 does). Floating point resolves
+//            such a tie by whatever the last bit holds, and this C++ and the
+//            JavaScript oracle would then disagree on the last digit for some
+//            locators with nobody able to say which one is right.
+//
+// No 60.00-minute carry is needed and none is written: every term is a multiple
+// of 125 (250 for longitude) thousandths, so the remainder never exceeds 59875.
+// tools/js8-aprs-gate-smoke.js sweeps the grid to keep that claim honest.
+bool aprsisGridToAprs(const String &grid, String &latOut, String &lonOut) {
+  String g = grid;
+  g.toUpperCase();
+  size_t len = g.length();
+  if (len != 4 && len != 6 && len != 8) return false;
+  if (g[0] < 'A' || g[0] > 'R' || g[1] < 'A' || g[1] > 'R') return false;
+  if (!isdigit((unsigned char)g[2]) || !isdigit((unsigned char)g[3])) return false;
+  if (len >= 6 && (g[4] < 'A' || g[4] > 'X' || g[5] < 'A' || g[5] > 'X')) return false;
+  if (len >= 8 && (!isdigit((unsigned char)g[6]) || !isdigit((unsigned char)g[7]))) return false;
+
+  long lat = (long)(g[1] - 'A') * 600000L + (long)(g[3] - '0') * 60000L;
+  long lon = (long)(g[0] - 'A') * 1200000L + (long)(g[2] - '0') * 120000L;
+  long latHalf = 30000L, lonHalf = 60000L;          // half a 2 deg x 1 deg square
+  if (len >= 6) {
+    lat += (long)(g[5] - 'A') * 2500L;
+    lon += (long)(g[4] - 'A') * 5000L;
+    latHalf = 1250L; lonHalf = 2500L;               // half a 5' x 2.5' subsquare
+  }
+  if (len >= 8) {
+    lat += (long)(g[7] - '0') * 250L;
+    lon += (long)(g[6] - '0') * 500L;
+    latHalf = 125L; lonHalf = 250L;
+  }
+  lat += latHalf - 5400000L;                        // from the south pole to the equator
+  lon += lonHalf - 10800000L;                       // from the antimeridian to Greenwich
+
+  char buf[16];
+  long a = lat < 0 ? -lat : lat;
+  snprintf(buf, sizeof(buf), "%02ld%02ld.%02ld%c", a / 60000L,
+           ((a % 60000L) + 5) / 10 / 100, ((a % 60000L) + 5) / 10 % 100, lat < 0 ? 'S' : 'N');
+  latOut = buf;
+  a = lon < 0 ? -lon : lon;
+  snprintf(buf, sizeof(buf), "%03ld%02ld.%02ld%c", a / 60000L,
+           ((a % 60000L) + 5) / 10 / 100, ((a % 60000L) + 5) / 10 % 100, lon < 0 ? 'W' : 'E');
+  lonOut = buf;
+  return true;
+}
+
+void aprsisFail(const char *error) {
+  aprsResultState = 4;
+  aprsResultLine = error;
+  webServer.send(502, "application/json",
+                 String("{\"ok\":false,\"error\":\"") + error + "\"}");
+}
+
+// Connect, log in, write one line, and leave the socket open for a moment. The
+// linger is not politeness: it is the only window in which the server's
+// "# logresp <call> verified" arrives, and reading it is what tells the operator
+// that a wrong passcode is throwing every packet away. wx.ino spends that window
+// in delay(500), which stalls the loop; here the socket is closed from
+// aprsisLoop() on a later pass and nothing blocks.
+bool aprsisSendLine(const String &host, uint16_t port, const String &login,
+                    const String &line) {
+  if ((uint32_t)aprsHostIp == 0 || aprsHostResolved != host) {
+    IPAddress ip;
+    if (!WiFi.hostByName(host.c_str(), ip)) return false;
+    aprsHostIp = ip;
+    aprsHostResolved = host;
+  }
+  if (!AprsClient.connect(aprsHostIp, port, APRSIS_CONNECT_TIMEOUT_MS)) {
+    aprsHostIp = IPAddress();       // a stale address re-resolves on the next attempt
+    AprsClient.stop();
+    return false;
+  }
+  AprsClient.setNoDelay(true);
+  AprsClient.println(login);
+  AprsClient.println(line);
+  aprsRespBuf = "";
+  aprsCloseAtMs = millis() + APRSIS_LINGER_MS;
+  return true;
+}
+
+// Drains whatever the server said and closes the socket. Runs from loop(), so a
+// dead server costs nothing but the linger.
+void aprsisLoop() {
+  if (!aprsCloseAtMs) return;
+  while (AprsClient.available() && aprsRespBuf.length() < APRSIS_RESP_MAX)
+    aprsRespBuf += (char)AprsClient.read();
+  // "unverified" contains "verified", so the refusal has to be tested first.
+  if (aprsResultState == 1 && aprsRespBuf.indexOf("logresp") >= 0) {
+    if (aprsRespBuf.indexOf("unverified") >= 0) aprsResultState = 3;
+    else if (aprsRespBuf.indexOf("verified") >= 0) aprsResultState = 2;
+    if (aprsResultState != 1) {
+      int line = aprsRespBuf.indexOf("logresp");
+      int end = aprsRespBuf.indexOf('\n', line);
+      aprsResultLine = aprsRespBuf.substring(aprsRespBuf.lastIndexOf('#', line),
+                                             end < 0 ? aprsRespBuf.length() : end);
+      aprsResultLine.trim();
+      int server = aprsResultLine.indexOf("server ");
+      if (server >= 0) {
+        aprsResultServer = aprsResultLine.substring(server + 7);
+        aprsResultServer.trim();
+      }
+    }
+  }
+  if ((int32_t)(millis() - aprsCloseAtMs) < 0) return;
+  AprsClient.stop();
+  aprsCloseAtMs = 0;
+}
+
+void handleAprsisSpot() {
+  webServer.sendHeader("Connection", "close");
+  webServer.client().setNoDelay(true);
+  // A blocking connect inside a keyed interval would stall the audio stream the
+  // radio is being fed from. 503 is not a failure here -- the browser holds the
+  // packet and asks again, which is what its queue is for.
+  if (txRealtimeNow()) {
+    webServer.send(503, "application/json", "{\"ok\":false,\"error\":\"tx\"}");
+    return;
+  }
+  if (aprsCloseAtMs) {
+    webServer.send(503, "application/json", "{\"ok\":false,\"error\":\"busy\"}");
+    return;
+  }
+  if ((int32_t)(millis() - aprsBackoffUntil) < 0) {
+    webServer.send(502, "application/json", "{\"ok\":false,\"error\":\"backoff\"}");
+    return;
+  }
+  if (!WiFiStationReady()) {
+    webServer.send(502, "application/json", "{\"ok\":false,\"error\":\"offline\"}");
+    return;
+  }
+  String body = webServer.arg("plain");
+  if (body.length() == 0 || body.length() > 1024) {
+    webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"body\"}");
+    return;
+  }
+  String login = extractJsonObject(body, "login");
+  String packet = extractJsonObject(body, "packet");
+  String call = extractJsonString(login, "call");
+  String pass = extractJsonString(login, "pass");
+  String host = extractJsonString(login, "host");
+  int port = extractJsonInt(login, "port");
+  call.toUpperCase();
+  if (call.length() < 3 || call.length() > 9 || host.length() == 0 ||
+      port <= 0 || port > 65535) {
+    webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"login\"}");
+    return;
+  }
+  // The same refusal JS8Call makes silently (APRSISClient.h:51). Said out loud
+  // here, because a gate that looks busy and delivers nothing is the worst of
+  // the available behaviours.
+  if (pass != String(aprsisPasscode(call))) {
+    webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"passcode\"}");
+    return;
+  }
+
+  String kind = extractJsonString(packet, "kind");
+  String from = extractJsonString(packet, "from");
+  String source = aprsisSourceCall(from);
+  if (source.length() < 3) {
+    webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"from\"}");
+    return;
+  }
+  String line = source + ">" + APRSIS_TOCALL + ",qAR," + call + ":";
+  if (kind == "cmd") {
+    String text = extractJsonString(packet, "text");
+    // The browser normalised the nine-character addressee; this only refuses what
+    // is not an APRS message at all, so a malformed frame never carries our call.
+    if (text.length() < 4 || text[0] != ':' || text.indexOf(':', 1) < 0) {
+      webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"text\"}");
+      return;
+    }
+    line += text;
+  } else if (kind == "grid") {
+    String lat, lon;
+    if (!aprsisGridToAprs(extractJsonString(packet, "grid"), lat, lon)) {
+      webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"grid\"}");
+      return;
+    }
+    // Identical to JS8Call's spot comment: "<MHz>MHz <SNR>dB", six decimals, the
+    // frequency being dial + audio offset. A portable callsign goes in front,
+    // because the source field above had to drop the suffix.
+    int snr = extractJsonInt(packet, "snrDb");
+    long hz = (long)extractJsonInt(packet, "freqHz");
+    String prefix = from.indexOf('/') >= 0 ? from + " " : String("");
+    char comment[64];
+    if (hz > 0)
+      snprintf(comment, sizeof(comment), "%s%.6fMHz %+03ddB", prefix.c_str(), hz / 1e6, snr);
+    else
+      snprintf(comment, sizeof(comment), "%s%+03ddB", prefix.c_str(), snr);
+    comment[42] = 0;                       // APRS comment limit, as upstream
+    // String() on the front deliberately: a chain that starts with two string
+    // literals is pointer arithmetic, not concatenation, and the second half of
+    // this line is exactly the kind of expression where that goes unnoticed.
+    line += String("=") + lat + "/" + lon + "G#JS8 " + comment;
+  } else {
+    webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"kind\"}");
+    return;
+  }
+
+  aprsSeq++;
+  aprsResultState = 1;
+  aprsResultServer = "";
+  aprsResultLine = "";
+  String loginFrame = "user " + call + " pass " + pass + " vers wifilt " + String(REV);
+  if (!aprsisSendLine(host, (uint16_t)port, loginFrame, line)) {
+    // 5 s, half a minute, five minutes. A server that is down stays down for a
+    // while, and the browser's own five-minute TTL drops the packet before this
+    // ladder ever reaches its top step.
+    aprsBackoffStep = aprsBackoffStep < 5000 ? 5000
+                    : (aprsBackoffStep < 30000 ? 30000 : 300000);
+    aprsBackoffUntil = millis() + aprsBackoffStep;
+    aprsisFail("connect");
+    return;
+  }
+  aprsBackoffStep = 0;
+  aprsBackoffUntil = millis();
+  String out = "{\"ok\":true,\"seq\":";
+  out += aprsSeq;
+  out += ",\"sent\":\"";
+  out += configJsonEscape(line);
+  out += "\"}";
+  webServer.send(200, "application/json", out);
+}
+
+// The verdict on the LAST packet only -- hence seq. An older packet's result is
+// never reported under a newer number: lying about somebody else's outcome is
+// worse than admitting the answer is gone.
+void handleAprsisStatus() {
+  webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  webServer.sendHeader("Connection", "close");
+  const char *state = aprsResultState == 2 ? "verified"
+                    : aprsResultState == 3 ? "unverified"
+                    : aprsResultState == 4 ? "error"
+                    : aprsResultState == 1 ? "pending" : "idle";
+  String out = "{\"seq\":";
+  out += aprsSeq;
+  out += ",\"state\":\"";
+  out += state;
+  out += "\",\"server\":\"";
+  out += configJsonEscape(aprsResultServer);
+  out += "\",\"line\":\"";
+  out += configJsonEscape(aprsResultLine);
+  out += "\"}";
+  webServer.send(200, "application/json", out);
+}
+
 void setupWebServer(void){
   const char *requestHeaders[] = {"Accept-Encoding"};
   webServer.collectHeaders(requestHeaders, 1);
@@ -3610,6 +3942,8 @@ void setupWebServer(void){
   webServer.on("/js8-config.json", HTTP_POST, handlePostJs8Config);
   webServer.on("/txgain.json", HTTP_GET,  handleGetTxGain);
   webServer.on("/txgain.json", HTTP_POST, handlePostTxGain);
+  webServer.on("/aprsis/spot",   HTTP_POST, handleAprsisSpot);
+  webServer.on("/aprsis/status", HTTP_GET,  handleAprsisStatus);
   webServer.on("/civread",     HTTP_GET,  handleGetCivRead);
   webServer.on("/gps",         HTTP_GET,  handleGetGps);
   webServer.on("/oi3/state",    HTTP_GET,  handleOi3State);
@@ -4278,6 +4612,7 @@ void loop(){
   _TIMED("IcomScan",        icomScanTick())
   _TIMED("TrxNet",          TrxNetLoop())
   _TIMED("DxcLoop",         DxcLoop())
+  _TIMED("AprsIs",          aprsisLoop())
   _TIMED("dxcRaw",          dxcHandleRawClient())
   _TIMED("audioRaw",        audioHandleRawClient())
   _TIMED("audioWs",         AudioHandleWsClient())

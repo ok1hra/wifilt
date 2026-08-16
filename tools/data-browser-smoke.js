@@ -6,6 +6,12 @@
 
 const crypto=require("crypto"), fs=require("fs"), http=require("http"), path=require("path"), {spawn}=require("child_process");
 const root=path.resolve(__dirname,".."), data=path.join(root,"data");
+// The fixture answers /aprsis/spot with the gate module's own frame builder, the
+// same oracle the firmware's C++ is held to (tools/aprsis-conversion-parity.js).
+// A hand-written expected string here would pass while both real implementations
+// were wrong together.
+const AprsGate=require(path.join(data,"js8-aprs-gate.js"));
+let aprsisSpots=[], aprsisSeq=0, aprsisRefuse=false;
 let unattendedPosts=[], inboxWrites=[];
 // One message already waiting for K0OG, so the restore path is exercised too.
 const inboxSeed=JSON.stringify({id:1,from:"KD8SKZ",to:"K0OG",text:"MEET AT NOON",atMs:0,delivered:false})+"\n";
@@ -71,6 +77,28 @@ const server=http.createServer((req,res)=>{
   if(url.pathname==="/js8/session/ping"&&req.method==="POST"){return sessionBody(req,res,(body)=>{if(session.token&&!sessionOwns(body.token))return sessionReply(res,409);session.token=body.token||"";sessionReply(res,200);});}
   if(url.pathname==="/js8/session/release"&&req.method==="POST"){return sessionBody(req,res,(body)=>{if(sessionOwns(body.token)){session.token="";session.releases++;}res.writeHead(200,{"Content-Type":"application/json"});res.end('{"ok":true}');});}
   if(url.pathname==="/fixture/unattended-reboot"&&req.method==="POST"){unaReboot=true;res.setHeader("Content-Type","application/json");res.end('{"ok":true}');return;}
+  // The APRS-IS gate's two firmware routes, answering the way wifilt.ino does:
+  // the passcode is checked before anything is "sent", the frame is built here so
+  // the page cannot smuggle its own, and the verdict arrives separately through
+  // /aprsis/status. aprsisRefuse=true makes the server report an unverified
+  // login, which is the one failure that otherwise looks exactly like success.
+  if(url.pathname==="/aprsis/spot"&&req.method==="POST"){let body="";req.on("data",c=>body+=c);req.on("end",()=>{
+    res.setHeader("Content-Type","application/json");
+    let post={};try{post=JSON.parse(body);}catch(_error){}
+    const login=post.login||{},packet=post.packet||{};
+    if(String(login.pass||"")!==AprsGate.passcode(String(login.call||""))){
+      aprsisSpots.push({error:"passcode",body});res.statusCode=400;res.end('{"ok":false,"error":"passcode"}');return;}
+    const sent=AprsGate.frame({kind:packet.kind,from:packet.from,grid:packet.grid,
+      text:packet.text,snrDb:packet.snrDb,freqHz:packet.freqHz},login);
+    if(!sent){aprsisSpots.push({error:"grid",body});res.statusCode=400;res.end('{"ok":false,"error":"grid"}');return;}
+    aprsisSeq++;aprsisSpots.push({seq:aprsisSeq,sent,body});
+    res.end(JSON.stringify({ok:true,seq:aprsisSeq,sent}));});return;}
+  if(url.pathname==="/aprsis/status"){res.setHeader("Content-Type","application/json");
+    res.end(JSON.stringify({seq:aprsisSeq,state:aprsisSeq===0?"idle":(aprsisRefuse?"unverified":"verified"),
+      server:"T2FIXTURE",line:`# logresp FIXTURE ${aprsisRefuse?"unverified":"verified"}, server T2FIXTURE`}));return;}
+  if(url.pathname==="/fixture/aprsis"){
+    if(req.method==="POST"){let body="";req.on("data",c=>body+=c);req.on("end",()=>{aprsisRefuse=body==="refuse";aprsisSpots.length=0;aprsisSeq=0;res.setHeader("Content-Type","application/json");res.end('{"ok":true}');});return;}
+    res.setHeader("Content-Type","application/json");res.end(JSON.stringify({spots:aprsisSpots,seq:aprsisSeq}));return;}
   // What the page actually wrote back, so the migration can be asserted on the
   // wire rather than on the mirror it lives in.
   if(url.pathname==="/fixture/msgbox-writes"){res.setHeader("Content-Type","application/json");res.end(JSON.stringify({count:inboxWrites.length,last:inboxWrites[inboxWrites.length-1]||""}));return;}
@@ -972,7 +1000,7 @@ f.onload=()=>{
       const isDigit=ch=>ch>='0'&&ch<='9';
       const hhMmTail=text=>{const t=(text||'').slice(-5);return t.length===5&&t[2]===':'&&[0,1,3,4].every(i=>isDigit(t[i]));};
       const flagText=key=>flagNodes.find(node=>node.textContent.trim().startsWith(key))?.textContent.trim()||'';
-      checks.settingsFlags=flagKeys==='TX,AUTO,CQ,HB,ACK'&&hhMmTail(flagText('AUTO'))&&hhMmTail(flagText('HB'))&&
+      checks.settingsFlags=flagKeys==='TX,AUTO,CQ,HB,ACK,IGATE'&&hhMmTail(flagText('AUTO'))&&hhMmTail(flagText('HB'))&&
         cqFlagOn&&cqFlag()?.classList.contains('on')===false&&
         !d.querySelector('#settingsFlags button,#settingsFlags input,#settingsFlags a');
       // Turning Radio TX off must stand down every TX-dependent pill (AUTO/CQ/HB/ACK):
@@ -985,8 +1013,16 @@ f.onload=()=>{
         .find(node=>node.textContent.trim().startsWith(key))?.classList.contains('on');
       const flagTip=key=>[...d.querySelectorAll('#settingsFlags .summary-flag')]
         .find(node=>node.textContent.trim().startsWith(key))?.title||'';
+      // IGATE is the exception and has to be shown to be one: it publishes to the
+      // internet and never keys the transmitter, so Radio TX off must leave it
+      // exactly as it was. Configured here, so "off" would mean the gate was
+      // wrongly grouped with the transmitting switches.
+      dt.aprsGateSet({enabled:true,call:'OK1HRA-10',
+        passcode:f.contentWindow.Js8AprsGate.passcode('OK1HRA-10')});
       checks.settingsFlagsTxGate=flagOn('TX')===false&&flagOn('AUTO')===false&&flagOn('CQ')===false&&
-        flagOn('HB')===false&&flagOn('ACK')===false&&flagTip('AUTO').includes('needs Radio TX');
+        flagOn('HB')===false&&flagOn('ACK')===false&&flagTip('AUTO').includes('needs Radio TX')&&
+        flagOn('IGATE')===true;
+      dt.aprsGateSet({enabled:false});
       // Restore Radio TX (the manual-TX checks below expect it on) and the CQ selector.
       txSafetyBox.checked=true; txSafetyBox.dispatchEvent(new f.contentWindow.Event('change',{bubbles:true}));
       cqSel.value='0'; cqSel.dispatchEvent(new f.contentWindow.Event('change',{bubbles:true}));
@@ -1020,6 +1056,118 @@ f.onload=()=>{
       dt.feedAssembled({directed:{from:'OK4TXT',to:'OK1HRA',command:' SNR'},
         payload:'-12',checksumOk:true});
       checks.msgBoxIgnoresMachineTraffic=dt.inboxState().size===afterPlain.size;
+
+      // ---- APRS-IS gate -----------------------------------------------------
+      // The whole path, in the browser: a decoded @APRSIS message, the decision,
+      // the POST, and the badge. What the fixture receives is compared against
+      // the frame the gate module builds, which is also the oracle the firmware
+      // is held to -- so a hand-written expectation cannot drift away from both.
+      const Gate=f.contentWindow.Js8AprsGate;
+      const gateCall='OK1HRA-10', gatePass=Gate.passcode(gateCall);
+      const gateConfig={enabled:true,call:gateCall,passcode:gatePass,
+        host:'127.0.0.1',port:14580};
+      // Only the two network round trips are waited on. Every other decision here
+      // is synchronous, and this block sits ahead of the transmit sequence, whose
+      // slot-boundary checks observe a transient state -- so the time this costs
+      // moves where in the 15-second slot that transmission starts.
+      const gateSettle=()=>new Promise(resolve=>setTimeout(resolve,120));
+      const gateEntry=key=>dt.aprsGateEntries().find(item=>item.key===key)||{};
+      const gateBadge=call=>[...d.querySelectorAll('#traffic .message')]
+        .filter(row=>row.textContent.indexOf(call)>=0)
+        .map(row=>row.querySelector('.igate-badge')).find(Boolean)||null;
+      await fetch('/fixture/aprsis',{method:'POST',body:'accept'});
+      dt.aprsGateReset();
+      dt.aprsGateSet(gateConfig);
+      // Fed through setActivity, not feedAssembled: the badge is on the row, and
+      // only this path puts a row in the feed as well as running the dispatch.
+      const gateMessage=(id,from,command,payload,extra)=>Object.assign({id,
+        directed:{from,to:'@APRSIS',command},payload,checksumOk:true,incomplete:false,
+        text:from+': @APRSIS'+command+' '+payload+' ',snr:-7,offsetHz:1200,submode:0,
+        firstSlotUtcMs:Date.now(),lastSlotUtcMs:Date.now(),raw:[id],complete:true},extra||{});
+      dt.setActivity({frames:[],timing:[],channels:[],calls:[],
+        messages:[gateMessage('gate-grid','OK2ABC',' GRID','JN79NX')]});
+      await gateSettle();
+      await dt.aprsGatePump();
+      await gateSettle();
+      const gateSpots=await (await fetch('/fixture/aprsis')).json();
+      // 7078000 is the fixture's dial; the comment carries dial + offset, which is
+      // where the signal actually was.
+      const gateWant=Gate.frame({kind:'grid',from:'OK2ABC',grid:'JN79NX',snrDb:-7,
+        freqHz:7079200},gateConfig);
+      checks.aprsGateSendsGrid=gateSpots.spots.length===1&&
+        gateSpots.spots[0].sent===gateWant&&
+        gateWant.indexOf('OK2ABC>APJ8CL,qAR,OK1HRA-10:=4958.75N/01507.50EG#JS8 7.079200MHz -07dB')===0;
+      // Written is not accepted: the badge may only go green once the server has
+      // answered, which is the whole reason /aprsis/status exists.
+      checks.aprsGateVerifiedBadge=gateEntry('gate-grid').state==='verified'&&
+        Boolean(gateBadge('OK2ABC'))&&gateBadge('OK2ABC').classList.contains('verified')&&
+        gateBadge('OK2ABC').tagName==='A'&&
+        gateBadge('OK2ABC').getAttribute('href').indexOf('aprs.fi')>=0&&
+        gateBadge('OK2ABC').getAttribute('href').indexOf('OK2ABC')>=0&&
+        gateBadge('OK2ABC').getAttribute('title').indexOf(gateWant)>=0;
+      checks.aprsGateCountsVerified=dt.aprsGateSentLastHour()===1&&
+        [...d.querySelectorAll('#settingsFlags .summary-flag')]
+          .some(flag=>flag.textContent.indexOf('IGATE')===0&&
+            flag.textContent.indexOf('1/30')>0);
+      // The same station with the same locator again, inside the window.
+      dt.feedAssembled({id:'gate-dup',directed:{from:'OK2ABC',to:'@APRSIS',command:' GRID'},
+        payload:'JN79NX',checksumOk:true,snr:-7,offsetHz:1200});
+      checks.aprsGateDedups=gateEntry('gate-dup').state==='skipped'&&
+        gateEntry('gate-dup').reason.indexOf('already gated')===0;
+      // A lost EOT truncates the text, so the locator may be a different place
+      // entirely. Displayed, never gated.
+      dt.feedAssembled({id:'gate-partial',directed:{from:'OK3INC',to:'@APRSIS',command:' GRID'},
+        payload:'JN79',checksumOk:true,incomplete:true,snr:-7,offsetHz:1200});
+      checks.aprsGateRefusesIncomplete=gateEntry('gate-partial').state==='skipped'&&
+        gateEntry('gate-partial').reason==='message incomplete';
+      // CMD is the third-party tunnel. The nine-character addressee is recomputed
+      // here, never trusted: the padding is invisible in the sender's input field.
+      dt.feedAssembled({id:'gate-cmd',directed:{from:'OK4CMD',to:'@APRSIS',command:' CMD'},
+        payload:':SMSGTE:HI',checksumOk:true,snr:-3,offsetHz:1500});
+      await gateSettle();
+      await dt.aprsGatePump();
+      await gateSettle();
+      const gateCmd=await (await fetch('/fixture/aprsis')).json();
+      checks.aprsGatePadsAddressee=gateCmd.spots.length===2&&
+        gateCmd.spots[1].sent==='OK4CMD>APJ8CL,qAR,OK1HRA-10::SMSGTE   :HI';
+      // A passcode that does not match the callsign has APRS-IS drop everything in
+      // silence, so the gate refuses to open at all and says which callsign.
+      dt.aprsGateSet({passcode:'1'});
+      dt.feedAssembled({id:'gate-badpass',directed:{from:'OK5PAS',to:'@APRSIS',command:' GRID'},
+        payload:'JO70FB',checksumOk:true,snr:-7,offsetHz:1200});
+      checks.aprsGateRefusesBadPasscode=gateEntry('gate-badpass').state==='skipped'&&
+        gateEntry('gate-badpass').reason.indexOf('passcode')===0&&
+        (await (await fetch('/fixture/aprsis')).json()).spots.length===2&&
+        [...d.querySelectorAll('#settingsFlags .summary-flag')]
+          .every(flag=>flag.textContent.indexOf('IGATE')!==0||
+            !flag.classList.contains('on'));
+      checks.aprsGateStateLineExplains=
+        d.querySelector('#aprsGateState').dataset.state==='bad'&&
+        d.querySelector('#aprsGateState').textContent.indexOf('passcode')>=0;
+      // And the failure that looks exactly like success from our end: the server
+      // takes the connection and refuses the login.
+      await fetch('/fixture/aprsis',{method:'POST',body:'refuse'});
+      dt.aprsGateReset();
+      dt.aprsGateSet(gateConfig);
+      dt.setActivity({frames:[],timing:[],channels:[],calls:[],
+        messages:[gateMessage('gate-unver','OK6UNV',' GRID','JO70FB')]});
+      await gateSettle();
+      await dt.aprsGatePump();
+      await gateSettle();
+      checks.aprsGateShowsUnverified=gateEntry('gate-unver').state==='unverified'&&
+        dt.aprsGateSentLastHour()===0&&
+        Boolean(gateBadge('OK6UNV'))&&gateBadge('OK6UNV').classList.contains('unverified')&&
+        gateBadge('OK6UNV').tagName!=='A';
+      // Off is off: nothing is offered to the firmware and the row says why.
+      await fetch('/fixture/aprsis',{method:'POST',body:'accept'});
+      dt.aprsGateReset();
+      dt.aprsGateSet({enabled:false});
+      dt.feedAssembled({id:'gate-off',directed:{from:'OK7OFF',to:'@APRSIS',command:' GRID'},
+        payload:'JO70FB',checksumOk:true,snr:-7,offsetHz:1200});
+      checks.aprsGateOffSendsNothing=gateEntry('gate-off').state==='skipped'&&
+        gateEntry('gate-off').reason==='gate off'&&
+        (await (await fetch('/fixture/aprsis')).json()).spots.length===0;
+      dt.aprsGateReset();
 
       // An advertisement inside ordinary traffic ("... MSG ID 32") is a pointer
       // to mail held elsewhere. AUTO and Radio TX are on here, so the station

@@ -486,6 +486,19 @@ button { color: inherit; cursor: pointer; }
 .aprs-param-cost.warn { color:var(--amber); }
 .aprs-badge { display:inline-block; margin-right:6px; padding:0 5px; border:1px solid var(--amber); border-radius:3px; color:var(--amber); font:800 9px/1.6 ui-monospace,monospace; letter-spacing:.08em; vertical-align:1px; }
 .message.aprs-reply { opacity:1; }
+/* What this station carried to APRS-IS for somebody else. Five states, because
+   "written to the socket" and "the network took it" are different claims and the
+   gap between them is what a wrong passcode looks like: green only after the
+   server answered `logresp ... verified`, and only green is a link to the raw
+   packet on aprs.fi. */
+.igate-badge { display:inline-block; margin-right:6px; padding:0 5px; border:1px solid var(--muted);
+  border-radius:3px; color:var(--muted); font:800 9px/1.6 ui-monospace,monospace;
+  letter-spacing:.08em; vertical-align:1px; text-decoration:none; }
+.igate-badge.queued, .igate-badge.sending, .igate-badge.sent { border-color:var(--amber); color:var(--amber); }
+.igate-badge.verified { border-color:var(--green); color:var(--green); }
+.igate-badge.verified:hover { background:rgba(90,209,138,.14); }
+.igate-badge.unverified, .igate-badge.failed { border-color:var(--red); color:var(--red); }
+.igate-badge.skipped { opacity:.7; }
 .abort { border: 1px solid var(--red); background: transparent; color: var(--red); border-radius: 5px; padding: 5px 8px; }
 .session-actions { display: flex; align-items: center; gap: 8px; }
 .log-qso { border: 1px solid var(--cyan); background: transparent; color: var(--cyan); border-radius: 5px; padding: 5px 8px; font-weight: 800; cursor: pointer; }
@@ -1088,6 +1101,13 @@ button { color: inherit; cursor: pointer; }
 .group-add button:hover { border-color:var(--cyan); color:var(--text); }
 .group-cost { font-size:9px; font-weight:700; color:var(--amber); cursor:help; }
 .group-mail { color:var(--amber); }
+/* The port sits beside the hostname rather than on a row of its own: it is part
+   of one address and almost never touched. */
+.port-field { max-width:6em; }
+/* The gate's state line is the answer to "why is nothing reaching aprs.fi", so it
+   is coloured: green when the passcode matches the callsign, red when it does not. */
+#aprsGateState[data-state="ok"] { color:var(--green); }
+#aprsGateState[data-state="bad"] { color:var(--red); }
 .cal-hint { display:block; font-size:11px; color:var(--muted); line-height:1.5; }
 .cal-hint a { color:#9fd39f; }
 
