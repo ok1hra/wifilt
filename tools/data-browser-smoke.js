@@ -11,7 +11,7 @@ const root=path.resolve(__dirname,".."), data=path.join(root,"data");
 // A hand-written expected string here would pass while both real implementations
 // were wrong together.
 const AprsGate=require(path.join(data,"js8-aprs-gate.js"));
-let aprsisSpots=[], aprsisSeq=0, aprsisRefuse=false;
+let aprsisSpots=[], aprsisSeq=0, aprsisRefuse=false, aprsisBusy=false, aprsisCap=30;
 let unattendedPosts=[], inboxWrites=[];
 // One message already waiting for K0OG, so the restore path is exercised too.
 const inboxSeed=JSON.stringify({id:1,from:"KD8SKZ",to:"K0OG",text:"MEET AT NOON",atMs:0,delivered:false})+"\n";
@@ -90,14 +90,27 @@ const server=http.createServer((req,res)=>{
       aprsisSpots.push({error:"passcode",body});res.statusCode=400;res.end('{"ok":false,"error":"passcode"}');return;}
     const sent=AprsGate.frame({kind:packet.kind,from:packet.from,grid:packet.grid,
       text:packet.text,snrDb:packet.snrDb,freqHz:packet.freqHz},login);
-    if(!sent){aprsisSpots.push({error:"grid",body});res.statusCode=400;res.end('{"ok":false,"error":"grid"}');return;}
+    // A control character would be a second APRS-IS packet; the firmware refuses
+    // one and so must the fixture, or the browser check would pass against a
+    // server more permissive than the real one.
+    if(!sent||/[\u0000-\u001f\u007f]/.test(sent)){aprsisSpots.push({error:"text",body});res.statusCode=400;res.end('{"ok":false,"error":"text"}');return;}
+    // Busy, then duplicate, then cap: the order the device applies them in.
+    if(aprsisBusy){res.statusCode=503;res.end('{"ok":false,"error":"tx"}');return;}
+    const twin=aprsisSpots.find(spot=>spot.sent===sent);
+    if(twin){res.statusCode=409;res.end(JSON.stringify({ok:false,error:"duplicate",seq:twin.seq}));return;}
+    if(aprsisSpots.length>=aprsisCap){res.statusCode=429;res.end('{"ok":false,"error":"hourly_cap"}');return;}
     aprsisSeq++;aprsisSpots.push({seq:aprsisSeq,sent,body});
-    res.end(JSON.stringify({ok:true,seq:aprsisSeq,sent}));});return;}
+    // 202: accepted, not yet written. The verdict arrives through /aprsis/status.
+    res.statusCode=202;res.end(JSON.stringify({ok:true,seq:aprsisSeq,sent}));});return;}
   if(url.pathname==="/aprsis/status"){res.setHeader("Content-Type","application/json");
     res.end(JSON.stringify({seq:aprsisSeq,state:aprsisSeq===0?"idle":(aprsisRefuse?"unverified":"verified"),
       server:"T2FIXTURE",line:`# logresp FIXTURE ${aprsisRefuse?"unverified":"verified"}, server T2FIXTURE`}));return;}
   if(url.pathname==="/fixture/aprsis"){
-    if(req.method==="POST"){let body="";req.on("data",c=>body+=c);req.on("end",()=>{aprsisRefuse=body==="refuse";aprsisSpots.length=0;aprsisSeq=0;res.setHeader("Content-Type","application/json");res.end('{"ok":true}');});return;}
+    if(req.method==="POST"){let body="";req.on("data",c=>body+=c);req.on("end",()=>{
+      aprsisRefuse=body==="refuse";aprsisBusy=body==="busy";
+      aprsisCap=body==="cap"?1:30;
+      if(body!=="busy"){aprsisSpots.length=0;aprsisSeq=0;}
+      res.setHeader("Content-Type","application/json");res.end('{"ok":true}');});return;}
     res.setHeader("Content-Type","application/json");res.end(JSON.stringify({spots:aprsisSpots,seq:aprsisSeq}));return;}
   // What the page actually wrote back, so the migration can be asserted on the
   // wire rather than on the mirror it lives in.
@@ -375,7 +388,11 @@ f.onload=()=>{
         tune:!!d.querySelector('#tuneButton')&&d.querySelector('#tuneOffset').textContent.trim()===d.querySelector('#txOffset').value+' Hz',
         txSession:[...d.querySelectorAll('details[data-section="reply"] > summary span')].some(node=>node.textContent.trim()==='TX SESSION'),
         defaultDisclosures:defaultDisclosuresInitially,
-        ownCallPanelsExpanded:d.querySelector('details[data-section="traffic"]').open&&d.querySelector('details[data-section="stations"]').open,
+        // A message for MYCALL unfolds Recent traffic and NOTHING else. Stations must
+        // stay as the operator left it: our own callsign lands in that table as
+        // heard-about-only for every directed message, which used to pop the section
+        // open with nothing in it worth reading.
+        ownCallPanelsExpanded:d.querySelector('details[data-section="traffic"]').open&&!d.querySelector('details[data-section="stations"]').open,
         // My own callsign, in the feed and in the stations table: one colour in both,
         // amber (#ffbf69), which is the feed's "this came from me or is about me". These
         // two checks asked for red (#ff6b6b) long after the rule had moved to green and
@@ -503,6 +520,31 @@ f.onload=()=>{
       checks.snapshotDivider=d.querySelectorAll('#traffic .restore-divider').length===1;
       f.contentWindow.sessionStorage.removeItem('js8lan.session.v1');
       d.querySelector('#messageInput').value='';
+      // Chat thread across midnight: the bubble clock carries no date, so yesterday 22:00
+      // reads as a LATER time of day than today 00:01 and used to jump ahead of it. The
+      // stamps are pinned to the current UTC day so the pair always straddles midnight
+      // whatever hour the harness runs at, and the older row is seeded last so a thread
+      // that simply kept insertion order fails the check too.
+      (function(){
+        const T=f.contentWindow.__dataTest, today=new Date();
+        const dayStart=Date.UTC(today.getUTCFullYear(),today.getUTCMonth(),today.getUTCDate());
+        T.clearConversation('OK0DAY');
+        T.pushConversationAt('OK0DAY',{utcMs:dayStart+60000,text:'TODAY ROW'});
+        T.pushConversationAt('OK0DAY',{utcMs:dayStart-2*3600000,text:'OLD ROW'});
+        T.selectCallForLog('OK0DAY');
+        const rows=[...d.querySelectorAll('#chatThread > div')];
+        const texts=rows.map(row=>row.textContent);
+        const oldIndex=texts.findIndex(text=>text.includes('OLD ROW'));
+        const newIndex=texts.findIndex(text=>text.includes('TODAY ROW'));
+        checks.chatDayOrder=oldIndex>=0&&newIndex>oldIndex;
+        // Two headings: the older day is named and "today" marks where the thread catches
+        // up, because the same clock hour on two days is otherwise unreadable.
+        const days=[...d.querySelectorAll('#chatThread .chat-day')].map(node=>node.textContent);
+        checks.chatDayDivider=days.length===2&&days[0]==='yesterday'&&days[1]==='today'&&
+          Boolean(rows[oldIndex-1]&&rows[oldIndex-1].classList.contains('day'));
+        T.clearConversation('OK0DAY');
+        T.selectCallForLog('');
+      })();
       const sd=setupFrame.contentDocument,radioSection=sd.querySelector('#radioSection'),lanWarning=sd.querySelector('#radioConfigWarning');
       // The card is built by lan-gate.js and worded for both sub-pages, so it
       // says DATA rather than JS8Call and names the transports that still exist.
@@ -1057,6 +1099,37 @@ f.onload=()=>{
         payload:'-12',checksumOk:true});
       checks.msgBoxIgnoresMachineTraffic=dt.inboxState().size===afterPlain.size;
 
+      // The gate's fields have to be wide enough to READ. The settings label is a
+      // three-track grid whose last track is sized to its content and therefore
+      // greedy: a hint
+      // parked in it takes its content width first and collapses the field beside
+      // it to the 20px floor, which is how the callsign box ended up showing not
+      // one whole character. Measured, not reasoned about -- a width is exactly
+      // the kind of claim that looks right in the markup and is wrong on screen.
+      const gateSettings=d.querySelector('[data-section="settings"]');
+      if(gateSettings)gateSettings.open=true;
+      const charWidth=(()=>{
+        const probe=d.createElement('span');
+        probe.style.cssText='position:absolute;visibility:hidden;font:'
+          +getComputedStyle(d.querySelector('#aprsGateCall')).font;
+        probe.textContent='0000000000';
+        d.body.appendChild(probe);
+        const width=probe.getBoundingClientRect().width/10;
+        probe.remove();
+        return width;
+      })();
+      const fieldChars=id=>d.querySelector(id).getBoundingClientRect().width/charWidth;
+      checks.aprsGateFieldsAreReadable=fieldChars('#aprsGateCall')>=9&&
+        fieldChars('#aprsGatePass')>=6&&fieldChars('#aprsGateHost')>=6&&
+        fieldChars('#aprsGatePort')>=5;
+      // The hint belongs on a row of its own, which is what stops it stealing the
+      // field's width in the first place.
+      checks.aprsGateHintOwnsItsRow=(()=>{
+        const call=d.querySelector('#aprsGateCall');
+        const hint=call.parentElement.querySelector('small');
+        return hint.getBoundingClientRect().top>=call.getBoundingClientRect().bottom-1;
+      })();
+
       // ---- APRS-IS gate -----------------------------------------------------
       // The whole path, in the browser: a decoded @APRSIS message, the decision,
       // the POST, and the badge. What the fixture receives is compared against
@@ -1158,6 +1231,57 @@ f.onload=()=>{
         dt.aprsGateSentLastHour()===0&&
         Boolean(gateBadge('OK6UNV'))&&gateBadge('OK6UNV').classList.contains('unverified')&&
         gateBadge('OK6UNV').tagName!=='A';
+      // A packet the interface refused because the transmitter was keyed must not
+      // spend an attempt: four of those in a 15-second cycle used to drop a
+      // position nothing had actually refused.
+      await fetch('/fixture/aprsis',{method:'POST',body:'accept'});
+      dt.aprsGateReset();
+      dt.aprsGateSet(gateConfig);
+      // Busy BEFORE the message arrives: feeding one pumps the queue straight
+      // away, so setting it afterwards would test nothing.
+      await fetch('/fixture/aprsis',{method:'POST',body:'busy'});
+      dt.setActivity({frames:[],timing:[],channels:[],calls:[],
+        messages:[gateMessage('gate-busy','OK8BSY',' GRID','JO70FB')]});
+      await gateSettle();
+      for(let round=0;round<6;round++){dt.aprsGateDue();await dt.aprsGatePump();await gateSettle();}
+      checks.aprsGateTxIsNotAFailure=gateEntry('gate-busy').state==='queued'&&
+        gateEntry('gate-busy').attempts<=1;
+      // ...and once the radio stops, it goes out.
+      await fetch('/fixture/aprsis',{method:'POST',body:'accept'});
+      dt.aprsGateDue();
+      await dt.aprsGatePump();
+      await gateSettle();
+      await dt.aprsGatePump();
+      await gateSettle();
+      checks.aprsGateSendsAfterTx=gateEntry('gate-busy').state==='verified';
+      // The interface says the frame already went out -- another browser, or our
+      // own timed-out POST. It is on the network either way, so the row says so.
+      dt.aprsGateReset();
+      dt.setActivity({frames:[],timing:[],channels:[],calls:[],
+        messages:[gateMessage('gate-twin','OK8BSY',' GRID','JO70FB')]});
+      await gateSettle();
+      await dt.aprsGatePump();
+      await gateSettle();
+      // It legitimately ends up green -- that frame IS on the network -- but the
+      // row has to keep saying it was not this browser's packet, and the device
+      // must not have written a second one.
+      checks.aprsGateAcceptsDeviceDuplicate=gateEntry('gate-twin').duplicate===true&&
+        gateEntry('gate-twin').reason.indexOf('already gated')===0&&
+        gateEntry('gate-twin').seq>0&&
+        ['sent','verified'].includes(gateEntry('gate-twin').state)&&
+        (await (await fetch('/fixture/aprsis')).json()).spots.length===1;
+      // A control character in the text is a second APRS-IS packet, chosen by
+      // whoever transmitted it. Refused before the POST, so the fixture never
+      // even sees it.
+      await fetch('/fixture/aprsis',{method:'POST',body:'accept'});
+      dt.aprsGateReset();
+      dt.feedAssembled({id:'gate-inject',directed:{from:'OK9INJ',to:'@APRSIS',command:' CMD'},
+        payload:':SMSGTE:HI'+String.fromCharCode(10)+'OK1XX>APRS,TCPIP*:>pwned',
+        checksumOk:true,snr:-7,offsetHz:1200});
+      await gateSettle();
+      checks.aprsGateRefusesInjection=gateEntry('gate-inject').state==='skipped'&&
+        gateEntry('gate-inject').reason==='control character in the message'&&
+        (await (await fetch('/fixture/aprsis')).json()).spots.length===0;
       // Off is off: nothing is offered to the firmware and the row says why.
       await fetch('/fixture/aprsis',{method:'POST',body:'accept'});
       dt.aprsGateReset();

@@ -408,7 +408,10 @@
     return new RegExp(`\\bTO:\\s*${call}\\b`).test(sanitize(message && message.text));
   }
 
-  return {GROUP, ADDRESSEE_WIDTH, MESSAGE_TEXT_LIMIT, RECENT_KEY, RECENT_MAX,
+  // LOCATOR_RE is exported for js8-aprs-gate.js: what this module will compose
+  // into a GRID command and what the gate will accept out of one have to be the
+  // same rule, or the station gates positions it would refuse to send.
+  return {GROUP, ADDRESSEE_WIDTH, MESSAGE_TEXT_LIMIT, LOCATOR_RE, RECENT_KEY, RECENT_MAX,
     COMMANDS, SERVICES, MENU, GRID, CMD, DIRECT,
     sanitize, addressee, portable, megahertz, isDraft, parse, normalize, validate,
     splitForTx, compose, prefill, checkParams, truncateTo, airtimeSeconds,

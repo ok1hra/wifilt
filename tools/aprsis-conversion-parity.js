@@ -38,6 +38,8 @@ function extract(signature) {
 
 const functions = [
   extract("uint16_t aprsisPasscode(const String &call) {"),
+  extract("bool aprsisFieldSafe(const String &value) {"),
+  extract("String aprsisCleanCall(const String &call) {"),
   extract("String aprsisSourceCall(const String &call) {"),
   extract("bool aprsisGridToAprs(const String &grid, String &latOut, String &lonOut) {")
 ].join("\n");
@@ -46,12 +48,14 @@ const functions = [
 // start using that is missing here will fail to compile, which is the point.
 const shim = `
 #include <cstdio>
+#include <cstdlib>
 #include <cctype>
 #include <string>
 #include <iostream>
 
 struct String : std::string {
   String() {}
+  String(char c) : std::string(1, c) {}
   String(const char *s) : std::string(s) {}
   String(const std::string &s) : std::string(s) {}
   void toUpperCase() { for (auto &c : *this) c = toupper((unsigned char)c); }
@@ -62,6 +66,7 @@ struct String : std::string {
     return String(substr(from, to - from));
   }
   String &operator=(const char *s) { assign(s); return *this; }
+  String &operator+=(char c) { push_back(c); return *this; }
 };
 
 // Concatenation has to keep producing a String, not a std::string: Arduino's
@@ -72,13 +77,31 @@ inline String operator+(const char *a, const String &b) { String r(a); r.append(
 
 ${functions}
 
+// EVERY argument crosses percent-encoded. The values under test include spaces
+// and control characters, and a whitespace-delimited pipe would silently split
+// them -- which shifts every later answer by a line and reports the resulting
+// misalignment as a conversion mismatch.
+static String decodeArgument(const std::string &argument) {
+  String decoded;
+  for (size_t i = 0; i < argument.size(); i++) {
+    if (argument[i] == '%' && i + 2 < argument.size()) {
+      decoded += (char)strtol(argument.substr(i + 1, 2).c_str(), nullptr, 16);
+      i += 2;
+    } else decoded += argument[i];
+  }
+  return decoded;
+}
+
 int main() {
-  std::string command, argument;
-  while (std::cin >> command >> argument) {
+  std::string command, raw;
+  while (std::cin >> command >> raw) {
+    String argument = decodeArgument(raw);
     if (command == "passcode") {
       printf("%u\\n", (unsigned)aprsisPasscode(String(argument)));
     } else if (command == "source") {
       printf("%s\\n", aprsisSourceCall(String(argument)).c_str());
+    } else if (command == "safe") {
+      printf("%s\\n", aprsisFieldSafe(argument) ? "safe" : "refused");
     } else if (command == "grid") {
       String lat, lon;
       if (!aprsisGridToAprs(String(argument), lat, lon)) printf("REFUSED\\n");
@@ -114,12 +137,30 @@ for (let field = 0; field < 18; field += 1)
 const calls = ["N0CALL", "N0CAL", "OK1HRA", "OK1HRA-10", "W1AW", "VK2ABCD", "3DA0XX",
   "OK1A", "A", "AB", "ABC"];
 const sources = ["OK2ABC", "OK2ABC/P", "OK2ABC/9", "OK2ABC/13", "OK2ABC/QRP",
-  "ok2abc", "OK2ABC/0", "OK2ABC/123"];
+  "ok2abc", "OK2ABC/0", "OK2ABC/123",
+  // Hostile and merely odd input. The old sweep fed only well-formed callsigns,
+  // which is exactly why it passed while the C++ was missing the character
+  // filter its JavaScript oracle applies -- a newline here reached the AX.25
+  // source field and started a second packet.
+  "AA1:BB", "AA1 BB", "AA1>BB", "AA1,BB", "AA1;BB", "AA1@BB", "AA1#BB",
+  "OK2ABC*", "OK2ABC.", "OK2ABC/P/Q", "-OK2ABC", "OK2ABC-", "OK2ABC--9"];
+
+// Control characters: what one of these in a field means is a second APRS-IS
+// packet, so both sides have to refuse the same set. Percent-encoded across the
+// pipe for the obvious reason.
+const control = code => String.fromCharCode(code);
+const fields = ["OK2ABC", ":SMSGTE   :HI", "HI THERE 73",
+  `AA1${control(10)}BB`, `AA1${control(13)}BB`, `AA1${control(9)}BB`,
+  `AA1${control(0)}BB`, `AA1${control(127)}BB`, control(10), `HI${control(27)}[2J`];
+// Percent-encode anything the pipe could not carry intact.
+const encode = value => String(value).replace(/[^A-Za-z0-9/:.-]/g,
+  ch => `%${ch.charCodeAt(0).toString(16).padStart(2, "0").toUpperCase()}`);
 
 const script = [
-  ...grids.map(grid => `grid ${grid}`),
-  ...calls.map(call => `passcode ${call}`),
-  ...sources.map(call => `source ${call}`)
+  ...grids.map(grid => `grid ${encode(grid)}`),
+  ...calls.map(call => `passcode ${encode(call)}`),
+  ...sources.map(call => `source ${encode(call)}`),
+  ...fields.map(field => `safe ${encode(field)}`)
 ].join("\n") + "\n";
 
 const out = execFileSync(bin, {input: script, encoding: "utf8"}).trim().split("\n");
@@ -143,6 +184,10 @@ for (const call of sources) {
   report(`source ${call}`, Gate.sourceCall(call), out[line]);
   line += 1;
 }
+for (const field of fields) {
+  report(`safe ${encode(field)}`, Gate.fieldSafe(field) ? "safe" : "refused", out[line]);
+  line += 1;
+}
 
 fs.rmSync(dir, {recursive: true, force: true});
 if (mismatches) {
@@ -150,5 +195,6 @@ if (mismatches) {
   process.exit(1);
 }
 console.log(`APRS-IS PARITY PASS ${line} conversions identical `
-  + `(${grids.length} locators, ${calls.length} passcodes, ${sources.length} callsigns)`);
+  + `(${grids.length} locators, ${calls.length} passcodes, ${sources.length} callsigns, `
+  + `${fields.length} control-character fields)`);
 console.log(`  sample ${grids[0]} -> ${out[0]}, ${LETTERS.length} subsquare letters swept`);

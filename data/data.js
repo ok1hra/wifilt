@@ -169,7 +169,6 @@ const dom = {
   trafficFilter:document.querySelector(".traffic-filter"),
   trafficClear:document.querySelector("[data-traffic-clear]"),
   trafficHide:document.querySelector("[data-traffic-hide]"),
-  stationsSection:document.querySelector('[data-section="stations"]'),
   stationMapSection:document.querySelector('[data-section="stations-map"]'),
   stationMap:$("stationMap"), stationMapSummary:$("stationMapSummary"), stationMapLinks:$("stationMapLinks"),
   stationMapLog:$("stationMapLog"),
@@ -343,7 +342,7 @@ const state = {
   txSessionMode:"CHAT", audioDb:-90, tuneActive:false, spectrumWasTransmitting:false,
   help:{incompatibleActive:false},
   lanConfig:{checked:false, ready:false, detail:"", slot:0},
-  ownCallAttention:{call:"", messages:new Set(), stations:new Set()},
+  ownCallAttention:{call:"", messages:new Set()},
   // Rows addressed to us, so the beep fires once per message. `seeded` keeps the
   // first render after a reload silent: everything on screen is history, and a
   // burst of tones for messages that arrived while the tab was shut is noise.
@@ -462,6 +461,24 @@ function rebuildDecoderSeen() {
   }
 }
 
+// Chat rows saved before they carried an absolute stamp kept only the UTC clock.
+// Rebuild the stamp from the moment the snapshot was written: that time-of-day belongs
+// to the save's day, or to the day before when it reads later than the save itself.
+// Nothing older than 24 h is recoverable this way and nothing needs to be -- a snapshot
+// is written on the way out of the page and read back on the way in.
+function restoreConversationItem(item, savedAtMs) {
+  const copy = {...item};
+  if (Number(copy.utcMs) > 0 || !savedAtMs) return copy;
+  const clock = /^(\d{2}):(\d{2}):(\d{2})$/.exec(String(copy.time || ""));
+  if (!clock) return copy;
+  const saved = new Date(savedAtMs);
+  let stamp = Date.UTC(saved.getUTCFullYear(), saved.getUTCMonth(), saved.getUTCDate(),
+    Number(clock[1]), Number(clock[2]), Number(clock[3]));
+  if (stamp > savedAtMs) stamp -= 86400000;
+  copy.utcMs = stamp;
+  return copy;
+}
+
 function restoreSession() {
   const store = sessionStore(); if (!store) return false;
   let raw = null;
@@ -482,8 +499,9 @@ function restoreSession() {
     state.activitySessions = buckets;
     if (snapshot.conversations && typeof snapshot.conversations === "object") {
       const conversations = {};
+      const savedAtMs = Number(snapshot.savedAtMs) || 0;
       for (const [call, items] of Object.entries(snapshot.conversations))
-        if (Array.isArray(items)) conversations[call] = items.map(item => ({...item}));
+        if (Array.isArray(items)) conversations[call] = items.map(item => restoreConversationItem(item, savedAtMs));
       state.conversations = conversations;
     }
     if (typeof snapshot.selectedCall === "string") state.selectedCall = snapshot.selectedCall;
@@ -2405,7 +2423,7 @@ function alertBeep(){
 
 // Fires once per message, not once per frame: a long reception grows its text (and
 // therefore its message key) with every frame, so the channel id is what identifies
-// it while it arrives, exactly as openSectionsForNewOwnCall does. Without that a
+// it while it arrives, exactly as openTrafficForNewOwnCall does. Without that a
 // six-frame message addressed to us would beep six times.
 function noteCallsToMe(messages){
   const own=currentJs8().myCall;
@@ -2421,7 +2439,13 @@ function noteCallsToMe(messages){
   if(fresh.length && currentJs8().alertBeep===true)alertBeep();
 }
 
-function openSectionsForNewOwnCall(messages,calls) {
+// Only Recent traffic pops open, never Stations. A message addressed to us puts our own
+// callsign into the station table as heard-about-only (js8-protocol.js registers every
+// callsign named in a frame), so the Stations section used to unfold on every single
+// message for MYCALL -- twice the movement for one reception, and the second one showed
+// nothing the operator came for: the text is in the traffic feed. Stations now stays
+// exactly where the operator left it.
+function openTrafficForNewOwnCall(messages) {
   const own=currentJs8().myCall;
   const previous=state.ownCallAttention;
   // Keyed by channel identity where there is one: a growing reception changes its text and
@@ -2430,14 +2454,10 @@ function openSectionsForNewOwnCall(messages,calls) {
   // reception pops the section open exactly once.
   const messageKeys=new Set(messages.filter(item=>!item.outgoing && messageMentionsCall(item,own))
     .map(item=>item.id ? `channel|${item.id}` : activityMessageKey(item)));
-  const stationKeys=new Set(calls.filter(item=>sameCall(item.call,own))
-    .map(item=>`${item.call}|${activityCallSignature(item)}`));
   const sameOperator=previous.call===own;
   if(messageKeys.size && (!sameOperator || [...messageKeys].some(key=>!previous.messages.has(key))))
     dom.trafficSection.open=true;
-  if(stationKeys.size && (!sameOperator || [...stationKeys].some(key=>!previous.stations.has(key))))
-    dom.stationsSection.open=true;
-  state.ownCallAttention={call:own,messages:messageKeys,stations:stationKeys};
+  state.ownCallAttention={call:own,messages:messageKeys};
 }
 
 const TRAFFIC_WINDOWS={"5m":5*60*1000};
@@ -3037,7 +3057,7 @@ function renderActivity() {
     return `<tr data-call="${esc(item.call)}" class="${item.call===state.selectedCall?"selected":""}${ban?" station-restricted":""}${heard?"":" station-indirect"}"${heardTitle}><td class="call${ownCall?" own-callsign":""}${reacted?" reacted":""}"${ownCall?' data-own-call="true"':""}${reacted?' title="Reacted to your transmission"':""}>${reacted?"← ":""}${esc(item.call)}${banMark}</td><td class="station-country"${country?` title="${esc(country)}"`:""}>${esc(country||"—")}</td><td>${heard?signed(item.snr):"—"}</td><td>${heard?Math.round(item.offsetHz):"—"}</td><td>${heard?speedDetail(item.submode):"—"}</td><td class="station-direction">${directionHtml}</td><td>${age(item.lastSlotUtcMs)}</td></tr>`;
   }).join("")+groupRowsHtml();
   noteCallsToMe(recent);
-  openSectionsForNewOwnCall(recent,calls);
+  openTrafficForNewOwnCall(recent);
   renderStationSort();
   renderStationMap(calls,responders);
   renderConversation();
@@ -3421,11 +3441,25 @@ function messageBelongsToConversation(message) {
   const directed=Array.isArray(message.kinds)&&message.kinds.includes("directed");
   return !directed || !calls[1] || sameCall(calls[1],currentJs8().myCall);
 }
+// A chat row's `time` is a bare UTC clock with no date in it, so ordering the thread by
+// that string files yesterday 06:00 ahead of today 05:00 as soon as a session outlives
+// midnight -- exactly when the thread is long enough for the order to matter. Every row
+// carries an absolute stamp instead; rows restored from a snapshot written before this
+// existed get theirs rebuilt in restoreConversationItem().
+function conversationTimeMs(item){ return Number(item && item.utcMs) || 0; }
+function utcDayKey(ms){ return ms>0 ? new Date(ms).toISOString().slice(0,10) : ""; }
+// Today needs no heading; older days are named, so an hour on screen is never ambiguous.
+function conversationDayLabel(ms){
+  const key=utcDayKey(ms);
+  if(key===utcDayKey(Date.now()))return "today";
+  if(key===utcDayKey(Date.now()-86400000))return "yesterday";
+  return key;
+}
 function conversationItems() {
   // `from` matters only for a group thread, where every bubble may have a different
   // sender; on a station thread it is always the selected call anyway.
-  const received=(state.activity.messages||[]).filter(messageBelongsToConversation).map(message=>({direction:"incoming",from:senderOf(message).call,time:new Date(message.lastSlotUtcMs||0).toISOString().slice(11,19),text:message.text,status:"received"}));
-  return [...received,...(state.conversations[state.selectedCall]||[])].sort((a,b)=>a.time.localeCompare(b.time));
+  const received=(state.activity.messages||[]).filter(messageBelongsToConversation).map(message=>({direction:"incoming",from:senderOf(message).call,time:new Date(message.lastSlotUtcMs||0).toISOString().slice(11,19),utcMs:Number(message.lastSlotUtcMs)||0,text:message.text,status:"received"}));
+  return [...received,...(state.conversations[state.selectedCall]||[])].sort((a,b)=>conversationTimeMs(a)-conversationTimeMs(b));
 }
 function renderOutgoingText(item) {
   const length=item.text.length;
@@ -3467,15 +3501,26 @@ function renderConversation() {
   dom.sessionMeta.classList.toggle("session-blocked",Boolean(blockedCountry));
   updateLogQsoButton(station);
   const items=state.selectedCall ? conversationItems() : [];
+  // The bubble clock is a time of day, so a thread that outlived midnight would repeat
+  // the same hour with nothing saying which day it belongs to. One divider per day
+  // change names it; a thread that is entirely today's gets none.
+  let lastDay="";
   dom.chat.innerHTML=items.length ? items.map(item=>{
-    if(item.direction==="system")return `<div class="chat-row system"><div class="chat-system">${esc(item.text)}</div></div>`;
+    const day=utcDayKey(conversationTimeMs(item));
+    let dayDivider="";
+    if(day && day!==lastDay){
+      if(lastDay || day!==utcDayKey(Date.now()))
+        dayDivider=`<div class="chat-row day"><div class="chat-day">${esc(conversationDayLabel(conversationTimeMs(item)))}</div></div>`;
+      lastDay=day;
+    }
+    if(item.direction==="system")return dayDivider+`<div class="chat-row system"><div class="chat-system">${esc(item.text)}</div></div>`;
     // Same word, same meaning as in the traffic feed: it sends. A conversation restored
     // from a snapshot is detached from the outgoing log, so those rows keep the older
     // behaviour of restaging the text in the composer rather than offering a dead button.
     const resend=item.direction!=="outgoing" ? ""
       : txResendable(item) ? `<button type="button" class="chat-resend" data-resend-id="${esc(String(item.id))}">↻ resend</button>`
       : item.status==="interrupted" ? `<button type="button" class="chat-resend" data-resend-text="${esc(item.sourceText||item.text)}">↻ resend</button>` : "";
-    return `<div class="chat-row ${item.direction}"><article class="chat-bubble" data-message-status="${esc(item.status)}"><header><strong>${item.direction==="incoming"?esc(item.from||state.selectedCall):esc(currentJs8().myCall)}</strong><time>${esc(item.time)}</time></header><div class="chat-message">${item.direction==="outgoing"?renderOutgoingText(item):esc(item.text)}</div><footer>${esc(item.status)}${resend}</footer></article></div>`;
+    return dayDivider+`<div class="chat-row ${item.direction}"><article class="chat-bubble" data-message-status="${esc(item.status)}"><header><strong>${item.direction==="incoming"?esc(item.from||state.selectedCall):esc(currentJs8().myCall)}</strong><time>${esc(item.time)}</time></header><div class="chat-message">${item.direction==="outgoing"?renderOutgoingText(item):esc(item.text)}</div><footer>${esc(item.status)}${resend}</footer></article></div>`;
   }).join("") : '<div class="chat-empty">No messages in this session.</div>';
   dom.chat.scrollTop=dom.chat.scrollHeight;
 }
@@ -3612,7 +3657,7 @@ function updateLogQsoButton(station) {
 function pushSystemMessage(call, text) {
   if(!call)return;
   if(!state.conversations[call])state.conversations[call]=[];
-  state.conversations[call].push({direction:"system",time:new Date().toISOString().slice(11,19),text,status:"info"});
+  state.conversations[call].push({direction:"system",time:new Date().toISOString().slice(11,19),utcMs:Date.now(),text,status:"info"});
   renderConversation();
   persistSession();
 }
@@ -4558,18 +4603,33 @@ function gateToAprsIs(message) {
   return entry;
 }
 
+// Which HTTP answers mean "not now" rather than "no". The interface refuses to
+// open a socket while the transmitter is keyed and while a previous packet is
+// still on the wire; in a 15-second JS8 cycle that is routine, and counting it
+// as a failed attempt used to spend the whole retry ladder in under two minutes
+// on a packet nothing had actually refused.
+const APRS_GATE_TRANSIENT = new Set(["tx", "busy", "backoff", "offline",
+  "timeout", "unreachable", "http 503"]);
+
 async function pumpAprsGate() {
   if (aprsGatePumping) return;
   const config = aprsGateConfig();
   const now = js8Clock.now();
   if (!Js8AprsGate.readiness(config).ready) { aprsGate.expire(now); return; }
   aprsGatePumping = true;
+  const countBefore = aprsGate.sentLastHour(now);
   try {
-    // One packet per tick. A burst of decodes must not turn into a burst of
-    // blocking connects in the firmware, which is where the audio stream lives.
-    const [entry] = aprsGate.due(now);
+    // The verdict FIRST. The interface remembers one result, so sending another
+    // packet before collecting the previous one's answer overwrites it -- and on
+    // a band where somebody beacons every fifteen seconds, nothing would ever
+    // reach "verified", the hourly cap would never engage, and the header would
+    // read 0/30 while packets were going out.
+    await pollAprsGateVerdict();
+    // Then one packet per tick, so a burst of decodes cannot become a burst of
+    // connects in a firmware that is also feeding the radio its audio.
+    const [entry] = aprsGate.due(js8Clock.now());
     if (entry) {
-      aprsGate.markSending(entry, now);
+      aprsGate.markSending(entry, js8Clock.now());
       let result;
       try {
         // Every fetch on this page carries a timeout: a request left hanging
@@ -4580,18 +4640,34 @@ async function pumpAprsGate() {
           body: JSON.stringify(aprsGate.body(entry, config)),
           signal: AbortSignal.timeout(8000)});
         const data = await response.json().catch(() => ({}));
-        result = {ok: response.ok && data.ok === true, seq: data.seq, sent: data.sent,
-          error: data.error || `http ${response.status}`};
+        const error = data.error || `http ${response.status}`;
+        // 409 is the interface saying this exact frame already went out -- our
+        // own timed-out POST, or another browser, now that the login lives in
+        // the station profile. It is on the network either way.
+        if (response.status === 409) {
+          aprsGate.noteDuplicate(entry, {seq: data.seq, nowMs: js8Clock.now()});
+          result = null;
+        } else {
+          result = {ok: response.ok && data.ok === true, seq: data.seq, sent: data.sent,
+            error, transient: APRS_GATE_TRANSIENT.has(error)};
+        }
       } catch (error) {
-        result = {ok: false, error: error.name === "TimeoutError" ? "timeout" : "unreachable"};
+        // A timeout here does NOT mean the packet was not written: the interface
+        // parks it and answers before the socket work happens. The duplicate
+        // check on the device is what keeps the retry from publishing it twice.
+        result = {ok: false, transient: true,
+          error: error.name === "TimeoutError" ? "timeout" : "unreachable"};
       }
-      aprsGate.noteSend(entry, {...result, nowMs: js8Clock.now()});
+      if (result) aprsGate.noteSend(entry, {...result, nowMs: js8Clock.now()});
       renderActivity();
     }
-    await pollAprsGateVerdict();
   } finally {
     aprsGatePumping = false;
-    renderSettingsFlags(currentJs8());
+    // Only when the count it displays actually moved: this runs every three
+    // seconds and rebuilding the pill row for nothing is work on the 500 ms
+    // render path's budget.
+    if (aprsGate.sentLastHour(js8Clock.now()) !== countBefore)
+      renderSettingsFlags(currentJs8());
   }
 }
 
@@ -4601,8 +4677,12 @@ async function pumpAprsGate() {
 // an unverified connection in silence.
 async function pollAprsGateVerdict() {
   const now = js8Clock.now();
+  // Anchored on when the packet was actually written, not when the message was
+  // decoded: retries push the send out by up to 105 s, and a window measured
+  // from the decode had already closed by then -- so exactly the packets that
+  // had trouble were the ones whose verdict was never collected.
   const waiting = aprsGate.awaiting()
-    .filter(entry => now - Number(entry.createdMs) < APRS_GATE_VERDICT_MS);
+    .filter(entry => now - Number(entry.sentMs || entry.createdMs) < APRS_GATE_VERDICT_MS);
   if (!waiting.length) return;
   let data;
   try {
@@ -4622,14 +4702,13 @@ async function pollAprsGateVerdict() {
   renderActivity();
 }
 
+// Called once per row, up to two hundred rows, on every 500 ms render. It must
+// therefore be a key lookup and nothing else: the previous version fell back to
+// a full describe() regex pass on the miss, which is the common case -- every
+// row that is not @APRSIS traffic at all.
 function aprsGateEntryFor(message) {
-  if (!message) return null;
-  if (message.id) {
-    const byId = aprsGate.entryFor(message.id);
-    if (byId) return byId;
-  }
-  const shape = Js8AprsGate.describe(message);
-  return shape && shape.key ? aprsGate.entryFor(shape.key) : null;
+  if (!message || !message.id) return null;
+  return aprsGate.entryFor(message.id);
 }
 
 // Five states, not two, because "sent" and "accepted" are not the same fact and
@@ -4652,6 +4731,8 @@ function aprsGateBadge(message) {
   // the bytes that were published under this station's callsign.
   const title = [`IGATE: ${look.word}`, entry.reason, entry.sent,
     entry.server ? `server ${entry.server}` : ""].filter(Boolean).join(" · ");
+  // A row gated by another browser (or by our own retry) has no frame of its own
+  // to show, so the tooltip is all it has.
   const text = `IGATE ${look.mark}`;
   if (entry.state === "verified") {
     // Straight to the raw packet view: the only page that can prove the position
@@ -5828,7 +5909,7 @@ function parseRelayedCommand(text, fallbackFrom) {
 // not only in the console.
 function appendRelayMessage(from, text) {
   const item = {direction: "incoming", time: new Date().toISOString().slice(11, 19),
-    text: `${from}: ${text}`, status: "relayed"};
+    utcMs: Date.now(), text: `${from}: ${text}`, status: "relayed"};
   if (!state.conversations[from]) state.conversations[from] = [];
   state.conversations[from].push(item);
   renderConversation();
@@ -7798,6 +7879,11 @@ async function init() {
     aprsGateEntries(){return aprsGate.entries.map(entry=>({...entry}));},
     aprsGateSentLastHour(){return aprsGate.sentLastHour(js8Clock.now());},
     aprsGateReset(){aprsGate.clear();renderActivity();renderSettingsFlags(currentJs8());},
+    // Brings a queued retry forward. Without it a harness would have to sit out
+    // the real backoff, and a check that waits fifteen seconds is a check that
+    // gets deleted.
+    aprsGateDue(){for(const entry of aprsGate.entries)
+      if(entry.state==="queued")entry.nextMs=js8Clock.now();},
     async aprsGatePump(){await pumpAprsGate();},
     ttSlotNow(){return slotIndexNow();},
     ttSet(index,hz,band){setTimetableSlot(Number(index),Number(hz),band||null);},
@@ -7992,7 +8078,15 @@ async function init() {
     setMyCall(call){setJs8Setting("myCall",String(call||"").toUpperCase());renderActivity();renderConversation();},
     selectCallForLog(call){state.selectedCall=String(call||"").toUpperCase();renderConversation();},
     pushMessage(msg){state.activity.messages.push(msg);},
-    pushOutgoing(call,text,status){const c=String(call||"").toUpperCase();(state.conversations[c]||(state.conversations[c]=[])).push({direction:"outgoing",time:"00:00:00",text,sourceText:text,status:status||"completed"});},
+    pushOutgoing(call,text,status){const c=String(call||"").toUpperCase();(state.conversations[c]||(state.conversations[c]=[])).push({direction:"outgoing",time:new Date().toISOString().slice(11,19),utcMs:Date.now(),text,sourceText:text,status:status||"completed"});},
+    // Seeds a chat row with an explicit age: the thread's order across a midnight
+    // boundary cannot be checked by waiting for one to go past.
+    pushConversationAt(call,item){const c=String(call||"").toUpperCase();
+      const utcMs=Number(item&&item.utcMs)||Date.now();
+      (state.conversations[c]||(state.conversations[c]=[])).push({direction:"outgoing",
+        status:"completed",...item,utcMs,time:new Date(utcMs).toISOString().slice(11,19)});
+      renderConversation();},
+    clearConversation(call){delete state.conversations[String(call||"").toUpperCase()];renderConversation();},
     autoLogSweep(){maybeAutoLogQsos();},
     logQsoManual(call){state.selectedCall=String(call||"").toUpperCase();return logQsoFor(state.selectedCall,{manual:true});},
     refreshJs8LogNow(){return refreshJs8Log();},

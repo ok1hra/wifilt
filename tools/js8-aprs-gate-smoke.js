@@ -148,16 +148,6 @@ assert.strictEqual(Gate.describe(cmd("OK2ABC", `:SMSGTE   :${"A".repeat(68)}`)).
   "APRS text over 67 characters");
 assert.strictEqual(Gate.describe(cmd("OK2ABC", `:SMSGTE   :${"A".repeat(67)}`)).kind, "cmd");
 
-// ---- readiness --------------------------------------------------------------
-assert.strictEqual(Gate.readiness({...config, enabled: false}).ready, false);
-assert.strictEqual(Gate.readiness({...config, passcode: "1"}).ready, false);
-assert(Gate.readiness({...config, passcode: "1"}).reason.includes("passcode"));
-assert.strictEqual(Gate.readiness({...config, call: ""}).ready, false);
-assert.strictEqual(Gate.readiness(config).ready, true);
-// -1 is the read-only login APRS-IS accepts; it must not pass for a gate that sends.
-assert.strictEqual(Gate.readiness({...config, passcode: "-1"}).ready, false);
-
-// ---- the four filters -------------------------------------------------------
 function makeStore() {
   const map = new Map();
   return {map, getItem: key => (map.has(key) ? map.get(key) : null),
@@ -171,12 +161,70 @@ function makeGate(storage) {
 }
 const base = {config, blockedReason: () => "", freqHz: 14079200};
 
+// ---- line injection ---------------------------------------------------------
+// APRS-IS is line based and "\n" is a literal in the JS8 alphabet, so a station
+// on the air could otherwise write a second, arbitrary packet into the CMD text
+// and have this station publish it under its own callsign. CMD_RE spans newlines
+// on purpose (the text is free-form), which is why the refusal is explicit.
+const NEWLINE = String.fromCharCode(10), RETURN = String.fromCharCode(13);
+for (const hostile of [
+  ":SMSGTE:HI" + NEWLINE + "OK1XX>APRS,TCPIP*:>pwned",
+  ":SMSGTE:HI" + RETURN + NEWLINE + "OK1XX>APRS,TCPIP*:>pwned",
+  ":SMSGTE:" + NEWLINE + "HI",
+  ":SMS" + NEWLINE + "GTE:HI"
+]) {
+  const shape = Gate.describe(cmd("OK2ABC", hostile));
+  assert.strictEqual(shape.kind, "", "hostile CMD payload must not be gated");
+  assert.strictEqual(shape.refuse, "control character in the message");
+}
+// The same through the whole decision, so the refusal is on the row and not just
+// in a helper nobody calls.
+let injGate = makeGate();
+const injected = injGate.consider(cmd("OK2ABC", ":SMSGTE:HI" + NEWLINE + "OK1XX>APRS:>x"),
+  {config, blockedReason: () => "", freqHz: 14079200, nowMs: 0});
+assert.strictEqual(injected.state, "skipped");
+assert.strictEqual(injected.reason, "control character in the message");
+// A GRID message carrying a newline is refused for the same reason, even though
+// the locator itself would have parsed.
+assert.strictEqual(Gate.describe(grid("OK2ABC", "JN79NX" + NEWLINE + "OK1XX>APRS:>x")).refuse,
+  "control character in the message");
+// And a sender callsign is never a way in either.
+assert.strictEqual(Gate.describe(grid("OK2ABC" + NEWLINE + "X", "JN79NX")).refuse,
+  "control character in the message");
+assert(!Gate.frame({kind: "cmd", from: "OK2ABC", text: ":SMSGTE   :HI"}, config)
+  .includes(NEWLINE), "a built frame is one line");
+
+// ---- readiness --------------------------------------------------------------
+assert.strictEqual(Gate.readiness({...config, enabled: false}).ready, false);
+assert.strictEqual(Gate.readiness({...config, passcode: "1"}).ready, false);
+// The refusal must name the BASE callsign. Pointing at "OK1HRA-10" sends the
+// operator looking at the SSID, which is the one part that cannot be wrong --
+// the passcode is a checksum of the callsign with the SSID stripped.
+const mismatch = Gate.readiness({...config, call: "OK1HRA-10", passcode: "1"}).reason;
+assert(mismatch.includes("OK1HRA"), mismatch);
+assert(!mismatch.includes("OK1HRA-10"), mismatch);
+assert(Gate.passcode("OK1HRA") === Gate.passcode("OK1HRA-10"));
+// Two callsigns, two different numbers -- the mistake this check exists for is a
+// passcode that belongs to somebody else's callsign. 13023 is N0CALL's, and it is
+// the vector used throughout these tests, so it is exactly the one likely to be
+// pasted into the wrong field.
+assert.strictEqual(Gate.passcode("OK1HRA"), "24480");
+assert.notStrictEqual(Gate.passcode("OK1HRA"), Gate.passcode("N0CALL"));
+assert.strictEqual(Gate.readiness({...config, call: ""}).ready, false);
+assert.strictEqual(Gate.readiness(config).ready, true);
+// -1 is the read-only login APRS-IS accepts; it must not pass for a gate that sends.
+assert.strictEqual(Gate.readiness({...config, passcode: "-1"}).ready, false);
+
+// ---- the four filters -------------------------------------------------------
 let gate = makeGate();
 let entry = gate.consider(grid("OK2ABC", "JN79NX"), {...base, nowMs: 1000});
 assert.strictEqual(entry.state, "queued");
 assert.strictEqual(entry.kind, "grid");
+// The policy rides with the packet: the device is what enforces it, because the
+// login is in the shared profile and every open browser is a gate.
 assert.deepStrictEqual(gate.body(entry, config), {
-  login: {call: "N0CALL-10", pass: "13023", host: "czech.aprs2.net", port: 14580},
+  login: {call: "N0CALL-10", pass: "13023", host: "czech.aprs2.net", port: 14580,
+    dedupMinutes: 10, maxPerHour: 30},
   packet: {kind: "grid", from: "OK2ABC", snrDb: -7, freqHz: 14079200, grid: "JN79NX"}});
 
 // Filter 1: an incomplete reception is displayed but never gated. A lost EOT
@@ -230,26 +278,55 @@ assert.strictEqual(gate.consider({...grid("OK2XYZ", "JO70AA"), id: "muchlater"},
   {...base, nowMs: afterWindow}).state, "queued");
 
 // ---- retry, expiry and the server's verdict ---------------------------------
+// Every step of the ladder must be reachable: indexing it one place too far left
+// the last delay dead and turned a four-step ladder into a three-step one.
 gate = makeGate();
 let retry = gate.consider(grid("OK2ABC", "JN79NX"), {...base, nowMs: 0});
 for (let attempt = 1; attempt <= Gate.RETRY_MS.length; attempt += 1) {
   gate.markSending(retry, 0);
-  gate.noteSend(retry, {ok: false, error: "tx", nowMs: 0});
-  if (attempt < Gate.RETRY_MS.length) {
-    assert.strictEqual(retry.state, "queued");
-    assert.strictEqual(retry.nextMs, Gate.RETRY_MS[attempt - 1], `backoff step ${attempt}`);
-  }
+  gate.noteSend(retry, {ok: false, error: "no route", nowMs: 0});
+  assert.strictEqual(retry.state, "queued", `attempt ${attempt} must still be retried`);
+  assert.strictEqual(retry.nextMs, Gate.RETRY_MS[attempt - 1], `backoff step ${attempt}`);
 }
+gate.markSending(retry, 0);
+gate.noteSend(retry, {ok: false, error: "no route", nowMs: 0});
 assert.strictEqual(retry.state, "failed", "a packet is not retried forever");
 
-// 503 while transmitting is a normal answer, not a fault: the packet waits.
+// "Not now" is not "failed". The interface refuses to open a socket while the
+// transmitter is keyed, which is routine in a 15-second cycle -- four of those
+// used to burn the whole ladder and drop a position nothing had refused.
 gate = makeGate();
 const busy = gate.consider(grid("OK2ABC", "JN79NX"), {...base, nowMs: 0});
-gate.markSending(busy, 0);
-gate.noteSend(busy, {ok: false, error: "tx", nowMs: 0});
-assert.strictEqual(busy.state, "queued");
+for (let round = 0; round < 12; round += 1) {
+  gate.markSending(busy, 0);
+  gate.noteSend(busy, {ok: false, error: "tx", transient: true, nowMs: 0});
+  assert.strictEqual(busy.state, "queued", `transient refusal ${round} must not fail it`);
+}
 assert.deepStrictEqual(gate.due(0), [], "a retry is not due immediately");
 assert.deepStrictEqual(gate.due(Gate.RETRY_MS[0]).map(item => item.key), [busy.key]);
+// ...but it still expires, so a radio that never stops transmitting cannot hold
+// a position report for ever.
+gate.due(Gate.TTL_MS + 1);
+assert.strictEqual(busy.state, "failed");
+
+// The interface says this frame already went out -- our own timed-out POST, or
+// another browser now that the login lives in the shared profile. The row has to
+// show it as gated, under the seq that actually carried it.
+gate = makeGate();
+const twin2 = gate.consider(grid("OK2ABC", "JN79NX"), {...base, nowMs: 0});
+gate.markSending(twin2, 0);
+gate.noteDuplicate(twin2, {seq: 12, nowMs: 5});
+assert.strictEqual(twin2.state, "sent");
+assert.strictEqual(twin2.seq, 12);
+assert.strictEqual(twin2.sentMs, 5);
+assert.strictEqual(twin2.duplicate, true);
+assert.deepStrictEqual(gate.awaiting().map(item => item.seq), [12]);
+// The verdict for that seq will turn the row green, because the frame really is
+// on the network -- but the explanation of why this row has no packet of its own
+// must survive it.
+gate.noteStatus(twin2, {state: "verified", server: "T2TEST", nowMs: 10});
+assert.strictEqual(twin2.state, "verified");
+assert.strictEqual(twin2.reason, "already gated by this station");
 
 // Past the TTL it is dropped instead of arriving late: `=` carries no timestamp,
 // so a late position is plotted as if it had just been heard.
@@ -273,6 +350,17 @@ assert.strictEqual(ok.state, "sent", "pending must not resolve the badge");
 gate.noteStatus(ok, {state: "verified", server: "T2CZECH", nowMs: 20});
 assert.strictEqual(ok.state, "verified");
 assert.strictEqual(gate.sentLastHour(20), 1);
+
+// "error" from the interface means the packet never reached the server -- a
+// refused connect or a failed resolve. It is owed, not lost, so it goes back in
+// the queue rather than turning the row red.
+gate = makeGate();
+const unreachable = gate.consider(grid("OK5ERR", "JN79NX"), {...base, nowMs: 0});
+gate.markSending(unreachable, 0);
+gate.noteSend(unreachable, {ok: true, seq: 4, sent: "line", nowMs: 0});
+gate.noteStatus(unreachable, {state: "error", line: "connect failed", nowMs: 10});
+assert.strictEqual(unreachable.state, "queued");
+assert.strictEqual(unreachable.nextMs, 10 + Gate.RETRY_MS[0]);
 
 gate = makeGate();
 const bad = gate.consider(grid("OK2ABC", "JN79NX"), {...base, nowMs: 0});

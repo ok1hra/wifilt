@@ -52,17 +52,18 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
  · [5.4 TX SESSION](#54-tx-session)
  · [5.5 Message presets](#55-message-presets)
  · [5.6 @APRSIS command builder](#56-aprsis-command-builder)
- · [5.7 Recent traffic](#57-recent-traffic)
- · [5.8 Stations](#58-stations)
- · [5.9 Stations map](#59-stations-map)
- · [5.10 MSG BOX](#510-msg-box)
- · [5.11 Groups](#511-groups)
- · [5.12 Unattended operation](#512-unattended-operation)
- · [5.13 SETTINGS](#513-settings)
- · [5.14 Timing and diagnostics](#514-timing-and-diagnostics)
- · [5.15 Frequency timetable](#515-frequency-timetable)
- · [5.16 Logging JS8 QSOs](#516-logging-js8-qsos)
- · [5.17 Troubleshooting](#517-troubleshooting)
+ · [5.7 APRS-IS gate (IGate)](#57-aprs-is-gate-igate)
+ · [5.8 Recent traffic](#58-recent-traffic)
+ · [5.9 Stations](#59-stations)
+ · [5.10 Stations map](#510-stations-map)
+ · [5.11 MSG BOX](#511-msg-box)
+ · [5.12 Groups](#512-groups)
+ · [5.13 Unattended operation](#513-unattended-operation)
+ · [5.14 SETTINGS](#514-settings)
+ · [5.15 Timing and diagnostics](#515-timing-and-diagnostics)
+ · [5.16 Frequency timetable](#516-frequency-timetable)
+ · [5.17 Logging JS8 QSOs](#517-logging-js8-qsos)
+ · [5.18 Troubleshooting](#518-troubleshooting)
 
 **[6. DATA — WSPR beacon](#6-data--wspr-beacon)**
  · [6.1 What the beacon does](#61-what-the-beacon-does)
@@ -130,7 +131,9 @@ works exactly as it does at home. That is the point of the design, not a side ef
 WebAssembly in the browser tab, driven by real receiver audio streamed from the radio.
 Heartbeats, directed messages, store-and-forward mail, groups and an APRS-IS command builder
 are all there — and so is unattended operation, where the station answers for you while you
-are away.
+are away. It can also work the other way round and act as an **APRS-IS IGate**, carrying
+what other stations address to `@APRSIS` onto the APRS network — see
+[section 5.7](#57-aprs-is-gate-igate).
 
 **A WSPR beacon with a real schedule.** Not a "transmit every ten minutes" timer, but a
 24-hour band-by-band time table, transmit-percentage pacing, and power taken from what the
@@ -386,7 +389,7 @@ erased.
 | Store | Contents | Survives a firmware update | Survives clearing browser data |
 |---|---|---|---|
 | **NVS** on the interface (`eeprom` badge) | WiFi networks, callsign, locator, radio login, cluster host, TrxNet, baud rate | ✅ | ✅ |
-| **`cfg` partition** on the interface (`config` badge) | radio slots and the detected model, LOG settings, TX gain calibrations, CW and frequency memories, MSG BOX | ✅ | ✅ |
+| **`cfg` partition** on the interface (`config` badge) | radio slots and the detected model, LOG settings, TX gain calibrations, CW and frequency memories, MSG BOX, the JS8 operating profile — heartbeat, groups, band schedule, power **and the APRS-IS gate login** | ✅ | ✅ |
 | **The browser's database** | **your QSO log** | ✅ (it was never on the device) | ❌ **gone permanently** |
 | Nothing (`live` badge) | the unattended-operation arming window — running state only | ❌ resets on restart | — |
 
@@ -806,7 +809,7 @@ The bar across the top of the page, left to right:
 |---|---|
 | **`?`** | radio setup help for your model |
 | **TRX *n* · frequency** | which slot is on ICOM-LAN, and the dial frequency with a dot every three digits. A coloured dot shows whether the radio is answering. Click to open the dial-frequency menu. |
-| **TIMETABLE** | the 24-hour frequency schedule — [section 5.15](#515-frequency-timetable) |
+| **TIMETABLE** | the 24-hour frequency schedule — [section 5.16](#516-frequency-timetable) |
 | **CAL PLAN** | the band × power TX-gain calibration matrix — [section 6.8](#68-tx-audio-gain-and-cal-plan). It turns **red by itself** when nothing is calibrated, or when the radio is on a band that has never been measured. |
 | **mode** | the radio's mode, `---` when unknown |
 | **power** | RF power as a ten-segment bar and in watts |
@@ -834,7 +837,7 @@ is collapsed, which is how it normally sits — and an operator watching the rad
 the browser would never see it. The tab title carries the same count —
 `(3) JS8Call-ICOM — WIFILT` — for when the page is in a background tab.
 
-**Clicking the button opens MSG BOX and scrolls to it** ([section 5.10](#510-msg-box)). It
+**Clicking the button opens MSG BOX and scrolls to it** ([section 5.11](#511-msg-box)). It
 does nothing else: the message stays unread, because reading is confirmed by clicking the
 message itself. The bar goes back to normal once every message for you has been read — or
 deleted.
@@ -887,7 +890,7 @@ The conversation with one station.
 The header names the selected station and the state of the exchange, and carries three
 controls:
 
-- **LOG QSO** — see [section 5.16](#516-logging-js8-qsos).
+- **LOG QSO** — see [section 5.17](#517-logging-js8-qsos).
 - a **transmit-queue indicator** while something is waiting to go out.
 - **ABORT** — stop the transmission in progress.
 
@@ -897,7 +900,7 @@ Below it is the thread of messages with that station, then the composer:
 |---|---|
 | **Recipient** | click a callsign anywhere on the page to fill it, or type one. **×** clears it. It refuses your own callsign — you cannot work yourself. |
 | **Message** | the text. **Enter sends.** The **▾** opens the preset menu. |
-| **SEND LATER** | do not transmit now: put the message in the MSG BOX and let it go out when the recipient — or someone who can hear them — appears on the band. See [section 5.10](#510-msg-box). It refuses messages over **120 characters**, group calls, and anything that is not a well-formed callsign. |
+| **SEND LATER** | do not transmit now: put the message in the MSG BOX and let it go out when the recipient — or someone who can hear them — appears on the band. See [section 5.11](#511-msg-box). It refuses messages over **120 characters**, group calls, and anything that is not a well-formed callsign. |
 | **Routes** | under the field: stations that hear the recipient, so a message can go through one of them. See below. |
 
 **Routes through an intermediary.** When you fill in Recipient, a line appears under the
@@ -906,6 +909,21 @@ hearing the addressee yourself, and opens on its own when you are not — or whe
 time you decoded them is more than 15 minutes old, which is exactly when a route is the
 point. That is decided afresh for each addressee: collapsing it for one station does not
 keep it shut for the next, whose situation is a different question.
+
+![Routes through an intermediary](img/js8call-tx-session-select-via.png)
+
+A message to **IU7VLD** about to go out through somebody else. The panel opened by itself
+and offers **5 routes via an intermediary**, with **DIRECT** — IU7VLD's own signal, `me
+-04`, heard 54 seconds ago — as the first row, so sending straight to them is still a
+visible choice. **HB9BV** has been clicked: the row is framed, the badge above the list
+repeats the evidence it rests on (`me +02 · hears +03 · 15m`) with **×** to drop it, and
+the summary confirms it is *using HB9BV*. Nothing was written into the text — the words are
+still the operator's — but the hint under the field now says where the frame is really
+going: `Enter sends to HB9BV for IU7VLD · 3 frames · 0:45`. **W4KUS** shows what ageing
+looks like: its `35m` is amber, the evidence still counts but the warning is there. Only
+**G3RCE** has a `back` number, the addressee's own report of that station, and only HB9BV
+has ever reacted to a transmission of mine — `hears me`, the one column that says the path
+has been proved in both directions.
 
 The list is built from the same evidence the stations map draws its green arrows with:
 who has reported hearing whom in the last hour. Every row is a station **you decode
@@ -1114,7 +1132,142 @@ text becomes an underlined link to their page on aprs.fi. The link is deliberate
 there — the green callsign at the left of the row stays a plain chat-selection control, and
 there is no such link in the Stations table, where the context is not visible.
 
-### 5.7 Recent traffic
+### 5.7 APRS-IS gate (IGate)
+
+Section 5.6 is the outgoing direction: your station asking APRS-IS for something. This is
+the other one. When any station on the band addresses **@APRSIS**, an IGate somewhere has
+to pick that up and carry it to the internet, or it goes nowhere. Your interface can be
+that IGate.
+
+Nothing is transmitted on the radio. The traffic leaves over your network connection,
+**under your callsign**, and only while the DATA page is open — that is where JS8 is
+decoded.
+
+Two kinds of message are carried, the same two a gateway understands:
+
+| Heard on the air | What reaches APRS-IS |
+|---|---|
+| `OK2ABC: @APRSIS GRID JN79NX` | that station's position, plotted on aprs.fi |
+| `OK2ABC: @APRSIS CMD :SMSGTE   :@+420… HI` | an APRS message to that service or callsign |
+
+#### Switching it on
+
+The gate is **off by default** and lives in JS8 **SETTINGS** — see
+[section 5.14](#514-settings) for where the section is.
+
+![APRS-IS gate settings](img/js8call-settings-aprs-igate.png)
+
+A gate ready to run. The switch is ticked, the callsign has been given an SSID of its own —
+`OK1HRA-10` — and the line under the passcode is **green**: it names the callsign the number
+was checked against and adds the hourly tally, `0/30 gated this hour`, which is still zero
+because nothing has been carried yet. The server is left at the default `czech.aprs2.net`
+on port `14580`. The note beside the switch is the whole arrangement in one sentence:
+traffic addressed to @APRSIS goes onto the APRS-IS network under your callsign, nothing is
+transmitted on the radio, and the page has to stay open.
+
+| Field | What to put in it |
+|---|---|
+| **Gate @APRSIS to the internet** | the master switch |
+| **APRS-IS callsign** | your callsign with an SSID of its own, proposed as `-10` — the convention for a full-time IGate |
+| **APRS-IS passcode** | the number that belongs to your callsign — see below |
+| **APRS-IS server** | `czech.aprs2.net` and port `14580` by default |
+
+**Why the SSID matters.** APRS-IS allows one connection per callsign-SSID. If a weather
+station or a copy of JS8Call on a PC is already logged in as plain `OK1HRA`, an interface
+logging in under the same name will fight it for the connection and both will keep dropping.
+Give this one its own SSID. Ticking the switch with the field empty fills in the `-10`
+proposal for you; it is never written behind your back before that.
+
+**Where the passcode comes from.** It is not a password you choose: it is a checksum
+computed from your callsign, the same number every APRS program asks for. Ask whoever
+provides your APRS-IS access, or use one of the usual generators. **The SSID plays no part
+in it** — `OK1HRA` and `OK1HRA-10` have the same passcode — so a number that will not be
+accepted is almost always one belonging to a *different callsign*.
+
+**It is checked as you type it.** The line under the field turns green and names the
+callsign it matches, or red and says which callsign it should have been computed from —
+and while it is red the gate will not open at all. That is deliberate: APRS-IS accepts an
+unverified connection and then throws every packet away without a word, so a gate with a
+wrong passcode looks exactly like a working one for as long as nobody checks aprs.fi.
+
+#### What it refuses to carry
+
+Four filters sit between "somebody transmitted" and "your callsign published it":
+
+- **An incomplete reception.** If the end of the message was lost, the text may be
+  truncated — a `JN89HK` cut short to `JN89` is a valid locator tens of kilometres away.
+  The row is still shown; it is simply not gated.
+- **Blocked callsigns and DXCC entities.** The same list that hides a station from Recent
+  traffic and refuses to answer it — see [section 3.8](#38-blocked-dxcc) — also refuses it
+  a gateway.
+- **A repeat.** The same station with the same content is carried once every ten minutes.
+- **A ceiling of thirty packets an hour**, across all stations. Without it, one station on
+  the band could push varying text through your callsign every fifteen seconds.
+
+A message carrying a control character is refused outright, and that one is worth
+explaining: APRS-IS is a line-based protocol and the JS8 alphabet contains a newline, so a
+newline inside somebody's `CMD` text would not be a broken message — it would be a **second
+packet of their choosing**, published under your callsign.
+
+#### Reading the badges
+
+A gated row in Recent traffic carries an **IGATE** badge, and it has five states rather
+than two because "we sent it" and "the network took it" are different facts:
+
+| Badge | Meaning |
+|---|---|
+| `IGATE …` | queued — waiting for a free moment, or for a retry |
+| `IGATE ↑` | the interface has accepted it and is waiting for the server's answer |
+| `IGATE ✓` | APRS-IS answered `verified`: the login was accepted |
+| `IGATE ✗` | APRS-IS refused the login, or the packet could not be delivered |
+| `IGATE –` | deliberately not gated — hover it for the reason |
+
+Hovering any badge shows the **exact frame** that was published under your callsign. A
+green badge is also a link: it opens the raw packet view for that station on aprs.fi, which
+is the only place that can prove the position really arrived, path and all.
+
+The **IGATE** marker in the SETTINGS header counts **verified** packets against the hourly
+ceiling — `IGATE 7/30`. It counts what the network confirmed, not what was written, so a
+gate that is delivering nothing can never read as a busy one.
+
+> **Green is a strong sign, not a proof.** `verified` says the server accepted your
+> *login*. A malformed or duplicate packet is dropped in silence even on a verified
+> connection, which is why the badge links to aprs.fi rather than claiming the job is done.
+
+#### One gate per station, not per browser
+
+These settings live in the station profile, which is stored on the interface and read by
+every browser that opens DATA. Setting the gate up once sets it up for the station — and
+every one of those browsers then acts as a gate in its own right.
+
+That is handled where it has to be: the duplicate check and the hourly ceiling are enforced
+**by the interface**, not by the browser, because only the interface sees all of them. A
+tablet and a phone both watching the same band will not publish one position twice, and the
+ceiling is a ceiling for the station rather than for each screen. A row carried by another
+browser still shows the badge, and its tooltip says the packet was already gated by this
+station.
+
+#### What it does when it cannot send right now
+
+The interface will not open a socket while the transmitter is keyed, so during your own
+transmission packets wait. Waiting is not failing: a packet is retried for **five minutes**
+and only then dropped. It is dropped rather than delivered late on purpose — a position
+report carries no timestamp, so one arriving ten minutes afterwards would be plotted as if
+the station were there now.
+
+#### Two differences from JS8Call
+
+Both are deliberate and both were checked against the APRS specification.
+
+- **The position is the centre of the locator's cell, not its south-west corner.** JS8Call
+  never adds the half cell, so its spots sit about 1.2 km south and 1.6 km west of the
+  station — tens of kilometres on a four-character locator. The consequence is worth
+  knowing: a station gated by both yours and a JS8Call IGate will appear on the map twice.
+- **The path says `qAR`, not `qAS`.** `qAR` means "an IGate received this on the radio",
+  which is what happened; `qAS` claims a server put it there. Your callsign follows it, so
+  a packet can be traced back to your interface.
+
+### 5.8 Recent traffic
 
 ![Recent traffic with the waterfall](img/js8call-recent-trafic-with-waterfall.png)
 
@@ -1153,7 +1306,7 @@ anchor the feed is read by. Useful on a phone, where the meta columns squeeze th
 text. The setting is remembered.
 
 **A callsign you have already worked on this band is dimmer.** The test is the JS8CALL log's
-real content (see [section 5.16](#516-logging-js8-qsos)), so it survives a reload and a QSO
+real content (see [section 5.17](#517-logging-js8-qsos)), so it survives a reload and a QSO
 logged from another window. It never disables anything — answering a station a second time
 is perfectly legitimate — it only lets your eye skip to the stations still worth working.
 
@@ -1198,7 +1351,7 @@ still stop it** if you pressed the wrong line.
 
 > **The station never answers a CQ by itself.** `REPLY` is the only path from this list to
 > the transmitter, and it is a click. Unattended operation
-> ([section 5.12](#512-unattended-operation)) answers *questions* addressed to you — `SNR?`,
+> ([section 5.13](#513-unattended-operation)) answers *questions* addressed to you — `SNR?`,
 > `GRID?` and the rest — and nothing else.
 
 #### When somebody calls you
@@ -1211,11 +1364,15 @@ marked; that happens constantly on a busy band.
 Nothing is transmitted in response. What happens next is yours: the station is one click
 away in the line, and TX SESSION is already open.
 
-**Beep on a call to me** in [SETTINGS](#513-settings) adds a short tone to that moment. It
+**Beep on a call to me** in [SETTINGS](#514-settings) adds a short tone to that moment. It
 is **off by default** — the page is meant to be left running for days beside a radio that is
 already making noise. Ticking the box sounds the tone once so you know it works. Browsers
 refuse to play sound until the page has been clicked at least once, so on a tab that has
 only ever been looked at, the highlighted line is all you get.
+
+**A line carried to APRS-IS gets an `IGATE` badge**, if you run the gate. It says what
+became of that packet on the network, and hovering it shows the exact frame that went out
+under your callsign — [section 5.7](#57-aprs-is-gate-igate).
 
 **Partial messages are shown while they are still arriving.** A multi-slot message assembles
 in place, including the damaged and missing pieces, with a blocking `|` marker at the end
@@ -1227,7 +1384,7 @@ it — the automatic functions wait for a complete, checked message.
 > flowing during transmission — so the decoder hears your own monitor. It is also why
 > receive audio is deliberately never muted while keying.
 
-### 5.8 Stations
+### 5.9 Stations
 
 ![Stations](img/js8call-stations.png)
 
@@ -1244,17 +1401,17 @@ Every station heard, in a sortable table. Click a column header to sort by it.
 | **Last** | when it was last heard |
 
 A **⏸** beside a callsign means automatic replies to that station are paused, with the
-remaining time in the tooltip — see [section 5.12](#512-unattended-operation).
+remaining time in the tooltip — see [section 5.13](#513-unattended-operation).
 
 The list stops growing at the height of the screen and then scrolls.
 
 **GROUPS** opens the group palette — the same one as in SETTINGS; see
-[section 5.11](#511-groups).
+[section 5.12](#512-groups).
 
 Stations from blocked DXCC entities never appear here at all. They are discarded silently,
 across the table, the traffic list, the TX session **and every automatic function**.
 
-### 5.9 Stations map
+### 5.10 Stations map
 
 ![Stations map](img/js8call-stations-map.png)
 
@@ -1283,7 +1440,7 @@ to be drawn; here the decade rings pull them apart into individual dots and the 
 links become readable. The clump counts that survive are the stations genuinely sharing one
 locator square.
 
-### 5.10 MSG BOX
+### 5.11 MSG BOX
 
 ![MSG BOX](img/js8call-msg-box.png)
 
@@ -1380,7 +1537,7 @@ is running — the same rule that keeps automatic replies from talking over a co
 held-back question shows the reason on the row and goes out at the next opportunity.
 
 Asking is automatic only while the station is armed (see [section
-5.12](#512-unattended-operation)); with `Answer queries automatically` off, the row is there
+5.13](#513-unattended-operation)); with `Answer queries automatically` off, the row is there
 and **ASK** works, but nothing goes out by itself.
 
 **How SEND LATER actually delivers.** A deferred message waits until either the recipient
@@ -1397,7 +1554,7 @@ station it is waiting for.
 When the box runs out of room, messages that are *not* addressed to you are evicted first,
 then the oldest ones.
 
-### 5.11 Groups
+### 5.12 Groups
 
 Group calls (`@ALLCALL`, `@HB`, `@OK`, …) let several stations share one addressee. The
 palette is reachable from two places — **GROUPS** in the Stations table and **My groups** in
@@ -1410,7 +1567,7 @@ press **ADD**.
 > A non-standard group name costs a second frame — roughly 15 seconds more air time per
 > message. The standard ones are free.
 
-### 5.12 Unattended operation
+### 5.13 Unattended operation
 
 This is what the page is really for: leaving the station on, walking away, and finding out
 afterwards exactly what it did.
@@ -1422,7 +1579,7 @@ answers nothing and relays nothing, whatever the other boxes say.
 
 | Setting | Effect |
 |---|---|
-| **Answer queries automatically** | **arms unattended operation**, and replies to `SNR?`, `GRID?`, `INFO?`, `STATUS?`, `HEARING?` and `AGN?`. It is also what lets the station send `AGN?` *itself* when a message addressed to you arrives unreadable — see [section 5.10](#510-msg-box). With it **off**, an answer is placed in the message box for you to send by hand instead. |
+| **Answer queries automatically** | **arms unattended operation**, and replies to `SNR?`, `GRID?`, `INFO?`, `STATUS?`, `HEARING?` and `AGN?`. It is also what lets the station send `AGN?` *itself* when a message addressed to you arrives unreadable — see [section 5.11](#511-msg-box). With it **off**, an answer is placed in the message box for you to send by hand instead. |
 | | `AGN?` repeats what was last sent **to the asking station**, or — matching JS8Call — the station's last transmission of any kind when there was none, so a station that copied your CQ garbled can ask for it again. Asked through a group, `AGN?` is never answered: every member would repeat a different message into the same slot. |
 | **Unattended for** | how long the arming lasts: 1, 6, 12, 24 or 168 hours. It only sets the length — it does not arm anything by itself. The state beside it counts down, and reads `disarmed` when off. |
 | **Repeat CQ** | calls CQ on an interval. **The exception:** this one runs whether or not the station is armed. |
@@ -1476,12 +1633,16 @@ The tooltip gives the reason and the time left — *"Auto replies paused 8 min (
 Unattended operation can also be revoked remotely from SETUP — see
 [section 7.8](#78-remote-management-of-js8-unattended-operation).
 
-### 5.13 SETTINGS
+### 5.14 SETTINGS
 
 ![Settings](img/js8call-settings.png)
 
 The collapsed header carries small non-clickable markers showing which functions are
-currently active, so you can see the station's posture without opening the section.
+currently active, so you can see the station's posture without opening the section. All but
+one go grey when *Enable radio TX* is off, because none of them can reach the air without
+it; **IGATE** is the exception, since it publishes to the internet and never keys the
+transmitter. Its number is verified packets against the hourly ceiling —
+[section 5.7](#57-aprs-is-gate-igate).
 
 | Setting | Meaning |
 |---|---|
@@ -1496,8 +1657,9 @@ currently active, so you can see the station's posture without opening the secti
 | **Enable radio TX** | **the master switch.** Off, and nothing transmits: HB, TUNE, auto-reply, heartbeats, CQ repeat and the calibration are all disabled, and their markers in the header go grey. The tickbox carries the pledge *"I will use safe RF power and a suitable load/antenna."* |
 | **INFO answer** | up to 40 characters, e.g. `50W VERT` |
 | **STATUS answer** | a menu — see [What the station answers to STATUS?](#what-the-station-answers-to-status) |
-| **Answer queries automatically** · **Unattended for** · **Repeat CQ** · **My groups** · **Send heartbeats** · **Heartbeat every** · **Acknowledge heartbeats** | see [section 5.12](#512-unattended-operation) |
-| **Beep on a call to me** | a short tone when a station addresses your callsign directly. **Off by default.** The line in Recent traffic is highlighted either way — see [section 5.7](#57-recent-traffic). Ticking it plays the tone once, which is also the click browsers require before they will allow any sound. Purely local to this browser; it never transmits anything. |
+| **Answer queries automatically** · **Unattended for** · **Repeat CQ** · **My groups** · **Send heartbeats** · **Heartbeat every** · **Acknowledge heartbeats** | see [section 5.13](#513-unattended-operation) |
+| **Beep on a call to me** | a short tone when a station addresses your callsign directly. **Off by default.** The line in Recent traffic is highlighted either way — see [section 5.8](#58-recent-traffic). Ticking it plays the tone once, which is also the click browsers require before they will allow any sound. Purely local to this browser; it never transmits anything. |
+| **Gate @APRSIS to the internet** · **APRS-IS callsign** · **APRS-IS passcode** · **APRS-IS server** | carry other stations' `@APRSIS` traffic onto the APRS network under your callsign. Nothing is transmitted on the radio. **Off by default**, and it needs a passcode that matches the callsign — the line under the field says whether it does. Full description in [section 5.7](#57-aprs-is-gate-igate). |
 | **Restore defaults** | reset every setting on this page |
 
 The radio setup help opens by itself the first time this browser loads the page. That is
@@ -1508,6 +1670,11 @@ its own. Until you press it, the heartbeat, groups, band schedule and power live
 this browser and another device would not have them. It is a button rather than an automatic
 upload on purpose: otherwise the first tablet to open the page would decide the whole
 station's schedule.
+
+Once the profile is on the interface it is **shared**: every browser that opens DATA reads
+it, so a setting changed on the tablet is in force on the phone as well. That includes the
+APRS-IS gate — the login is part of the profile, and so it is also part of the configuration
+backup in [section 7.9](#79-save-download-and-upload-the-configuration).
 
 #### What the station answers to STATUS?
 
@@ -1549,7 +1716,7 @@ Roughly every fourteenth character buys another frame, and a frame is a whole sl
 why the presets are short — a chatty status is paid for on every single answer, at every
 speed, for as long as the station is on the air.
 
-### 5.14 Timing and diagnostics
+### 5.15 Timing and diagnostics
 
 ![Timing and diagnostics](img/js8call-timing-and-diagnostics.png)
 
@@ -1561,7 +1728,7 @@ The rest of the block reports the health of the modem, the audio channel and the
 counts, buffer state and the last errors. It is the first place to look when something is
 not working.
 
-### 5.15 Frequency timetable
+### 5.16 Frequency timetable
 
 ![Frequency timetable](img/js8call-timetable.png)
 
@@ -1580,7 +1747,7 @@ Click a cell to set the band for that half hour.
 > **A scheduled change never happens during a transmission.** The band change waits for the
 > transmission to finish.
 
-### 5.16 Logging JS8 QSOs
+### 5.17 Logging JS8 QSOs
 
 **LOG QSO** in the TX SESSION header writes the contact to the log.
 
@@ -1594,7 +1761,7 @@ The mode is logged as `JS8` — not the radio's `USB-D` — and no exchange is s
 
 After logging, the button turns into **VIEW LOG** and opens the logbook in a new window.
 
-### 5.17 Troubleshooting
+### 5.18 Troubleshooting
 
 | Symptom | Cause and fix |
 |---|---|
@@ -2270,9 +2437,17 @@ Three things govern all of it:
    the firmware requires a heartbeat from the page. Close the browser and transmission stops.
 3. **The WSPR beacon will not key above 10 W**, whatever the radio is capable of.
 
-And one that does *not* transmit, despite appearances: the **CW IP announcement** plays the
-address into the sidetone with break-in forced off and RF gain at minimum. It never keys the
-transmitter.
+And two that do *not* transmit, despite appearances:
+
+- The **CW IP announcement** plays the address into the sidetone with break-in forced off
+  and RF gain at minimum. It never keys the transmitter.
+- The **APRS-IS gate** ([section 5.7](#57-aprs-is-gate-igate)) publishes other stations'
+  traffic to the internet under your callsign. Nothing goes on the air, so *Enable radio TX*
+  does not govern it and its marker stays lit when the master switch is off. What governs it
+  instead is its own switch, a passcode that must match the callsign, and the four filters
+  described in that section. It is the one automatic function here whose output is a
+  network packet rather than a signal, and it is worth knowing that it carries **somebody
+  else's words** under **your** callsign.
 
 ---
 

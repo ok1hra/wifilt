@@ -55,14 +55,93 @@ published.
     which is what happened; `qAS` claims a server injected it. The IGate callsign after it
     is yours, so a packet can be traced back to this box.
 
-  Design, packet format and the decisions behind them: `docs/aprsis-igate-implementace.md`.
+  One thing worth knowing about how it is configured: the gate lives in the JS8 profile,
+  and that profile is **shared** — it is stored on the interface and read by every browser
+  that opens DATA. Configuring the gate once configures it for the station, and every one
+  of those browsers is then a gate in its own right. That is why the duplicate check and
+  the hourly cap are enforced **on the interface** and not in the browser: two tabs, or a
+  tablet and a phone, would otherwise publish the same position twice under one callsign,
+  and a per-browser cap is no cap at all.
 
-  Verified in software only — `tools/js8-aprs-gate-smoke.js` (the four filters, the queue
-  and the frame), `tools/aprsis-conversion-parity.js` (16 543 conversions compiled out of
-  `wifilt.ino` and compared against the browser's, so the C++ and the JavaScript cannot
-  drift apart), ten new checks in `tools/data-browser-smoke.js`, and
-  `tools/aprsis-fake-server.js` for pointing the device at a server on your own desk.
-  **Nothing has been through a real APRS-IS server or off the air yet.**
+  Design, packet format and the twenty decisions behind them:
+  `docs/aprsis-igate-implementace.md`.
+
+  Verified in software only — `tools/js8-aprs-gate-smoke.js` (the filters, the queue, the
+  frame and the line-injection refusal), `tools/aprsis-conversion-parity.js` (16 566
+  conversions compiled out of `wifilt.ino` and compared against the browser's, hostile
+  input included, so the C++ and the JavaScript cannot drift apart), fourteen new checks
+  in `tools/data-browser-smoke.js`, and `tools/aprsis-fake-server.js` for pointing the
+  device at a server on your own desk. **Nothing has been through a real APRS-IS server or
+  off the air yet.**
+
+* **The APRS-IS callsign field was too narrow to show a single character.** The settings
+  row is a three-track grid whose last track is sized to its content and therefore takes
+  what it needs first; the hint beside the field landed in it and squeezed the input down to
+  the 20-pixel floor the grid allows. The hint now sits on a row of its own like every other
+  description in that panel, and the three APRS-IS fields have a floor measured in
+  characters — nine for the callsign, which is what `OK1ABC-10` needs. The browser harness
+  now *measures* the rendered width rather than trusting the markup, and that check goes red
+  against the old layout.
+
+* **Manual.** `SOFTWARE.md` gains **section 5.7 — APRS-IS gate (IGate)**, next to the
+  @APRSIS command builder it is the mirror image of: what is carried, how to switch it on,
+  what the SSID and the passcode are for, what the four filters refuse, how to read the five
+  badge states, and why one gate is a gate for the whole station rather than per browser.
+  Sections 5.7–5.17 shift up by one. Shorter notes go where the feature is actually met:
+  the SETTINGS table, the header markers, Recent traffic, *What is stored where* (the login
+  is in the shared profile and therefore in the configuration backup), and *Transmit safety*
+  — where it is the one automatic function whose output is a network packet rather than a
+  signal, and which carries somebody else's words under your callsign.
+
+* **Code review of the above, fifteen fixes.** Four are worth knowing about:
+
+  * **A station on the air could have published an arbitrary APRS-IS packet under your
+    callsign.** `\n` is a literal in the JS8 alphabet, and APRS-IS is a line protocol, so
+    a newline inside an `@APRSIS CMD` text was not a malformed message — it was a second
+    packet, chosen by whoever transmitted it, and every check the code had passed it. A
+    control character in any field is now refused outright, in the browser and again in
+    the firmware. The parity sweep that was supposed to catch the firmware half was
+    feeding it only well-formed callsigns; it now feeds it hostile ones too.
+  * **Nothing would ever have been reported as accepted.** The queue sent the next packet
+    before collecting the previous one's verdict, and the interface remembers one result —
+    so on a band where somebody beacons every fifteen seconds no packet ever reached
+    `verified`, the hourly cap never engaged, and the header read `IGATE 0/30` while
+    packets were going out. It now collects first and sends second.
+  * **A busy radio dropped positions.** The interface refuses to open a socket while
+    transmitting, which is routine, but the browser counted each refusal as a failed
+    attempt and gave up after four — under two minutes. "Not now" no longer costs an
+    attempt; the five-minute validity is what ends it.
+  * **The web request no longer touches the network at all.** It used to resolve DNS and
+    connect inside the handler, which runs in the same loop as the audio the radio is
+    being fed — `WiFi.hostByName` blocks for seconds. The request now parks the packet and
+    answers `202`; the socket work happens on later passes, guarded like every other
+    blocking call in the sketch.
+
+  Also fixed: the backoff refused everything between 24 and 49 days of uptime (a deadline
+  compared against its own uninitialised value); a packet caught mid-flight by a page
+  reload was stranded for ever as an amber badge; the verdict window was measured from
+  when the message was decoded rather than from when the packet was sent, so exactly the
+  packets that needed retries were never resolved; the 700 ms limit on the server's login
+  answer was a hard deadline that made a working gate on a distant server report nothing
+  as verified; the last step of the retry ladder was unreachable; and the badge is now a
+  key lookup instead of two linear scans and a regex per row on every render.
+
+* **A message for your callsign no longer unfolds the Stations table.** It opened both
+  Recent traffic and Stations, because every callsign named in a frame enters the station
+  table — including your own, as the addressee of somebody else's message, listed there as
+  heard about only. So a directed message moved two sections and the second one had nothing
+  in it the operator came for: the text is in the traffic feed. Recent traffic still pops
+  open on a message for MYCALL; Stations now stays exactly where it was left.
+
+* **A session left open over midnight shuffled yesterday's messages in among today's.**
+  The TX SESSION thread was ordered by the clock printed on each bubble, and that clock is
+  a time of day with no date in it — so yesterday 22:04 filed itself *after* today 07:15,
+  and a day-old exchange surfaced as if it were the current one. Every row now carries the
+  absolute moment it happened and the thread is ordered by that; rows restored from a
+  session snapshot written before this have their stamp rebuilt from the time the snapshot
+  was saved. Because the bubbles still show only an hour, the thread now draws a dividing
+  line where the day changes, naming it (`yesterday`, or the date) and marking where
+  `today` begins — with no line at all when everything on screen is from today.
 
 **REV 20260815.** Browser only — no firmware behaviour changed.
 

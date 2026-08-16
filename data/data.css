@@ -505,6 +505,8 @@ button { color: inherit; cursor: pointer; }
 .log-qso:disabled { opacity: .45; cursor: default; border-color: var(--line); color: var(--muted); }
 .chat-row.system { justify-content: center; padding: 0; }
 .chat-system { color: var(--muted); font-size: 10px; text-align: center; padding: 3px 10px; border: 1px dashed var(--line); border-radius: 10px; background: #0d1a17; overflow-wrap: anywhere; }
+.chat-row.day { justify-content: center; padding: 0; }
+.chat-day { flex: 1; margin: 4px 0; padding: 2px 10px; border-top: 1px dashed var(--line); color: var(--muted); font-size: 9px; letter-spacing: .05em; text-transform: uppercase; text-align: center; }
 .planned-session { margin:10px; padding:12px; border:1px dashed #4b615c; border-radius:6px; background:#091310; }
 .planned-session[hidden] { display:none; }
 .planned-session > header { display:flex; align-items:baseline; gap:10px; margin-bottom:10px; }
@@ -1103,7 +1105,14 @@ button { color: inherit; cursor: pointer; }
 .group-mail { color:var(--amber); }
 /* The port sits beside the hostname rather than on a row of its own: it is part
    of one address and almost never touched. */
-.port-field { max-width:6em; }
+.port-field { max-width:7ch; }
+/* A floor in characters, because that is the unit the operator judges these in:
+   a callsign field that shows fewer than its nine characters is not a small
+   field, it is a broken one. The track floor has to move with it -- a min-width
+   larger than its grid track just overflows the track instead of widening it. */
+.settings label.aprs-field { grid-template-columns: 130px minmax(9ch, 1fr) auto; }
+.settings label.aprs-field input { min-width: 6ch; }
+#aprsGateCall { min-width: 9ch; }
 /* The gate's state line is the answer to "why is nothing reaching aprs.fi", so it
    is coloured: green when the passcode matches the callsign, red when it does not. */
 #aprsGateState[data-state="ok"] { color:var(--green); }

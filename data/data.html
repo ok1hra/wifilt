@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>JS8Call-ICOM — WIFILT</title>
-  <link rel="stylesheet" href="/data.css?v=4746b90c">
+  <link rel="stylesheet" href="/data.css?v=f5dacdaa">
 </head>
 <body class="startup-pending lan-gate-checking">
   <header class="site-topbar">
@@ -465,9 +465,14 @@
                wrong one has APRS-IS drop everything in silence, so it is checked
                here and the state line says so out loud. -->
           <label class="safety-setting">Gate @APRSIS to the internet <input id="aprsGate" type="checkbox"><small>Carries positions and messages other stations address to @APRSIS onto the APRS-IS network, under your callsign. Nothing is transmitted on the radio. Needs this page open.</small></label>
-          <label>APRS-IS callsign <input id="aprsGateCall" maxlength="9" autocomplete="off" placeholder="OK1ABC-10"><small>Your callsign with an SSID of its own &mdash; APRS-IS allows one connection per callsign-SSID, so it must differ from a WX station or a JS8Call already logged in elsewhere.</small></label>
-          <label>APRS-IS passcode <input id="aprsGatePass" maxlength="6" autocomplete="off" inputmode="numeric" placeholder="12345"><small id="aprsGateState" class="cal-hint">off</small></label>
-          <label>APRS-IS server <input id="aprsGateHost" maxlength="40" autocomplete="off" placeholder="czech.aprs2.net"> <input id="aprsGatePort" class="port-field" maxlength="5" autocomplete="off" inputmode="numeric" placeholder="14580"></label>
+          <!-- The hints carry cal-hint so they drop onto a full-width row of their
+               own. Without it they land in the label grid's third track, which is
+               `auto` and therefore greedy: it takes its content width first and the
+               field beside it collapses to the 20px floor - the same trap the
+               checkbox rows hit, described above .settings label in data.css. -->
+          <label class="aprs-field">APRS-IS callsign <input id="aprsGateCall" maxlength="9" size="9" autocomplete="off" placeholder="OK1ABC-10"><small class="cal-hint">Your callsign with an SSID of its own &mdash; APRS-IS allows one connection per callsign-SSID, so it must differ from a WX station or a JS8Call already logged in elsewhere.</small></label>
+          <label class="aprs-field">APRS-IS passcode <input id="aprsGatePass" maxlength="6" size="6" autocomplete="off" inputmode="numeric" placeholder="12345"><small id="aprsGateState" class="cal-hint">off</small></label>
+          <label class="aprs-field">APRS-IS server <input id="aprsGateHost" maxlength="40" size="14" autocomplete="off" placeholder="czech.aprs2.net"> <input id="aprsGatePort" class="port-field" maxlength="5" size="5" autocomplete="off" inputmode="numeric" placeholder="14580"></label>
           <div class="settings-storage"><span id="storageState"></span><button id="resetSettings" type="button">Restore defaults</button></div>
           <!-- Shown only while the interface has no profile of its own: these are
                the operator's settings from before the profile moved off the
@@ -499,7 +504,7 @@
   <script src="/wake-lock.js?v=b487b3dc"></script>
   <script src="/lan-gate.js?v=085d5bd5"></script>
   <script src="/fw-version.js?v=64ac42ff"></script>
-  <script src="/js8-settings.js?v=646d46d0"></script>
+  <script src="/js8-settings.js?v=2ec502ca"></script>
   <script src="/station-identity.js?v=a1a20249"></script>
   <script src="/station-profile.js?v=ecfd3023"></script>
 <script src="/setup-spine.js?v=a9af5fb9"></script>
@@ -531,9 +536,9 @@
   }());
 </script>
   <script src="/js8-email.js?v=122fdab7"></script>
-  <script src="/js8-aprs.js?v=3fc9aef1"></script>
+  <script src="/js8-aprs.js?v=810eb183"></script>
   <!-- The other direction: what we do with somebody ELSE's @APRSIS traffic. -->
-  <script src="/js8-aprs-gate.js?v=e7b46ff5"></script>
+  <script src="/js8-aprs-gate.js?v=fb2ab5b5"></script>
   <script src="/js8-file-transfer.js?v=6204c34d"></script>
   <script src="/js8-presets.js?v=7131988f"></script>
   <script src="/js8-scheduler.js?v=7264d5e6"></script>
@@ -575,7 +580,7 @@
   <script src="/tx-gain-plan-ui.js?v=0d493edc"></script>
   <script src="/dxcc.js?v=c56ee081"></script>
   <script src="/log-db.js?v=6055416f"></script>
-  <script src="/data.js?v=87172acf"></script>
+  <script src="/data.js?v=92d4b1aa"></script>
   <script src="/compression.js?v=83837925"></script>
 </body>
 </html>

@@ -30,6 +30,10 @@
   // Gateways, not nets. Upstream refuses to join these too (Varicode::isGroupAllowed):
   // they answer to a server, so a station calling itself a member would be lying.
   const RESERVED_GROUPS = ["@APRSIS", "@JS8NET"];
+  // Used only when js8-aprs-gate.js is not on the page (wspr.html). The gate owns
+  // the real defaults; this is the shape a profile written without it must keep.
+  const APRSIS_FALLBACK = {enabled: false, call: "", passcode: "",
+    host: "czech.aprs2.net", port: 14580, maxPerHour: 30, dedupMinutes: 10};
   const MAX_GROUPS = 8;
   // Minutes between repeated CQ calls; 0 means the repeat is off.
   const CQ_REPEAT_MIN = [0, 2, 5, 10, 15];
@@ -119,12 +123,15 @@
         stations: false, inbox: false, settings: false, timing: false}},
       // The APRS-IS gate. It lives in the profile and not in SETUP because it is
       // a JS8 function: it only ever acts on @APRSIS traffic this modem decoded.
-      // The firmware stores none of it -- the login travels with every packet --
-      // so this object is the single place the whole feature is configured.
+      // The profile is SHARED -- it is pushed to the interface and read back by
+      // every browser that opens DATA -- so configuring the gate once configures
+      // it for the station, and every one of those browsers is then a gate. That
+      // is why the duplicate check and the hourly cap are enforced on the device
+      // and not here: a per-browser cap is no cap, and two tabs would otherwise
+      // publish one position twice.
       // Off by default, and deliberately: an upgrade must never start publishing
       // other stations' positions under this callsign on its own.
-      aprsis: {enabled: false, call: "", passcode: "", host: "czech.aprs2.net",
-        port: 14580, maxPerHour: 30, dedupMinutes: 10},
+      aprsis: normalizeAprsis(null, APRSIS_FALLBACK),
       // Sparse schedule: only the slots the operator filled are stored. `enabled`
       // is the ON/OFF switch that lets the browser apply changes on slot bounds.
       freqTimetable: {enabled: false, slots: {}}};
@@ -148,30 +155,21 @@
     return {enabled: source.enabled === true, slots};
   }
 
-  // The gate's own module validates this too (Js8AprsGate.normalizeConfig): one
-  // guards the stored profile, the other guards what is about to be transmitted,
-  // and neither may assume the other ran. Limits are kept identical on purpose --
-  // a value this store accepts and the gate rejects would be a setting the
-  // operator can save and never use.
+  // The APRS-IS gate's rules live in ONE place: data/js8-aprs-gate.js. This store
+  // does not re-implement them, it asks -- because two copies of "what a valid
+  // APRS-IS callsign is" drift, and the copy that loses is whichever one nobody
+  // is looking at.
+  //
+  // The module is not always there: js8-settings.js also runs on wspr.html,
+  // which has no gate. A page that cannot validate this branch must not rewrite
+  // it either, so it is carried through untouched -- and that is safe because
+  // the gate normalises again at the point of use, which is the only moment the
+  // values become a TCP connection under the operator's callsign.
   function normalizeAprsis(input, fallback) {
-    const source = input && typeof input === "object" ? input : {};
-    const port = Math.round(Number(source.port));
-    const perHour = Math.round(Number(source.maxPerHour));
-    const dedup = Math.round(Number(source.dedupMinutes));
-    return {
-      enabled: source.enabled === true,
-      // Uppercase with an SSID, the way APRS-IS wants a login; nine characters is
-      // the longest an AX.25 source field can carry.
-      call: String(source.call ?? "").toUpperCase().replace(/[^A-Z0-9-]/g, "").slice(0, 9),
-      passcode: String(source.passcode ?? "").replace(/[^0-9-]/g, "").slice(0, 6),
-      host: String(source.host ?? fallback.host).trim()
-        .replace(/[^A-Za-z0-9.\-]/g, "").slice(0, 40) || fallback.host,
-      port: Number.isFinite(port) && port > 0 && port <= 65535 ? port : fallback.port,
-      maxPerHour: Number.isFinite(perHour) && perHour >= 1 && perHour <= 240
-        ? perHour : fallback.maxPerHour,
-      dedupMinutes: Number.isFinite(dedup) && dedup >= 1 && dedup <= 120
-        ? dedup : fallback.dedupMinutes
-    };
+    const gate = typeof globalThis !== "undefined" && globalThis.Js8AprsGate;
+    if (gate && typeof gate.normalizeConfig === "function")
+      return gate.normalizeConfig(input);
+    return input && typeof input === "object" ? {...input} : {...fallback};
   }
 
   function normalize(input) {

@@ -858,9 +858,17 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void handlePostTxGain(void);
   void handleGetCivRead(void);
   uint16_t aprsisPasscode(const String &call);
+  bool aprsisFieldSafe(const String &value);
+  String aprsisCleanCall(const String &call);
   String aprsisSourceCall(const String &call);
   bool aprsisGridToAprs(const String &grid, String &latOut, String &lonOut);
-  bool aprsisSendLine(const String &host, uint16_t port, const String &login, const String &line);
+  uint32_t aprsisHashLine(const String &line);
+  void aprsisAgeMinutes(void);
+  uint16_t aprsisSentLastHour(void);
+  uint32_t aprsisDuplicateOf(uint32_t hash);
+  void aprsisRememberSent(uint32_t hash, uint32_t seq);
+  bool aprsisBackoffActive(void);
+  void aprsisNoteConnectFailure(void);
   void aprsisLoop(void);
   void handleAprsisSpot(void);
   void handleAprsisStatus(void);
@@ -3584,38 +3592,77 @@ void handleOi3SetHz() {
 // ---- APRS-IS igate ----------------------------------------------------------
 //
 // The browser decodes JS8, hears somebody address @APRSIS, and asks us to put
-// that station's position (or its third-party text) on APRS-IS. Everything about
-// the decision -- the four filters, the dedup, the hourly cap -- happens up
-// there in data/js8-aprs-gate.js, because that is where the blocked-callsign list
-// and the DXCC table live. What is down here is the part the browser cannot do:
-// a TCP socket, and the frame that carries OUR callsign.
+// that station's position (or its third-party text) on APRS-IS. Which messages
+// deserve that is decided up in data/js8-aprs-gate.js, because that is where the
+// blocked-callsign list and the DXCC table live. What is down here is the part
+// the browser cannot do -- a TCP socket -- plus the three judgements that must
+// NOT live in a browser:
 //
-// The frame is built here for that reason. A raw line accepted over HTTP would
-// let anything on the LAN transmit under this station's licence.
+//   the frame     it carries THIS station's callsign, so it is built here. A raw
+//                 line accepted over HTTP would let anything on the LAN transmit
+//                 under the operator's licence.
+//   the duplicate the login now travels in the shared station profile, so every
+//                 browser that opens DATA is a gate. Two tabs, or a tablet and a
+//                 phone, would otherwise publish the same position twice under
+//                 one callsign. The device is the only place that sees all of
+//                 them, so the dedup ring lives here and the browser's copy is
+//                 only a way to avoid a pointless POST.
+//   the hourly cap for the same reason: a per-browser cap is no cap at all.
+//
+// Nothing in the request path touches the network. handleAprsisSpot() validates,
+// builds and parks one line; aprsisLoop() resolves, connects, writes and reads
+// the server's answer on later passes through loop(). That is not tidiness:
+// WiFi.hostByName blocks for seconds and connect() for its whole timeout, and a
+// web handler runs inside loop(), where the audio the radio is being fed from
+// also lives.
 //
 // data/js8-aprs-gate.js is the reference implementation of every conversion
-// below; tools/js8-aprs-gate-smoke.js pins the expected strings and
-// tools/aprsis-fake-server.js compares what really leaves this box against them.
-// Change one side and the other has to move with it.
+// below; tools/aprsis-conversion-parity.js compiles these functions out of this
+// file and compares 16 000 conversions against it, so the two cannot drift.
 //
 // See docs/aprsis-igate-implementace.md.
 
 static const char *APRSIS_TOCALL = "APJ8CL";
-static const uint16_t APRSIS_CONNECT_TIMEOUT_MS = 500;   // not 1500 like DXC: see below
-static const uint32_t APRSIS_LINGER_MS = 700;            // window for the server's logresp
+static const uint16_t APRSIS_CONNECT_TIMEOUT_MS = 500;
+// How long the socket stays open after the write, waiting for the server's
+// "# logresp <call> verified". Generous on purpose: 700 ms was a hard deadline
+// that turned a working gate on a distant server into a permanent "pending",
+// which is the one outcome the five badge states exist to distinguish. Nothing
+// blocks while it runs -- the socket is drained from loop().
+static const uint32_t APRSIS_LINGER_MS = 3000;
 static const size_t   APRSIS_RESP_MAX = 200;
+static const uint8_t  APRSIS_DEDUP_SLOTS = 16;
 
 WiFiClient AprsClient;
 IPAddress  aprsHostIp(0, 0, 0, 0);
 String     aprsHostResolved = "";
-uint32_t   aprsSeq = 0;              // 0 = nothing has been sent since boot
+uint32_t   aprsSeq = 0;              // 0 = nothing has been offered since boot
 uint8_t    aprsResultState = 0;      // 0 idle, 1 pending, 2 verified, 3 unverified, 4 error
 String     aprsResultServer = "";
 String     aprsResultLine = "";
 String     aprsRespBuf = "";
-uint32_t   aprsCloseAtMs = 0;        // 0 = no socket waiting to be closed
-uint32_t   aprsBackoffUntil = 0;
-uint16_t   aprsBackoffStep = 0;
+// One parked packet, waiting for loop() to carry it.
+String     aprsPendingLine = "", aprsPendingLogin = "", aprsPendingHost = "";
+uint16_t   aprsPendingPort = 0;
+uint8_t    aprsPhase = 0;            // 0 idle, 1 parked, 2 socket open
+uint32_t   aprsOpenedAtMs = 0;
+// Elapsed-since, never a deadline: a bare "millis() > until" with `until` still
+// at its initial 0 refuses everything for the 24 days between millis() passing
+// 2^31 and wrapping, and the assignment that would fix it sits behind the very
+// check that is failing.
+uint32_t   aprsBackoffAtMs = 0, aprsBackoffMs = 0, aprsBackoffStep = 0;
+// Recent packets, so a second browser (or a retry after a timed-out POST) cannot
+// publish the same position twice.
+uint32_t   aprsDedupHash[APRSIS_DEDUP_SLOTS] = {0};
+uint32_t   aprsDedupAtMs[APRSIS_DEDUP_SLOTS] = {0};
+uint32_t   aprsDedupSeq[APRSIS_DEDUP_SLOTS] = {0};
+uint8_t    aprsDedupNext = 0;
+// One counter per minute for the last hour: exact to the minute and 60 bytes,
+// where a ring of timestamps would have to be as long as the highest cap.
+uint8_t    aprsMinuteCount[60] = {0};
+uint32_t   aprsMinuteAtMs = 0;
+uint8_t    aprsMinuteIndex = 0;
+uint16_t   aprsDedupMinutes = 10, aprsMaxPerHour = 30;
 
 // The aprsc passcode hash. Not a secret -- it is a checksum of the callsign --
 // but an unverified connection has its packets dropped in silence, so refusing
@@ -3637,12 +3684,39 @@ uint16_t aprsisPasscode(const String &call) {
   return (uint16_t)(hash & 0x7FFF);
 }
 
+// APRS-IS is line based, so a control character anywhere in a field is not a
+// formatting problem -- it is a second packet. "\n" is a literal in the JS8
+// alphabet, which means a station on the air could write one into the CMD text
+// and have this box publish an arbitrary frame under the operator's callsign.
+// Refused rather than stripped: the intent is not recoverable, and silently
+// repairing hostile input teaches nobody anything.
+bool aprsisFieldSafe(const String &value) {
+  for (unsigned i = 0; i < value.length(); i++) {
+    uint8_t c = (uint8_t)value[i];
+    if (c < 0x20 || c == 0x7f) return false;
+  }
+  return true;
+}
+
 // AX.25 has no room for "/P": a numeric suffix becomes an SSID, anything else is
 // dropped. What gets dropped reappears at the head of the comment, so portable
-// operation stays visible on aprs.fi.
+// operation stays visible on aprs.fi. The character filter mirrors the
+// JavaScript oracle exactly -- without it a hostile `from` reached the source
+// field, and the parity sweep could not see it because it only ever fed
+// well-formed callsigns.
+String aprsisCleanCall(const String &call) {
+  String clean = "";
+  for (unsigned i = 0; i < call.length(); i++) {
+    char c = call[i];
+    if (c >= 'a' && c <= 'z') c = c - 'a' + 'A';
+    if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '/' || c == '-')
+      clean += c;
+  }
+  return clean;
+}
+
 String aprsisSourceCall(const String &call) {
-  String clean = call;
-  clean.toUpperCase();
+  String clean = aprsisCleanCall(call);
   int slash = clean.indexOf('/');
   if (slash < 0) return clean.substring(0, 9);
   String base = clean.substring(0, slash);
@@ -3706,88 +3780,170 @@ bool aprsisGridToAprs(const String &grid, String &latOut, String &lonOut) {
   return true;
 }
 
-void aprsisFail(const char *error) {
+// FNV-1a over the finished frame. The frame is deterministic, so the same
+// position from two browsers hashes the same -- which is exactly the collision
+// the dedup ring is looking for.
+uint32_t aprsisHashLine(const String &line) {
+  uint32_t hash = 2166136261u;
+  for (unsigned i = 0; i < line.length(); i++) {
+    hash ^= (uint8_t)line[i];
+    hash *= 16777619u;
+  }
+  return hash;
+}
+
+// Ages the per-minute counters. Called from loop() and before every decision, so
+// the hour is a sliding window and not a bucket that empties at :00.
+void aprsisAgeMinutes() {
+  uint32_t now = millis();
+  if (aprsMinuteAtMs == 0) { aprsMinuteAtMs = now; return; }
+  uint32_t elapsed = now - aprsMinuteAtMs;
+  if (elapsed >= 3600000UL) {              // idle for an hour: the whole window is stale
+    memset(aprsMinuteCount, 0, sizeof(aprsMinuteCount));
+    aprsMinuteAtMs = now;
+    return;
+  }
+  while (elapsed >= 60000UL) {
+    aprsMinuteAtMs += 60000UL;
+    elapsed -= 60000UL;
+    aprsMinuteIndex = (aprsMinuteIndex + 1) % 60;
+    aprsMinuteCount[aprsMinuteIndex] = 0;
+  }
+}
+
+uint16_t aprsisSentLastHour() {
+  uint16_t total = 0;
+  for (uint8_t i = 0; i < 60; i++) total += aprsMinuteCount[i];
+  return total;
+}
+
+// Returns the seq of the earlier packet, or 0. Only packets that were actually
+// written are in the ring, so a genuine retry after a failed connect is not
+// mistaken for a duplicate.
+uint32_t aprsisDuplicateOf(uint32_t hash) {
+  uint32_t window = (uint32_t)aprsDedupMinutes * 60000UL;
+  for (uint8_t i = 0; i < APRSIS_DEDUP_SLOTS; i++) {
+    if (aprsDedupHash[i] != hash || aprsDedupAtMs[i] == 0) continue;
+    if ((uint32_t)(millis() - aprsDedupAtMs[i]) < window) return aprsDedupSeq[i];
+  }
+  return 0;
+}
+
+void aprsisRememberSent(uint32_t hash, uint32_t seq) {
+  aprsDedupHash[aprsDedupNext] = hash;
+  aprsDedupAtMs[aprsDedupNext] = millis();
+  aprsDedupSeq[aprsDedupNext] = seq;
+  aprsDedupNext = (aprsDedupNext + 1) % APRSIS_DEDUP_SLOTS;
+  aprsisAgeMinutes();
+  if (aprsMinuteCount[aprsMinuteIndex] < 255) aprsMinuteCount[aprsMinuteIndex]++;
+}
+
+bool aprsisBackoffActive() {
+  return aprsBackoffMs != 0 && (uint32_t)(millis() - aprsBackoffAtMs) < aprsBackoffMs;
+}
+
+void aprsisNoteConnectFailure() {
+  // 5 s, half a minute, five minutes. A server that is down stays down for a
+  // while, and the browser's own five-minute TTL drops the packet before this
+  // ladder reaches its top step.
+  aprsBackoffStep = aprsBackoffStep < 5000 ? 5000
+                  : (aprsBackoffStep < 30000 ? 30000 : 300000);
+  aprsBackoffAtMs = millis();
+  aprsBackoffMs = aprsBackoffStep;
   aprsResultState = 4;
-  aprsResultLine = error;
-  webServer.send(502, "application/json",
-                 String("{\"ok\":false,\"error\":\"") + error + "\"}");
+  aprsResultLine = "connect failed";
+  aprsPhase = 0;
+  aprsPendingLine = "";
 }
 
-// Connect, log in, write one line, and leave the socket open for a moment. The
-// linger is not politeness: it is the only window in which the server's
-// "# logresp <call> verified" arrives, and reading it is what tells the operator
-// that a wrong passcode is throwing every packet away. wx.ino spends that window
-// in delay(500), which stalls the loop; here the socket is closed from
-// aprsisLoop() on a later pass and nothing blocks.
-bool aprsisSendLine(const String &host, uint16_t port, const String &login,
-                    const String &line) {
-  if ((uint32_t)aprsHostIp == 0 || aprsHostResolved != host) {
-    IPAddress ip;
-    if (!WiFi.hostByName(host.c_str(), ip)) return false;
-    aprsHostIp = ip;
-    aprsHostResolved = host;
-  }
-  if (!AprsClient.connect(aprsHostIp, port, APRSIS_CONNECT_TIMEOUT_MS)) {
-    aprsHostIp = IPAddress();       // a stale address re-resolves on the next attempt
-    AprsClient.stop();
-    return false;
-  }
-  AprsClient.setNoDelay(true);
-  AprsClient.println(login);
-  AprsClient.println(line);
-  aprsRespBuf = "";
-  aprsCloseAtMs = millis() + APRSIS_LINGER_MS;
-  return true;
-}
-
-// Drains whatever the server said and closes the socket. Runs from loop(), so a
-// dead server costs nothing but the linger.
+// The whole network side, on a later pass through loop(). Resolve, connect,
+// write, drain, close -- one step per call where it can be, and never inside a
+// web handler.
 void aprsisLoop() {
-  if (!aprsCloseAtMs) return;
-  while (AprsClient.available() && aprsRespBuf.length() < APRSIS_RESP_MAX)
-    aprsRespBuf += (char)AprsClient.read();
-  // "unverified" contains "verified", so the refusal has to be tested first.
-  if (aprsResultState == 1 && aprsRespBuf.indexOf("logresp") >= 0) {
-    if (aprsRespBuf.indexOf("unverified") >= 0) aprsResultState = 3;
-    else if (aprsRespBuf.indexOf("verified") >= 0) aprsResultState = 2;
-    if (aprsResultState != 1) {
-      int line = aprsRespBuf.indexOf("logresp");
-      int end = aprsRespBuf.indexOf('\n', line);
-      aprsResultLine = aprsRespBuf.substring(aprsRespBuf.lastIndexOf('#', line),
-                                             end < 0 ? aprsRespBuf.length() : end);
-      aprsResultLine.trim();
-      int server = aprsResultLine.indexOf("server ");
-      if (server >= 0) {
-        aprsResultServer = aprsResultLine.substring(server + 7);
-        aprsResultServer.trim();
+  aprsisAgeMinutes();
+
+  if (aprsPhase == 2) {
+    while (AprsClient.available() && aprsRespBuf.length() < APRSIS_RESP_MAX)
+      aprsRespBuf += (char)AprsClient.read();
+    // "unverified" contains "verified", so the refusal has to be tested first.
+    if (aprsResultState == 1 && aprsRespBuf.indexOf("logresp") >= 0) {
+      if (aprsRespBuf.indexOf("unverified") >= 0) aprsResultState = 3;
+      else if (aprsRespBuf.indexOf("verified") >= 0) aprsResultState = 2;
+      if (aprsResultState != 1) {
+        int at = aprsRespBuf.indexOf("logresp");
+        int end = aprsRespBuf.indexOf('\n', at);
+        int from = aprsRespBuf.lastIndexOf('#', at);
+        aprsResultLine = aprsRespBuf.substring(from < 0 ? at : from,
+                                               end < 0 ? aprsRespBuf.length() : end);
+        aprsResultLine.trim();
+        int server = aprsResultLine.indexOf("server ");
+        if (server >= 0) {
+          aprsResultServer = aprsResultLine.substring(server + 7);
+          aprsResultServer.trim();
+        }
       }
     }
+    // Closed as soon as the verdict is in; the linger is only the ceiling.
+    if (aprsResultState != 1 || (uint32_t)(millis() - aprsOpenedAtMs) >= APRSIS_LINGER_MS) {
+      AprsClient.stop();
+      aprsPhase = 0;
+    }
+    return;
   }
-  if ((int32_t)(millis() - aprsCloseAtMs) < 0) return;
-  AprsClient.stop();
-  aprsCloseAtMs = 0;
+
+  if (aprsPhase != 1) return;
+  // The two blocking calls in this function are guarded exactly as the DX
+  // cluster client guards its own: never while the transmitter is keyed.
+  if (txRealtimeNow()) return;
+  if (aprsisBackoffActive()) return;
+  if (!WiFiStationReady()) return;
+
+  if ((uint32_t)aprsHostIp == 0 || aprsHostResolved != aprsPendingHost) {
+    IPAddress ip;
+    if (!WiFi.hostByName(aprsPendingHost.c_str(), ip)) {
+      aprsisNoteConnectFailure();
+      aprsResultLine = "dns failed";
+      return;
+    }
+    aprsHostIp = ip;
+    aprsHostResolved = aprsPendingHost;
+  }
+  if (!AprsClient.connect(aprsHostIp, aprsPendingPort, APRSIS_CONNECT_TIMEOUT_MS)) {
+    aprsHostIp = IPAddress();       // a stale address re-resolves on the next attempt
+    AprsClient.stop();
+    aprsisNoteConnectFailure();
+    return;
+  }
+  AprsClient.setNoDelay(true);
+  AprsClient.println(aprsPendingLogin);
+  AprsClient.println(aprsPendingLine);
+  // Recorded only now: a packet that never reached the socket must stay
+  // retryable, and one that did must never go out twice.
+  aprsisRememberSent(aprsisHashLine(aprsPendingLine), aprsSeq);
+  aprsBackoffStep = 0;
+  aprsBackoffMs = 0;
+  aprsRespBuf = "";
+  aprsOpenedAtMs = millis();
+  aprsPendingLine = "";
+  aprsPhase = 2;
 }
 
 void handleAprsisSpot() {
   webServer.sendHeader("Connection", "close");
   webServer.client().setNoDelay(true);
-  // A blocking connect inside a keyed interval would stall the audio stream the
-  // radio is being fed from. 503 is not a failure here -- the browser holds the
-  // packet and asks again, which is what its queue is for.
-  if (txRealtimeNow()) {
-    webServer.send(503, "application/json", "{\"ok\":false,\"error\":\"tx\"}");
-    return;
-  }
-  if (aprsCloseAtMs) {
+  aprsisAgeMinutes();
+  // One packet at a time. 503 is not a failure -- the browser holds it and asks
+  // again, which is what its queue is for.
+  if (aprsPhase != 0) {
     webServer.send(503, "application/json", "{\"ok\":false,\"error\":\"busy\"}");
     return;
   }
-  if ((int32_t)(millis() - aprsBackoffUntil) < 0) {
-    webServer.send(502, "application/json", "{\"ok\":false,\"error\":\"backoff\"}");
+  if (aprsisBackoffActive()) {
+    webServer.send(503, "application/json", "{\"ok\":false,\"error\":\"backoff\"}");
     return;
   }
   if (!WiFiStationReady()) {
-    webServer.send(502, "application/json", "{\"ok\":false,\"error\":\"offline\"}");
+    webServer.send(503, "application/json", "{\"ok\":false,\"error\":\"offline\"}");
     return;
   }
   String body = webServer.arg("plain");
@@ -3803,7 +3959,8 @@ void handleAprsisSpot() {
   int port = extractJsonInt(login, "port");
   call.toUpperCase();
   if (call.length() < 3 || call.length() > 9 || host.length() == 0 ||
-      port <= 0 || port > 65535) {
+      port <= 0 || port > 65535 ||
+      !aprsisFieldSafe(call) || !aprsisFieldSafe(host)) {
     webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"login\"}");
     return;
   }
@@ -3814,6 +3971,13 @@ void handleAprsisSpot() {
     webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"passcode\"}");
     return;
   }
+  // The operator's policy, clamped: it arrives from a browser, and the ceiling
+  // it sets is the one thing standing between a hostile station and unlimited
+  // traffic under this callsign.
+  int dedupMinutes = extractJsonInt(login, "dedupMinutes");
+  int maxPerHour = extractJsonInt(login, "maxPerHour");
+  if (dedupMinutes >= 1 && dedupMinutes <= 120) aprsDedupMinutes = dedupMinutes;
+  if (maxPerHour >= 1 && maxPerHour <= 240) aprsMaxPerHour = maxPerHour;
 
   String kind = extractJsonString(packet, "kind");
   String from = extractJsonString(packet, "from");
@@ -3825,9 +3989,11 @@ void handleAprsisSpot() {
   String line = source + ">" + APRSIS_TOCALL + ",qAR," + call + ":";
   if (kind == "cmd") {
     String text = extractJsonString(packet, "text");
-    // The browser normalised the nine-character addressee; this only refuses what
-    // is not an APRS message at all, so a malformed frame never carries our call.
-    if (text.length() < 4 || text[0] != ':' || text.indexOf(':', 1) < 0) {
+    // The browser normalised the nine-character addressee; this refuses what is
+    // not an APRS message at all, and -- the reason this check exists -- any
+    // control character, which would end the line and start a second packet.
+    if (text.length() < 4 || text[0] != ':' || text.indexOf(':', 1) < 0 ||
+        !aprsisFieldSafe(text)) {
       webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"text\"}");
       return;
     }
@@ -3843,7 +4009,11 @@ void handleAprsisSpot() {
     // because the source field above had to drop the suffix.
     int snr = extractJsonInt(packet, "snrDb");
     long hz = (long)extractJsonInt(packet, "freqHz");
-    String prefix = from.indexOf('/') >= 0 ? from + " " : String("");
+    // The comment shows the callsign as it was heard, suffix included -- but
+    // through the same character filter the source field went through, or the
+    // sanitising above would be undone by the comment.
+    String heard = aprsisCleanCall(from);
+    String prefix = heard.indexOf('/') >= 0 ? heard + " " : String("");
     char comment[64];
     if (hz > 0)
       snprintf(comment, sizeof(comment), "%s%.6fMHz %+03ddB", prefix.c_str(), hz / 1e6, snr);
@@ -3858,30 +4028,45 @@ void handleAprsisSpot() {
     webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"kind\"}");
     return;
   }
+  // Last line of defence, whatever the fields did on the way here.
+  if (!aprsisFieldSafe(line)) {
+    webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"text\"}");
+    return;
+  }
+
+  // Now the two judgements the browser cannot be trusted with, because there is
+  // more than one browser.
+  uint32_t hash = aprsisHashLine(line);
+  uint32_t twin = aprsisDuplicateOf(hash);
+  if (twin) {
+    String out = "{\"ok\":false,\"error\":\"duplicate\",\"seq\":";
+    out += twin;
+    out += "}";
+    webServer.send(409, "application/json", out);
+    return;
+  }
+  if (aprsisSentLastHour() >= aprsMaxPerHour) {
+    webServer.send(429, "application/json", "{\"ok\":false,\"error\":\"hourly_cap\"}");
+    return;
+  }
 
   aprsSeq++;
   aprsResultState = 1;
   aprsResultServer = "";
   aprsResultLine = "";
-  String loginFrame = "user " + call + " pass " + pass + " vers wifilt " + String(REV);
-  if (!aprsisSendLine(host, (uint16_t)port, loginFrame, line)) {
-    // 5 s, half a minute, five minutes. A server that is down stays down for a
-    // while, and the browser's own five-minute TTL drops the packet before this
-    // ladder ever reaches its top step.
-    aprsBackoffStep = aprsBackoffStep < 5000 ? 5000
-                    : (aprsBackoffStep < 30000 ? 30000 : 300000);
-    aprsBackoffUntil = millis() + aprsBackoffStep;
-    aprsisFail("connect");
-    return;
-  }
-  aprsBackoffStep = 0;
-  aprsBackoffUntil = millis();
+  aprsPendingLine = line;
+  aprsPendingLogin = "user " + call + " pass " + pass + " vers wifilt " + String(REV);
+  aprsPendingHost = host;
+  aprsPendingPort = (uint16_t)port;
+  aprsPhase = 1;
+  // 202, not 200: the packet is accepted, not yet written. What became of it is
+  // in /aprsis/status, which is also where the server's verdict arrives.
   String out = "{\"ok\":true,\"seq\":";
   out += aprsSeq;
   out += ",\"sent\":\"";
   out += configJsonEscape(line);
   out += "\"}";
-  webServer.send(200, "application/json", out);
+  webServer.send(202, "application/json", out);
 }
 
 // The verdict on the LAST packet only -- hence seq. An older packet's result is
@@ -3890,6 +4075,7 @@ void handleAprsisSpot() {
 void handleAprsisStatus() {
   webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   webServer.sendHeader("Connection", "close");
+  aprsisAgeMinutes();
   const char *state = aprsResultState == 2 ? "verified"
                     : aprsResultState == 3 ? "unverified"
                     : aprsResultState == 4 ? "error"
@@ -3902,7 +4088,11 @@ void handleAprsisStatus() {
   out += configJsonEscape(aprsResultServer);
   out += "\",\"line\":\"";
   out += configJsonEscape(aprsResultLine);
-  out += "\"}";
+  out += "\",\"sentLastHour\":";
+  out += aprsisSentLastHour();
+  out += ",\"maxPerHour\":";
+  out += aprsMaxPerHour;
+  out += "}";
   webServer.send(200, "application/json", out);
 }
 
