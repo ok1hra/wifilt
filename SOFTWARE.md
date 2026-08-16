@@ -812,12 +812,32 @@ The bar across the top of the page, left to right:
 | **power** | RF power as a ten-segment bar and in watts |
 | **link state** | `● LOADING` and `● LOAD ERROR` while the modem starts, then `● RX WAIT` (connected, nothing arriving), `● RX LIVE` (audio flowing), `● TX` (transmitting), or `● OFFLINE` in red when the browser loses the interface — with a **Reconnect** button |
 | **station** | your callsign and grid, as the interface holds them |
+| **`✉ NEW MSG`** | unread mail — see below |
 | **UTC clock** | and the clock-check state beside it |
 
 ![Dial frequency menu](img/js8call-dial-frequencies.png)
 
 The frequency menu lists the standard JS8 dial frequencies per band. Choosing one retunes
 the radio and sets USB-D.
+
+#### Unread mail turns the whole bar red
+
+![Unread mail in the status bar](img/js8call-msg-box-alert-top-bar.png)
+
+As soon as a message addressed to you is filed, the status bar changes colour and a red
+button appears in it: **`✉ NEW MSG · <callsign>`** followed by the beginning of the text.
+With more than one waiting it counts them — `✉ 3 NEW MSG · OK1BT`. The callsign is the one
+that wrote the **newest** message; the whole text is in the button's tooltip.
+
+The bar is the alarm because the count in the MSG BOX header is invisible while that section
+is collapsed, which is how it normally sits — and an operator watching the radio rather than
+the browser would never see it. The tab title carries the same count —
+`(3) JS8Call-ICOM — WIFILT` — for when the page is in a background tab.
+
+**Clicking the button opens MSG BOX and scrolls to it** ([section 5.10](#510-msg-box)). It
+does nothing else: the message stays unread, because reading is confirmed by clicking the
+message itself. The bar goes back to normal once every message for you has been read — or
+deleted.
 
 ### 5.3 Waterfall
 
@@ -878,6 +898,71 @@ Below it is the thread of messages with that station, then the composer:
 | **Recipient** | click a callsign anywhere on the page to fill it, or type one. **×** clears it. It refuses your own callsign — you cannot work yourself. |
 | **Message** | the text. **Enter sends.** The **▾** opens the preset menu. |
 | **SEND LATER** | do not transmit now: put the message in the MSG BOX and let it go out when the recipient — or someone who can hear them — appears on the band. See [section 5.10](#510-msg-box). It refuses messages over **120 characters**, group calls, and anything that is not a well-formed callsign. |
+| **Routes** | under the field: stations that hear the recipient, so a message can go through one of them. See below. |
+
+**Routes through an intermediary.** When you fill in Recipient, a line appears under the
+Message field with the paths this station knows about. It stays collapsed while you are
+hearing the addressee yourself, and opens on its own when you are not — or when the last
+time you decoded them is more than 15 minutes old, which is exactly when a route is the
+point. That is decided afresh for each addressee: collapsing it for one station does not
+keep it shut for the next, whose situation is a different question.
+
+The list is built from the same evidence the stations map draws its green arrows with:
+who has reported hearing whom in the last hour. Every row is a station **you decode
+yourself** that has proved it copies the addressee. The first row is always **DIRECT**,
+carrying the addressee's own signal, so sending straight to them stays a visible choice.
+
+Each row shows the numbers the decision rests on:
+
+| Column | Meaning |
+|---|---|
+| **me** | the signal *you* receive that station at |
+| **hears** | what that station reported hearing *from the addressee* — or `ack`/`hearing` when the evidence was a reply rather than a report |
+| **back** | what the *addressee* reported hearing from that station, when it is known |
+| **hears me** | that station has reacted to one of your transmissions |
+| age | how old the evidence is; amber once it is over half an hour |
+
+An hour is the outer limit: a report older than that stops counting altogether and the
+route simply leaves the list. The amber therefore means *ageing*, not expired — it is
+your warning while the evidence is still there.
+
+Rows are ordered by their **weakest hop** — a route is only as good as its worse end —
+and evidence with no number sorts last. While the list is open the order is frozen, so a
+row never moves between you deciding and clicking.
+
+**Clicking a row arms the route**; it does not fill in any text. The message stays yours to
+write. Recipient keeps showing the addressee — the thread, LOG QSO and the SNR preset all
+still belong to them — and the chosen route appears as a badge under the field, with **×**
+to drop it. The send hint says where the frame is really going, e.g. `Enter sends to OK2ABC
+for OK1XYZ · 3 frames · 1:12`.
+
+**Enter** then sends the message as mail to that station's inbox (`MSG TO:<addressee>
+<text>`) and files it in the MSG BOX as `waiting`. The row only changes to **via OK2ABC**
+when that station acknowledges storing it, which is the only proof of anything the
+protocol can produce — nobody will ever tell you the addressee read it. That
+acknowledgement also writes a line into the addressee's own thread. Until it arrives the
+message is still ordinary waiting mail, so the automation may yet deliver it directly or
+leave it with somebody else.
+
+**SEND LATER with a route armed** pins it: the message waits for that one station and is
+parked nowhere else. Direct delivery to the addressee is never blocked by a pin.
+
+A route is a reading of the band at one moment, so it is deliberately short-lived. It is
+dropped when you change the recipient, change band, press CLEAR, or send — and it does not
+survive a reload. The pin written by SEND LATER is different: it lives in the MSG BOX
+record and stays until the message goes out or expires.
+
+If nothing can be offered the line says why — nobody you hear has copied that station, the
+callsign is unknown on this band, or it is a group, where the question does not apply. A
+station that a data-layer module has given its own encoding profile also has no routes,
+and SEND LATER is disabled for it: stored mail is written as typed and kept on the
+interface, and a third station does not share that profile anyway.
+
+Sending is refused only for hard obstacles: a blocked DXCC entity at either end, an
+exchange already open with that station, a callsign that cannot be packed into a directed
+frame, or a group as the addressee. Stale evidence does **not** block — it turns the badge
+amber and tells you its age. A draft that carries its own recipient (`@APRSIS`, `CQ`) takes
+priority over the route and says so in the hint.
 
 ### 5.5 Message presets
 
@@ -1205,8 +1290,12 @@ locator square.
 Store-and-forward mail, in both directions: messages left here for you, and messages you
 left for stations that were not on the air.
 
-The header signals unread mail for you strongly — but it never expands itself; opening it is
-your decision. Clicking a message is what marks it read.
+Unread mail for you is signalled twice: `1 NEW` in this section's own header, and — because
+that one is invisible while the section is collapsed — the **red status bar** at the top of
+the page with the sender on it, described in
+[section 5.2](#unread-mail-turns-the-whole-bar-red). Clicking the button up there brings you
+here. Neither of them expands the section by itself; opening it is your decision, and
+clicking a message is what marks it read.
 
 | Filter | Shows |
 |---|---|
@@ -1214,6 +1303,10 @@ your decision. Clicking a message is what marks it read.
 | **FOR ME** | messages addressed to me |
 | **WAITING** | my messages waiting for their recipient to appear |
 | **HELD** | mail this station is holding on behalf of other callsigns |
+
+The state column of a message of your own reads **waiting** while it is still trying,
+**waiting for OK2ABC** when you pinned it to one intermediary, and **via OK2ABC** once
+that station has acknowledged holding it.
 
 | Button | Action |
 |---|---|
@@ -1294,6 +1387,12 @@ and **ASK** works, but nothing goes out by itself.
 shows up on the band themselves — a heartbeat, a CQ — in which case it goes **direct**; or
 somebody who *hears* the recipient shows up, in which case it goes **through that
 intermediary**. This happens whether or not you are at the keyboard.
+
+**Pinned messages.** If you armed a route before pressing SEND LATER
+([section 5.4](#54-tx-session)), the message is pinned to that one intermediary: no other
+station may hold it, however convenient. Direct delivery to the recipient is unaffected —
+a pin narrows who may *carry* the message, not who may receive it. The row shows the
+station it is waiting for.
 
 When the box runs out of room, messages that are *not* addressed to you are evicted first,
 then the oldest ones.

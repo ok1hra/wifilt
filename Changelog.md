@@ -11,8 +11,94 @@ published.
 
 ## Working tree — not committed
 
-**REV 20260813.** Browser only — no firmware behaviour changed.
+**REV 20260815.** Browser only — no firmware behaviour changed.
 
+* **Messages can now be routed through a station that hears the addressee.** The stations
+  map already knew who copies whom; that knowledge only ever reached the automation, never
+  the operator. Filling in **Recipient** now offers a list of routes under the Message
+  field, best first, and clicking one sends the message as mail to that station's inbox
+  (`MSG TO:<addressee> <text>`) instead of straight at somebody who cannot hear it.
+
+  Each row carries the numbers the choice actually rests on: my own signal from the
+  intermediary, what the intermediary reported hearing from the addressee, what the
+  addressee reported back, whether that station has ever reacted to me, and how old the
+  evidence is. The first row is **DIRECT** with the addressee's own signal, so "through
+  nobody" is a visible choice rather than the absence of one.
+
+  Three things worth knowing about how it behaves:
+
+  * **Recipient keeps showing the addressee.** The route lives in a badge under the field,
+    so the chat thread, LOG QSO and the SNR preset all stay with the person being written
+    to. The send hint says where the frame is really going — `Enter sends to OK2ABC for
+    OK1XYZ` — with the frame count of the whole message, prefix included.
+  * **Enter sends now, SEND LATER pins the route.** A pinned message waits for that one
+    station and is parked nowhere else; direct delivery to the addressee is never blocked
+    by a pin.
+  * **A message sent this way stays in the MSG BOX as `waiting`** until the intermediary
+    acknowledges storing it, which is the only proof the protocol can produce. That ACK now
+    also writes a line into the addressee's own thread, so the whole story of one message
+    is in one place.
+
+  Only hard obstacles refuse the send (blocked entity, an exchange already open with that
+  station, an unaddressable callsign, a group). Evidence older than the hour turns the badge
+  amber and says its age, but still sends: reports that stopped being renewed are not proof
+  the path is gone. A draft that carries its own recipient (`@APRSIS`, `CQ`) wins over a
+  chosen route and says out loud that it dropped it.
+
+  Design and the fifteen decisions behind it: `docs/js8-via-cesty-plan.md`.
+
+* **Code review of the above, seven fixes.** Worth knowing about two of them:
+
+  * **The routes panel could never hide.** `display` on the class beat the browser's own
+    `[hidden]` rule, so clearing the recipient left the previous addressee's routes on
+    screen and still clickable. The check that should have caught it read the `hidden`
+    property instead of the computed style; it now reads the style.
+  * **The amber "evidence is getting old" warning was unreachable.** Routes are derived
+    from reports younger than an hour, so a route older than an hour is not shown at all —
+    the warning could never fire. It now fires at half the window, while the evidence is
+    still there but ageing, which is what decision 9 was actually about.
+
+  Also: the auto-open heuristic no longer latches after its first firing (a `<details>`
+  reports a programmatic open through the same event a click does); the panel no longer
+  retires a pending mail transaction as a side effect of drawing a tooltip; route
+  freshness is measured on the same corrected clock as everything else on the page; an
+  unusable SEND LATER pin is refused instead of silently widening back to "park it
+  anywhere"; and the frame count is cached and debounced rather than re-encoding the
+  message on every keystroke and every radio poll.
+
+* **A station with its own encoding profile cannot be reached through stored mail at
+  all** — neither through an intermediary nor with SEND LATER. Mail is written by the mail
+  path, not the composer, so it never passes through what the module applies. And a parked
+  message is stored **as it was typed** in `/msgbox.jsonl` on the device, which the
+  firmware serves to anyone on the LAN without authentication — so warning the operator
+  would not have helped: a warning does not un-write that file. The route list is empty for
+  such a station and says why, SEND LATER is disabled with the same reason, and both
+  `viaBlockReasons` and `deferMessage` refuse behind the button.
+
+  `data.js` grows one neutral extension point (`mailPathRefusal`) that data-layer modules
+  wrap; the base page never objects. Note it applies when the message is composed, not
+  retroactively: anything parked before the profile existed still goes out as it was
+  stored.
+
+* **Unread mail now turns the whole status bar red.** It was announced by `1 NEW` in the MSG
+  BOX section header — small, red, and inside a `<details>` that is normally collapsed, so
+  the one operator who most needs it (watching the radio, not the browser) never saw it. The
+  bar that starts with the `?` button now changes colour whenever the box holds mail for you,
+  and carries a button naming the sender and the start of the text:
+  `✉ 2 NEW MSG · OK1BT`. Clicking it opens MSG BOX and scrolls there — and does nothing else:
+  the message stays unread, because reading is still confirmed by clicking the message
+  itself, which is the rule that keeps mail from being lost by scrolling past it.
+  ([`data.js`](data/data.js) `renderMsgBoxAlert`, [`data.css`](data/data.css) `.has-mail`,
+  documented in [`SOFTWARE.md`](SOFTWARE.md) section 5.2 with a screenshot.)
+* **The alert survived the message it was announcing.** Deleting the mail cleared the red
+  background but left the oval on screen. `.msgbox-alert` is `display:flex`, and an author
+  rule beats the browser's own `[hidden] { display:none }` whatever the specificity — so the
+  `hidden` attribute the code sets did nothing, and the button was in fact visible from page
+  load, before any mail existed. Every other flex element in this stylesheet carries its own
+  `[hidden]` companion; this one did not. Worth more than the fix: the two smoke checks that
+  should have caught it read the `hidden` **property**, which was perfectly true while the
+  button sat there — they now measure computed `display`, and a third check
+  (`msgBoxHeaderAlertGoneAfterDelete`) deletes an unread message rather than reading it.
 * **A deferred message stayed `waiting` after its ACK had arrived.** Seen on the air
   2026-08-13: OK1BT was heard on a −22 dB heartbeat, the direct `MSG` drew no answer, and the
   message was then parked at M9LOV — which had reported OK1BT at +03 dB — as
@@ -201,6 +287,20 @@ class of bug, hunted deliberately. Seven findings, all fixed:
   streaming path, `txId`-less callers), `data-browser-smoke` `alcLimiterHearsTheSecondFrame`
   + `alcTrimIsVisibleWhileItHappens` green with its known reds unchanged, `wspr-browser-smoke`
   274/274 unchanged. Not verified on the radio.
+* **The waterfall controls stopped eating four rows in a narrow window.** `TX speed`,
+  `TX offset` and `Audio` need about 440 px side by side, but the row was laid out as equal
+  columns — two of them below 900 px, one below 560 px — so with the browser window pulled
+  in each control was stretched across the full width and pushed onto a line of its own: at
+  a 560 px window the speed select alone was 423 px wide and the block was 159 px tall for
+  four items. The row now wraps by content instead of being cut into columns
+  ([`data/data.css`](data/data.css)): all three sit on one line down to a 440 px window with
+  `HB`/`TUNE` on the line below, and from 680 px up to the 900 px breakpoint the buttons
+  join them on that same line — the block is 97 px tall where it used to be 159 px, and
+  59 px where it used to be 97 px. Below 560 px the resolved-speed hint (`→ A · 15 s`) gives
+  way, because the slot meter directly above the row already reads `A 15 s`, and the offset
+  field is capped at the width four digits need. The rules are scoped to `#js8Interface`:
+  the WSPR beacon reuses the same class for a row of three read-outs and keeps its own grid.
+  Measured in headless Chrome across 320–1000 px; not verified on the radio.
 
 ### Still untracked
 

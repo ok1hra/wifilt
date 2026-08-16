@@ -23,10 +23,17 @@ while IFS= read -r -d '' source; do
   esac
   if [[ "$(basename "$source")" == "data.js" ]]; then
     # data.js is the largest application-owned script. Mangle its private
-    # top-level bindings, but retain the documented extension API used by
-    # future modem modules. This also preserves one SPIFFS allocation unit.
+    # top-level bindings, but retain the documented extension API that
+    # data-layer modules load against by name. This also preserves one SPIFFS
+    # allocation unit.
+    #
+    # Everything after Encoder is the host contract compression.js binds against
+    # (HOST_BINDINGS in that file). Drop one here and the module's hooks bind to
+    # nothing in the minified build only -- but data-browser-smoke.js serves the
+    # minified .gz and its compressionHostBindings check goes red, so the two
+    # lists cannot silently drift. Keep them in sync.
     "$TERSER_BIN" --compress passes=3 \
-      --mangle 'toplevel,reserved=[AudioSource,Modems,registerModem,Decoder,Encoder]' \
+      --mangle 'toplevel,reserved=[AudioSource,Modems,registerModem,Decoder,Encoder,state,currentJs8,startTxTo,applyDecoderActivity,dispatchAssembledMessage,buildSessionSnapshot,chooseCall,clearRecipient,presetHz,bandOf,radioTransmitting,requestFrequency,renderHeader,renderFrequencyMenu,selectedMode,isMyGroup,mailPathRefusal]' \
       --output "${source}.min" -- "$source"
   else
     "$TERSER_BIN" --compress --mangle --output "${source}.min" -- "$source"

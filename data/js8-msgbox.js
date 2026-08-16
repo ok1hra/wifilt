@@ -28,6 +28,10 @@
   // inside the encoder. Anything we plan to transmit to has to pass this first.
   const isCallsign = (inboxModule && inboxModule.isCallsign) ||
     (value => /^[A-Z0-9]{2,6}(?:\/[A-Z0-9]{1,2})?$/.test(String(value || "").toUpperCase().trim()));
+  // OK1ABC and OK1ABC/P are one station. Comparing the raw strings would let a
+  // suffix slip past an identity check that exists to catch exactly that.
+  const baseCall = value =>
+    String(value || "").toUpperCase().trim().split("/")[0];
 
   const DEFAULTS = {
     maxBytes: 24576,     // must match MSGBOX_MAX_BYTES in the firmware
@@ -58,6 +62,12 @@
   // filed against a third station -- see docs/msgbox-implementace.md.
   function migrateRecord(record) {
     if (!record || typeof record !== "object") return null;
+    // `pinnedVia` arrived with the via-route picker. A deferred record written
+    // before it has no pin, which is exactly what an empty string means, so the
+    // default is filled in rather than left undefined -- the automation reads
+    // this field on every appearance and an absent key would work by accident.
+    if (record.type === TYPE.DEFERRED && typeof record.pinnedVia !== "string")
+      record = {...record, pinnedVia: ""};
     if (record.type) return record;
     const own = String(record.to || "").toUpperCase() === String(record.from || "").toUpperCase();
     const delivered = Boolean(record.delivered);
@@ -221,9 +231,12 @@
      * A group is refused because a group never "shows up" -- there is no event
      * that could ever release the message, so it would wait for ever.
      *
+     * `pinnedVia` narrows the automation to a single intermediary the operator
+     * picked from the route list. Empty means "any", which is the old behaviour.
+     *
      * @returns {record} | {refused:reason}
      */
-    defer({to, text, nowMs, myCall, lifetimeMs = DEFAULTS.lifetimeMs}) {
+    defer({to, text, nowMs, myCall, lifetimeMs = DEFAULTS.lifetimeMs, pinnedVia = ""}) {
       const target = String(to || "").toUpperCase().trim();
       const body = String(text || "").trim();
       if (!target || target.startsWith("@")) return {refused: "not-a-station"};
@@ -234,10 +247,26 @@
       if (!body) return {refused: "empty"};
       if (body.length > DEFAULTS.maxTextLength) return {refused: "too-long"};
       if (this.counts().deferred >= DEFAULTS.maxDeferred) return {refused: "too-many"};
+      // `pinnedVia` is the operator's WISH -- the one intermediary this message
+      // may be parked at. It is a different thing from `via`, which is the
+      // RESULT recorded once somebody actually acknowledged storing it, and
+      // conflating the two would make an unfulfilled plan look like a delivery.
+      //
+      // An unusable pin is REFUSED rather than dropped. Storing the message with
+      // an empty pin would widen it back to "park it anywhere", which is the
+      // opposite of what was asked, while the button reported success -- and the
+      // automation would then hand the mail to whichever station turned up first.
+      const pin = String(pinnedVia || "").toUpperCase().trim();
+      if (pin) {
+        if (!isCallsign(pin)) return {refused: "pin-not-addressable"};
+        // /P and /QRP are the same station; a suffix must not let a pin name the
+        // addressee and quietly become a self-pin the automation can never satisfy.
+        if (baseCall(pin) === baseCall(target)) return {refused: "pin-is-the-addressee"};
+      }
       const record = this.store.add({type: TYPE.DEFERRED, state: STATE.WAITING,
         from: String(myCall || "").toUpperCase(), to: target, text: body,
         atMs: nowMs, expiresMs: nowMs + lifetimeMs, via: "", attempts: 0,
-        delivered: false});
+        pinnedVia: pin, delivered: false});
       this._emit({type: "deferred", id: record.id, to: target});
       return record;
     }

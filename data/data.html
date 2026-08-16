@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>JS8Call-ICOM — WIFILT</title>
-  <link rel="stylesheet" href="/data.css?v=7b571526">
+  <link rel="stylesheet" href="/data.css?v=9f3a5b90">
 </head>
 <body class="startup-pending lan-gate-checking">
   <header class="site-topbar">
@@ -88,6 +88,13 @@
     <button id="trxReconnect" class="trx-reconnect" type="button" hidden>Reconnect</button>
     <span id="stationIdentity" class="operator"></span>
     <span class="spacer"></span>
+    <!-- Unread mail, where an operator who is watching the radio rather than the
+         page can still see it: the whole bar turns red and this button names the
+         sender. The count in the MSG BOX summary is invisible while the section
+         is collapsed, which is how it usually sits. Clicking jumps to the box;
+         reading is still confirmed there, never by this button. -->
+    <button id="msgBoxAlert" class="msgbox-alert" type="button" hidden
+            title="Open MSG BOX"><span aria-hidden="true">✉</span><b id="msgBoxAlertText">NEW MSG</b><span id="msgBoxAlertPreview" class="msgbox-alert-preview"></span></button>
     <span id="utcClock" class="pill">UTC --:--:--</span>
     <span id="timingState" class="muted">clock unchecked</span>
   </header>
@@ -259,6 +266,13 @@
             </span></span>
             <small id="sendHint" class="send-hint">Enter sends</small>
             <button id="sendLaterButton" type="button" class="send-later" disabled title="Hold this message in the MSG BOX and send it when the recipient shows up on the band">SEND LATER</button>
+            <div id="viaRoutes" class="via-routes" hidden>
+              <div id="viaBadge" class="via-badge" hidden></div>
+              <details id="viaDetails" class="via-details">
+                <summary id="viaSummary">Routes</summary>
+                <div id="viaList" class="via-list" role="group" aria-label="Routes through an intermediary"></div>
+              </details>
+            </div>
             <button id="sendButton" type="submit" hidden disabled aria-hidden="true" tabindex="-1">Send</button>
           </form>
         </section>
@@ -512,7 +526,7 @@
   <script src="/js8-presets.js?v=7131988f"></script>
   <script src="/js8-scheduler.js?v=7264d5e6"></script>
   <script src="/js8-inbox.js?v=571d5bc3"></script>
-  <script src="/js8-msgbox.js?v=3fcbb5c9"></script>
+  <script src="/js8-msgbox.js?v=9a48d5e1"></script>
   <script src="/js8-relay.js?v=9165b49d"></script>
   <script src="/js8-heartbeat.js?v=2fb0a1da"></script>
   <script src="/js8-txqueue.js?v=0c0a15c4"></script>
@@ -549,6 +563,7 @@
   <script src="/tx-gain-plan-ui.js?v=0d493edc"></script>
   <script src="/dxcc.js?v=c56ee081"></script>
   <script src="/log-db.js?v=6055416f"></script>
-  <script src="/data.js?v=0c1100c4"></script>
+  <script src="/data.js?v=8dc7a17b"></script>
+  <script src="/compression.js?v=83837925"></script>
 </body>
 </html>

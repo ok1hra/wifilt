@@ -331,6 +331,16 @@ f.onload=()=>{
         decoderRxDuringTx:decoderDuringTx===decoderBeforeTx+1,
         presets:d.querySelectorAll('[data-frequency]').length===12,
         presetStable:originalPreset===currentPreset,
+        // The extended compression profile ships in every build but must be inert
+        // until a phrase wakes it: module present, phase dormant, no panel, no
+        // preview element, nothing written to storage.
+        compressionDormant:!!f.contentWindow.Compression&&f.contentWindow.Compression._runtime.phase==='dormant'&&!d.getElementById('__cmp_panel')&&!d.getElementById('__cmp_preview')&&f.contentWindow.localStorage.getItem('compression.profiles')===null,
+        // This harness serves the MINIFIED data.js, so it is the one place that
+        // catches a reserved-list drift: the module binds to data.js globals by
+        // name, and --mangle toplevel would rename them away unless they are in
+        // tools/minify-spiffs-js.sh. The module probes them at load; assert none
+        // went missing. Red here = a hook name and the reserved list disagree.
+        compressionHostBindings:!!f.contentWindow.Compression&&f.contentWindow.Compression._runtime.missingDeps.length===0,
         recipientInSession:!!d.querySelector('#composer #recipient'),
         heartbeat:!!d.querySelector('#heartbeatButton'),
         heartbeatUsesTx:d.querySelector('#heartbeatOffset').textContent.trim()===d.querySelector('#txOffset').value+' Hz',
@@ -891,11 +901,24 @@ f.onload=()=>{
       checks.msgBoxUnreadBadge=unreadState.unread===1&&
         d.querySelector('#inboxSummary').textContent.includes('1 NEW')&&
         unreadState.title.indexOf('(1)')===0;
+      // The status bar is the loud half of that: red background plus the sender,
+      // because the summary badge is invisible while MSG BOX sits collapsed.
+      // Computed display, not the hidden property: display:flex outranks the UA
+      // rule for [hidden], so the property can say gone while the oval is still
+      // on screen -- which is exactly how it shipped the first time.
+      const mailAlert=d.querySelector('#msgBoxAlert'), radioBar=d.querySelector('.radio-bar');
+      const alertShown=()=>getComputedStyle(mailAlert).display!=='none';
+      checks.msgBoxHeaderAlert=Boolean(mailAlert)&&alertShown()&&
+        mailAlert.textContent.includes('OK5MAIL')&&
+        mailAlert.textContent.includes('CALL ME BACK')&&
+        radioBar.classList.contains('has-mail');
       unreadRow.querySelector('.inbox-text').click();
       await new Promise(resolve=>setTimeout(resolve,60));
       const readState=dt.msgBoxState();
       checks.msgBoxClickMarksRead=readState.unread===0&&readState.read===1&&
         readState.title.indexOf('(')!==0;
+      checks.msgBoxHeaderAlertClears=!alertShown()&&
+        !radioBar.classList.contains('has-mail');
       const readRow=[...d.querySelectorAll('#inboxRows tr[data-msg-id]')]
         .find(row=>row.textContent.includes('OK5MAIL'));
       const readId=Number(readRow.dataset.msgId);
@@ -910,6 +933,18 @@ f.onload=()=>{
         Boolean(restored)&&restored.from==='OK5MAIL'&&
         d.querySelector('#msgBoxUndo').hidden===true;
       dt.msgBoxSetFilter('all');
+
+      // Deleting the message is the other way it stops being new, and it has to
+      // take the oval with it -- reading it was covered above, deleting it was
+      // not, and that is the case that shipped broken.
+      dt.storeInboxDirect({type:'UNREAD',from:'OK7DEL',to:'OK1HRA',text:'DELETE ME'});
+      const deleteRow=[...d.querySelectorAll('#inboxRows tr[data-msg-id]')]
+        .find(row=>row.textContent.includes('OK7DEL'));
+      const alertBeforeDelete=alertShown();
+      deleteRow.querySelector('[data-msg-action="delete"]').click();
+      await new Promise(resolve=>setTimeout(resolve,60));
+      checks.msgBoxHeaderAlertGoneAfterDelete=alertBeforeDelete&&!alertShown()&&
+        !radioBar.classList.contains('has-mail');
 
       // CQ interval selector: values offered and the setting applied.
       const cqSel=d.querySelector('#cqRepeat');
@@ -2089,6 +2124,192 @@ f.onload=()=>{
                     dtE4.clearTxQueue();
                     d.querySelector('#abortButton').click();
                     if(!txSafeWas){txSafe.checked=false;txSafe.dispatchEvent(new f.contentWindow.Event('change',{bubbles:true}));}
+                  }
+                  // Routes through an intermediary: the same "who hears whom" evidence, now
+                  // offered to the operator under the Message field instead of only being
+                  // acted on by the automation. A fresh frequency gives an empty bucket, so
+                  // this fixture is the only thing the panel can be reading.
+                  {
+                    const dtV=f.contentWindow.__dataTest;
+                    // Later checks read the chat thread, which is keyed by the selected
+                    // call -- so this block borrows the selection and gives it back.
+                    const vSelectedWas=dtV.selectedCall();
+                    const txSafeV=d.querySelector('#txSafety'), txSafeVWas=txSafeV.checked;
+                    if(!txSafeVWas){txSafeV.checked=true;txSafeV.dispatchEvent(new f.contentWindow.Event('change',{bubbles:true}));}
+                    dtV.setRadioFrequency(18100000);
+                    const vNow=Date.now();
+                    const vMsg=(from,to,command,payload,atMs)=>({directed:{from,to,command},payload,
+                      text:from+': '+to+command+' '+payload,callsigns:[from,to],kinds:['directed'],
+                      submode:0,offsetHz:900,firstSlotUtcMs:atMs,lastSlotUtcMs:atMs});
+                    const pick=call=>d.querySelector('#viaList [data-via="'+call+'"]');
+                    const setRecipient=call=>{const field=d.querySelector('#recipient');
+                      field.value=call;field.dispatchEvent(new f.contentWindow.Event('change',{bubbles:true}));};
+                    const setMessage=text=>{const field=d.querySelector('#messageInput');
+                      field.value=text;field.dispatchEvent(new f.contentWindow.Event('input',{bubbles:true}));};
+                    // Nothing selected: there is no addressee to route to, so no panel.
+                    // Asserted as the COMPUTED display, not the .hidden property: a
+                    // display rule on the class beats the UA [hidden] rule, and the
+                    // property would read true while the panel stayed on screen with the
+                    // previous addressee's routes still clickable.
+                    d.querySelector('#recipientClear').click();
+                    const viaShown=()=>getComputedStyle(d.querySelector('#viaRoutes')).display!=='none';
+                    checks.viaRoutesHidden=dtV.viaState().hidden===true&&!viaShown();
+                    // vMsg(reporter, subject, ...) proves the REPORTER copies the SUBJECT.
+                    // OM3VIA is the strong path by my own receiver, SP3WK the strong one at
+                    // the far end, DL1ACK proves copy with no number at all, and PH0NTM has
+                    // never been decoded here.
+                    dtV.setActivity({frames:[],timing:[],channels:[],messages:[
+                      vMsg('OM3VIA','OK9TGT',' SNR','-13',vNow-60000),
+                      vMsg('SP3WK','OK9TGT',' SNR','-07',vNow-120000),
+                      vMsg('DL1ACK','OK9TGT',' ACK','',vNow-90000),
+                      vMsg('PH0NTM','OK9TGT',' SNR','-05',vNow-30000),
+                      vMsg('OK9TGT','OM3VIA',' SNR','-09',vNow-45000),
+                      vMsg('OM3VIA','OK1HRA',' SNR','-06',vNow-20000)
+                    ],calls:[
+                      {call:'OM3VIA',snr:-8,offsetHz:900,submode:0,lastSlotUtcMs:vNow-20000,grid:'JN88',heardDirectly:true},
+                      {call:'SP3WK',snr:-12,offsetHz:910,submode:0,lastSlotUtcMs:vNow-120000,grid:'JO82',heardDirectly:true},
+                      {call:'DL1ACK',snr:-4,offsetHz:920,submode:0,lastSlotUtcMs:vNow-90000,grid:'JN49',heardDirectly:true},
+                      {call:'PH0NTM',snr:null,offsetHz:null,submode:null,lastSlotUtcMs:vNow-30000,grid:'JO21',heardDirectly:false}
+                    ]});
+                    setRecipient('OK9TGT');
+                    const vRows=dtV.viaState().rows;
+                    // A station known only from somebody else's report has never been decoded
+                    // here, so there is no reason to believe it would hear my transmission.
+                    checks.viaNoPhantoms=vRows.indexOf('PH0NTM')<0&&vRows.indexOf('OM3VIA')>=0;
+                    // A route is only as good as its worst hop: SP3WK wins on min(-12,-07)
+                    // against OM3VIA's min(-8,-13), and evidence with no number sorts last
+                    // whatever the station's own signal. DIRECT is always the first row.
+                    checks.viaOrderWeakestHop=vRows.join(',')===',SP3WK,OM3VIA,DL1ACK';
+                    // The addressee is not being decoded here, which is exactly when a route
+                    // is the point, so the list opens without being asked.
+                    checks.viaOpensWhenNeeded=dtV.viaState().open===true&&
+                      dtV.viaState().rows.length===4;
+                    const vCand=dtV.viaCandidates('OK9TGT');
+                    const vOm=vCand.find(row=>row.via==='OM3VIA');
+                    // All three edges are reported, not just the one that qualifies: my own
+                    // signal, what the intermediary hears, what the target heard back, and
+                    // whether it has ever reacted to me.
+                    checks.viaShowsAllEdges=Boolean(vOm)&&vOm.mySnr===-8&&vOm.toTargetSnr===-13&&
+                      vOm.fromTargetSnr===-9&&vOm.hearsMe===true&&
+                      vCand.find(row=>row.via==='DL1ACK').toTargetSnr===null;
+                    // Order is frozen while the panel is open. A newcomer that would sort to
+                    // the top joins at the end instead, so nothing moves under the cursor.
+                    dtV.setActivity({frames:[],timing:[],channels:[],
+                      messages:[vMsg('S57NEW','OK9TGT',' SNR','-02',vNow-10000)],
+                      calls:[{call:'S57NEW',snr:-3,offsetHz:930,submode:0,lastSlotUtcMs:vNow-10000,grid:'JN76',heardDirectly:true}]});
+                    checks.viaOrderFrozen=dtV.viaState().rows.join(',')===',SP3WK,OM3VIA,DL1ACK,S57NEW';
+                    // Choosing a route must not move the addressee out of the Recipient field:
+                    // the thread, LOG QSO and the SNR preset all still belong to OK9TGT.
+                    pick('OM3VIA').click();
+                    const vBadge=dtV.viaState();
+                    checks.viaBadgeKeepsRecipient=d.querySelector('#recipient').value==='OK9TGT'&&
+                      dtV.selectedCall()==='OK9TGT'&&vBadge.route==='OM3VIA'&&
+                      vBadge.badge.indexOf('OM3VIA')>=0&&
+                      vBadge.hint.indexOf('Enter sends to OM3VIA for OK9TGT')>=0;
+                    // A draft carrying its own recipient wins, but never in silence.
+                    setMessage('@APRSIS GRID');
+                    const vAprs=dtV.viaState();
+                    checks.viaAprsWins=vAprs.hidden===true&&!viaShown()&&vAprs.route===''&&
+                      vAprs.hint.indexOf('route via OM3VIA dropped')>=0;
+                    setMessage('');
+                    pick('OM3VIA').click();
+                    // What goes on the air is mail addressed to the intermediary; the bubble
+                    // belongs to the conversation with the addressee.
+                    dtV.clearTxQueue(); dtV.clearTxCaptured();
+                    setMessage('QRV 40M');
+                    d.querySelector('#composer').requestSubmit();
+                    const vSent=dtV.txCaptured().find(item=>item.to==='OM3VIA');
+                    checks.viaFrameShape=Boolean(vSent)&&vSent.text==='MSG TO:OK9TGT QRV 40M'&&
+                      dtV.viaState().route===''&&d.querySelector('#messageInput').value==='';
+                    checks.viaThread=d.querySelector('#chatThread').textContent.indexOf('MSG TO:OK9TGT QRV 40M')>=0&&
+                      dtV.selectedCall()==='OK9TGT';
+                    const vRecord=dtV.msgBoxDeferred().find(item=>item.to==='OK9TGT');
+                    checks.viaRecordWaits=Boolean(vRecord)&&vRecord.state==='waiting'&&
+                      vRecord.text==='QRV 40M'&&vRecord.pinnedVia==='';
+                    if(vRecord)dtV.msgBoxDelete(vRecord.id);
+                    dtV.clearTxQueue(); dtV.clearTxCaptured();
+                    // SEND LATER pins the route instead of spending it: only that station may
+                    // hold this message, and no transmission happens now.
+                    pick('SP3WK').click();
+                    setMessage('CALL ME');
+                    d.querySelector('#sendLaterButton').click();
+                    const vPinned=dtV.msgBoxDeferred().find(item=>item.to==='OK9TGT');
+                    // Nothing is keyed AT the pinned station: the previous send may still
+                    // be draining, so the claim is about SP3WK, not about the queue being
+                    // empty.
+                    checks.viaPinStored=Boolean(vPinned)&&vPinned.pinnedVia==='SP3WK'&&
+                      !dtV.txCaptured().some(item=>item.to==='SP3WK')&&dtV.viaState().route==='';
+                    checks.viaPinRespected=dtV.msgBoxParkVia('OM3VIA',{manual:true})==='nothing waiting'&&
+                      dtV.msgBoxParkVia('SP3WK',{manual:true,probe:true})==='';
+                    // A pin the operator cannot see is a message waiting on a station that
+                    // may never turn up, with nothing on screen to say so.
+                    dtV.renderInboxNow();
+                    checks.viaPinVisibleInBox=[...d.querySelectorAll('#inboxRows .msgbox-state')]
+                      .some(node=>node.textContent==='waiting for SP3WK');
+                    if(vPinned)dtV.msgBoxDelete(vPinned.id);
+                    // Empty is never silent: the reason names the actual obstacle, and an
+                    // unknown callsign is a different obstacle from a band nobody has copied.
+                    setRecipient('OK0XX');
+                    checks.viaReasonUnknown=dtV.viaState().rows.length===0&&
+                      dtV.viaState().empty.indexOf('OK0XX unknown on this band')>=0;
+                    setRecipient('DL1ACK');
+                    checks.viaReasonNobodyCopies=dtV.viaState().rows.length===0&&
+                      dtV.viaState().empty.indexOf('nobody I hear has copied DL1ACK')>=0;
+                    // The auto-open heuristic must survive its own first firing: <details>
+                    // reports a programmatic open through the same async toggle event a
+                    // click uses, so a naive listener latches state.viaOpen on render one
+                    // and the derived default is dead for the rest of the session.
+                    setRecipient('OK9TGT');
+                    checks.viaAutoOpenNotLatched=dtV.viaState().open===true&&
+                      dtV.viaOpenState()===null;
+                    // Evidence ageing past HALF the hearing window goes amber. It cannot be
+                    // the full window: hearingLinks drops those links itself, so the row
+                    // would be gone and the warning could never fire at all.
+                    dtV.setActivity({frames:[],timing:[],channels:[],
+                      messages:[vMsg('S51OLD','OK9TGT',' SNR','-11',vNow-2400000)],
+                      calls:[{call:'S51OLD',snr:-6,offsetHz:940,submode:0,lastSlotUtcMs:vNow-2400000,grid:'JN75',heardDirectly:true}]});
+                    const vAged=dtV.viaCandidates('OK9TGT').find(row=>row.via==='S51OLD');
+                    checks.viaAgeingIsReachable=Boolean(vAged)&&vAged.stale===true&&
+                      dtV.viaCandidates('OK9TGT').find(row=>row.via==='OM3VIA').stale===false;
+                    pick('S51OLD').click();
+                    checks.viaAgeingBadgeAmber=d.querySelector('#viaBadge').classList.contains('warn')&&
+                      dtV.viaState().route==='S51OLD'&&
+                      // amber warns, it does not block (decision 9)
+                      dtV.viaBlocked().length===0;
+                    dtV.viaChoose('');
+                    // A station given its own encoding by a data-layer module cannot be
+                    // written to through anybody else: the third station does not share it.
+                    dtV.mailSetRefusal('OK9TGT');
+                    checks.viaModuleRefusal=dtV.viaState().rows.length===0&&
+                      dtV.viaState().empty.indexOf('OK9TGT test refusal')>=0;
+                    // Parking is the same mail path: the text would be stored as typed and
+                    // synced to the device, which serves it unauthenticated. So SEND LATER
+                    // goes with the route, and deferMessage refuses behind the button too.
+                    setMessage('PARK ME');
+                    const vLater=d.querySelector('#sendLaterButton');
+                    checks.mailRefusalStopsSendLater=vLater.disabled===true&&
+                      vLater.title.indexOf('OK9TGT test refusal')>=0&&
+                      dtV.msgBoxDefer('OK9TGT','PARK ME')==='OK9TGT test refusal'&&
+                      dtV.msgBoxDeferred().filter(item=>item.text==='PARK ME').length===0;
+                    setMessage('');
+                    dtV.mailSetRefusal('');
+                    checks.mailRefusalReleasesSendLater=(()=>{
+                      setMessage('PARK ME');
+                      const free=d.querySelector('#sendLaterButton').disabled===false;
+                      setMessage('');
+                      return free;
+                    })();
+                    // An unusable pin is refused, never silently widened back to "park it
+                    // anywhere" -- that is the opposite of what the operator asked for,
+                    // reported as success.
+                    checks.viaPinRefusesUnusable=dtV.msgBoxDefer('OK9TGT','PIN TEST','OK9TGT/P')==='pin-is-the-addressee'&&
+                      dtV.msgBoxDefer('OK9TGT','PIN TEST','TOOLONGCALL')==='pin-not-addressable'&&
+                      dtV.msgBoxDeferred().filter(item=>item.text==='PIN TEST').length===0;
+                    dtV.clearTxQueue(); dtV.clearTxCaptured();
+                    setMessage('');
+                    if(vSelectedWas)setRecipient(vSelectedWas);
+                    else d.querySelector('#recipientClear').click();
+                    if(!txSafeVWas){txSafeV.checked=false;txSafeV.dispatchEvent(new f.contentWindow.Event('change',{bubbles:true}));}
                   }
                   // Partial receptions: a long message must be readable while it arrives,
                   // and one that never ended must say so instead of vanishing. Fed the way

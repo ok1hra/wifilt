@@ -122,6 +122,8 @@ const dom = {
   txPayload:$("txPayload"),
   chatSession:$("chatSession"), emailSession:$("emailSession"), binSession:$("binSession"),
   chat:$("chatThread"), composer:$("composer"), message:$("messageInput"), send:$("sendButton"),
+  viaRoutes:$("viaRoutes"), viaBadge:$("viaBadge"), viaDetails:$("viaDetails"),
+  viaSummary:$("viaSummary"), viaList:$("viaList"),
   emailComposer:$("emailComposer"), emailAddress:$("emailAddress"),
   emailGateway:$("emailGateway"), emailGatewayAdd:$("emailGatewayAdd"),
   emailGatewayEdit:$("emailGatewayEdit"), emailGatewayDelete:$("emailGatewayDelete"),
@@ -189,6 +191,7 @@ const dom = {
   inboxRows:$("inboxRows"), inboxSummary:$("inboxSummary"), inboxQueryMsgs:$("inboxQueryMsgs"), inboxRefresh:$("inboxRefresh"),
   inboxFilters:$("msgBoxFilters"), inboxUndo:$("msgBoxUndo"), inboxUndoButton:$("msgBoxUndoButton"),
   inboxHint:$("msgBoxHint"), inboxSection:document.querySelector('[data-section="inbox"]'),
+  msgBoxAlert:$("msgBoxAlert"), msgBoxAlertText:$("msgBoxAlertText"), msgBoxAlertPreview:$("msgBoxAlertPreview"),
   sendLater:$("sendLaterButton"),
   armHours:$("armHours"), autoState:$("autoState"),
   resetSettings:$("resetSettings"), settingsSummary:$("settingsSummary"), settingsFlags:$("settingsFlags"),
@@ -321,6 +324,14 @@ const state = {
   stationSort:{key:"lastSlotUtcMs", direction:"desc"}, trafficFilter:"all", trafficHide:0, testActivityLocked:false,
   previewHz:null, stationLabels:[], stationLabelsVisible:false, stationLabelsArmedMs:0,
   hearingLinksVisible:true, mapLogScale:false,
+  // The chosen route through an intermediary, and the display order frozen when the
+  // list was opened. Both are deliberately ephemeral: they are read from traffic that
+  // keeps moving, so a route restored after a reload would be a recommendation made
+  // from evidence nobody has re-checked. A pinned route lives in the MSG BOX record.
+  viaRoute:null,   // {target, via, chosenAtMs}
+  viaOrder:[],     // callsigns, in the order the open panel first showed them
+  viaOpen:null,    // operator's manual open/close, null = derive it
+  viaDropped:"",   // route a self-addressed draft displaced, so the hint can say so
   txSessionMode:"CHAT", audioDb:-90, tuneActive:false, spectrumWasTransmitting:false,
   help:{incompatibleActive:false},
   lanConfig:{checked:false, ready:false, detail:"", slot:0},
@@ -866,6 +877,8 @@ function selectActivityFrequency(frequency) {
   const session=activitySessionFor(hz);
   state.activityFrequency=session.frequencyHz;
   state.activity=session.activity;
+  // Propagation on the new band has nothing to do with the route chosen on the old one.
+  clearViaRoute();
   return true;
 }
 function applyDecoderActivity(snapshot) {
@@ -1312,6 +1325,24 @@ function renderRhythm() {
 
 // ---- UI projection ----------------------------------------------------------
 
+// The dial frequency a band preset resolves to. Plain identity by default; an
+// extended profile may substitute a per-band table shift here, which is why the
+// menu, the off-dial check, the header and the timetable all read presets
+// through this one accessor rather than the frozen `frequencyHz` directly, so
+// the whole band table moves together or not at all.
+function presetHz(preset) { return preset ? preset.frequencyHz : 0; }
+
+// The dial frequency a timetable slot resolves to. A band slot follows the
+// active preset table (so a profile shift carries it too); a custom kHz slot is
+// an absolute frequency the operator typed and is left exactly as entered.
+function slotDialHz(slot) {
+  if (slot && slot.band) {
+    const preset = Js8TrxPresets.PRESETS.find(item => item.band === slot.band);
+    if (preset) return presetHz(preset);
+  }
+  return slot ? slot.hz : 0;
+}
+
 // A dial on none of the presets the menu offers is a band nobody is listening
 // on. The menu already answers half of that by highlighting the matching preset;
 // this is the other half, for the button that is on screen when the menu is not.
@@ -1321,7 +1352,7 @@ function renderRhythm() {
 function offDialFrequency() {
   const hz=state.pendingFrequency || state.radio.frequency;
   if(!hz)return false;
-  return !Js8TrxPresets.PRESETS.some(item => item.frequencyHz===hz);
+  return !Js8TrxPresets.PRESETS.some(item => presetHz(item)===hz);
 }
 
 // Closing a pop-out is three statements, and it was written out at every place
@@ -1341,7 +1372,7 @@ function closeTimetablePanel() {
 function renderFrequencyMenu() {
   const selected=state.pendingFrequency || state.radio.frequency;
   dom.frequencyMenu.innerHTML = `<header><strong>JS8 dial frequencies</strong><small>Choose a band to tune the TRX</small><span class="tt-actions"><button class="tt-clear" type="button" data-menu-close title="Close">CLOSE</button></span></header><div class="frequency-presets">${Js8TrxPresets.PRESETS.map(item =>
-    `<button class="frequency-preset${item.frequencyHz===selected?" current":""}" data-frequency="${item.frequencyHz}" type="button"><strong>${item.band}</strong><span>${formatFrequency(item.frequencyHz)}</span></button>`).join("")}</div><footer>Dial frequencies from the bundled JS8Call source</footer>`;
+    `<button class="frequency-preset${presetHz(item)===selected?" current":""}" data-frequency="${presetHz(item)}" type="button"><strong>${item.band}</strong><span>${formatFrequency(presetHz(item))}</span></button>`).join("")}</div><footer>Dial frequencies from the bundled JS8Call source</footer>`;
   frequencyMenuKey=String(selected);
 }
 
@@ -1472,14 +1503,15 @@ function reconcileTimetable() {
     renderTimetableButton();
     return;
   }
-  if (index===ttRuntime.appliedSlotIndex && slot.hz===ttRuntime.appliedHz) {
+  const dialHz=slotDialHz(slot);
+  if (index===ttRuntime.appliedSlotIndex && dialHz===ttRuntime.appliedHz) {
     renderTimetableButton();
     return;
   }
   if (radioTransmitting() || !state.radio.connected) { renderTimetableButton(); return; }
-  ttRuntime.appliedSlotIndex=index; ttRuntime.appliedHz=slot.hz; ttRuntime.appliedBand=slot.band||null;
+  ttRuntime.appliedSlotIndex=index; ttRuntime.appliedHz=dialHz; ttRuntime.appliedBand=slot.band||null;
   renderTimetableButton();
-  requestFrequency(slot.hz).catch(()=>{});
+  requestFrequency(dialHz).catch(()=>{});
 }
 
 // trx-help.js is a separate script, so guard rather than assume: a page that
@@ -1801,6 +1833,46 @@ function txBlockReasons(needsRecipient,allowFileTransfer=false) {
   if(!js8.myCall)reasons.push("set My callsign");
   if(!js8.txSafetyAccepted)reasons.push("confirm Enable radio TX");
   if(!allowFileTransfer&&binState.active&&!terminalTransferState(binState.active.state))reasons.push("a file-transfer session is active");
+  reasons.push(...viaBlockReasons(needsRecipient));
+  return reasons;
+}
+
+// Extension point for data-layer modules: a reason this addressee's traffic cannot go
+// through the MAIL path -- store-and-forward, whether parked here or handed to a third
+// station -- or "" when nothing objects. The base page never objects.
+//
+// A module that gives a station its own encoding does object, for two reasons that both
+// stand alone. Mail is written by the mail path, not the composer, so it reaches the
+// queue as source "msgbox" and the module's transmit hook never sees it. And a parked
+// message is stored as it was typed in `/msgbox.jsonl` on the device, which the firmware
+// serves to anyone on the LAN without authentication -- so "warn and continue" is not an
+// option here, because no warning un-writes that file.
+function mailPathRefusal(_target) { return ""; }
+
+// Only the hard obstacles block a chosen route (decision 9). Stale evidence does NOT
+// appear here on purpose: the reports simply stopped being renewed, which is not proof
+// the path is gone, and the badge already says how old it is.
+function viaBlockReasons(needsRecipient) {
+  const route=needsRecipient?state.viaRoute:null;
+  if(!route)return [];
+  const js8=currentJs8();
+  const reasons=[];
+  const blockedCountry=blockedCountryForCall(route.via);
+  if(blockedCountry)reasons.push(`${route.via} is blocked (${blockedCountry})`);
+  if(sameCall(route.via,route.target))reasons.push("the route is the addressee");
+  if(sameCall(route.via,js8.myCall))reasons.push("the route is my own station");
+  if(!Js8Inbox.isCallsign(route.via))reasons.push(`${route.via} cannot be addressed in a directed frame`);
+  if(String(route.target||"").startsWith("@"))reasons.push("a group cannot be reached through an intermediary");
+  const refusal=mailPathRefusal(route.target);
+  if(refusal)reasons.push(refusal);
+  // One open mail exchange per station is what makes an ACK readable at all: it carries
+  // no message id, so a second transaction would make the answer ambiguous. Asked without
+  // pruning: this runs on every render and must not retire a transaction as a side effect.
+  if(mailTransactionOpen(route.via,js8Clock.now(),{prune:false}))
+    reasons.push(`an exchange with ${route.via} is in progress`);
+  const draft=dom.message.value.trim();
+  if(draft.length>Js8MsgBox.DEFAULTS.maxTextLength)
+    reasons.push(`${draft.length} characters, limit ${Js8MsgBox.DEFAULTS.maxTextLength} through an intermediary`);
   return reasons;
 }
 
@@ -2083,6 +2155,17 @@ function renderControls() {
   // CQ carries its own recipient in the frame and an @APRSIS command carries its
   // own group call, so neither needs a station selected in the composer.
   const aprsDraft=Js8Aprs.isDraft(dom.message.value);
+  // startTx peels an @APRSIS draft off BEFORE it ever looks at the recipient, so a route
+  // left standing here would be overridden without a word. Drop it while the operator is
+  // still typing and remember what was dropped, so the hint can say it out loud.
+  if(aprsDraft||cqType(dom.message.value)){
+    if(state.viaRoute)state.viaDropped=state.viaRoute.via;
+    clearViaRoute();
+  } else state.viaDropped="";
+  // A route that no longer points at the selected station is a recommendation for
+  // somebody else's conversation.
+  if(state.viaRoute&&state.viaRoute.target!==String(state.selectedCall||"").toUpperCase())
+    clearViaRoute();
   const txBlocks=txBlockReasons(!cqType(dom.message.value)&&!aprsDraft), heartbeatBlocks=txBlockReasons(false), tuneBlocks=txBlockReasons(false);
   if(state.txSessionMode!=="CHAT")txBlocks.push(`${state.txSessionMode} uses its own form`);
   // A half-built command costs the same airtime as a whole one and the gateway
@@ -2092,6 +2175,7 @@ function renderControls() {
     if(!check.ok)txBlocks.push(check.reason);
   }
   renderSendHint(aprsDraft);
+  renderViaRoutes();
   dom.send.disabled=txBlocks.length>0; dom.send.title=txBlocks.join("; ");
   // SEND LATER only needs a message and a real station -- deliberately NOT the
   // TX gates, because parking mail is what you do when you cannot transmit to
@@ -2106,9 +2190,14 @@ function renderControls() {
     else if(!Js8Inbox.isCallsign(target))reasons.push(`${target} cannot be addressed in a directed frame`);
     if(draft.length>120)reasons.push(`${draft.length} characters, limit 120`);
     if(state.txSessionMode!=="CHAT")reasons.push("only in CHAT");
+    // Parking is the mail path too: the text is stored as typed and goes out later
+    // through the automation, so whatever refuses a route refuses this as well.
+    if(target)reasons.push(...[mailPathRefusal(target)].filter(Boolean));
     dom.sendLater.disabled=reasons.length>0;
     dom.sendLater.title=reasons.length?reasons.join("; ")
-      :`Hold this message and send it when ${target} shows up on the band`;
+      :state.viaRoute
+        ?`Hold this message and park it at ${state.viaRoute.via} when that station shows up`
+        :`Hold this message and send it when ${target} shows up on the band`;
   }
   dom.heartbeat.disabled=heartbeatBlocks.length>0; dom.heartbeat.title=heartbeatBlocks.join("; ");
   dom.heartbeatOffset.textContent=`${js8.txOffsetHz} Hz`;
@@ -2418,6 +2507,9 @@ function clearRecentTraffic(){
   // CLEAR empties the whole feed, own TX included. The per-station chat thread and
   // the in-flight transmission are untouched — this only wipes the traffic view.
   state.outgoingLog.length=0;
+  // A route is a conclusion drawn from the traffic that was just wiped, so it goes with
+  // it -- exactly like the hearing links on the map, which are re-derived from nothing.
+  clearViaRoute();
   renderActivity();
   persistSession();
 }
@@ -2930,6 +3022,10 @@ function renderActivity() {
   renderStationSort();
   renderStationMap(calls,responders);
   renderConversation();
+  // Routes are read from the traffic that just changed, so they follow a decode instead
+  // of waiting for the next radio poll to repaint the composer. The order stays frozen
+  // while the panel is open; only the numbers and the ages move.
+  renderViaRoutes();
 }
 
 // Stations that have reacted to our transmissions: any received message whose callsigns
@@ -2949,6 +3045,32 @@ function respondingCalls() {
   return responders;
 }
 function stationReacted(responders,call){ return responders.has(String(call||"").toUpperCase()); }
+
+// Both derivations below walk the whole message buffer (200 per frequency), and one
+// decode now asks for them from the stations map, the route panel and the composer --
+// three or four full passes on the path the encoder cannot afford to be late on. The
+// answers only move when the traffic does, so they are cached for a second: against a
+// sixty-minute evidence window that is not a staleness anyone can observe, and it turns
+// the repeats into a map lookup. Keyed on the bucket identity as well as its length,
+// because switching bands swaps the array wholesale.
+const derivedCache={key:"",links:null,responders:null};
+function derivedKey(nowMs){
+  const messages=state.activity.messages||[];
+  return `${state.activityFrequency}|${messages.length}|${currentJs8().myCall}|${Math.floor(nowMs/1000)}`;
+}
+function hearingLinksNow(nowMs){
+  const key=derivedKey(nowMs);
+  if(derivedCache.key!==key){derivedCache.key=key;derivedCache.links=null;derivedCache.responders=null;}
+  if(!derivedCache.links)
+    derivedCache.links=hearingLinks(state.activity.messages||[],currentJs8().myCall,nowMs);
+  return derivedCache.links;
+}
+function respondingCallsNow(nowMs){
+  const key=derivedKey(nowMs);
+  if(derivedCache.key!==key){derivedCache.key=key;derivedCache.links=null;derivedCache.responders=null;}
+  if(!derivedCache.responders)derivedCache.responders=respondingCalls();
+  return derivedCache.responders;
+}
 
 // HEARING LINKS: the traffic constantly proves who is hearing whom, not only who I hear.
 // Two commands carry a real report ("your signal is -13 dB here"), a handful are replies
@@ -3003,6 +3125,94 @@ function hearingLinks(messages, own, nowMs){
     }
   }
   return [...links.values()];
+}
+
+// ---- routes through an intermediary ----------------------------------------
+// When I cannot hear the addressee, the traffic already knows who can. These are the
+// candidates for parking mail: stations I decode myself that have proved, inside the
+// hearing-link window, that they copy the target.
+//
+// Three different edges matter here and only one of them is the threshold:
+//
+//   1. the intermediary hears ME       -- so my MSG TO: arrives at all
+//   2. the TARGET hears the intermediary -- so the target ever picks the mail up
+//   3. the intermediary hears the TARGET -- strictly an indication of propagation
+//
+// Delivery rests on edge 2, but edge 3 is the threshold (decision 3): a two-way pair
+// between two remote stations is rare inside the hour, and requiring it would empty
+// the list in most situations. Edges 1 and 2 are therefore shown, not filtered -- they
+// are exactly what the operator weighs up when choosing. This mirrors what
+// parkDeferredVia has always done; the difference is that here it is said out loud.
+const VIA_ROUTE_LIMIT=5;
+// A direct decode older than this means the addressee is not obviously present, which is
+// when the route list is worth opening by itself.
+const VIA_DIRECT_STALE_MS=15*60000;
+// Amber, not gone. hearingLinks already drops everything past its own hour, so a route
+// that aged out simply disappears from the list -- the warning has to fire while the
+// evidence is still there but getting old, which is half the window. Past the hour the
+// row vanishes and the badge says it has no fresh evidence, and Enter still sends
+// (decision 9): reports that stopped being renewed are not proof the path is gone.
+const VIA_EVIDENCE_AGING_MS=HEARING_LINK_MAX_AGE_MS/2;
+
+// A hearing-link detail carries a number only when the evidence was a report
+// (" SNR", " HEARTBEAT SNR"); an "ack"/"hearing"/"qsl" proves copy without one.
+function viaDetailSnr(detail){
+  const match=/^([+-]?\d+)\s*dB$/.exec(String(detail||"").trim());
+  return match ? Number(match[1]) : null;
+}
+
+// The route list for one addressee, newest evidence per station, best first.
+// Derived per call from state.activity -- no new persistent state, exactly like the
+// hearing links on the map, so it survives reload and resets with CLEAR.
+function viaCandidates(target, nowMs){
+  const call=String(target||"").toUpperCase().trim();
+  const js8=currentJs8();
+  if(!call || call.startsWith("@") || sameCall(call,js8.myCall)) return [];
+  const links=hearingLinksNow(nowMs);
+  const responders=respondingCallsNow(nowMs);
+  // Edge 2 lookup: what the TARGET has reported about each station.
+  const fromTarget=new Map();
+  for(const link of links) if(link.to===call) fromTarget.set(link.from,link);
+  const rows=[];
+  for(const link of links){
+    if(link.from!==call) continue;          // edge 3: this station copies the target
+    const via=link.to;
+    if(sameCall(via,call) || sameCall(via,js8.myCall) || isBlockedCall(via)) continue;
+    // A directed frame packs the recipient into 28 bits. A callsign that does not fit is
+    // one we could never address, so offering it would be a route that cannot be taken --
+    // and defer() would silently drop the pin behind it.
+    if(!Js8Inbox.isCallsign(via)) continue;
+    // A station known only from somebody else's HEARING list has never been decoded here,
+    // so I have no signal of my own and no reason to believe it would hear me. Transmitting
+    // at it would be a shot in the dark -- the same rule the SNR preset already applies.
+    const mine=(state.activity.calls||[]).find(item=>item.call===via && item.heardDirectly!==false);
+    if(!mine) continue;
+    const back=fromTarget.get(via)||null;
+    rows.push({via,
+      mySnr:Number(mine.snr),
+      myAtMs:Number(mine.lastSlotUtcMs)||0,
+      toTargetSnr:viaDetailSnr(link.detail),
+      toTargetDetail:link.detail,
+      toTargetAtMs:link.atMs,
+      fromTargetSnr:back?viaDetailSnr(back.detail):null,
+      fromTargetDetail:back?back.detail:"",
+      hearsMe:stationReacted(responders,via),
+      stale:nowMs-link.atMs>VIA_EVIDENCE_AGING_MS});
+  }
+  // A route is only as good as its worst hop, so the key is the weaker of the two numbers.
+  // Evidence without a number cannot be compared to a signal report at all, so it sorts
+  // after everything numeric rather than being given an invented value (decision 5).
+  rows.sort((left,right)=>{
+    const lhs=left.toTargetSnr, rhs=right.toTargetSnr;
+    if(lhs===null && rhs!==null) return 1;
+    if(rhs===null && lhs!==null) return -1;
+    if(lhs!==null && rhs!==null){
+      const diff=Math.min(right.mySnr,rhs)-Math.min(left.mySnr,lhs);
+      if(diff) return diff;
+    }
+    return right.toTargetAtMs-left.toTargetAtMs;
+  });
+  return rows.slice(0,VIA_ROUTE_LIMIT);
 }
 
 // STATIONS MAP: azimuthal-equidistant radar centred on my QTH. Dots are stations placed by
@@ -4527,11 +4737,16 @@ function registerMailWaiting(station, id, more, now) {
 // One open mail transaction per station: an ACK and a delivery carry no message
 // id, so two overlapping exchanges with the same station cannot be told apart
 // (decision 12). The window is the same four periods everything else uses.
-function mailTransactionOpen(station, now) {
+// `prune` retires an entry that has run out of time, which is right when an attempt is
+// about to be made and wrong everywhere else. The render path asks this question several
+// times a second merely to draw a tooltip; letting it close a transaction as a side
+// effect would drop an ACK arriving in the same tick, silently and without the "too late"
+// log line that makes such a loss readable.
+function mailTransactionOpen(station, now, {prune = true} = {}) {
   const open = mailPending.get(station);
   if (!open) return false;
   if (now - open.sinceMs > Js8TxQueue.resendTtlMs(selectedMode())) {
-    mailPending.delete(station);
+    if (prune) mailPending.delete(station);
     return false;
   }
   return true;
@@ -4640,14 +4855,50 @@ function unwrapDeliveredMail(from, norm, now) {
 // the protocol can produce (decision 3).
 const deferredAttempts = new Js8MsgBox.AttemptLedger();  // key: record id
 
-function deferMessage(toCall, text) {
+function deferMessage(toCall, text, pinnedVia = "") {
   const js8 = currentJs8();
   const now = js8Clock.now();
-  const outcome = msgBox.defer({to: toCall, text, nowMs: now, myCall: js8.myCall});
+  // Backstop behind the disabled button: nothing may write this addressee's text into
+  // the store, because the store is what ends up on the device in the clear.
+  const refusal = mailPathRefusal(String(toCall || "").toUpperCase());
+  if (refusal) return refusal;
+  const outcome = msgBox.defer({to: toCall, text, nowMs: now, myCall: js8.myCall, pinnedVia});
   if (outcome.refused) return outcome.refused;
   if (isBlockedCall(toCall)) { msgBox.remove(outcome.id); return "blocked"; }
   syncInbox(); renderInbox();
-  console.info("[msgbox] deferred", outcome.id, "for", outcome.to);
+  console.info("[msgbox] deferred", outcome.id, "for", outcome.to,
+    outcome.pinnedVia ? `via ${outcome.pinnedVia}` : "");
+  return "";
+}
+
+// Send a message the operator wrote to somebody else's inbox, right now, through the
+// route they picked from the list. Everything below the record is the machinery that
+// already carries automatic parking -- the same frame, the same pending entry, the same
+// ACK path -- so this adds a way in, not a second state machine.
+//
+// The record is filed against the ADDRESSEE, because that is who the message is for.
+// It stays WAITING until an ACK proves storage; without one the automation may later
+// deliver it directly or park it elsewhere, which is the point of leaving it there.
+function sendMessageVia(target, text, via) {
+  const js8 = currentJs8();
+  const now = js8Clock.now();
+  const call = String(target || "").toUpperCase();
+  const hop = String(via || "").toUpperCase();
+  const outcome = msgBox.defer({to: call, text, nowMs: now, myCall: js8.myCall});
+  if (outcome.refused) return outcome.refused;
+  if (isBlockedCall(call) || isBlockedCall(hop)) { msgBox.remove(outcome.id); return "blocked"; }
+
+  deferredAttempts.note(`via-${outcome.id}`, now);
+  mailPending.set(hop, {id: outcome.id, sinceMs: now, handoff: true});
+  // conversationCall makes the bubble land in the ADDRESSEE's thread while the traffic
+  // feed still shows who was actually keyed -- queueOutgoing has kept those two apart
+  // since @APRSIS needed it. Only a route the operator picked sets it; automatic parking
+  // keeps filing its bubble under the intermediary, where it has always been.
+  txQueue.push({source: "msgbox", text: viaMessageText(call, text), to: hop,
+    nowMs: now, submode: selectedMode(),
+    meta: {command: "MSG TO:", msgboxHandoffId: outcome.id, conversationCall: call}});
+  drainTxQueue(); renderTxQueue(); syncInbox(); renderInbox();
+  console.info("[msgbox] sending", outcome.id, "for", call, "through", hop);
   return "";
 }
 
@@ -4673,8 +4924,7 @@ function noteStationAppearance(call, now) {
 // its arrows with: a signal report, an answer that only makes sense as a
 // reaction, or a HEARING list. Nothing older than the hour -- propagation moves.
 function stationsHeardBy(listener, now) {
-  const js8 = currentJs8();
-  const links = hearingLinks(state.activity.messages || [], js8.myCall, now);
+  const links = hearingLinksNow(now);
   const call = String(listener || "").toUpperCase();
   return links.filter(link => link.to === call).map(link => link.from);
 }
@@ -4712,7 +4962,11 @@ function parkDeferredVia(station, now, {manual = false, probe = false} = {}) {
   const js8 = currentJs8();
   const call = String(station || "").toUpperCase();
   const waiting = msgBox.items("waiting")
-    .filter(item => (item.state || "waiting") === "waiting" && item.to !== call);
+    .filter(item => (item.state || "waiting") === "waiting" && item.to !== call)
+    // A pinned route is the operator naming the one station this message may be left
+    // at. Direct delivery is untouched by it (sendDeferredTo never reads this): a pin
+    // narrows who may hold the mail, it does not stand in the way of the addressee.
+    .filter(item => !item.pinnedVia || item.pinnedVia === call);
   if (!waiting.length) return "nothing waiting";
   const heard = stationsHeardBy(call, now);
   const next = waiting.find(item => heard.includes(item.to));
@@ -4781,7 +5035,13 @@ function noteMailAck(from, now, {negative = false} = {}) {
     // ever tell us whether the recipient got it -- so the automation stops here
     // and the record stays visible for the operator to act on (decision 5).
     const record = msgBox.handOffDeferred(open.id, call);
-    if (record) console.info("[msgbox] parked", record.id, "for", record.to, "at", call);
+    if (record) {
+      console.info("[msgbox] parked", record.id, "for", record.to, "at", call);
+      // The whole story of one message belongs in one place, next to the person it was
+      // written for -- the raw exchange with the intermediary is still in its own
+      // thread. Storage is all this ACK can mean, so that is all the line claims.
+      pushSystemMessage(record.to, `parked at ${call} — stored, not yet delivered`);
+    }
   } else if (open.held) {
     // The member matters for group mail: one message, delivered once to each.
     if (inbox.confirmDelivered(open.id, call)) {
@@ -4981,13 +5241,36 @@ function renderMsgBoxTitle(unread) {
   document.title = unread > 0 ? `(${unread}) ${MSGBOX_BASE_TITLE}` : MSGBOX_BASE_TITLE;
 }
 
+// The same fact in the status bar, which is on screen even when MSG BOX is
+// collapsed -- which is how it sits most of the time. Red bar plus who wrote and
+// what it says; the bar is the alarm, the button is the answer to "from whom".
+const MSGBOX_ALERT_PREVIEW = 64;
+function renderMsgBoxAlert(unreadItems) {
+  if (dom.radioBar) dom.radioBar.classList.toggle("has-mail", unreadItems.length > 0);
+  if (!dom.msgBoxAlert) return;
+  dom.msgBoxAlert.hidden = unreadItems.length === 0;
+  if (!unreadItems.length) return;
+  // Newest first: with several unread the one that just landed is the one the
+  // operator has not seen at all.
+  const newest = unreadItems.reduce((best, item) =>
+    (Number(item.atMs) || 0) > (Number(best.atMs) || 0) ? item : best);
+  const from = String(newest.from || "?").toUpperCase();
+  const text = String(newest.text || "").trim();
+  dom.msgBoxAlertText.textContent = unreadItems.length > 1
+    ? `${unreadItems.length} NEW MSG · ${from}` : `NEW MSG · ${from}`;
+  if (dom.msgBoxAlertPreview) dom.msgBoxAlertPreview.textContent = text
+    ? (text.length > MSGBOX_ALERT_PREVIEW ? `${text.slice(0, MSGBOX_ALERT_PREVIEW)}…` : text) : "";
+  dom.msgBoxAlert.title = text ? `${from}: ${text}` : `New message from ${from}`;
+}
+
 function renderInbox() {
   if (!dom.inboxRows) return;
   // Hide messages to/from a blocked DXCC entity, like everywhere else in JS8LAN.
   const visible = item => !isBlockedCall(item.from) && !isBlockedCall(item.to);
   const all = msgBox.items("all").filter(visible);
   const items = msgBox.items(msgBoxFilter).filter(visible);
-  const unread = all.filter(item => item.type === "UNREAD").length;
+  const unreadItems = all.filter(item => item.type === "UNREAD");
+  const unread = unreadItems.length;
   const waiting = all.filter(item =>
     item.type === "DEFERRED" && (item.state || "waiting") === "waiting").length;
   const held = all.filter(item => item.type === "STORE").length;
@@ -4999,6 +5282,7 @@ function renderInbox() {
   if (msgBoxFull) parts.push('<strong class="msgbox-full">FULL</strong>');
   dom.inboxSummary.innerHTML = parts.length ? parts.join(" · ") : "empty";
   renderMsgBoxTitle(unread);
+  renderMsgBoxAlert(unreadItems);
 
   // Mail another station says it holds for us. Not messages yet -- pointers --
   // so they are rows of their own, above the mail we actually have.
@@ -5058,9 +5342,14 @@ function renderInbox() {
         // way, so the intermediary belongs on the row. Without it the box shows a
         // callsign that may never have been on the band at all.
         const via = mine && item.via && !sameCall(item.via, peer) ? String(item.via) : "";
+        // "waiting" alone hides the difference between a message any station may carry
+        // and one pinned to a single intermediary that may never turn up. `via` is the
+        // station that DID take it, `pinnedVia` the only one allowed to -- different
+        // facts, so they read differently.
         const label = type === "DEFERRED"
           ? (item.state === "handed" ? `via ${esc(item.via || "?")}`
-            : item.state === "attention" ? "attention" : "waiting")
+            : item.state === "attention" ? "attention"
+            : item.pinnedVia ? `waiting for ${esc(item.pinnedVia)}` : "waiting")
           : MSGBOX_STATE_LABEL[type] || type.toLowerCase();
         return `<tr class="msgbox-row msgbox-${type.toLowerCase()}" data-msg-id="${item.id}">` +
           `<td>${item.id}</td>` +
@@ -5797,8 +6086,13 @@ function beginOutgoing(recipe){
   // sent into the net. A gateway like @APRSIS is still not joinable, so its traffic
   // stays where it was: in the recent-traffic feed, like CQ and HB.
   const target=String(recipe.to||"");
-  const conversationCall=recipe.kind==="directed"&&(!target.startsWith("@")||isMyGroup(target))
-    ?recipe.to:"";
+  // Mail sent through a route the operator chose is addressed to the intermediary but
+  // belongs to the conversation with the addressee, so the recipe may name the thread
+  // explicitly. Everything else keeps deriving it from who is being keyed.
+  const routed=recipe.meta&&recipe.meta.conversationCall
+    ?String(recipe.meta.conversationCall).toUpperCase():"";
+  const conversationCall=routed||(recipe.kind==="directed"&&(!target.startsWith("@")||isMyGroup(target))
+    ?recipe.to:"");
   const item=queueOutgoing(outgoingTextFor(recipe),conversationCall,recipe.to||"",recipe);
   item.sourceText=recipe.sourceText||recipe.text; // raw operator text, replayed verbatim by a resend
   item.txMeta=recipe.meta||null;
@@ -5928,21 +6222,214 @@ function aprsCostText(payload,textLength) {
     (long?" · long transmission, consider a faster speed":"")};
 }
 
+// ---- routes through an intermediary: composing and drawing -------------------
+// The wire text of a parked message. The composed draft DOES carry the "TO:" prefix;
+// the frame payload does not, because the encoder splits " MSG TO:" off as the command
+// token and only "<call> <text>" goes on the air (see js8-inbox.js). Getting that
+// backwards is a mistake this codebase has already made once, in both directions.
+function viaMessageText(target,text){
+  return `MSG TO:${String(target||"").toUpperCase()} ${String(text||"").trim()}`;
+}
+
+// What a route costs, in the same words the @APRSIS builder uses -- counted over the
+// WHOLE frame, prefix included, because that is what gets keyed.
+//
+// Counting it means a full pack-and-split, and renderControls runs on every keystroke
+// AND on the 500 ms radio poll. So the answer is cached against its inputs (the poll
+// then costs nothing) and recomputed 200 ms after typing stops, which is the same
+// bargain the @APRSIS cost line strikes. The stale figure stays on screen meanwhile
+// rather than blinking out -- it is advisory either way.
+const viaCost={key:"",text:"",timer:0};
+function viaCostText(target,text){
+  const js8=currentJs8(), via=state.viaRoute?state.viaRoute.via:"";
+  const key=`${js8.myCall}|${via}|${target}|${selectedMode()}|${String(text||"").trim()}`;
+  if(viaCost.key===key)return viaCost.text;
+  if(viaCost.timer)clearTimeout(viaCost.timer);
+  viaCost.timer=setTimeout(()=>{
+    viaCost.timer=0;
+    viaCost.key=key;
+    viaCost.text=viaCostCompute(target,text,via);
+    renderSendHint(Js8Aprs.isDraft(dom.message.value));
+  },200);
+  return viaCost.text;
+}
+function viaCostCompute(target,text,via){
+  try {
+    const frames=Js8Protocol.buildReplyFrames({myCall:currentJs8().myCall,toCall:via,
+      text:viaMessageText(target,text),mode:selectedMode()}).length;
+    if(!frames)return "";
+    const seconds=Js8Aprs.airtimeSeconds(frames,selectedMode());
+    return `${frames} frame${frames===1?"":"s"} · ${aprsDuration(seconds)}`;
+  } catch(_error) { return ""; }   // unpackable callsign: the cost line is advisory
+}
+
+// The evidence for one hop, as text. Evidence without a number is still evidence --
+// an ACK proves copy -- so it is spelled out rather than shown as a missing value.
+function viaEvidence(snr,detail){
+  if(snr!==null && snr!==undefined)return formatJs8Snr(snr);
+  return String(detail||"").trim()||"—";
+}
+
+function viaRow(row,chosen){
+  const numbers=[`me ${formatJs8Snr(row.mySnr)}`,
+    `hears ${viaEvidence(row.toTargetSnr,row.toTargetDetail)}`,
+    row.fromTargetSnr!==null||row.fromTargetDetail
+      ? `back ${viaEvidence(row.fromTargetSnr,row.fromTargetDetail)}` : "",
+    row.hearsMe?"<em>hears me</em>":"",
+    row.stale?`<i>${esc(age(row.toTargetAtMs))}</i>`:esc(age(row.toTargetAtMs))]
+    .filter(Boolean);
+  return `<button type="button" data-via="${esc(row.via)}" aria-pressed="${chosen?"true":"false"}">`+
+    `<b>${esc(row.via)}</b><span>${numbers.join(" · ")}</span></button>`;
+}
+
+// The direct path competes in the same list as the routes, so "through nobody" is a
+// visible choice rather than the absence of one. It is never disabled: a station I do
+// not hear may well hear me, and refusing to try would be our opinion, not a fact.
+function viaDirectRow(target){
+  const station=(state.activity.calls||[]).find(item=>item.call===target && item.heardDirectly!==false);
+  const detail=station
+    ? `me ${formatJs8Snr(station.snr)} · ${esc(age(station.lastSlotUtcMs))}`
+    : "not heard here";
+  return `<button type="button" data-via="" aria-pressed="${state.viaRoute?"false":"true"}">`+
+    `<b>DIRECT</b><span>${detail}</span></button>`;
+}
+
+// Why the list is empty, in the terms of the actual obstacle. "0 routes" would be
+// misleading for a group, where the question itself does not apply.
+function viaEmptyReason(target){
+  if(!target)return "";
+  if(target.startsWith("@"))return `${target} is a group — a route makes no sense`;
+  if(!Js8Inbox.isCallsign(target))return `${target} cannot be addressed in a directed frame`;
+  const known=(state.activity.calls||[]).some(item=>item.call===target);
+  return known
+    ? `nobody I hear has copied ${target} — try SEND LATER`
+    : `${target} unknown on this band — try SEND LATER`;
+}
+
+// Order is frozen while the panel is open (decision 14): the numbers stay honest but
+// rows never jump under the cursor between the operator deciding and clicking. A new
+// candidate joins at the end instead of pushing its way to the top.
+function viaOrdered(rows){
+  if(!dom.viaDetails.open){state.viaOrder=rows.map(row=>row.via);return rows;}
+  const known=new Map(rows.map(row=>[row.via,row]));
+  const ordered=state.viaOrder.map(call=>known.get(call)).filter(Boolean);
+  const seen=new Set(ordered.map(row=>row.via));
+  for(const row of rows) if(!seen.has(row.via)) ordered.push(row);
+  state.viaOrder=ordered.map(row=>row.via);
+  return ordered;
+}
+
+// `<details>` fires `toggle` for a programmatic open too, and asynchronously, so a naive
+// listener would read our own auto-open as the operator's decision and latch it for the
+// rest of the session. The value we wrote is parked here and the listener consumes it.
+let viaAutoOpen=null;
+let viaRenderedTarget="";
+
+function renderViaRoutes() {
+  if(!dom.viaRoutes)return;
+  const now=js8Clock.now();
+  const target=String(state.selectedCall||"").toUpperCase();
+  // The auto-open heuristic is per addressee: a panel the operator collapsed for one
+  // station must not stay collapsed for the next one, whose situation is a fresh
+  // question. Changing who we write to also drops the frozen order.
+  if(target!==viaRenderedTarget){viaRenderedTarget=target;state.viaOpen=null;state.viaOrder=[];}
+  // A draft that carries its own recipient is going somewhere else entirely, so the
+  // whole question is moot -- and the route has already been dropped by then.
+  const ownRecipient=Js8Aprs.isDraft(dom.message.value)||Boolean(cqType(dom.message.value));
+  dom.viaRoutes.hidden=!target||state.txSessionMode!=="CHAT"||ownRecipient;
+  if(dom.viaRoutes.hidden){state.viaOrder=[];return;}
+  // A module may own how this addressee is written to; then there is nothing to offer,
+  // because a third station does not share it.
+  const refusal=mailPathRefusal(target);
+  const rows=refusal?[]:viaOrdered(viaCandidates(target,now));
+  const reason=rows.length?"":(refusal||viaEmptyReason(target));
+
+  // Open by itself when a route is what the operator plainly needs: the addressee is
+  // not being decoded here, or the last decode is old enough to be history.
+  const station=(state.activity.calls||[]).find(item=>item.call===target && item.heardDirectly!==false);
+  const needsRoute=!station||now-Number(station.lastSlotUtcMs||0)>VIA_DIRECT_STALE_MS;
+  if(state.viaOpen===null){
+    const want=Boolean(rows.length)&&needsRoute;
+    if(dom.viaDetails.open!==want){viaAutoOpen=want;dom.viaDetails.open=want;}
+  }
+
+  dom.viaSummary.innerHTML=rows.length
+    ? `${rows.length} route${rows.length===1?"":"s"} via an intermediary`+
+      (state.viaRoute?` <span class="via-summary-hint">· using ${esc(state.viaRoute.via)}</span>`:"")
+    : `<span class="via-summary-hint">${esc(reason)}</span>`;
+  dom.viaList.innerHTML=rows.length
+    ? viaDirectRow(target)+rows.map(row=>viaRow(row,Boolean(state.viaRoute&&state.viaRoute.via===row.via))).join("")
+    : `<p class="via-empty">${esc(reason)}</p>`;
+  renderViaBadge(rows);
+}
+
+function renderViaBadge(rows) {
+  const route=state.viaRoute;
+  dom.viaBadge.hidden=!route;
+  if(!route)return;
+  const row=(rows||[]).find(item=>item.via===route.via)||null;
+  // A route whose evidence has aged out is not a route that has gone away: propagation
+  // reports simply stop being renewed. It goes amber and says how old it is, and Enter
+  // still sends (decision 9) -- 61 minutes is not proof of anything.
+  const stale=!row||row.stale;
+  const detail=row
+    ? `me ${formatJs8Snr(row.mySnr)} · hears ${viaEvidence(row.toTargetSnr,row.toTargetDetail)} · ${age(row.toTargetAtMs)}`
+    : "no fresh evidence for this route";
+  dom.viaBadge.classList.toggle("warn",stale);
+  dom.viaBadge.innerHTML=`via <b>${esc(route.via)}</b><small>${esc(detail)}</small>`+
+    `<button type="button" id="viaClear" aria-label="Clear route" title="Send directly instead">×</button>`;
+}
+
+function chooseViaRoute(via) {
+  const call=String(via||"").toUpperCase().trim();
+  const target=String(state.selectedCall||"").toUpperCase();
+  state.viaRoute=call&&target ? {target, via:call, chosenAtMs:Date.now()} : null;
+  renderControls();
+  // The route is prefilled, the words are not: the message is still the operator's to
+  // write, so the caret goes where the typing happens.
+  dom.message.focus({preventScroll:true});
+}
+
+// The route belongs to one addressee. Anything that changes who we are writing to, or
+// wipes the evidence it was derived from, drops it rather than quietly re-pointing it.
+// The frozen display order is deliberately left alone: it belongs to the open panel, not
+// to the choice, and re-sorting the rows under a hand that just cleared a badge is the
+// misclick decision 14 exists to prevent. Stale entries fall out of viaOrdered by
+// themselves once the stations behind them are gone.
+function clearViaRoute() {
+  if(!state.viaRoute)return;
+  state.viaRoute=null;
+}
+
 function renderSendHint(aprsDraft) {
-  if(!aprsDraft){
-    dom.sendHint.textContent="Enter sends";
+  // A chosen route sends to somebody other than the addressee, which is the same
+  // class of surprise the @APRSIS line already guards against -- so it is said in
+  // the same words, with the cost of the WHOLE frame, prefix included.
+  if(!aprsDraft && state.viaRoute){
+    const cost=viaCostText(state.viaRoute.target,dom.message.value);
+    dom.sendHint.textContent=`Enter sends to ${state.viaRoute.via} for ${state.viaRoute.target}`+
+      (cost?` · ${cost}`:"");
     dom.sendHint.classList.remove("warn");
+    return;
+  }
+  // A draft carrying its own recipient wins over a chosen route (decision 15), but the
+  // route must not vanish in silence -- that is precisely the class of bug the audits
+  // of this page keep turning up.
+  const dropped=state.viaDropped?` — route via ${state.viaDropped} dropped`:"";
+  if(!aprsDraft){
+    dom.sendHint.textContent=dropped?`Enter sends${dropped}`:"Enter sends";
+    dom.sendHint.classList.toggle("warn",Boolean(dropped));
     return;
   }
   // The operator keeps their selected station through an APRS spot, so say out
   // loud that this particular message is not going to them.
-  const where=state.selectedCall
+  const where=(state.selectedCall
     ? `Enter sends to ${Js8Aprs.GROUP}, not ${state.selectedCall}`
-    : `Enter sends to ${Js8Aprs.GROUP}`;
+    : `Enter sends to ${Js8Aprs.GROUP}`)+dropped;
   const check=Js8Aprs.validate(dom.message.value);
   const cost=check.ok?aprsCostText(dom.message.value,check.textLength):{text:"",long:false};
   dom.sendHint.textContent=cost.text?`${where} · ${cost.text}`:where;
-  dom.sendHint.classList.toggle("warn",cost.long);
+  dom.sendHint.classList.toggle("warn",cost.long||Boolean(dropped));
 }
 
 function aprsNodeById(id) {
@@ -6533,6 +7020,13 @@ function bind() {
   dom.modeSelect.addEventListener("change",()=>selectMode(dom.modeSelect.value));
   dom.trxHelpButton.addEventListener("click",()=>openTrxHelp("manual"));
   dom.trxReconnect.addEventListener("click",reconnectRadio);
+  // Takes the operator to the mail, nothing more: the message stays unread until
+  // its own row is clicked, so the bar cannot clear itself by being looked at.
+  if(dom.msgBoxAlert)dom.msgBoxAlert.addEventListener("click",()=>{
+    if(!dom.inboxSection)return;
+    dom.inboxSection.open=true;
+    dom.inboxSection.scrollIntoView({behavior:"smooth",block:"start"});
+  });
   dom.trxHelpDialog.addEventListener("click",event=>{if(event.target===dom.trxHelpDialog)dom.trxHelpDialog.close();});
   dom.trxFrequency.addEventListener("click",()=>{const open=dom.frequencyMenu.hidden;dom.frequencyMenu.hidden=!open;dom.trxFrequency.setAttribute("aria-expanded",String(open));});
   dom.frequencyMenu.addEventListener("click",event=>{if(event.target.closest("[data-menu-close]")){closeFrequencyMenu();return;}const button=event.target.closest("[data-frequency]");if(button)requestFrequency(Number(button.dataset.frequency)).catch(()=>{});});
@@ -6803,15 +7297,59 @@ function bind() {
   dom.startupRetry.addEventListener("click",()=>location.reload());
   dom.heartbeat.addEventListener("click",()=>{if(!dom.heartbeat.disabled)startHeartbeat();});
   dom.tune.addEventListener("click",()=>{if(!dom.tune.disabled)toggleTune();});
-  dom.composer.addEventListener("submit",event=>{event.preventDefault();const text=dom.message.value.trim();if (!text || dom.send.disabled)return;dom.message.value="";renderControls();startTx(text);});
+  dom.composer.addEventListener("submit",event=>{
+    event.preventDefault();
+    const text=dom.message.value.trim();
+    if (!text || dom.send.disabled)return;
+    // A chosen route sends the message as mail to somebody else's inbox instead of
+    // straight at the addressee. The route is consumed by the send: it was picked from
+    // evidence that will have moved on by the next message.
+    const route=state.viaRoute;
+    if(route){
+      const refused=sendMessageVia(route.target,text,route.via);
+      if(refused){dom.sendHint.textContent=`Refused: ${refused}`;dom.sendHint.classList.add("warn");return;}
+      dom.message.value="";
+      clearViaRoute();
+      renderControls();persistSession();
+      return;
+    }
+    dom.message.value="";renderControls();startTx(text);
+  });
+  // Clicking a route arms it; clicking DIRECT (data-via="") disarms it. The list is
+  // rebuilt by renderControls, which detaches the clicked node, so the dataset is read
+  // before anything renders.
+  if(dom.viaList)dom.viaList.addEventListener("click",event=>{
+    const button=event.target.closest("[data-via]");
+    if(!button)return;
+    chooseViaRoute(button.dataset.via);
+  });
+  if(dom.viaBadge)dom.viaBadge.addEventListener("click",event=>{
+    if(!event.target.closest("#viaClear"))return;
+    chooseViaRoute("");
+  });
+  // Remember the operator's own open/close so the derived default stops fighting it,
+  // and freeze the display order from whatever is on screen at that moment.
+  if(dom.viaDetails)dom.viaDetails.addEventListener("toggle",()=>{
+    // Our own auto-open, coming back asynchronously: consume it and keep the heuristic
+    // alive. Only a real click records an opinion.
+    if(viaAutoOpen!==null&&dom.viaDetails.open===viaAutoOpen){viaAutoOpen=null;return;}
+    viaAutoOpen=null;
+    state.viaOpen=dom.viaDetails.open;
+    if(!dom.viaDetails.open)state.viaOrder=[];
+  });
   // A button, not a checkbox: a switch that survives one message is how the next
   // one gets parked by accident.
   if(dom.sendLater)dom.sendLater.addEventListener("click",()=>{
     const text=dom.message.value.trim();
     if(!text||dom.sendLater.disabled)return;
-    const refused=deferMessage(state.selectedCall,text);
+    // A route chosen here is a WISH, not an attempt: nothing is transmitted, the
+    // message is simply narrowed to the one intermediary the operator picked and waits
+    // for that station to show up.
+    const pin=state.viaRoute?state.viaRoute.via:"";
+    const refused=deferMessage(state.selectedCall,text,pin);
     if(refused){dom.sendLater.title=`Refused: ${refused}`;return;}
     dom.message.value="";
+    clearViaRoute();
     renderControls();persistSession();
     if(dom.inboxSection)dom.inboxSection.open=true;
   });
@@ -7006,6 +7544,7 @@ async function init() {
   loadInbox();
   renderInbox();
   setMasterTick(TICK_IDLE_MS);
+  let mailRefusalBase=null;   // original mailPathRefusal, kept so mailSetRefusal can restore it
   if (TEST_MODE) self.__dataTest={
     // Read-only views the RF-power checks need: the stored choice and what
     // the poll last read back, neither of which is reachable from the DOM.
@@ -7160,11 +7699,38 @@ async function init() {
         attempts:(mailAttempts.entry(mailKey(item.station,item.id))||{attempts:0}).attempts}))};},
     msgBoxFetch(station){return fetchWaitingMail(String(station||"").toUpperCase(),
       js8Clock.now(),{manual:true});},
-    msgBoxDefer(to,text){return deferMessage(to,text);},
+    msgBoxDefer(to,text,pinnedVia){return deferMessage(to,text,pinnedVia||"");},
+    // Routes through an intermediary. viaState reports what the panel is showing, not
+    // what viaCandidates computes, so a check reads the same thing the operator sees.
+    viaCandidates(target){return viaCandidates(String(target||"").toUpperCase(),Date.now())
+      .map(row=>({via:row.via,mySnr:row.mySnr,toTargetSnr:row.toTargetSnr,
+        toTargetDetail:row.toTargetDetail,fromTargetSnr:row.fromTargetSnr,
+        hearsMe:row.hearsMe,stale:row.stale}));},
+    viaState(){return {hidden:dom.viaRoutes.hidden,open:dom.viaDetails.open,
+      summary:dom.viaSummary.textContent,badge:dom.viaBadge.hidden?"":dom.viaBadge.textContent,
+      route:state.viaRoute?state.viaRoute.via:"",
+      rows:[...dom.viaList.querySelectorAll("[data-via]")].map(node=>node.dataset.via),
+      empty:(dom.viaList.querySelector(".via-empty")||{textContent:""}).textContent,
+      hint:dom.sendHint.textContent};},
+    viaChoose(via){chooseViaRoute(via);},
+    viaSetOpen(open){dom.viaDetails.open=Boolean(open);state.viaOpen=Boolean(open);renderControls();},
+    viaOpenState(){return state.viaOpen;},
+    viaBlocked(){return viaBlockReasons(true);},
+    // Wraps the extension point exactly the way a data-layer module does, so the check
+    // exercises the seam itself and not a test-only branch inside it.
+    mailSetRefusal(call){
+      const want=String(call||"").toUpperCase();
+      if(!mailRefusalBase)mailRefusalBase=mailPathRefusal;
+      mailPathRefusal=want
+        ?(target=>String(target||"").toUpperCase()===want?`${want} test refusal`:mailRefusalBase(target))
+        :mailRefusalBase;
+      renderControls();
+    },
     msgBoxSendDeferred(station,options){return sendDeferredTo(String(station||"").toUpperCase(),
       js8Clock.now(),options||{});},
     msgBoxDeferred(){return msgBox.items("waiting").map(item=>({id:item.id,to:item.to,
-      text:item.text,state:item.state,attempts:Number(item.attempts)||0,via:item.via||""}));},
+      text:item.text,state:item.state,attempts:Number(item.attempts)||0,via:item.via||"",
+      pinnedVia:item.pinnedVia||""}));},
     msgBoxPushHeld(station,options){return pushHeldMailTo(String(station||"").toUpperCase(),
       js8Clock.now(),options||{});},
     msgBoxParkVia(station,options){return parkDeferredVia(String(station||"").toUpperCase(),

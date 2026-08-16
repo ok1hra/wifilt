@@ -79,6 +79,32 @@ button { color: inherit; cursor: pointer; }
   align-items: center; gap: 10px; padding: 5px 14px; background: #0a1614;
   border-bottom: 1px solid var(--line); box-shadow: 0 4px 18px #0005;
 }
+/* Unread mail owns the whole bar, not a corner of it. The dark red keeps the
+   controls sitting on it readable -- a saturated red would take the frequency
+   with it -- and the muted greys go warm so nothing looks switched off. */
+.radio-bar.has-mail { background:#3b0a10; border-bottom-color:var(--red); }
+.radio-bar.has-mail .muted, .radio-bar.has-mail .operator { color:#f0c9c9; }
+.radio-bar.has-mail .pill { border-color:#7d2b31; }
+.msgbox-alert {
+  display:flex; align-items:center; gap:7px; min-width:0; max-width:min(38vw,44ch); padding:5px 12px;
+  border:1px solid #ffd9d9; border-radius:999px; background:#e01f2d; color:#fff;
+  font-size:12px; font-weight:800; letter-spacing:.05em; white-space:nowrap;
+  animation:msgbox-alert-pulse 1.1s ease-in-out infinite alternate;
+}
+/* The preview is the part that may be long; the ✉ and the callsign must not
+   shrink with it, or the button stops saying who wrote. */
+.msgbox-alert b { flex:0 0 auto; font-weight:800; }
+.msgbox-alert-preview {
+  min-width:0; overflow:hidden; text-overflow:ellipsis; font-weight:500;
+  letter-spacing:0; color:#ffdede;
+}
+.msgbox-alert-preview:empty { display:none; }
+/* display:flex above outranks the UA rule for [hidden], so without this the
+   button never goes away -- it survived deleting the message it was announcing. */
+.msgbox-alert[hidden] { display:none; }
+.msgbox-alert:hover, .msgbox-alert:focus-visible { background:#ff3f4c; outline:none; box-shadow:0 0 0 2px #ff6b6b66; }
+@keyframes msgbox-alert-pulse { from { opacity:.72; } to { opacity:1; } }
+@media (prefers-reduced-motion: reduce) { .msgbox-alert { animation:none; } }
 .brand { font-weight: 850; letter-spacing: .07em; white-space: nowrap; }
 .trx-help-button {
   width:30px; height:30px; flex:0 0 30px; padding:0; border:1px solid #3d675e;
@@ -420,6 +446,40 @@ button { color: inherit; cursor: pointer; }
 /* Parking a message is not sending it: quieter than SEND, and it stays usable
    when the TX gates are shut, which is exactly when it is wanted. */
 .send-later { grid-column:4; justify-self:end; padding:3px 8px; font-size:10px; letter-spacing:.04em; }
+/* Routes through an intermediary: the chosen one as a badge, the offer below it.
+   Spans the whole composer grid so the numbers line up in columns instead of
+   being squeezed into the message field's share of the width. */
+.via-routes { grid-column:1 / -1; min-width:0; display:grid; gap:5px; }
+/* `display` on the class beats the UA `[hidden]{display:none}`, so without this the
+   panel can never hide and keeps offering the PREVIOUS addressee's routes, still
+   clickable. Same trap as .msgbox-alert above -- which is how it shipped the first time. */
+.via-routes[hidden] { display:none; }
+.via-badge { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:5px 8px; border:1px solid var(--cyan); border-radius:4px; background:#0c1c19; color:var(--text); font:11px/1.35 ui-monospace,monospace; }
+.via-badge.warn { border-color:var(--amber); color:var(--amber); }
+.via-badge[hidden] { display:none; }
+.via-badge b { color:var(--cyan); font-weight:700; }
+.via-badge.warn b { color:var(--amber); }
+.via-badge small { color:var(--muted); }
+.via-badge button { margin-left:auto; padding:1px 6px; border:1px solid var(--line); border-radius:3px; background:transparent; color:var(--muted); font-size:13px; line-height:1.2; }
+.via-badge button:hover, .via-badge button:focus-visible { color:var(--text); border-color:var(--cyan); outline:none; }
+.via-details > summary { cursor:pointer; color:var(--muted); font-size:10px; letter-spacing:.03em; list-style:none; }
+.via-details > summary::-webkit-details-marker { display:none; }
+.via-details > summary::before { content:"\25B8 "; color:#3f5c55; }
+.via-details[open] > summary::before { content:"\25BE "; }
+.via-details > summary:hover, .via-details > summary:focus-visible { color:var(--text); outline:none; }
+.via-summary-hint { color:#3f5c55; }
+.via-list { display:grid; gap:2px; margin-top:4px; }
+.via-list button { display:grid; grid-template-columns:minmax(64px,auto) minmax(0,1fr); gap:8px; align-items:baseline; width:100%; padding:4px 7px; border:1px solid transparent; border-radius:4px; background:transparent; color:var(--text); text-align:left; font:11px/1.35 ui-monospace,monospace; }
+.via-list button:hover, .via-list button:focus-visible { border-color:var(--cyan); background:#132a26; outline:none; }
+.via-list button[aria-pressed="true"] { border-color:var(--cyan); background:#0c1c19; }
+.via-list button[disabled] { color:var(--muted); }
+.via-list button[disabled]:hover { border-color:transparent; background:transparent; }
+.via-list b { color:var(--cyan); font-weight:700; }
+.via-list button[disabled] b { color:var(--muted); }
+.via-list span { color:var(--muted); overflow-wrap:anywhere; }
+.via-list em { color:var(--green); font-style:normal; }
+.via-list i { color:var(--amber); font-style:normal; }
+.via-empty { padding:3px 7px; color:var(--muted); font:11px/1.4 ui-monospace,monospace; }
 .aprs-param-preview { display:grid; grid-template-columns:140px minmax(0,1fr); gap:9px; align-items:center; margin:0 14px; color:var(--muted); font-size:12px; }
 .aprs-param-preview output { min-height:42px; padding:9px; border:1px solid #31574f; border-radius:4px; background:#07100f; color:#fff; font:12px/1.45 ui-monospace,monospace; overflow-wrap:anywhere; white-space:pre-wrap; }
 .aprs-param-cost { min-height:1.3em; margin:6px 14px 0; color:var(--muted); font-size:11px; text-align:right; }
@@ -846,7 +906,16 @@ button { color: inherit; cursor: pointer; }
   .radio-bar { gap: 6px; padding-inline: 8px; }
   .radio-bar .muted, .operator { display: none; }
   .data-page { padding-inline: 5px; }
-  .quick-controls { grid-template-columns: 1fr 1fr; }
+  /* The two fields and the level need about 440 px together; the buttons are
+     the only wide item in the row. So wrap instead of cutting the row into
+     equal columns: a column of one third of the window stretched the select
+     and the offset field to a width neither has any use for, and pushed every
+     item onto a line of its own. Scoped to the JS8 page -- WSPR builds its own
+     grid out of the same class. */
+  #js8Interface .quick-controls { display: flex; flex-wrap: wrap; align-items: center; }
+  #js8Interface .quick-controls > label { flex: 0 1 auto; min-width: 148px; }
+  #js8Interface .quick-controls > .inline-status { flex: 0 1 auto; min-width: 92px; }
+  #js8Interface .quick-controls > .tx-actions { flex: 1 1 auto; }
   .settings { grid-template-columns: 1fr; }
   .settings-storage { grid-column: auto; }
 }
@@ -854,6 +923,10 @@ button { color: inherit; cursor: pointer; }
 @media (max-width: 560px) {
   .radio-bar { min-height: 49px; gap: 4px; padding: 3px 5px; font-size: 10px; }
   .brand, .radio-bar .pill, .live { display: none; }
+  /* The clock and the link state go here; the mail alert does not. It keeps the
+     callsign and drops the preview -- the row it belongs to is one tap away. */
+  .msgbox-alert { max-width: 44vw; padding: 4px 8px; gap: 5px; font-size: 11px; }
+  .msgbox-alert-preview { display: none; }
   .site-topbar .tab { padding:6px 9px; letter-spacing:.03em; }
   .site-topbar .tabs { gap:4px; padding:6px 0; }
   .trx-help-button { width:28px; height:28px; flex-basis:28px; order:3; }
@@ -881,7 +954,13 @@ button { color: inherit; cursor: pointer; }
   .modem-menu { gap: 6px; padding-inline: 7px; }
   .modem-menu label { grid-template-columns: auto minmax(0, 1fr); flex: 1; }
   .modem-state { max-width: 105px; text-align: right; line-height: 1.15; }
-  .quick-controls { grid-template-columns: 1fr; }
+  /* All three still fit one row down to ~440 px, but only once the resolved
+     speed gives way: the slot meter directly above the row already reads
+     "A 15 s", so the hint is the one thing here that is said twice. The offset
+     field never needs more than four digits either. */
+  #txSpeedResolved { display: none; }
+  #js8Interface .quick-controls > label { min-width: 104px; }
+  #txOffset { max-width: 72px; }
   .composer { grid-template-columns:62px minmax(0,1fr); }
   .composer label[for="messageInput"] { grid-column:1; }
   .composer .recipient-field { grid-column:2; }
