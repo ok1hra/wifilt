@@ -113,7 +113,15 @@ bool Debug          = false;
 bool cwIpOnConnect  = false;      // announce WiFi IP via CW on first full-CAT radio connect
 volatile bool cwIpSendPending = false;
 
-#define LOOP_WARN_MS 200
+// How long a single loop stage may take before it is reported. 200 ms is the
+// operational threshold -- below that nothing user-visible suffers. Overridable
+// from the build so the same instrumentation can be turned into a profiler
+// (-DLOOP_WARN_MS=20) without touching the source: measuring which stage
+// actually costs the time is the first step of any work on the cooperative
+// loop, and guessing at it is how the wrong thing gets optimised.
+#ifndef LOOP_WARN_MS
+  #define LOOP_WARN_MS 200
+#endif
 #define REV 20260816
 #define WIFI
 #define FSK_KEYING  // RTTY by keying the FSK + PTT outputs (was UDP_TO_FSK, from when a UDP port fed it)
@@ -278,6 +286,10 @@ volatile bool btConnectPending = false;
   #include <WebServer.h>
   #include <mbedtls/sha1.h>
   #include <lwip/sockets.h>   // raw select() to poll audio-WS writability (never block the loop)
+  // Must follow the socket headers above. Gives the two raw-send hot paths one
+  // meaning across lwip and Winsock -- see the header for why errno alone is not
+  // portable and what it silently breaks.
+  #include "net_nonblocking.h"
   // #include <ETH.h>
   // int SsidPassSize = (sizeof(SsidPass)/sizeof(char *))/2; //array size
   // int SelectSsidPass = -1;
@@ -898,7 +910,64 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void DxcSendTelnetStatus(void);
   bool DxcConnectTelnet(void);
   bool WiFiStationReady(void);
-  void WiFiRetryActiveProfile(const char *reason);
+  // Was declared with one parameter while the definition (below) takes two, so
+  // this prototype described a function that does not exist. The Arduino
+  // builder hid it by generating the correct prototype above this one; a call
+  // with a single argument would have compiled and then failed at link time.
+  void WiFiRetryActiveProfile(const char *reason, bool hardReset);
+
+  // ---------------------------------------------------------------------------
+  // Prototypes the Arduino builder used to generate for us.
+  //
+  // The IDE preprocesses .ino files and inserts a prototype for every function
+  // before first use, so the sketch can call things defined further down. The
+  // native build compiles this same file as plain C++ with no such step, so the
+  // prototypes are written out here. They are inert for the ESP32 build --
+  // identical to what the builder would have produced -- and they make the file
+  // valid C++ on its own, which is worth having regardless of the port.
+  // ---------------------------------------------------------------------------
+  void    APcliAlert();
+  void    ApplyStaIdentity();
+  void    chTable();
+  void    civPollTick();
+  void    civWriteFreq(uint8_t addr, uint32_t hz);
+  uint8_t collectVisibleWifiProfiles(int found, WifiScanPick out[2]);
+  void    ConnectWiFiAlternating();
+  void    EnterChar();
+  void    icomScanTick();
+  String  IntToTenString(int NR);
+  void    lanClientLoop();
+  void    ListCommands();
+  void    loadLastStaIp();
+  void    NetworkIdentityLoop();
+  byte    NextWifiProfile(byte profile);
+  void    printFrequency(void);
+  void    printMode(void);
+  void    print_wifi_error();
+  void    processCatMessages();
+  bool    radioLinkUp();
+  void    radioModelLearnTick();
+  bool    radioSetFrequency(uint32_t freqHz);
+  void    runLanCivTest();
+  void    saveLastStaIp(IPAddress ip);
+  bool    searchRadio();
+  void    sendCatRequest(uint8_t requestCode);
+  bool    sendCW();
+  void    sendFsk();
+  void    serialPump();
+  void    SplitString(String ORIGINAL, String* SplitStrFreq);
+  void    StartMdns();
+  byte    stringToByte(String str);
+  void    Watchdog();
+  bool    WifiProfileConfigured(byte profile);
+  String  WifiProfilePSWD(byte profile);
+  String  WifiProfileSSID(byte profile);
+  void    wifiTryTick();
+
+  // Defined static, so the prototypes must match or they declare a second,
+  // externally-linked function that is never defined.
+  static void statusFlashTick();
+  static bool trxIsPriorityName(const char* name);
   bool DxcSendWebSocketFrame(uint8_t opcode, const uint8_t* payload, size_t length);
   bool DxcSendWebSocketText(const char* text);
   bool DxcSendWebSocketText(const String& text);
@@ -2164,11 +2233,11 @@ bool handleFileFromSPIFFS(const String &path){
       if (buffered == 0) break;
     }
 
-    int n = ::send(webFd, buf + sent, buffered - sent, MSG_DONTWAIT);
+    int n = netSendNonBlocking(webFd, buf + sent, buffered - sent);
     if (n > 0) {
       sent += (size_t)n;
       lastProgress = millis();
-    } else if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != ENOMEM)) {
+    } else if (n < 0) {
       transferOk = false;
     }
 
@@ -8232,11 +8301,11 @@ void audioDrainWs(){
   while(wsOutLen > 0){
     size_t chunk = WS_OUT_SIZE - wsOutTail;   // contiguous run to buffer end
     if(chunk > wsOutLen) chunk = wsOutLen;
-    int n = ::send(fd, wsOut + wsOutTail, chunk, MSG_DONTWAIT);
+    int n = netSendNonBlocking(fd, wsOut + wsOutTail, chunk);
     if(n > 0){
       wsOutTail = (wsOutTail + (size_t)n) % WS_OUT_SIZE;
       wsOutLen -= (size_t)n;
-    }else if(n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOMEM)){
+    }else if(n == 0){
       break;                                    // socket full -> finish next tick
     }else{
       AudioDisconnectWs();                       // peer gone / hard error

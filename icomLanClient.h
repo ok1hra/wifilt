@@ -1265,7 +1265,10 @@ private:
     destination.sin_port = htons(audioPort);
     destination.sin_addr.s_addr = uint32_t(radioIP);
     uint32_t started = micros();
-    int sent = sendto(audioRuntime->socketFd, packet, length, MSG_DONTWAIT,
+    // char* rather than uint8_t*: Winsock spells the buffer as const char*,
+    // lwip as const void*, and char* satisfies both without an #ifdef.
+    int sent = sendto(audioRuntime->socketFd, reinterpret_cast<const char*>(packet),
+                      length, MSG_DONTWAIT,
                       reinterpret_cast<sockaddr*>(&destination), sizeof(destination));
     uint32_t elapsed = micros() - started;
     if (elapsed > audioRuntime->maxSendUs) audioRuntime->maxSendUs = elapsed;
@@ -1442,7 +1445,8 @@ private:
       uint8_t packet[1500];
       sockaddr_in source = {};
       socklen_t sourceLength = sizeof(source);
-      int received = recvfrom(audioRuntime->socketFd, packet, sizeof(packet), MSG_DONTWAIT,
+      int received = recvfrom(audioRuntime->socketFd, reinterpret_cast<char*>(packet),
+                              sizeof(packet), MSG_DONTWAIT,
                               reinterpret_cast<sockaddr*>(&source), &sourceLength);
       if (received < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) return;
@@ -1477,6 +1481,17 @@ private:
     AudioRuntime* runtime = audioRuntime;
     runtime->socketFd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (runtime->socketFd >= 0) {
+      // Every other socket in this project sets SO_REUSEADDR -- WiFiUDP does it
+      // for the control and CI-V channels, and the discovery scanner relies on
+      // it. This raw one was the odd one out, which meant the audio channel
+      // alone could not bind while anything else held the port. Without it the
+      // failure below is silent and the channel retries for ever.
+      // The cast is not decoration: Winsock declares the value as const char*,
+      // lwip and POSIX as const void*, and char* converts cleanly to both.
+      int reuse = 1;
+      setsockopt(runtime->socketFd, SOL_SOCKET, SO_REUSEADDR,
+                 reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+
       int flags = fcntl(runtime->socketFd, F_GETFL, 0);
       if (flags >= 0) fcntl(runtime->socketFd, F_SETFL, flags | O_NONBLOCK);
       sockaddr_in local = {};
@@ -1489,6 +1504,11 @@ private:
       }
     }
     if (runtime->socketFd < 0) {
+      // Said out loud once per attempt. This used to fail in complete silence
+      // while openAudioChannel() kept reporting success, so the only symptom
+      // was "the waterfall stays empty" with nothing in the log to explain it.
+      Serial.print("LAN | audio socket bind FAILED on local port ");
+      Serial.println(audioLocalPort);
       audioLock();
       runtime->tx.fail(IcomLanAudioTx::FAULT_NOT_READY);
       audioUnlock();
