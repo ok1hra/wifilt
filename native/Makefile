@@ -130,7 +130,11 @@ run: all
 # the norm for ham software, but a published checksum is the least that owes
 # the person running it.
 
-VERSION ?= $(shell date +%Y%m%d)
+# The SAME number the firmware carries, read from the same place tools/gh-pages.sh
+# reads it. Not a build date: the binary and the .bin flashed onto a box are the
+# same source, so they must not be able to claim different versions. That is the
+# mix-up this naming exists to prevent.
+VERSION ?= $(shell awk '/#define REV / { print $$3; exit }' $(SKETCH_DIR)/wifilt.ino)
 DIST    ?= dist
 ASSETS  := $(DIST)/assets
 
@@ -157,14 +161,14 @@ dist-linux: all dist-assets
 	cp $(BUILD_DIR)/$(TARGET) $(DIST)/wifilt-linux-x86_64/wifilt
 	cp install.sh             $(DIST)/wifilt-linux-x86_64/
 	cp -r $(ASSETS)           $(DIST)/wifilt-linux-x86_64/data
-	@cd $(DIST) && tar czf wifilt-linux-x86_64-$(VERSION).tar.gz wifilt-linux-x86_64
+	@cd $(DIST) && tar czf wifilt-$(VERSION)-linux-x86_64.tar.gz wifilt-linux-x86_64
 	@rm -rf $(DIST)/wifilt-linux-x86_64
 
 dist-windows: win dist-assets
 	@rm -rf $(DIST)/wifilt-windows-x64 && mkdir -p $(DIST)/wifilt-windows-x64
 	cp build-win/wifilt.exe $(DIST)/wifilt-windows-x64/
 	cp -r $(ASSETS)         $(DIST)/wifilt-windows-x64/data
-	@cd $(DIST) && zip -qr wifilt-windows-x64-$(VERSION).zip wifilt-windows-x64
+	@cd $(DIST) && zip -qr wifilt-$(VERSION)-windows-x64.zip wifilt-windows-x64
 	@rm -rf $(DIST)/wifilt-windows-x64
 
 clean:

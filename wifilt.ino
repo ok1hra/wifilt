@@ -35,20 +35,30 @@
   (local checks accept Node 18-20). See docs/js8call-build.md.
 
   1. Increase REV value in this .ino
-  2. Arduino IDE 1.8.19 menu: Sketch/Export compiled Binary (for "ESP32 Dev Module" + Tools/Partition Scheme:"No OTA (2MB APP/2MB SPIFFS)")
-  3. ./tools/upload-firmware-spiffs.sh --port /dev/ttyUSB0
+  2. Arduino IDE 1.8.19 menu: Sketch/Export compiled Binary
+     Board "ESP32 Dev Module", Tools/Partition Scheme:"No OTA (2MB APP/2MB SPIFFS)",
+     Tools/Flash Mode:"DIO"  <-- NOT the IDE default QIO. These boards carry a Zbit
+     (0x5e) clone flash whose QIO reads are unreliable, and the flash mode is baked
+     into the image header at compile time: upload-firmware-spiffs.sh passes no
+     --flash_mode, so whatever is set here is what the board ends up running.
+  3. make -C native dist (apt install mingw-w64)
+     optional check
+     tools/native-integration-test.sh
+  4. ./tools/upload-firmware-spiffs.sh --port /dev/ttyUSB0
      check without write
      ./tools/upload-firmware-spiffs.sh --dry-run
     for slow comm
     ./tools/upload-firmware-spiffs.sh --port /dev/ttyUSB0 --baud 460800
 
-  3. generate all .bin and publish to GitHub web page: $ ./tools/gh-pages.sh --publish
-  4. git commit with comment Release number and push
+  5. generate all .bin and publish to GitHub web page: $ ./tools/gh-pages.sh --publish
+  6. git commit with comment Release number and push
 
   Manual workflow
-  - afer standart edit data/*.html/css/js,
-  - before manual filesystem upload run tools/gzip-assets.sh
-  - continue with Arduino IDE
+  - after editing data/*.html/css/js, upload the filesystem alone with
+    tools/upload-spiffs.sh -- it runs tools/prepare-spiffs-tree.sh for you
+  - do NOT run tools/gzip-assets.sh by hand instead: on its own it skips
+    tools/stamp-asset-versions.js, so every ?v= keeps pointing at the previous
+    content and a browser with a warm cache never fetches the new file
 
   Features -- keep this list matching the code. Its previous version promised an
   http server on port 81 and a UDP listener on port 89, neither of which had
@@ -122,7 +132,7 @@ volatile bool cwIpSendPending = false;
 #ifndef LOOP_WARN_MS
   #define LOOP_WARN_MS 200
 #endif
-#define REV 20260816
+#define REV 20260817
 #define WIFI
 #define FSK_KEYING  // RTTY by keying the FSK + PTT outputs (was UDP_TO_FSK, from when a UDP port fed it)
 #define WDT         // watchdog timer

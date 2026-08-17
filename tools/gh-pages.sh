@@ -396,6 +396,56 @@ fi
 python3 "$ESPTOOL_BIN" "${MERGE_ARGS[@]}"
 
 # ---------------------------------------------------------------------------
+# Desktop archives (optional)
+# ---------------------------------------------------------------------------
+#
+# The same source also builds a binary for a PC, for operators whose radio is on
+# the network and who therefore need no hardware at all. Both carry the firmware
+# REV in their name for exactly the reason the .bin does: one source must not be
+# able to claim two version numbers.
+#
+# Optional on purpose. `make -C native dist` needs mingw-w64 for the Windows
+# half, and a firmware release must not fail because a cross-compiler is
+# missing. Whatever is present gets published; whatever is not is left out of
+# the page.
+
+DESKTOP_LINUX="${ROOT_DIR}/native/dist/wifilt-${FW_REV}-linux-x86_64.tar.gz"
+DESKTOP_WIN="${ROOT_DIR}/native/dist/wifilt-${FW_REV}-windows-x64.zip"
+DESKTOP_LINUX_NAME=""
+DESKTOP_WIN_NAME=""
+DESKTOP_LINUX_SIZE=""
+DESKTOP_WIN_SIZE=""
+
+human_size() {
+  awk -v bytes="$1" 'BEGIN { printf "%.1f MB", bytes / 1048576 }'
+}
+
+DESKTOP_SUMS_NAME=""
+
+if [[ -f "$DESKTOP_LINUX" ]]; then
+  DESKTOP_LINUX_NAME="$(basename "$DESKTOP_LINUX")"
+  DESKTOP_LINUX_SIZE="$(human_size "$(stat -c%s "$DESKTOP_LINUX")")"
+  cp "$DESKTOP_LINUX" "${OUTPUT_DIR}/${DESKTOP_LINUX_NAME}"
+  echo "==> Desktop archive: ${DESKTOP_LINUX_NAME} (${DESKTOP_LINUX_SIZE})"
+fi
+if [[ -f "$DESKTOP_WIN" ]]; then
+  DESKTOP_WIN_NAME="$(basename "$DESKTOP_WIN")"
+  DESKTOP_WIN_SIZE="$(human_size "$(stat -c%s "$DESKTOP_WIN")")"
+  cp "$DESKTOP_WIN" "${OUTPUT_DIR}/${DESKTOP_WIN_NAME}"
+  echo "==> Desktop archive: ${DESKTOP_WIN_NAME} (${DESKTOP_WIN_SIZE})"
+fi
+# The page tells people to check the download against this, so it has to travel
+# with the downloads rather than being left behind in native/dist.
+if [[ -n "$DESKTOP_LINUX_NAME" || -n "$DESKTOP_WIN_NAME" ]] \
+   && [[ -f "${ROOT_DIR}/native/dist/SHA256SUMS" ]]; then
+  DESKTOP_SUMS_NAME="SHA256SUMS"
+  cp "${ROOT_DIR}/native/dist/SHA256SUMS" "${OUTPUT_DIR}/${DESKTOP_SUMS_NAME}"
+fi
+if [[ -z "$DESKTOP_LINUX_NAME" && -z "$DESKTOP_WIN_NAME" ]]; then
+  echo "==> No desktop archives for REV ${FW_REV} (run: make -C native dist)"
+fi
+
+# ---------------------------------------------------------------------------
 # Generate manifest.json
 # ---------------------------------------------------------------------------
 
@@ -806,6 +856,60 @@ cat > "${OUTPUT_DIR}/index.html" <<EOF
         image, so it overwrites the WiFi credentials in NVS$(if [[ -n "$CFG_OFFSET" ]]; then echo " and the configuration partition"; fi)
         as well. Use it to recover a board that will not boot, not to update a working one.
       </p>
+$(if [[ -n "$DESKTOP_LINUX_NAME" || -n "$DESKTOP_WIN_NAME" ]]; then cat <<DESKTOP
+      <hr>
+      <h2>No interface board? Run it on your computer</h2>
+      <p>
+        If your transceiver is already on your network &mdash; an IC-705, IC-7610 or IC-7300&nbsp;MK2
+        with Network&nbsp;Control switched on &mdash; the same software runs as a program on your
+        PC and needs no hardware at all. It is the identical build as the firmware above,
+        version <code>${FW_REV}</code>.
+      </p>
+      <p class="muted">
+        A radio connected only by <strong>USB</strong> still needs the interface board: the desktop
+        build talks to radios over the network, not over a serial cable.
+      </p>
+      <ul>
+$(if [[ -n "$DESKTOP_LINUX_NAME" ]]; then echo "
+        <li><a href=\"${DESKTOP_LINUX_NAME}\">${DESKTOP_LINUX_NAME}</a> &nbsp;&bull;&nbsp; Linux x86-64, ${DESKTOP_LINUX_SIZE}</li>"; fi)
+$(if [[ -n "$DESKTOP_WIN_NAME" ]]; then echo "
+        <li><a href=\"${DESKTOP_WIN_NAME}\">${DESKTOP_WIN_NAME}</a> &nbsp;&bull;&nbsp; Windows x64, ${DESKTOP_WIN_SIZE}</li>"; fi)
+      </ul>
+$(if [[ -n "$DESKTOP_LINUX_NAME" ]]; then cat <<LINUX
+      <h3>Linux</h3>
+      <pre><code>tar xzf ${DESKTOP_LINUX_NAME}
+cd wifilt-linux-x86_64
+sudo ./install.sh</code></pre>
+      <p class="muted">
+        The installer copies the program to <code>/opt/wifilt</code> and grants it permission to
+        use port&nbsp;80. That permission is not optional: ports 80, 82 and 83 are all privileged,
+        and port&nbsp;83 carries the audio, so without it JS8 and WSPR cannot work. It installs a
+        service but deliberately does not enable it &mdash; starting a transmitter's control
+        interface at boot should be your decision. To run it without installing:
+        <code>sudo ./wifilt</code> from the unpacked folder.
+      </p>
+LINUX
+fi)
+$(if [[ -n "$DESKTOP_WIN_NAME" ]]; then cat <<WINDOWS
+      <h3>Windows</h3>
+      <p>
+        Unpack the ZIP anywhere and run <code>wifilt.exe</code>. There is nothing to install and no
+        runtime to add. Windows will ask once whether to allow it through the firewall &mdash; say
+        yes, or other devices on your network will not reach it. Because the file is not
+        code-signed, SmartScreen may warn on first run; choose <em>More info</em> &rarr;
+        <em>Run anyway</em>. Verify the download against <code>SHA256SUMS</code> if you would
+        rather not take that on trust.
+      </p>
+WINDOWS
+fi)
+      <p>
+        Then open <a href="http://wifilt.local">http://wifilt.local</a> &mdash; the same address the
+        interface board uses. That is not a coincidence: your browser stores the QSO log per
+        address, so keeping the name identical is what lets a log started on the board carry on
+        unchanged on the computer.
+      </p>
+DESKTOP
+fi)
       <p class="muted legal">
         Icom is a registered trademark of Icom Incorporated. WIFILT is an independent software
         project and is not affiliated with, endorsed by, or sponsored by Icom Incorporated.
@@ -925,6 +1029,17 @@ for release_file in .nojekyll index.html manifest.json bootloader.bin partitions
   boot_app0.bin firmware.bin spiffs.bin "wifilt-${FW_REV}-full.bin"; do
   require_file "${OUTPUT_DIR}/${release_file}" "release artifact ${release_file}"
   cp "${OUTPUT_DIR}/${release_file}" "$TMP_DIR/${release_file}"
+done
+
+# The desktop archives are published only when they exist, so they are listed
+# separately from the required set above. They must be here rather than relying
+# on a copy into OUTPUT_DIR: this loop is an allowlist, and anything not named
+# in it never reaches the branch -- which is how the download links 404'd while
+# the files sat happily in build/gh-pages.
+for optional_file in "$DESKTOP_LINUX_NAME" "$DESKTOP_WIN_NAME" "$DESKTOP_SUMS_NAME"; do
+  [[ -n "$optional_file" ]] || continue
+  require_file "${OUTPUT_DIR}/${optional_file}" "desktop artifact ${optional_file}"
+  cp "${OUTPUT_DIR}/${optional_file}" "$TMP_DIR/${optional_file}"
 done
 
 git -C "$TMP_DIR" add --all

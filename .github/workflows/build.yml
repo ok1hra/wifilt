@@ -20,6 +20,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # TrxNet lives in its own repository, so every job that compiles the
+      # sketch needs it -- not just the ESP32 one. Leaving it out of the two
+      # native jobs is what made them fail with "No rule to make target
+      # TrxNet.cpp.o", which reads like a Makefile bug and is not one.
+      - name: Fetch TrxNet
+        run: |
+          mkdir -p "$HOME/Arduino/libraries"
+          git clone --depth 1 https://github.com/ok1hra/TrxNet.git \
+            "$HOME/Arduino/libraries/TrxNet"
+
       - name: Build
         run: make -C native
 
@@ -57,6 +67,12 @@ jobs:
       - name: Install mingw-w64
         run: sudo apt-get update && sudo apt-get install -y mingw-w64
 
+      - name: Fetch TrxNet
+        run: |
+          mkdir -p "$HOME/Arduino/libraries"
+          git clone --depth 1 https://github.com/ok1hra/TrxNet.git \
+            "$HOME/Arduino/libraries/TrxNet"
+
       # The Makefile names the -posix compiler explicitly. Debian ships mingw in
       # two threading flavours and the win32 one has no std::thread, std::mutex
       # or std::condition_variable -- which is everything the FreeRTOS shim is
@@ -92,13 +108,11 @@ jobs:
           arduino-cli core update-index
           arduino-cli core install esp32:esp32@2.0.14
 
-      # The sketch depends on TrxNet, which lives outside this repository.
       - name: Fetch TrxNet
         run: |
           mkdir -p "$HOME/Arduino/libraries"
           git clone --depth 1 https://github.com/ok1hra/TrxNet.git \
-            "$HOME/Arduino/libraries/TrxNet" || \
-            echo "TrxNet unavailable -- the ESP32 job needs it to compile"
+            "$HOME/Arduino/libraries/TrxNet"
 
       - name: Compile
         run: |
