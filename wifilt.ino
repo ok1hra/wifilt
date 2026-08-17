@@ -130,6 +130,15 @@ volatile bool cwIpSendPending = false;
 // #define BLUETOOTH   // legacy only; UI supports LAN, TrxNet and CI-V
 // #define RESET_AFTER_DISCONNECT  // enable reset after each disconnect + short CW msg
 
+// Which capabilities physically exist on this build (ESP32 box vs PC binary).
+// Must come before anything that tests CAP_*: an undefined macro evaluates to
+// zero in #if, so a missing include would silently disable WiFi on the box
+// rather than failing loudly. Hence the guard immediately below.
+#include "platform_caps.h"
+#if !defined(CAP_WIFI) || !defined(CAP_GPIO) || !defined(CAP_CIV)
+  #error "platform_caps.h did not define the capability flags"
+#endif
+
 #include "EEPROM.h"
 #define EEPROM_SIZE 360
 /*
@@ -1657,6 +1666,18 @@ void handleSetupData(){
   String j;
   j.reserve(3500);
   j += "{\"fwRev\":"; j += (unsigned)REV;
+  // What this build physically has. The browser hides whole SETUP sections
+  // from this rather than probing for 404s: on the PC binary there is no WiFi
+  // to provision, no CI-V wire and no GPIO, so the first-run wizard must not
+  // present steps that can never be completed. See platform_caps.h.
+  j += ",\"platform\":\""; j += CAP_PLATFORM_NAME; j += "\"";
+  j += ",\"caps\":{";
+  j +=   "\"wifi\":";        j += CAP_WIFI ? "true" : "false";
+  j +=   ",\"civ\":";        j += CAP_CIV ? "true" : "false";
+  j +=   ",\"gpio\":";       j += CAP_GPIO ? "true" : "false";
+  j +=   ",\"bandDecoder\":";j += CAP_BAND_DECODER ? "true" : "false";
+  j +=   ",\"cwKeying\":";   j += CAP_GPIO ? "true" : "false";
+  j += "}";
   j += ",\"apMode\":"; j += APmode ? "true" : "false";
   j += ",\"apModeText\":\""; j += APmode ? "AP mode ON" : "AP mode OFF"; j += "\"";
   j += ",\"mac\":\""; j += configJsonEscape(MACString); j += "\"";
@@ -4480,6 +4501,15 @@ void setup(){
       }
     }
 
+    #if !CAP_WIFI
+      // There is no radio here to raise an access point with, no captive portal
+      // (UDP 53 would need root), and nothing to provision -- the operating
+      // system owns the connection. An unconfigured box is right to fall back to
+      // AP mode; an unconfigured PC binary would just strand the operator in a
+      // portal that cannot exist, so station mode is the only sane state.
+      APmode = false;
+    #endif
+
     // 1-21 - SSID
     if(EEPROM.read(1)==0xff){
       // APmode=true;
@@ -4714,7 +4744,9 @@ void setup(){
       ListCommands();
 
     }else{
-      ConnectWiFiAlternating();
+      #if CAP_WIFI
+        ConnectWiFiAlternating();
+      #endif
       // Remember it for the AP portal: if the operator ever lands back in AP
       // mode, that page can name the address instead of leaving them guessing.
       saveLastStaIp(WiFi.localIP());

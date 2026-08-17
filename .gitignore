@@ -1,5 +1,13 @@
 /build/
 /wifilt.ino*.bin
+
+# Native build output. The leading slash on /build/ above only covers the
+# Arduino one, so these need naming separately: object files, the two binaries
+# and the release archives are all reproducible from source.
+/native/build/
+/native/build-win/
+/native/dist/
+/native/_run/
 /data/*.gz
 /data/*.br
 /data/*.js.min
