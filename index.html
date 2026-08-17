@@ -178,7 +178,7 @@
     <div class="card">
       <h1>WIFILT<span class="tagline">Web interface for Icom LAN Transceivers</span></h1>
       <p class="subtitle">
-        Firmware installer &mdash; version <code>20260816</code> &nbsp;&bull;&nbsp;
+        Firmware installer &mdash; version <code>20260817</code> &nbsp;&bull;&nbsp;
         <a href="https://github.com/ok1hra/wifilt" target="_blank">GitHub</a>
       </p>
 
@@ -299,7 +299,7 @@
       </ul>
 
       <div class="cta gate" id="flashGate" data-locked="1">
-        <esp-web-install-button manifest="manifest.json?v=20260816" baudrate="9600"></esp-web-install-button>
+        <esp-web-install-button manifest="manifest.json?v=20260817" baudrate="9600"></esp-web-install-button>
       </div>
       <p class="gate-note" id="gateNote">Answer the question above to continue.</p>
 
@@ -354,10 +354,55 @@
         lets your settings survive an update.
       </p>
       <p class="muted">
-        For manual flashing there is <code>wifilt-20260816-full.bin</code> at offset <code>0x0</code>
+        For manual flashing there is <code>wifilt-20260817-full.bin</code> at offset <code>0x0</code>
         with <code>esptool.py</code>. <strong>That one erases everything</strong> — it is a whole-chip
         image, so it overwrites the WiFi credentials in NVS and the configuration partition
         as well. Use it to recover a board that will not boot, not to update a working one.
+      </p>
+      <hr>
+      <h2>No interface board? Run it on your computer</h2>
+      <p>
+        If your transceiver is already on your network &mdash; an IC-705, IC-7610 or IC-7300&nbsp;MK2
+        with Network&nbsp;Control switched on &mdash; the same software runs as a program on your
+        PC and needs no hardware at all. It is the identical build as the firmware above,
+        version <code>20260817</code>.
+      </p>
+      <p class="muted">
+        A radio connected only by <strong>USB</strong> still needs the interface board: the desktop
+        build talks to radios over the network, not over a serial cable.
+      </p>
+      <ul>
+
+        <li><a href="wifilt-20260817-linux-x86_64.tar.gz">wifilt-20260817-linux-x86_64.tar.gz</a> &nbsp;&bull;&nbsp; Linux x86-64, 1.9 MB</li>
+
+        <li><a href="wifilt-20260817-windows-x64.zip">wifilt-20260817-windows-x64.zip</a> &nbsp;&bull;&nbsp; Windows x64, 2.0 MB</li>
+      </ul>
+      <h3>Linux</h3>
+      <pre><code>tar xzf wifilt-20260817-linux-x86_64.tar.gz
+cd wifilt-linux-x86_64
+sudo ./install.sh</code></pre>
+      <p class="muted">
+        The installer copies the program to <code>/opt/wifilt</code> and grants it permission to
+        use port&nbsp;80. That permission is not optional: ports 80, 82 and 83 are all privileged,
+        and port&nbsp;83 carries the audio, so without it JS8 and WSPR cannot work. It installs a
+        service but deliberately does not enable it &mdash; starting a transmitter's control
+        interface at boot should be your decision. To run it without installing:
+        <code>sudo ./wifilt</code> from the unpacked folder.
+      </p>
+      <h3>Windows</h3>
+      <p>
+        Unpack the ZIP anywhere and run <code>wifilt.exe</code>. There is nothing to install and no
+        runtime to add. Windows will ask once whether to allow it through the firewall &mdash; say
+        yes, or other devices on your network will not reach it. Because the file is not
+        code-signed, SmartScreen may warn on first run; choose <em>More info</em> &rarr;
+        <em>Run anyway</em>. Verify the download against <code>SHA256SUMS</code> if you would
+        rather not take that on trust.
+      </p>
+      <p>
+        Then open <a href="http://wifilt.local">http://wifilt.local</a> &mdash; the same address the
+        interface board uses. That is not a coincidence: your browser stores the QSO log per
+        address, so keeping the name identical is what lets a log started on the board carry on
+        unchanged on the computer.
       </p>
       <p class="muted legal">
         Icom is a registered trademark of Icom Incorporated. WIFILT is an independent software
