@@ -245,6 +245,11 @@
       slots: slots,
       radio: radio,
       lanSlot: lanSlot,
+      // What the hardware this is running on actually has. Absent on older
+      // firmware, so every reader must treat "missing" as "yes, it has it" --
+      // the box is the case that predates the field.
+      caps: data.caps || {},
+      platform: data.platform || "esp32",
       network: {done: data.apMode !== true, ssid: (data.ssid || "").trim()},
       identity: {done: call !== "" && GRID_RE.test(grid), call: call, grid: grid,
                  compound: call.indexOf("/") >= 0},
@@ -454,6 +459,39 @@
 
     function fillNetwork(step, model) {
       var d = model.network;
+
+      // On a build with no WiFi of its own -- the PC binary -- there is nothing
+      // here the operator could set. The operating system owns the connection,
+      // there is no hotspot to fall back to and no credentials to store. The
+      // step stays in the list rather than vanishing, because the address is
+      // still the thing they need to know, but it offers no control it cannot
+      // honour. Leaving the real WiFi panel here would present fields that save
+      // into an EEPROM nothing ever reads.
+      if (model.caps.wifi === false) {
+        setState(step, "done", "✓");
+        step.detail.textContent = location.host;
+        if (!networkWork) {
+          networkWork = {lead: paragraph(""), extra: paragraph(""), panel: null};
+          step.body.innerHTML = "";
+          step.body.appendChild(networkWork.lead);
+          networkWork.extra.hidden = true;
+          step.body.appendChild(networkWork.extra);
+          var pcRow = el("div", "spine-next");
+          networkWork.act = el("button", "spine-act spine-act-go", "CONTINUE");
+          networkWork.act.type = "button";
+          networkWork.act.addEventListener("click", function () { openStep(1); });
+          pcRow.appendChild(networkWork.act);
+          networkWork.note = el("span", "spine-note");
+          pcRow.appendChild(networkWork.note);
+          step.body.appendChild(pcRow);
+        }
+        networkWork.lead.textContent =
+          "This computer's network connection is managed by its operating system, "
+          + "so there is nothing to set up here. Other devices on the same network "
+          + "reach WIFILT at this address.";
+        return;
+      }
+
       if (!networkWork) {
         networkWork = buildPanelStep(step, "wifiSection", "OPEN WIFI SETTINGS");
         networkWork.act.addEventListener("click", function () {

@@ -558,6 +558,13 @@ label.setup-trx-disabled {
 }
 
 /* ── Unified Radio editor (variant B) ── */
+/* An explicit `display` beats the `hidden` attribute, so every block that can be
+   hidden needs this companion rule. The CI-V bus panel is hidden on builds with
+   no serial port at all (the PC binary). */
+.setup-radio-global[hidden] {
+  display: none;
+}
+
 .setup-radio-global {
   display: grid;
   gap: 10px;

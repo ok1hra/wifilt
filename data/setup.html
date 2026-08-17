@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Setup — WIFILT</title>
-  <link rel="stylesheet" href="/setup.css?v=e64b8a9a">
+  <link rel="stylesheet" href="/setup.css?v=6ac62c8e">
 </head>
 <body>
   <header class="topbar">
@@ -52,7 +52,7 @@
       <div id="setupSpineHost"></div>
       <script src="/icom-models.js?v=484d9084"></script>
       <script src="/icom-discovery.js?v=dc5654a5"></script>
-      <script src="/setup-spine.js?v=a9af5fb9"></script>
+      <script src="/setup-spine.js?v=f2f44550"></script>
       <!-- The identity fields on this page are the only editable copy in the
            product, so the validation they use has to be the same one every other
            page trusts. -->
@@ -212,7 +212,7 @@
         <details class="setup-section" id="radioSection">
           <summary class="setup-section-title">Radio <span class="setup-local-badge" title="TRX1's connection is mirrored into NVS; the rest lives on the interface's own configuration partition. Neither is written by a firmware flash.">eeprom + config</span><span id="radioConfigWarning" class="setup-required-warning" role="status" hidden>RADIO CONFIG INCOMPLETE</span></summary>
           <div class="setup-section-body">
-            <div class="setup-radio-global">
+            <div class="setup-radio-global" data-caps-requires="civ">
               <strong>Shared CI-V bus</strong>
               <label>USB and CI-V serial baudrate
                 <div class="input-with-tip">
@@ -568,6 +568,12 @@
 
   <script>
     (function () {
+      // Capabilities of the build serving this page, filled in by
+      // applySetupData(). Empty until then, and an empty object means "assume
+      // everything is present" -- which is right, because the only build that
+      // predates the field is the hardware box, which has everything.
+      var platformCaps = {};
+
       function setValue(name, value) {
         var el = document.querySelector('[name="' + name + '"]');
         if (!el || value === undefined || value === null) return;
@@ -579,6 +585,10 @@
       }
 
       function applySetupData(data) {
+        // What this build physically has. Absent on firmware older than the
+        // field, so a missing value must read as "yes, it has it" -- the box is
+        // the case that predates the flag.
+        platformCaps = data.caps || {};
         // The WiFi handoff and the "last known address" hint both need to know
         // whether this page is being served from the AP or from the real LAN.
         window.setupDeviceInfo = {
@@ -756,8 +766,39 @@
             if (lanOption) lanOption.disabled = lanTaken && select.value !== 'lan';
           });
         }
+        function enforcePlatformCaps() {
+          // Whole blocks that only make sense with the hardware behind them.
+          // Marked in the markup with data-caps-requires so the rule lives next
+          // to the thing it governs rather than in a list that drifts.
+          document.querySelectorAll('[data-caps-requires]').forEach(function (node) {
+            var needed = node.dataset.capsRequires;
+            node.hidden = platformCaps[needed] === false;
+          });
+
+          // CI-V needs a UART. The PC binary has none -- it reaches radios only
+          // over IP -- so offering the option would let an operator configure a
+          // slot that can never come up, and then wonder why it stays dark.
+          //
+          // A slot already set to CI-V (a config restored from a box, say) keeps
+          // showing it rather than being silently rewritten: quietly changing
+          // someone's stored transport is worse than showing them why it cannot
+          // work here.
+          if (platformCaps.civ !== false) return;
+          ['trx1', 'trx2', 'trx3'].forEach(function (prefix) {
+            var select = document.querySelector('[name="' + prefix + 'transport"]');
+            if (!select) return;
+            var civOption = select.querySelector('option[value="civ"]');
+            if (!civOption) return;
+            if (!civOption.dataset.capsLabelled) {
+              civOption.textContent = 'CI-V (needs the hardware interface)';
+              civOption.dataset.capsLabelled = '1';
+            }
+            civOption.disabled = select.value !== 'civ';
+          });
+        }
         function refreshAllRadios() {
           enforceLanExclusivity();
+          enforcePlatformCaps();
           ['trx1', 'trx2', 'trx3'].forEach(refreshRadio);
           validateRadios();
         }
