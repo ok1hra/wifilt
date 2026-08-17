@@ -42,9 +42,15 @@
     // or beacon screen that cannot key the radio is worse than an explanation.
     // Only the topbar survives, so the sub-nav still switches pages -- which is
     // why it lives up there and not inside <main>.
-    + "body.lan-gate-checking>:not(.site-topbar),"
-    + "body.lan-gate-blocked>:not(.site-topbar){display:none}"
-    + "body.lan-gate-blocked>main{display:block}"
+    + "body.lan-gate-checking>:not(.site-topbar){display:none}"
+    // :not(main) rather than a following "> main{display:block}" rule to undo
+    // it. :not() takes the specificity of its argument, so the hiding rule
+    // scored (0,2,1) against the un-hiding rule's (0,1,2) and won regardless of
+    // source order -- <main> stayed display:none and the card explaining why the
+    // page had stopped was itself invisible. The page then looked like a blank
+    // black screen under the topbar, which is the one thing this gate exists to
+    // prevent. Excluding <main> from the hiding rule removes the contest.
+    + "body.lan-gate-blocked>:not(.site-topbar):not(main){display:none}"
     + "body.lan-gate-blocked>main>:not(.gate-card){display:none}"
     + "@media (max-width:700px){.gate-card{grid-template-columns:1fr;margin-top:18px;"
     + "padding:19px 16px}.gate-card-icon{width:36px;height:36px;font-size:20px}}";

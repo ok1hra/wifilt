@@ -7647,6 +7647,16 @@ void handleSet() {
   }else{
     // Serial.println("Form VALID");
 
+    // Only where there is a radio to join a network with. On a build without
+    // WiFi the form still carries these fields, empty, and the length check
+    // below then refuses the whole save -- taking the radio, TrxNet and baud
+    // settings further down with it, because they all live in this same else
+    // branch. Nothing here has anywhere to be stored on such a build anyway.
+    //
+    // Guarded rather than made conditional at runtime so the ESP32 build is
+    // preprocessed to exactly the code it had before.
+    #if CAP_WIFI
+
     // 1-20 - SSID1*
     if ( requestArg("ssid").length()<1 || requestArg("ssid").length()>20){
       setupSsidErr = "Out of range 1-20 characters";
@@ -7766,6 +7776,8 @@ void handleSet() {
       setupPswd2Err = "";
       ERRdetect = 1;
     }
+
+    #endif  // CAP_WIFI -- everything below is stored on every build
 
 
     // 41 TRXNET_ID (hex string "01".."ff"; 0x00 = disabled)

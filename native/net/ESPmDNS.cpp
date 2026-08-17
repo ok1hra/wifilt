@@ -178,13 +178,21 @@ std::string instanceFqdn(const Service &service) {
   return label + "." + service.type;
 }
 
-void sendPacket(const std::vector<uint8_t> &packet) {
+// unicastTo == nullptr sends to the multicast group; otherwise straight back to
+// the asker. Both are needed -- see the legacy-query note in handleQuery().
+void sendPacket(const std::vector<uint8_t> &packet,
+                const struct sockaddr_in *unicastTo = nullptr) {
   if (gSocket == WIFILT_INVALID_SOCKET || packet.empty()) return;
+
   struct sockaddr_in destination;
-  memset(&destination, 0, sizeof(destination));
-  destination.sin_family = AF_INET;
-  destination.sin_port = htons(MDNS_PORT);
-  destination.sin_addr.s_addr = inet_addr(MDNS_GROUP);
+  if (unicastTo) {
+    destination = *unicastTo;
+  } else {
+    memset(&destination, 0, sizeof(destination));
+    destination.sin_family = AF_INET;
+    destination.sin_port = htons(MDNS_PORT);
+    destination.sin_addr.s_addr = inet_addr(MDNS_GROUP);
+  }
   ::sendto(gSocket, (const char *)packet.data(), (int)packet.size(), 0,
            (struct sockaddr *)&destination, sizeof(destination));
 }
@@ -216,12 +224,27 @@ std::vector<uint8_t> buildAnnouncement(uint32_t ip) {
   return packet;
 }
 
-void handleQuery(const uint8_t *packet, size_t length, uint32_t ip) {
+// A "legacy" (one-shot) query is one whose source port is not 5353: an ordinary
+// resolver asking from an ephemeral port, which is what glibc's nss-mdns does
+// for every getent/curl/browser lookup. RFC 6762 section 5.4 requires the answer
+// to go back UNICAST to that port, and to look like a conventional DNS reply --
+// same transaction ID, question section echoed.
+//
+// Answering only on multicast, as this did at first, is invisible to such a
+// client: it never joined the group. The name still resolved eventually, from a
+// periodic announcement that happened to land, which is why the symptom was
+// "wifilt.local works but takes ten to twenty seconds" rather than "does not
+// resolve" -- far more confusing than a clean failure.
+void handleQuery(const uint8_t *packet, size_t length, uint32_t ip,
+                 const struct sockaddr_in *from) {
   if (length < 12) return;
   const uint16_t flags = (packet[2] << 8) | packet[3];
   if (flags & 0x8000) return;                        // a response, not a query
   const uint16_t questions = (packet[4] << 8) | packet[5];
   if (!questions) return;
+
+  const bool legacy = from && ntohs(from->sin_port) != MDNS_PORT;
+  const uint16_t transactionId = legacy ? ((packet[0] << 8) | packet[1]) : 0;
 
   std::vector<uint8_t> body;
   uint16_t answers = 0;
@@ -258,14 +281,20 @@ void handleQuery(const uint8_t *packet, size_t length, uint32_t ip) {
   if (!answers) return;
 
   std::vector<uint8_t> response;
-  response.push_back(0); response.push_back(0);
+  response.push_back(transactionId >> 8);
+  response.push_back(transactionId & 0xFF);
   response.push_back(0x84); response.push_back(0x00);
-  response.push_back(0); response.push_back(0);
+  // A legacy reply repeats the question it answers; a multicast one carries no
+  // question section at all.
+  const uint16_t echoed = legacy ? questions : 0;
+  response.push_back(echoed >> 8); response.push_back(echoed & 0xFF);
   response.push_back(answers >> 8); response.push_back(answers & 0xFF);
   response.push_back(0); response.push_back(0);
   response.push_back(0); response.push_back(0);
+  if (legacy) response.insert(response.end(), packet + 12, packet + offset);
   response.insert(response.end(), body.begin(), body.end());
-  sendPacket(response);
+
+  sendPacket(response, legacy ? from : nullptr);
 }
 
 void responderThread() {
@@ -308,7 +337,7 @@ void responderThread() {
     if (received <= 0 || !ip) continue;
 
     std::lock_guard<std::mutex> guard(stateLock);
-    handleQuery(packet, (size_t)received, ip);
+    handleQuery(packet, (size_t)received, ip, &from);
   }
 }
 
