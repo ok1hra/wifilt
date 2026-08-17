@@ -1,0 +1,107 @@
+name: build
+
+# One source, three targets. The point of running all of them on every commit is
+# that the shared sources rot the moment one target stops being compiled: an
+# ESP-only API slips into wifilt.ino and the PC build breaks silently, or a
+# POSIX-ism lands and Windows breaks. Neither is noticed by anyone until much
+# later, which is exactly the divergence the port exists to avoid.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    name: Linux build + integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: make -C native
+
+      # Ports 80, 82 and 83 are all below 1024 and 83 carries the audio, so
+      # without this the integration test can only cover half the product.
+      # Runners have passwordless sudo, so this is free here.
+      - name: Grant CAP_NET_BIND_SERVICE
+        run: sudo setcap cap_net_bind_service=+ep native/build/wifilt
+
+      # Drives the binary against tools/icom-lan-fake-radio.py: RS-BA1
+      # handshake, CI-V frequency into /state, and the AUD1 audio WebSocket
+      # carrying a tone that is decoded and measured on the way out.
+      - name: Integration test (fake radio)
+        run: tools/native-integration-test.sh
+
+      - name: Browser-free smoke tests
+        run: |
+          for test in setup-spine-smoke setup-radio-contract-smoke \
+                      state-json-budget-smoke config-backup-smoke; do
+            echo "--- $test"
+            node "tools/$test.js"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wifilt-linux-x86_64
+          path: native/build/wifilt
+
+  windows:
+    name: Windows cross-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mingw-w64
+        run: sudo apt-get update && sudo apt-get install -y mingw-w64
+
+      # The Makefile names the -posix compiler explicitly. Debian ships mingw in
+      # two threading flavours and the win32 one has no std::thread, std::mutex
+      # or std::condition_variable -- which is everything the FreeRTOS shim is
+      # built from.
+      - name: Build
+        run: make -C native win
+
+      - name: Check it has no DLL dependencies beyond the system ones
+        run: |
+          x86_64-w64-mingw32-objdump -p native/build-win/wifilt.exe \
+            | grep 'DLL Name' | sort -u
+          ! x86_64-w64-mingw32-objdump -p native/build-win/wifilt.exe \
+            | grep -qi 'libstdc++\|libgcc\|libwinpthread'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wifilt-windows-x64
+          path: native/build-win/wifilt.exe
+
+  esp32:
+    name: ESP32 firmware
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: arduino/setup-arduino-cli@v1
+
+      - name: Install the ESP32 core
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls \
+            https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32@2.0.14
+
+      # The sketch depends on TrxNet, which lives outside this repository.
+      - name: Fetch TrxNet
+        run: |
+          mkdir -p "$HOME/Arduino/libraries"
+          git clone --depth 1 https://github.com/ok1hra/TrxNet.git \
+            "$HOME/Arduino/libraries/TrxNet" || \
+            echo "TrxNet unavailable -- the ESP32 job needs it to compile"
+
+      - name: Compile
+        run: |
+          arduino-cli compile \
+            --fqbn "esp32:esp32:esp32:PartitionScheme=no_ota,FlashMode=dio" \
+            --libraries "$HOME/Arduino/libraries" .
