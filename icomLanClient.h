@@ -143,6 +143,19 @@ public:
     stopRxAudio();
     if (!sessionWasActive) return;
     if (streamOpened) sendCivOpenClose(true);
+#if defined(WIFILT_NATIVE)
+    // The radio keeps per-endpoint CI-V conversation state keyed by our fixed
+    // local ports, and a polite control-channel logout alone PARKS it: the
+    // radio stops pinging, nothing ever expires the conversation, and the next
+    // session from the same ports gets its control packets answered but never
+    // any CI-V data ("civ: ready" then "timeout in state", verified against an
+    // IC-705 2026-08-18). A disconnect on the civ channel itself is what
+    // releases it -- wfview sends one on every teardown. The box escapes this
+    // only because its reboot leaves the ports closed long enough for the
+    // radio's keepalives to fail and tear the whole session down; the native
+    // build restarts in under a second, so it must say goodbye properly.
+    if (civGotHere) sendCtrl(civUdp, civMyId, civRemoteId, 0x05, 0);
+#endif
     if (token) sendToken(0x01);        // release
     sendCtrl(ctrlUdp, ctrlMyId, ctrlRemoteId, 0x05, 0);  // disconnect
     civUdp.stop();

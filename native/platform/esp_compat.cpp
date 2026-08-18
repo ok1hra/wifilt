@@ -20,6 +20,11 @@
 
 EspClass ESP;
 
+// Defined in wifilt.ino under WIFILT_NATIVE: logs the radio sessions out so the
+// IC-705 does not keep serving a ghost session after the re-exec (see the note
+// at the definition).
+extern void wifiltNativeStopRadioSessions();
+
 #ifdef _WIN32
 namespace {
 
@@ -54,6 +59,11 @@ void appendQuoted(std::string &commandLine, const char *argument) {
 void EspClass::restart() {
   Serial.println("\nWIFILT | restarting...");
   Serial.flush();
+
+  // Say goodbye to the radio first. The re-exec'd process comes back on the
+  // same fixed local ports within a second, so without a logout it would adopt
+  // the dead session's keepalives and the radio would never expire it.
+  wifiltNativeStopRadioSessions();
 
   // Re-exec ourselves with the original argv so the operator keeps whatever
   // --port / --data-dir / --config-dir they launched with. If that fails there

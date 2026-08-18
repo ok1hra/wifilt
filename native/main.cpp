@@ -29,6 +29,7 @@
 
 #include "Arduino.h"
 #include "EEPROM.h"
+#include "ESPmDNS.h"
 #include "FS.h"
 #include "WebServer.h"
 #include "paths.h"
@@ -45,6 +46,7 @@
 extern void setup();
 extern void loop();
 extern fs::LittleFSFS cfgFS;
+extern void wifiltNativeStopRadioSessions();
 
 namespace {
 
@@ -172,6 +174,14 @@ int main(int argc, char **argv) {
   }
 
   printf("\nWIFILT | shutting down\n");
+  // Log the radio sessions out. Ctrl+C followed by a quick manual start hits
+  // the same ghost-session wedge as a restart: the new process rebinds the
+  // fixed ports and keeps the dead session alive by answering its pings.
+  wifiltNativeStopRadioSessions();
+  // Join the responder thread. A global std::thread left joinable calls
+  // std::terminate() from its destructor at exit, which printed
+  // "terminate called without an active exception" after every Ctrl+C.
+  MDNS.end();
   EEPROM.end();
 
 #ifdef _WIN32

@@ -436,6 +436,23 @@ bool     icomScanSuspendLan = false;   // gate honoured by the LAN service loops
 bool     icomScanLanWasUp = false;     // reconnect afterwards only if we cut it
 bool     icomScanFailed = false;       // scan could not start (no station link)
 IcomLanClient* icomTestClient = nullptr;
+
+#if defined(WIFILT_NATIVE)
+// Called by the native platform layer before a re-exec restart and on process
+// shutdown. The ESP32 reboot takes long enough for the radio to expire the old
+// session by itself; the native restart is near-instant AND rebinds the same
+// fixed local ports 50001-50003, so the new process would answer the dead
+// session's keepalive pings and keep that ghost alive on the radio for ever --
+// the radio then serves CI-V/audio to the ghost and the fresh login loops on
+// "timeout in state". A clean logout here is what the reboot gap does for the
+// box.
+void wifiltNativeStopRadioSessions() {
+  lanClient.stop();
+  for (IcomLanClient* client : secondaryLanClients)
+    if (client) client->stop();
+  if (icomTestClient) icomTestClient->stop();
+}
+#endif
 IPAddress icomTestIp;
 String   icomTestUser, icomTestPass;
 uint8_t  icomTestCivAddr = 0xA4;
