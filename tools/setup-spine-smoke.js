@@ -141,6 +141,38 @@ check("CW IP announce is off until it is asked for",
 check("firmware no longer refuses a TrxNet slot that has no peer yet",
   /if \(nextSlots\[slot\]\.netId != 0x00\s*\n\s*&& \(TRXNET_ID == 0x00 \|\| nextSlots\[slot\]\.netId == TRXNET_ID\)\)/.test(sketch));
 
+// ---- the header: which build, and which network -----------------------------
+// SETUP names the build it is served from and the network the device is on.
+// Both are read off /setup-data.json, so the wording lives in the sketch and the
+// page only places it -- these checks are what keeps the two from drifting.
+const caps = fs.readFileSync(path.join(ROOT, "platform_caps.h"), "utf8");
+check("the build names its operating system, not just \"not the box\"",
+  /_WIN32[\s\S]{0,80}"windows"/.test(caps) && /__APPLE__[\s\S]{0,80}"macos"/.test(caps)
+  && /__linux__[\s\S]{0,80}"linux"/.test(caps));
+// A platform nobody named must not be able to claim it is Linux.
+check("an unnamed platform falls back rather than guessing", /#else\s*\n\s*#define CAP_PLATFORM_NAME "native"/.test(caps));
+check("the ESP32 build still calls itself esp32", /#define CAP_PLATFORM_NAME "esp32"/.test(caps));
+check("the page appends the platform to the product name, never rewriting it",
+  /id="setupPlatformSuffix"/.test(html)
+  && /suffix\.textContent = '-' \+ String\(data\.platform\)\.toUpperCase\(\)/.test(html));
+
+// One segment, several states. The radio is the truth: WiFi.SSID() is the
+// network actually joined, so the line cannot name one the device has dropped.
+check("firmware reports the network from the radio, not from the profile",
+  /apModeText = staSsid\.length\(\) > 0 \? \("AP " \+ staSsid\)/.test(sketch));
+check("SoftAP is still announced as a mode", /apModeText = "AP mode ON";/.test(sketch));
+check("a station that is not joined says so", /apModeText = "WiFi down";/.test(sketch));
+// A hidden network answers WL_CONNECTED with an empty name.
+check("a hidden network does not print a bare AP", /String\("AP \(hidden\)"\)/.test(sketch));
+// No radio, no network to name -- and the SSID may contain a quote.
+check("the desktop binary leaves the segment empty", /String apModeText;\s*\n\s*#if CAP_WIFI/.test(sketch));
+check("the segment is escaped like every other string in the blob",
+  /"apModeText\\":\\""; j \+= configJsonEscape\(apModeText\)/.test(sketch));
+// Concatenation put an orphaned " | " at the head of the line whenever the
+// first segment was empty, which is every load of the desktop binary.
+check("the status line drops empty segments instead of gluing them on",
+  /\]\.filter\(Boolean\)\.join\(' \| '\)/.test(html));
+
 // ---- the banner, decision 8 ------------------------------------------------
 // The transmit check cannot be done on SETUP -- no TX stack, no radio session --
 // so the spine follows the operator to the page that can, rather than letting
@@ -201,7 +233,12 @@ const DRIVER = `
           headings: steps.map(function (s) { return s.querySelector(".spine-name").textContent; }),
           headsVisible: steps.filter(function (s) {
             return s.querySelector(".spine-head").offsetHeight > 0; }).length,
-          summaryPresent: !!document.querySelector(".spine-summary")
+          summaryPresent: !!document.querySelector(".spine-summary"),
+          // The fresh scenario describes a device whose blob names neither a
+          // platform nor a network, which is what an old firmware and a failed
+          // answer both look like. The header has to survive it.
+          suffix: (document.getElementById("setupPlatformSuffix") || {}).textContent,
+          meta: (document.getElementById("setupMeta") || {}).textContent
         })
       });
     }, 600);
@@ -316,6 +353,43 @@ const DRIVER_RADIO = `
 // out of AP mode returned silently because the radio config was incomplete,
 // which in AP mode it MUST be.
 SCENARIOS.firstrun = {data: device({apMode: true}), txgain: {}};
+
+// The header, in a browser, on the real page. Two loads are enough to cover it:
+// this one is a station on a named network on the desktop binary's Linux build,
+// and `fresh` above is a device whose blob names neither platform nor network --
+// which is exactly the shape a failed or old firmware answer has, and the shape
+// that used to start the status line with an orphaned separator.
+SCENARIOS.header = {
+  data: device({apMode: false, platform: "linux", apModeText: "AP Muj Domov",
+    mac: "24:6F:28:AA:BB:CC", fwRev: 20260817, hwRev: 3}),
+  txgain: {}
+};
+
+const DRIVER_HEADER = `
+<script>
+(function () {
+  window.addEventListener("load", function () {
+    setTimeout(function () {
+      var h1 = document.querySelector(".setup-head h1");
+      var suffix = document.getElementById("setupPlatformSuffix");
+      var meta = document.getElementById("setupMeta");
+      // firstChild, not textContent: the tagline lives inside the same h1, and
+      // the point is that the WORD is untouched and only the suffix grew.
+      fetch("/result", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          scenario: location.search.replace("?", ""),
+          product: h1 ? h1.firstChild.nodeValue : "",
+          suffix: suffix ? suffix.textContent : null,
+          suffixColor: suffix ? getComputedStyle(suffix).color : "",
+          taglineColor: h1 ? getComputedStyle(h1.querySelector(".setup-tagline")).color : "",
+          meta: meta ? meta.textContent : ""
+        })
+      });
+    }, 600);
+  });
+}());
+</script>`;
 
 const DRIVER_FIRSTRUN = `
 <script>
@@ -487,6 +561,22 @@ function report() {
     noradio && /Domov/.test(noradio.scanNote));
   check("no radio found: the step does not turn green", noradio && noradio.radioState !== "done");
 
+  // ---- the header -----------------------------------------------------------
+  const header = results.header;
+  check("header: the product name carries the build it runs on",
+    header && header.product === "WIFILT" && header.suffix === "-LINUX");
+  check("header: the platform is quieter than the product",
+    header && header.suffixColor === header.taglineColor && header.suffixColor !== "");
+  check("header: the status line leads with the network the radio is on",
+    header && /^AP Muj Domov \| MAC 24:6F:28:AA:BB:CC \| FW 20260817 \| HW 3$/.test(header.meta));
+  // A blob that names no platform must leave the word alone rather than guess.
+  check("header: an unnamed platform leaves the product name bare",
+    fresh && (fresh.suffix === "" || fresh.suffix == null));
+  // The bug this filter exists for: an empty first segment used to start the
+  // line with " | ", which is every load of the desktop binary.
+  check("header: an empty network segment does not orphan a separator",
+    fresh && /^MAC /.test(fresh.meta));
+
   // ---- the first run --------------------------------------------------------
   const first = results.firstrun;
   check("first run: the WiFi panel is inside step 1, not somewhere below it",
@@ -553,7 +643,9 @@ const server = http.createServer((req, res) => {
   if (url === "/" || url === "/setup") {
     currentScenario = (req.url.split("?")[1] || "fresh").split("&")[0];
     const radioWalk = currentScenario === "radio" || currentScenario === "noradio";
-    const driver = currentScenario === "firstrun" ? DRIVER_FIRSTRUN : radioWalk ? DRIVER_RADIO : DRIVER;
+    const driver = currentScenario === "firstrun" ? DRIVER_FIRSTRUN
+      : currentScenario === "header" ? DRIVER_HEADER
+      : radioWalk ? DRIVER_RADIO : DRIVER;
     const page = fs.readFileSync(path.join(ROOT, "data", "setup.html"), "utf8");
     return send("text/html; charset=utf-8", page.replace("</body>", driver + "</body>"));
   }
@@ -651,12 +743,14 @@ function runScenario(base, name, done) {
 
 server.listen(0, "127.0.0.1", () => {
   const base = "http://127.0.0.1:" + server.address().port + "/";
-  timer = setTimeout(() => { failures.push("timeout waiting for the rendered page"); report(); }, 60000);
+  timer = setTimeout(() => { failures.push("timeout waiting for the rendered page"); report(); }, 75000);
   runScenario(base, "fresh", function () {
     runScenario(base, "ready", function () {
       runScenario(base, "radio", function () {
         runScenario(base, "noradio", function () {
-          runScenario(base, "firstrun", report);
+          runScenario(base, "firstrun", function () {
+            runScenario(base, "header", report);
+          });
         });
       });
     });

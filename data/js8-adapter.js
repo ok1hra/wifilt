@@ -21,6 +21,7 @@
         this._frameCount = 0;
         this._activityKey = "";
         this._failure = null;
+        this._telemetry = null;
         this._worker = createWorker();
         this._worker.onmessage = event => this._receive(event.data);
         // A worker whose script never arrives -- a 404, a dropped connection on a
@@ -100,7 +101,18 @@
         this._worker.postMessage({type: "expire", nowMs});
       }
 
+      // Pulled by the page when it repaints the diagnostics panel, never pushed:
+      // a state message arrives with every audio packet, and an event per packet
+      // would cost a render per packet to show numbers nobody is looking at while
+      // the panel is closed. Only the counters are kept -- holding the whole state
+      // would pin its frame array for as long as the newest message lives.
+      telemetry() { return this._telemetry; }
+
       _receive(message) {
+        if (message.state)
+          this._telemetry = {audio: message.state.audio, decode: message.state.decode,
+            windows: message.state.windows, windowsByMode: message.state.windowsByMode,
+            epoch: message.state.epoch};
         if (message.type === "loading" && this._onEvent)
           this._onEvent({type:"loading", stage:message.stage,
             label:message.label, progress:message.progress,

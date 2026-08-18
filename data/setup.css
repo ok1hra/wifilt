@@ -1134,6 +1134,14 @@ button.icom-scan-hit:hover {
   font-weight: 400;
   letter-spacing: 0.01em;
 }
+
+/* The build the page is served from, appended to the product name by
+   /setup-data.json. Same size and weight as WIFILT so it reads as one name,
+   muted so the product stays the loud half. */
+.setup-head h1 .setup-platform {
+  color: var(--muted);
+}
+
 .setup-page-footer {
   display: flex;
   justify-content: center;

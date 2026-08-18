@@ -14,7 +14,20 @@
 
 #if defined(WIFILT_NATIVE)
 
-  #define CAP_PLATFORM_NAME "pc"
+  // Which operating system, not just "not the box". SETUP shows this as the
+  // suffix in its title (WIFILT-LINUX, WIFILT-WINDOWS), so an operator with the
+  // box and the desktop binary open side by side can tell the two pages apart.
+  // The catch-all matters: a build on a platform nobody named here says
+  // "native" rather than claiming to be Linux.
+  #if defined(_WIN32)
+    #define CAP_PLATFORM_NAME "windows"
+  #elif defined(__APPLE__)
+    #define CAP_PLATFORM_NAME "macos"
+  #elif defined(__linux__)
+    #define CAP_PLATFORM_NAME "linux"
+  #else
+    #define CAP_PLATFORM_NAME "native"
+  #endif
 
   // No radio to provision. The operating system owns the network connection
   // long before this binary starts, so SoftAP, the captive portal (which would

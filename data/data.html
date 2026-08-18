@@ -493,6 +493,10 @@
       <details class="compact-section" data-section="timing">
         <summary><span>Timing and diagnostics</span><span id="diagnosticSummary" class="summary-status">Clock unchecked</span></summary>
         <div id="diagnostics" class="compact-diagnostics"></div>
+        <!-- Live decode telemetry, in a container of its own: it repaints once a
+             second while this panel is open, and the block above holds buttons a
+             one-second innerHTML would swallow a click on. -->
+        <div id="decodeTelemetry" class="compact-diagnostics"></div>
       </details>
     </div>
   </main>
@@ -550,7 +554,7 @@
   <script src="/js8-restrictions.js?v=80c0585c"></script>
   <script src="/js8-autoreply.js?v=f91dddcd"></script>
   <script src="/js8-protocol.js?v=f9be082c"></script>
-  <script src="/js8-timebase.js?v=aeba99fa"></script>
+  <script src="/js8-timebase.js?v=1fb76682"></script>
   <script src="/spectrum.js?v=4f749dd8"></script>
   <script src="/js8-aud1.js?v=13d88b95"></script>
   <!-- The station's calibration table and the ALC limiter, shared with WSPR. -->
@@ -560,7 +564,7 @@
   <script src="/js8-audio.js?v=7be4a7f4"></script>
   <script src="/js8-tx.js?v=26bed715"></script>
   <script src="/js8-core.js?v=750ce261"></script>
-  <script src="/js8-adapter.js?v=44aaa823"></script>
+  <script src="/js8-adapter.js?v=788e573f"></script>
   <!-- Only for RADIO_FULL_POWER_W / fullPowerWatts: the header turns the CI-V
        level into watts and must never disagree with the WSPR page about how. -->
   <!-- One table of Icom models: watts for WSPR, menu paths for the setup guides. -->
@@ -580,7 +584,7 @@
   <script src="/tx-gain-plan-ui.js?v=0d493edc"></script>
   <script src="/dxcc.js?v=c56ee081"></script>
   <script src="/log-db.js?v=6055416f"></script>
-  <script src="/data.js?v=92d4b1aa"></script>
+  <script src="/data.js?v=d6a2fd2a"></script>
   <script src="/compression.js?v=83837925"></script>
 </body>
 </html>

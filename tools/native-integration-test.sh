@@ -134,7 +134,21 @@ if [[ $GZIP_TESTABLE -eq 1 ]]; then
 else
   echo "  SKIP gzip content negotiation -- no compressed assets in this checkout"
 fi
-check "platform reported as pc"        "$(curl -s -m 3 "http://127.0.0.1:$HTTP_PORT/setup-data.json" | grep -q '"platform":"pc"' && echo 1 || echo 0)"
+# The binary names the operating system it was compiled for, not just "not the
+# ESP32" -- SETUP shows it as the suffix in its title. Derived from uname here so
+# the test still proves something when run on a Mac rather than only asserting
+# the name this machine happens to produce.
+case "$(uname -s)" in
+  Linux)  EXPECT_PLATFORM=linux ;;
+  Darwin) EXPECT_PLATFORM=macos ;;
+  MINGW*|MSYS*|CYGWIN*) EXPECT_PLATFORM=windows ;;
+  *)      EXPECT_PLATFORM=native ;;
+esac
+SETUP_DATA="$(curl -s -m 3 "http://127.0.0.1:$HTTP_PORT/setup-data.json")"
+check "platform reported as $EXPECT_PLATFORM" "$(echo "$SETUP_DATA" | grep -q "\"platform\":\"$EXPECT_PLATFORM\"" && echo 1 || echo 0)"
+# No radio, so no network to name. An empty segment is what makes SETUP's status
+# line start at MAC instead of at an orphaned separator.
+check "WiFi status segment empty"      "$(echo "$SETUP_DATA" | grep -q '"apModeText":""' && echo 1 || echo 0)"
 check "RS-BA1 handshake completed"     "$(grep -q '^CONNECTED' "$WORK/radio.log" && echo 1 || echo 0)"
 check "CI-V frequency reached /state"  "$([[ "${FREQ:-0}" == "7035920" ]] && echo 1 || echo 0)"
 

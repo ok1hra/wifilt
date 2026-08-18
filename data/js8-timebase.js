@@ -41,6 +41,9 @@
       this.anchorUtcSample0Ms = null;
       this.anchorCandidates = [];
       this.anchorCandidateCount = 0;
+      this.minCandidateSinceLockMs = null;
+      this.anchorLateMs = 0;
+      this.anchorProofs = 0;
       this.expectedSample = null;
       this.expectedSequence = null;
       this.seenPackets = new Set();
@@ -152,6 +155,21 @@
       } else {
         this.maxTransportDelayMs = Math.max(this.maxTransportDelayMs,
           candidate - this.anchorUtcSample0Ms);
+        // The other half of the same measurement, and the half that decides whether
+        // anything decodes. The anchor is five packets wide and taken while the page
+        // is still loading, so a main-thread stall or a burst of transport delay in
+        // that half second freezes a sample-0 estimate that is too LATE, and every
+        // decode dt then carries the error for the life of the epoch. A later packet
+        // implying an EARLIER sample 0 is proof of exactly how much too late, because
+        // transport delay can only ever push a candidate later than the truth.
+        if (this.minCandidateSinceLockMs === null ||
+            candidate < this.minCandidateSinceLockMs) {
+          this.minCandidateSinceLockMs = candidate;
+          if (candidate < this.anchorUtcSample0Ms) {
+            this.anchorLateMs = this.anchorUtcSample0Ms - candidate;
+            this.anchorProofs += 1;
+          }
+        }
       }
 
       return {accepted: true, duplicate: false, clockJump: clock.jump,
@@ -260,6 +278,7 @@
           streamId: this.streamId, status: this.mediaStatus,
           anchorUtcSample0Ms: this.anchorUtcSample0Ms,
           anchorCandidates: this.anchorCandidateCount,
+          anchorLateMs: this.anchorLateMs, anchorProofs: this.anchorProofs,
           expectedSample: this.expectedSample, slotFlushes: this.slotFlushes},
         transport: {acceptedPackets: this.acceptedPackets,
           duplicatePackets: this.duplicatePackets,
@@ -288,6 +307,9 @@
       this.anchorUtcSample0Ms = null;
       this.anchorCandidates = [];
       this.anchorCandidateCount = 0;
+      this.minCandidateSinceLockMs = null;
+      this.anchorLateMs = 0;
+      this.anchorProofs = 0;
       this.expectedSample = null;
       this.expectedSequence = null;
       this.seenPackets.clear();

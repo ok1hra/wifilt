@@ -48,8 +48,20 @@
       this.dedupeOrder = [];
       this.windows = 0;
       this.windowsByMode = {0: 0, 1: 0, 2: 0, 4: 0, 8: 0};
+      this.resetDecodeStats();
       if (this.protocol && this.protocol.discontinuity)
         this.protocol.discontinuity();
+    }
+
+    // What the decoder actually did with the windows it was handed. Counted here
+    // because this is the only place that knows: the page sees frames when there
+    // are frames, and a decoder that never ran looks exactly like a dead band.
+    resetDecodeStats() {
+      this.decodedWindows = 0;
+      this.decodeEvents = 0;
+      this.skippedWindows = 0;
+      this.lastSkip = null;
+      this.recentDecodes = [];
     }
 
     reset(streamId, anchorUtcMs = this.anchorUtcMs,
@@ -65,6 +77,7 @@
       this.dedupeOrder = [];
       this.windows = 0;
       this.windowsByMode = {0: 0, 1: 0, 2: 0, 4: 0, 8: 0};
+      this.resetDecodeStats();
       if (this.protocol && this.protocol.discontinuity)
         this.protocol.discontinuity();
     }
@@ -149,8 +162,22 @@
     }
 
     decodeWindow(mode, slotUtcMs, firstSample, sampleCount) {
-      if (firstSample < this.totalSamples - RING_SAMPLES ||
-          firstSample + sampleCount > this.totalSamples) return;
+      // A window the ring cannot serve used to return in silence, and silence is
+      // indistinguishable from a quiet band: the decoder never ran, no frame came
+      // out, and nothing anywhere said so. `evicted` means the audio was overwritten
+      // before the window was drained (the worker is behind real time); `incomplete`
+      // means the scheduler released a window the audio path had not finished
+      // producing, which should never happen and is a bug the moment it is nonzero.
+      const incomplete = firstSample + sampleCount > this.totalSamples;
+      if (firstSample < this.totalSamples - RING_SAMPLES || incomplete) {
+        this.skippedWindows += 1;
+        this.lastSkip = {mode, slotUtcMs: Number(slotUtcMs),
+          reason: incomplete ? "incomplete" : "evicted",
+          missingMs: Math.round((incomplete
+            ? firstSample + sampleCount - this.totalSamples
+            : this.totalSamples - RING_SAMPLES - firstSample) / 12)};
+        return;
+      }
       const pcmPtr = this.decoderWasm._malloc(sampleCount * 2);
       const heap = this.decoderWasm.HEAP16;
       for (let i = 0; i < sampleCount; i += 1)
@@ -160,6 +187,7 @@
       );
       this.decoderWasm._free(pcmPtr);
       if (count < 0) throw new Error(`decoder rejected mode ${mode}`);
+      if (count > 0) this.decodedWindows += 1;
 
       while (this.decoderWasm._js8_wasm_decoder_next_event(
         this.decoder, this.eventPtr
@@ -188,6 +216,14 @@
           if (this.dedupeOrder.length > 2048)
             this.dedupe.delete(this.dedupeOrder.shift());
           this.frames.push(frame);
+          // dt is the whole diagnosis for a station that is heard but not decoded:
+          // it says by how much this reception sat off the slot the scheduler cut,
+          // and a bias shared by every station is the anchor, not the band. Kept as
+          // a short tail so the state message stays small.
+          this.decodeEvents += 1;
+          this.recentDecodes.push({slotUtcMs: frame.slotUtcMs, submode: frame.submode,
+            dtMs: frame.dtMs, snr: frame.snr, offsetHz: frame.offsetHz});
+          if (this.recentDecodes.length > 8) this.recentDecodes.shift();
           if (this.protocol) this.protocol.push(frame);
         }
       }
@@ -203,6 +239,9 @@
         windowsByMode: {...this.windowsByMode},
         frames: this.frames.slice(),
         activity: this.protocol ? this.protocol.snapshot() : null,
+        decode: {decodedWindows: this.decodedWindows, events: this.decodeEvents,
+          skippedWindows: this.skippedWindows, lastSkip: this.lastSkip,
+          recent: this.recentDecodes.slice()},
         epoch: {strict: this.strictEpochAnchoring, ready: this.epochReady,
           streamId: this.streamId, anchorUtcMs: Number(this.anchorUtcMs)},
         audio: {

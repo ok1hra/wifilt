@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Setup — WIFILT</title>
-  <link rel="stylesheet" href="/setup.css?v=6ac62c8e">
+  <link rel="stylesheet" href="/setup.css?v=ef13e844">
 </head>
 <body>
   <header class="topbar">
@@ -34,7 +34,7 @@
     <section class="setup-card">
       <header class="setup-head">
         <p class="eyebrow">Configuration</p>
-        <h1>WIFILT<span class="setup-tagline">Web interface for Icom LAN Transceivers</span></h1>
+        <h1>WIFILT<span id="setupPlatformSuffix" class="setup-platform"></span><span class="setup-tagline">Web interface for Icom LAN Transceivers</span></h1>
         <p class="meta" id="setupMeta">Loading setup data</p>
         <!-- The badges used to name the ESP32 partition each section writes to
              (`spiffs`, `littlefs`), which stopped meaning anything useful the
@@ -605,10 +605,26 @@
         });
         var fw = document.getElementById('topbarFw');
         if (fw) fw.dataset.rev = data.fwRev || '';
+        // The name carries the build it is running on, so an operator with the
+        // box and the desktop binary open in two tabs can tell the pages apart.
+        // It only ever grows: the word WIFILT is in the HTML and is never
+        // rewritten, so a failed fetch leaves a correct-but-shorter title
+        // rather than a wrong platform.
+        var suffix = document.getElementById('setupPlatformSuffix');
+        if (suffix && data.platform) suffix.textContent = '-' + String(data.platform).toUpperCase();
+
         var meta = document.getElementById('setupMeta');
         if (meta) {
-          meta.textContent = (data.apModeText || '') + ' | MAC ' + (data.mac || '') +
-            ' | FW ' + (data.fwRev || '') + ' | HW ' + (data.hwRev || '');
+          // Joined by filtering, not by concatenation. The WiFi segment is
+          // empty on the desktop binary -- there is no radio to name a network
+          // with -- and gluing it on unconditionally started the line with an
+          // orphaned separator.
+          meta.textContent = [
+            data.apModeText || '',
+            'MAC ' + (data.mac || ''),
+            'FW ' + (data.fwRev || ''),
+            'HW ' + (data.hwRev || '')
+          ].filter(Boolean).join(' | ');
         }
         var note = document.getElementById('trxnetApNote');
         if (note && data.trxnetApNote) {

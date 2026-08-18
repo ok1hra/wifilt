@@ -11,7 +11,67 @@ published.
 
 ## Working tree — not committed
 
-**REV 20260817.** Installer page and release tooling — no firmware behaviour changed.
+**REV 20260817.** SETUP now names the build it is served from and the network the device is on.
+
+* **The product name carries its platform.** The heading on SETUP reads `WIFILT-ESP32`,
+  `WIFILT-LINUX`, `WIFILT-WINDOWS` or `WIFILT-MACOS`, so an operator with the box and the desktop
+  binary open in two tabs can tell the pages apart. `platform_caps.h` stopped calling every
+  non-ESP32 build `pc` and names the operating system instead — with a `native` fallback, because a
+  platform nobody listed must not be able to claim it is Linux. The word `WIFILT` itself is in the
+  HTML and is never rewritten: the suffix is an empty span that grows once `/setup-data.json`
+  arrives, so a failed fetch leaves a shorter title rather than a wrong one.
+
+* **The status line says which network the device is on**, not merely whether SoftAP is running.
+  One segment with several states — `AP mode ON` in the hotspot, `AP <ssid>` when joined,
+  `AP (hidden)` on a network that answers `WL_CONNECTED` with no name, `WiFi down` otherwise, and
+  nothing at all on the desktop binary, which has no radio to name a network with. The name comes
+  from `WiFi.SSID()` rather than from the configured profile, so the line cannot advertise a network
+  the device has since dropped off — the failure it exists to make visible.
+
+* **A fix that fell out of it:** the line was built by concatenation, so an empty first segment
+  started it with an orphaned ` | `. Segments are now filtered before they are joined. This was
+  invisible until the WiFi segment could be empty, which is every load of the desktop binary.
+
+* Both halves are guarded: `tools/native-integration-test.sh` derives the expected platform from
+  `uname` and checks that the WiFi segment is empty on a build with no radio, and
+  `tools/setup-spine-smoke.js` reads the rendered heading and status line out of headless Chrome —
+  including a device whose blob names neither platform nor network, which is what an old firmware
+  and a failed answer both look like.
+
+* Not verified on the radio: `WiFi.SSID()` under a live association, the switch to the second
+  profile, and the hotspot.
+
+### Committed earlier today
+
+* The tree was clean at REV 20260817. What follows was the working tree of 2026-08-18 and is now
+  committed.
+
+### Still untracked
+
+* **Design notes in `docs/`**, including `first-run-plan.md`,
+  `tx-audio-gain-plan-implementace.md`, `tx-auto-gain-implementace.md`,
+  `js8-skupiny-implementace.md`, `msgbox-implementace.md`, `js8-signal-stripe-plan.md`,
+  `js8-rx-partial-display-plan.md`, `js8-llm-implementace.md`, `aprsis-*.md`, the `js8call-*`
+  guides, `docs/agents/` and the radio CI-V manuals in PDF.
+* **Agreed but not implemented:** the JS8 LLM chat (`docs/js8-llm-implementace.md`) — budget
+  `clamp(frames_rx − 1, 1, 4)`, the timer initiates and the model may only veto, key in
+  `localStorage`, since the page is served over an insecure origin.
+* **Test harnesses** in `tools/`: `stamp-asset-versions.js`, `js8-modem-failure-smoke.js`,
+  `js8-modem-init-race-smoke.js`,
+  `js8-groups-smoke.js`, `js8-data-frames-smoke.js`, `js8-aprs-smoke.js`, `js8-txqueue-smoke.js`,
+  `civread-smoke.js`, `check-page-scripts.js`, `fixtures/`.
+* **`mercury/`** — Rhizomatica Mercury v2 evaluated as a second file-transfer modem beside JS8 and
+  WSPR; the WASM build exists and passes a loopback test (~230 kB Brotli). Airtime, not flash, is the
+  limiting factor. Notes in `docs/mercury-implementace.md`.
+* `backups/` and `AGENTS.md`.
+
+---
+
+## REV 20260817 — 2026-08-18
+
+### `21d7362` release script · `6f74d7e` release.sh · `da3e37a` fix(ci): generate the web assets the integration test serves · `11af540` `2df6079` `ce4b2ea` bugfix
+
+Installer page and release tooling — no firmware behaviour changed.
 
 * **A release is now one script that asks before every phase.** `tools/release.sh` walks
   the nine steps — REV, firmware export, desktop archives, integration test, a hands-on
@@ -109,7 +169,43 @@ published.
   regression guards refuse the USB sentence, a fold shipped `open`, the exclusive-accordion
   `name=` attribute, and a step 0 that calls itself a flash again.
 
-**REV 20260816.**
+---
+
+## REV 20260816 — 2026-08-16 … 2026-08-17
+
+### `a95011c` feat: native build for Linux and Windows from the same source
+
+* **The interface now also runs as a PC program**, built from the same 9 000-line sketch: `native/`
+  carries a small Arduino compatibility layer (`String`, `Print`, `Stream`, `IPAddress`, the
+  `esp32-hal` shims) plus a Makefile that produces a Linux and a Windows binary, 7 600 lines in
+  total and one line changed in `wifilt.ino`.
+* **The differences between the two machines are named once**, in `platform_caps.h`, instead of
+  being scattered as `#ifdef`s: the ESP32 box has a WiFi radio, a CI-V UART and seven GPIOs, the PC
+  build has none of those and reaches radios purely over IP. `WIFILT_NATIVE` is defined only by
+  `native/Makefile`, so the board keeps every capability and nothing about it changes.
+
+### `14d5b62` feat(setup): hide what the running build does not physically have
+
+* **SETUP is told what the build can do** — `platform` and `caps` in `/setup-data.json` — and hides
+  the controls that cannot work on it, so the PC build does not offer a CI-V bus, GPIO keying, the
+  band decoder or the switched 13.8 V output it has no hardware for.
+
+### `15bf9a8` test: exercise every transport without a radio, and build all three targets in CI
+
+* **Every transport can now be exercised with no radio present**: `tools/icom-lan-fake-radio.py`
+  (513 lines) answers the Icom LAN protocol, `tools/dxc-fake-cluster.py` a DX cluster,
+  `tools/aud1-ws-check.py` and `tools/dxc-ws-check.py` drive the two WebSocket channels, and
+  `tools/native-integration-test.sh` ties them together.
+* CI (`.github/workflows/build.yml`) builds all three targets — ESP32, Linux, Windows — so a change
+  that compiles on one and not the others is caught before a release.
+
+### `5179395` fix: report socket failures instead of silently claiming success
+
+* **A failed send is reported as a failure.** The non-blocking socket layer (`net_nonblocking.h`)
+  and the LAN client had paths that returned success after writing nothing, which is the worst
+  possible answer: the caller believed the radio had been told something it never heard.
+
+### `6f3a251` aprs igate · `53fc838` many bugfix + manual update
 
 * **The station can now be an APRS-IS IGate for the JS8 band.** When any station on the
   air addresses `@APRSIS` — `GRID JN79NX` to put its position on the map, or
@@ -241,7 +337,13 @@ published.
   line where the day changes, naming it (`yesterday`, or the date) and marking where
   `today` begins — with no line at all when everything on screen is from today.
 
-**REV 20260815.** Browser only — no firmware behaviour changed.
+---
+
+## REV 20260815 — 2026-08-16
+
+### `7f93600` NEW send MSG via + fix log hotkey, ALC, msg box, ack, reply
+
+Browser only — no firmware behaviour changed.
 
 * **Messages can now be routed through a station that hears the addressee.** The stations
   map already knew who copies whom; that knowledge only ever reached the automation, never
@@ -532,24 +634,30 @@ class of bug, hunted deliberately. Seven findings, all fixed:
   the WSPR beacon reuses the same class for a row of three read-outs and keeps its own grid.
   Measured in headless Chrome across 320–1000 px; not verified on the radio.
 
-### Still untracked
+---
 
-* **Design notes in `docs/`**, including `first-run-plan.md`,
-  `tx-audio-gain-plan-implementace.md`, `tx-auto-gain-implementace.md`,
-  `js8-skupiny-implementace.md`, `msgbox-implementace.md`, `js8-signal-stripe-plan.md`,
-  `js8-rx-partial-display-plan.md`, `js8-llm-implementace.md`, `aprsis-*.md`, the `js8call-*`
-  guides, `docs/agents/` and the radio CI-V manuals in PDF.
-* **Agreed but not implemented:** the JS8 LLM chat (`docs/js8-llm-implementace.md`) — budget
-  `clamp(frames_rx − 1, 1, 4)`, the timer initiates and the model may only veto, key in
-  `localStorage` because `crypto.subtle` does not exist on an insecure origin.
-* **Test harnesses** in `tools/`: `stamp-asset-versions.js`, `js8-modem-failure-smoke.js`,
-  `js8-modem-init-race-smoke.js`,
-  `js8-groups-smoke.js`, `js8-data-frames-smoke.js`, `js8-aprs-smoke.js`, `js8-txqueue-smoke.js`,
-  `civread-smoke.js`, `check-page-scripts.js`, `fixtures/`.
-* **`mercury/`** — Rhizomatica Mercury v2 evaluated as a second file-transfer modem beside JS8 and
-  WSPR; the WASM build exists and passes a loopback test (~230 kB Brotli). Airtime, not flash, is the
-  limiting factor. Notes in `docs/mercury-implementace.md`.
-* `backups/` and `AGENTS.md`.
+## REV 20260813 — 2026-08-14
+
+### `e844bd8` bugfix and manual update
+
+* Manual and screenshots brought in step with the JS8 TX-session and APRS-IS windows, and the test
+  suite grew where the previous two revisions had been thin: new `tools/log-hotkey-smoke.js` (230
+  lines) and `tools/tx-gain-cal-smoke.js` (110), `tools/data-browser-smoke.js` +244,
+  `tools/js8-data-frames-smoke.js` +19.
+
+---
+
+## REV 20260812 — 2026-08-13
+
+### `027a186` log hotkey fix
+
+* **QRPLog keyboard shortcuts corrected** (`data/log.js`): the hotkeys that save and clear a QSO
+  were reachable in states where they did the wrong thing, or not reachable at all where they
+  should have been. Pinned afterwards by `tools/log-hotkey-smoke.js` in `e844bd8`.
+
+### `7c07b99` changelog
+
+* Documentation only.
 
 ---
 

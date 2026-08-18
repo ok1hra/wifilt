@@ -5,7 +5,7 @@
 
 const PAGE_PARAMS = new URLSearchParams(location.search);
 const TEST_MODE = PAGE_PARAMS.has("test");
-const ASSET_REV = "75462622";
+const ASSET_REV = "66104543";
 // Two of the files the worker importScripts() are also loaded by this page with
 // its own <script> tag, and each carried an independent version: the tag in
 // data.html and ASSET_REV here. Nothing forced them to agree, and js8-protocol.js
@@ -197,6 +197,7 @@ const dom = {
   armHours:$("armHours"), autoState:$("autoState"),
   resetSettings:$("resetSettings"), settingsSummary:$("settingsSummary"), settingsFlags:$("settingsFlags"),
   diagnosticSummary:$("diagnosticSummary"), diagnostics:$("diagnostics"),
+  decodeTelemetry:$("decodeTelemetry"),
   sessionBusy:$("sessionBusy"), sessionBusyWhere:$("sessionBusyWhere"),
   sessionBusyDetail:$("sessionBusyDetail"), sessionTakeover:$("sessionTakeover"),
   startup:$("startupLoader"), startupProgress:$("startupProgress"),
@@ -3750,6 +3751,62 @@ function renderDiagnostics() {
   dom.diagnostics.innerHTML=`<span>Audio WebSocket</span><code>${esc(state.audioStatus)}</code><span>Browser/system clock</span><code>${esc(tb.clock.status)} · epoch ${tb.clock.epoch} · jumps ${tb.clock.jumps} <button id="confirmClock" type="button">Confirm synchronized</button></code><span>Media epoch</span><code>${tb.media.epoch} · ${esc(tb.media.reason)} · ${esc(tb.media.status)}</code><span>Packets</span><code>${tb.transport.acceptedPackets} accepted · ${tb.transport.duplicatePackets} duplicate · ${tb.transport.sequenceGaps} gaps</code><span>Timing correction</span><code>manual ${signed(tb.correction.manualMs)} ms · auto ${signed(tb.correction.autoMs)} ms · ${esc(tb.correction.status)} <button id="resetTiming" type="button">Reset</button></code>`;
   $("confirmClock").addEventListener("click",()=>{audioSource.confirmClock();renderDiagnostics();renderHeader();});
   $("resetTiming").addEventListener("click",()=>{audioSource.resetTiming();renderDiagnostics();renderHeader();});
+  renderDecodeTelemetry();
+}
+
+// What the decoder did with the audio, as opposed to what came out of it. A station
+// that is plainly visible in the waterfall and never decodes leaves no other trace:
+// the frame list stays empty whether the decoder found nothing, never ran, or ran on
+// a window cut in the wrong place — and those three want three different fixes.
+// Everything here is measured elsewhere already and was simply never surfaced.
+const dbfs = value => Number(value) > 0 ? `${(20*Math.log10(Number(value))).toFixed(1)} dBFS` : "−∞";
+function renderDecodeTelemetry() {
+  if (!dom.decodeTelemetry) return;
+  const telemetry = activeDecoder && activeDecoder.telemetry ? activeDecoder.telemetry() : null;
+  const tb = audioSource ? audioSource.state().timebase : null;
+  if (!telemetry || !tb) { dom.decodeTelemetry.innerHTML=""; return; }
+  const audio = telemetry.audio || {};
+  const decode = telemetry.decode || {};
+  const rows = [];
+
+  // Peak and RMS are cumulative since the anchor, not a live level (the header
+  // already shows that), so this is a clipping test: a peak pinned at full scale
+  // means the audio was already ruined before the decoder saw it.
+  const clipped = Number(audio.peak) >= 0.999;
+  rows.push(["Audio since anchor",
+    `peak ${dbfs(audio.peak)} · rms ${dbfs(audio.rms)}${clipped?" · <strong>CLIPPING</strong>":""}`]);
+
+  // The anchor maps sample 0 to UTC and never moves again. Late means every decode
+  // dt carries that offset, and the 15 s window has only ~1.9 s of slack for it.
+  const late = Number(tb.media.anchorLateMs)||0;
+  rows.push(["Anchor", tb.media.status!=="locked"
+    ? `${esc(tb.media.status)} · ${tb.media.anchorCandidates} of 5 packets`
+    : `${late>0?`late by ${Math.round(late)} ms (${tb.media.anchorProofs} proofs)`:"no proof of lateness yet"}` +
+      ` · jitter ${Math.round(Number(audio.maxArrivalJitterMs)||0)} ms`]);
+
+  const byMode=Object.entries(telemetry.windowsByMode||{})
+    .filter(([,count])=>count>0)
+    .map(([mode,count])=>`${MODE_TO_SPEED[Number(mode)]||"?"} ${count}`).join(" ");
+  const skip=decode.lastSkip;
+  rows.push(["Decode windows",
+    `${Number(telemetry.windows)||0} cut${byMode?` · ${byMode}`:""} · ${Number(decode.skippedWindows)||0} skipped` +
+    (skip?` (${esc(skip.reason)}, ${skip.missingMs} ms)`:"")]);
+
+  const events=Number(decode.events)||0;
+  rows.push(["Decodes", events
+    ? `${events} frames from ${Number(decode.decodedWindows)||0} windows`
+    : "<strong>no frame decoded in this epoch</strong>"]);
+
+  // The bias every station shares is the anchor or the clock; a spread means the
+  // stations themselves, and then timing is not what is wrong.
+  const recent=(decode.recent||[]);
+  if (recent.length) {
+    const mean=recent.reduce((sum,item)=>sum+Number(item.dtMs||0),0)/recent.length;
+    rows.push(["Recent dt", `mean ${signed(Math.round(mean))} ms · ` + recent.slice(-4).reverse()
+      .map(item=>`${signed(Math.round(Number(item.dtMs)||0))} ms ${MODE_TO_SPEED[Number(item.submode)]||"?"} ${Math.round(Number(item.offsetHz)||0)} Hz`)
+      .join(" · ")]);
+  }
+  dom.decodeTelemetry.innerHTML=rows.map(([label,value])=>`<span>${label}</span><code>${value}</code>`).join("");
 }
 
 function openEmailGatewayDialog(gateway=null) {
@@ -7838,6 +7895,13 @@ async function init() {
   // band costs one postMessage per second and no re-render.
   scheduler.every("reassembly",1000,()=>{
     if(activeDecoder && activeDecoder.expire)activeDecoder.expire(js8Clock.now());
+  });
+  // Repainted only while the operator is looking at it. The numbers ride in on a
+  // state message that arrives with every audio packet, so a closed panel must not
+  // cost a render per second for something nobody can see.
+  scheduler.every("decodeTelemetry",1000,()=>{
+    const panel=dom.decodeTelemetry && dom.decodeTelemetry.closest("details");
+    if(panel && panel.open)renderDecodeTelemetry();
   });
   scheduler.every("heartbeat",5000,()=>{checkHeartbeat();renderHeartbeatState();});
   // Messages that arrived unreadable: the retry windows are minutes long, and

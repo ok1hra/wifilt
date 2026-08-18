@@ -1692,7 +1692,30 @@ void handleSetupData(){
   j +=   ",\"cwKeying\":";   j += CAP_GPIO ? "true" : "false";
   j += "}";
   j += ",\"apMode\":"; j += APmode ? "true" : "false";
-  j += ",\"apModeText\":\""; j += APmode ? "AP mode ON" : "AP mode OFF"; j += "\"";
+  // The first segment of SETUP's status line. One segment with several states
+  // rather than a second one beside it: it answers "which network is this
+  // device on", and "apMode" above already carries the SoftAP flag for anything
+  // that needs to branch on it.
+  //
+  // The radio is the truth. WiFi.SSID() is the network actually joined, not the
+  // profile that was asked for, so the line cannot name a network the device
+  // has since dropped off -- which is the whole reason an operator reads it.
+  // The desktop binary has no radio, so the segment is empty and the page drops
+  // it instead of printing a leading separator.
+  String apModeText;
+  #if CAP_WIFI
+    if (APmode) {
+      apModeText = "AP mode ON";
+    } else if (!WiFiStationReady()) {
+      apModeText = "WiFi down";
+    } else {
+      String staSsid = WiFi.SSID();
+      // A hidden network answers WL_CONNECTED with an empty name, which would
+      // otherwise print a bare "AP " and read as a bug.
+      apModeText = staSsid.length() > 0 ? ("AP " + staSsid) : String("AP (hidden)");
+    }
+  #endif
+  j += ",\"apModeText\":\""; j += configJsonEscape(apModeText); j += "\"";
   j += ",\"mac\":\""; j += configJsonEscape(MACString); j += "\"";
   j += ",\"hwRev\":"; j += HardwareRev;
   j += ",\"ipLastOctet\":"; j += ipLastOctet;
