@@ -30,6 +30,13 @@ jobs:
           git clone --depth 1 https://github.com/ok1hra/TrxNet.git \
             "$HOME/Arduino/libraries/TrxNet"
 
+      # The integration test serves the real asset tree, which is build output and
+      # therefore absent from a fresh checkout. Without these it cannot exercise
+      # the content negotiation the firmware relies on, and says so rather than
+      # passing on an untested path.
+      - name: Install asset tooling
+        run: sudo apt-get update && sudo apt-get install -y p7zip-full terser
+
       - name: Build
         run: make -C native
 

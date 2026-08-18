@@ -97,6 +97,20 @@ python3 "$ROOT/tools/dxc-fake-cluster.py" --port 7300 --interval 1 --seconds 120
 DXC_PID=$!
 sleep 1
 
+# The compressed assets are build output and gitignored, so a fresh clone (CI,
+# or anyone's first checkout) has none of them -- and then the server has
+# nothing to negotiate with and serves everything raw. Generate them, the same
+# way `make dist` does. Where the tools for that are missing the check is
+# skipped out loud rather than quietly passing on an untested code path.
+GZIP_TESTABLE=1
+if [[ ! -f "$ROOT/data/data.js.gz" ]]; then
+  echo "== generating web assets (none in this checkout) =="
+  if ! "$ROOT/tools/prepare-spiffs-tree.sh" "$ROOT/data" "$WORK/tree" >/dev/null 2>&1; then
+    GZIP_TESTABLE=0
+    echo "   could not build them -- needs terser and p7zip-full"
+  fi
+fi
+
 echo "== starting wifilt =="
 "$BINARY" --port "$HTTP_PORT" --data-dir "$ROOT/data" --config-dir "$WORK" \
   > "$WORK/app.log" 2>&1 &
@@ -115,7 +129,11 @@ echo
 echo "== results =="
 check "HTTP answers /state"            "$(curl -s -m 3 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$HTTP_PORT/state" | grep -q 200 && echo 1 || echo 0)"
 check "static assets served"           "$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$HTTP_PORT/setup" | grep -q 200 && echo 1 || echo 0)"
-check "gzip content negotiation"       "$(curl -s -m 5 -I -H 'Accept-Encoding: gzip' "http://127.0.0.1:$HTTP_PORT/data.js" | grep -qi 'content-encoding: gzip' && echo 1 || echo 0)"
+if [[ $GZIP_TESTABLE -eq 1 ]]; then
+  check "gzip content negotiation"     "$(curl -s -m 5 -I -H 'Accept-Encoding: gzip' "http://127.0.0.1:$HTTP_PORT/data.js" | grep -qi 'content-encoding: gzip' && echo 1 || echo 0)"
+else
+  echo "  SKIP gzip content negotiation -- no compressed assets in this checkout"
+fi
 check "platform reported as pc"        "$(curl -s -m 3 "http://127.0.0.1:$HTTP_PORT/setup-data.json" | grep -q '"platform":"pc"' && echo 1 || echo 0)"
 check "RS-BA1 handshake completed"     "$(grep -q '^CONNECTED' "$WORK/radio.log" && echo 1 || echo 0)"
 check "CI-V frequency reached /state"  "$([[ "${FREQ:-0}" == "7035920" ]] && echo 1 || echo 0)"
