@@ -11,7 +11,57 @@ published.
 
 ## Working tree — not committed
 
-**REV 20260817.** Installer page only — no firmware behaviour changed.
+**REV 20260817.** Installer page and release tooling — no firmware behaviour changed.
+
+* **A release is now one script that asks before every phase.** `tools/release.sh` walks
+  the nine steps — REV, firmware export, desktop archives, integration test, a hands-on
+  run of the Linux binary, installing it on this computer, flashing the board, commit and
+  push, publish — and each is a question whose Enter takes the capitalised default. What it adds is not automation but order, because the phases depend on each
+  other in ways that are invisible while you run them one at a time:
+
+  `native/dist` archives are named after `REV` (the Makefile reads the same `#define` the
+  firmware carries) and `tools/gh-pages.sh` looks for exactly those names, so bumping REV
+  without rebuilding them publishes a download page with no desktop downloads at all —
+  as a printed line, not an error. `REV` is compiled in as a number and cannot be read
+  back out of the `.bin`, so file times are the only cheap check that the exported image
+  is the revision everything else claims. And the page is published from a throwaway git
+  repository, which means it will carry a build of source that exists nowhere: publishing
+  now comes *after* the push and refuses to run unless the tree is clean and `HEAD` is
+  `origin/main`.
+
+  Three smaller things the script does because doing them by hand is exactly what gets
+  forgotten. It clears archives of other revisions before `make dist`, whose last step is
+  `sha256sum *.tar.gz *.zip` and would otherwise publish checksums for releases that are
+  not on the page. It re-stamps the asset versions *before* the commit rather than
+  leaving it to `gh-pages.sh`, which runs the same stamper inside itself and would dirty
+  the tracked `data/*.html` immediately after the commit meant to capture them. And it
+  offers `make -C native setcap` before the integration test, because the capability
+  lives on the inode, every relink drops it, and without it ports 80/82/83 do not bind —
+  so the audio half of the test reports itself as skipped on any machine whose `sudo`
+  wants a password.
+
+  Running the binary from the script (phase 5) needed job control to be turned on for
+  that one command: without it the app shares the script's process group, and the Ctrl-C
+  meant to stop the app would end the release with it. Doing that surfaced a defect in
+  the native build worth writing down — on SIGINT it prints `shutting down` and then dies
+  on `terminate called without an active exception`, a thread going out of scope
+  unjoined, exit 134. The script reports it and carries on instead of asking, because the
+  operator pressed that Ctrl-C on purpose.
+
+* **`Sketch → Export Compiled Binary` has a headless equivalent.**
+  `tools/export-compiled-binary.sh` drives the IDE's own command line and then makes the
+  copy that *is* the export — `recipe.output.save_file` renames `wifilt.ino.bin` to
+  `wifilt.ino.esp32.bin`, and nothing else. Checked against an IDE export of the same
+  source: of 1 024 448 bytes the two images differ in 63, all of them inside the embedded
+  ELF SHA-256 at `0xb0`, the checksum byte that field feeds, and the image digest at the
+  end. The code is identical.
+
+  It builds in `build/arduino/` with its own settings folder, so an open IDE cannot change
+  what is built and the script cannot rewrite the IDE's preferences — `--preferences-file`
+  moves Arduino's *whole* settings folder next to that file, which is why the folder needs
+  a `packages` symlink back to `~/.arduino15`. It also refuses a non-DIO image, and reports
+  the size against `app0` of the sketch-local `partitions.csv` (1.375 MB) instead of the
+  2 MB the menu scheme promises and the IDE measures against.
 
 * **The download page now folds into three, and opens none of them.** It had grown into one
   long scroll that laid all three roads end to end — flash an ESP32 board, install on Linux,
