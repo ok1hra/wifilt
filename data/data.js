@@ -353,6 +353,12 @@ const state = {
   settingsDraft:{txGain:null}, reconnectPending:false,
   js8Log:null, loggedCalls:new Set(), autoLogInFlight:new Set(),
   autoExpiryAt:null, // epoch ms when unattended arming lapses (null = unknown/disarmed)
+  // RX audio datagrams the radio sent and the LAN client never got, straight from
+  // the firmware's own counter. It rides in on the /unattended poll the page already
+  // makes; null means that firmware does not report it. It is the only thing that
+  // separates loss on the radio->ESP32 hop from loss on the ESP32->browser one,
+  // because both reach the browser looking identical: a jump in the sample counter.
+  audioRxDropped:null,
 };
 let audioSource = null, activeDecoder = null, activeEncoder = null;
 // Whether the modem ever came up in this page's life, and whether the one free
@@ -1297,10 +1303,39 @@ function ingestSpectrum(samples) {
   waterfall.ingest(samples);
 }
 
+// Inserted silence, split by what this station was doing while it went missing. The
+// worker keeps one cumulative figure, so the split is made here: sample that figure
+// once a second and put the increment in the bucket the radio was in. Any packet seen
+// under PTT sends the WHOLE increment to the transmit bucket -- the split exists to
+// keep our own transmissions out of the receive figure, so where it cannot tell it
+// errs against TX, and a receive figure that stays large is then evidence and not an
+// artefact of the operator's duty cycle.
+const silenceSplit = {baseline:null, rxMs:0, txMs:0, txSeen:false};
+function sampleSilenceSplit() {
+  const telemetry = activeDecoder && activeDecoder.telemetry ? activeDecoder.telemetry() : null;
+  const inserted = telemetry && telemetry.audio
+    ? Number(telemetry.audio.insertedGapSamples8k) : NaN;
+  if (!Number.isFinite(inserted)) return;
+  // A counter that went backwards is a new media epoch -- the worker restarted it at
+  // zero -- and carrying the old buckets across would describe two different runs as
+  // one. Restart with it.
+  if (silenceSplit.baseline === null || inserted < silenceSplit.baseline) {
+    silenceSplit.baseline = inserted;
+    silenceSplit.rxMs = 0; silenceSplit.txMs = 0; silenceSplit.txSeen = false;
+    return;
+  }
+  const deltaMs = (inserted - silenceSplit.baseline) / 8;
+  silenceSplit.baseline = inserted;
+  if (silenceSplit.txSeen) silenceSplit.txMs += deltaMs;
+  else silenceSplit.rxMs += deltaMs;
+  silenceSplit.txSeen = false;
+}
+
 function onSamples(samples, rate, metadata) {
   state.lastAudioMs = performance.now();
   let sum=0;
   for (const value of samples) sum += value * value;
+  if (radioTransmitting()) silenceSplit.txSeen = true;
   ingestSpectrum(samples);
   const rms = Math.sqrt(sum / Math.max(1, samples.length));
   state.audioDb=20*Math.log10(rms + 1e-9);
@@ -3776,6 +3811,32 @@ function renderDecodeTelemetry() {
   rows.push(["Audio since anchor",
     `peak ${dbfs(audio.peak)} · rms ${dbfs(audio.rms)}${clipped?" · <strong>CLIPPING</strong>":""}`]);
 
+  // The hole the waterfall cannot show. A radio datagram the LAN client missed, and a
+  // WS frame the firmware could not queue, both advance the firmware's sample counter
+  // without carrying audio, so the browser fills that media time with silence to keep
+  // the timeline honest. The waterfall draws only the samples that DID arrive, so it
+  // closes the gap and stays beautiful — while the decoder gets the same transmission
+  // with pieces punched out of it. This ratio is the difference between the two views.
+  const timelineMs = (Number(audio.producedSamples12k)||0)/12;
+  const silenceMs = (Number(audio.insertedGapSamples8k)||0)/8;
+  if (timelineMs > 0) {
+    const share = 100*silenceMs/timelineMs;
+    const dropped = state.audioRxDropped;
+    rows.push(["Audio continuity",
+      `${share>=5?"<strong>":""}${Math.round(silenceMs/1000)} s silent of ${Math.round(timelineMs/1000)} s (${share.toFixed(1)} %)${share>=5?"</strong>":""}` +
+      ` · ${Number(audio.discontinuities)||0} breaks` +
+      (dropped===null?"":` · ${dropped} dropped by the radio link`)]);
+    // Which half of that is self-inflicted. The unattributed remainder is silence
+    // from before this page began sampling the counter, and is named rather than
+    // quietly folded into one of the two buckets.
+    const attributed = silenceSplit.rxMs + silenceSplit.txMs;
+    if (attributed > 0)
+      rows.push(["Silence attribution",
+        `receiving ${Math.round(silenceSplit.rxMs/1000)} s · transmitting ${Math.round(silenceSplit.txMs/1000)} s` +
+        (silenceMs - attributed >= 1000
+          ? ` · ${Math.round((silenceMs-attributed)/1000)} s before counting began` : "")]);
+  }
+
   // The anchor maps sample 0 to UTC and never moves again. Late means every decode
   // dt carries that offset, and the 15 s window has only ~1.9 s of slack for it.
   const late = Number(tb.media.anchorLateMs)||0;
@@ -4459,6 +4520,8 @@ function applyUnattendedState(result) {
   // A refusal stands until the arming it failed to create actually exists, so a
   // 5 s poll cannot wipe the only explanation the operator gets.
   if (state.autoExpiryAt) autoStateError = "";
+  const dropped = Number(result && result.audioRxDropped);
+  state.audioRxDropped = Number.isFinite(dropped) ? dropped : null;
 }
 
 // The firmware holds the arming window in RAM only, while the AUTO switch is a
@@ -7900,6 +7963,9 @@ async function init() {
   // state message that arrives with every audio packet, so a closed panel must not
   // cost a render per second for something nobody can see.
   scheduler.every("decodeTelemetry",1000,()=>{
+    // Sampled whether or not anybody is looking: the split is built from increments,
+    // so a closed panel would leave a hole in it that no later render could fill.
+    sampleSilenceSplit();
     const panel=dom.decodeTelemetry && dom.decodeTelemetry.closest("details");
     if(panel && panel.open)renderDecodeTelemetry();
   });
