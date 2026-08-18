@@ -42,18 +42,78 @@ void WebServer::onNotFound(THandlerFunction handler) {
 // Request handling
 // ---------------------------------------------------------------------------
 
-void WebServer::handleClient() {
-  if (!_currentClient) {
-    _currentClient = _server.available();
-    if (!_currentClient) return;
-    _currentClient.setNoDelay(true);
-  }
+namespace {
 
-  if (readRequest()) dispatch();
-  finishRequest();
+// How much of the body the header block promises. Needed before parseRequest()
+// runs, to know when a buffered request is complete.
+size_t declaredContentLength(const String &buffer, int headerEnd) {
+  String head = buffer.substring(0, headerEnd);
+  head.toLowerCase();
+  int at = head.indexOf("content-length:");
+  if (at < 0) return 0;
+  at += 15;
+  while (at < (int)head.length() && head[at] == ' ') at++;
+  size_t value = 0;
+  while (at < (int)head.length() && head[at] >= '0' && head[at] <= '9')
+    value = value * 10 + (size_t)(head[at++] - '0');
+  return value;
 }
 
-bool WebServer::readRequest() {
+}  // namespace
+
+void WebServer::handleClient() {
+  // Accept every connection currently waiting, so a speculative browser socket
+  // cannot stand in front of a real request. The cap only bounds memory; the
+  // rest stay in the listen backlog for the next pass.
+  while (_pending.size() < 16) {
+    WiFiClient incoming = _server.available();
+    if (!incoming) break;
+    incoming.setNoDelay(true);
+    _pending.push_back({incoming, String(), millis() + HTTP_MAX_DATA_WAIT});
+  }
+
+  // One non-blocking read pass per connection, resumed next loop tick if the
+  // request is still incomplete. Nothing here may wait: this loop also feeds
+  // the radio's TX audio ring, and the blocking wait that used to live here
+  // (up to HTTP_MAX_DATA_WAIT per connection) starved it into TX dropouts.
+  for (size_t i = 0; i < _pending.size();) {
+    Pending &pending = _pending[i];
+
+    for (;;) {
+      uint8_t chunk[2048];
+      const int got = pending.client.read(chunk, sizeof(chunk));
+      if (got <= 0) break;
+      pending.buffer.concat((const char *)chunk, (size_t)got);
+      if (pending.buffer.length() > 4u * 1024u * 1024u) {  // runaway sender
+        pending.deadline = millis();
+        break;
+      }
+    }
+
+    const int headerEnd = pending.buffer.indexOf("\r\n\r\n");
+    if (headerEnd >= 0 &&
+        pending.buffer.length() >=
+            (size_t)headerEnd + 4 + declaredContentLength(pending.buffer, headerEnd)) {
+      _currentClient = pending.client;
+      if (parseRequest(pending.buffer, headerEnd)) dispatch();
+      finishRequest();
+      _pending.erase(_pending.begin() + i);
+      continue;
+    }
+
+    if (!pending.client.connected() ||
+        (int32_t)(millis() - pending.deadline) >= 0) {
+      // Speculative or abandoned. Close without answering -- the 500 the old
+      // code sent here taught the browser nothing.
+      pending.client.stop();
+      _pending.erase(_pending.begin() + i);
+      continue;
+    }
+    ++i;
+  }
+}
+
+bool WebServer::parseRequest(const String &raw, int headerEnd) {
   _args.clear();
   _headers.clear();
   _responseHeaders = "";
@@ -63,29 +123,8 @@ bool WebServer::readRequest() {
   _currentUri = "";
   _currentMethod = HTTP_ANY;
 
-  // Sockets are non-blocking, so this spins with short sleeps until the request
-  // is complete or the deadline passes. The bound is the sketch's own
-  // HTTP_MAX_DATA_WAIT, lowered to 1000 ms at wifilt.ino:277.
-  const uint32_t deadline = millis() + HTTP_MAX_DATA_WAIT;
-
-  String head;
-  int headerEnd = -1;
-  while ((int32_t)(millis() - deadline) < 0) {
-    uint8_t chunk[1024];
-    int got = _currentClient.read(chunk, sizeof(chunk));
-    if (got > 0) {
-      head.concat((const char *)chunk, (size_t)got);
-      headerEnd = head.indexOf("\r\n\r\n");
-      if (headerEnd >= 0) break;
-      continue;
-    }
-    if (got == 0 && !_currentClient.connected()) return false;
-    delay(1);
-  }
-  if (headerEnd < 0) return false;
-
-  const String headerBlock = head.substring(0, headerEnd);
-  String       body = head.substring(headerEnd + 4);
+  const String headerBlock = raw.substring(0, headerEnd);
+  String       body = raw.substring(headerEnd + 4);
 
   int lineEnd = headerBlock.indexOf("\r\n");
   parseRequestLine(lineEnd < 0 ? headerBlock : headerBlock.substring(0, lineEnd));
@@ -122,16 +161,10 @@ bool WebServer::readRequest() {
     }
   }
 
-  while (body.length() < declaredLength && (int32_t)(millis() - deadline) < 0) {
-    uint8_t chunk[1024];
-    int got = _currentClient.read(chunk, sizeof(chunk));
-    if (got > 0) {
-      body.concat((const char *)chunk, (size_t)got);
-      continue;
-    }
-    if (got == 0 && !_currentClient.connected()) break;
-    delay(1);
-  }
+  // handleClient() only calls this once the declared body is fully buffered;
+  // anything beyond it would be a pipelined follow-up, which browsers do not
+  // send and this server never supported.
+  if (body.length() > declaredLength) body = body.substring(0, declaredLength);
 
   if (declaredLength > 0) {
     String lowered = contentType;

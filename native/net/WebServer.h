@@ -68,9 +68,13 @@ public:
   void close();
   void stop();
 
-  // Pumped from the sketch loop. Accepts at most one connection per call,
-  // reads the request, dispatches it and closes -- the same one-at-a-time
-  // model the ESP32 server uses.
+  // Pumped from the sketch loop. Accepts every waiting connection, does ONE
+  // non-blocking read pass per connection, and dispatches whatever requests
+  // are complete. It must never wait: the same loop feeds the radio's TX
+  // audio ring, and the previous implementation -- which blocked up to
+  // HTTP_MAX_DATA_WAIT waiting for each request -- turned every speculative
+  // browser socket (opened ahead of need, often never written to) into a
+  // near-1-second loop stall and audible TX dropouts.
   void handleClient();
 
   void on(const String &uri, THandlerFunction handler);
@@ -124,8 +128,15 @@ private:
     String key;
     String value;
   };
+  // A connection whose request has not fully arrived yet. Kept across
+  // handleClient() calls so the read can be resumed instead of waited for.
+  struct Pending {
+    WiFiClient client;
+    String     buffer;
+    uint32_t   deadline;
+  };
 
-  bool readRequest();
+  bool parseRequest(const String &raw, int headerEnd);
   void parseRequestLine(const String &line);
   void parseQuery(const String &query);
   void parseFormBody(const String &body);
@@ -138,6 +149,7 @@ private:
 
   uint16_t              _port;
   WiFiServer            _server;
+  std::vector<Pending>  _pending;
   std::vector<Route>    _routes;
   THandlerFunction      _notFound;
   std::vector<KeyValue> _args;
