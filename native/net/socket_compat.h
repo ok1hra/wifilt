@@ -88,6 +88,15 @@ bool nativeSocketErrorWasPermission(void);
 // True when the last socket error was "address already in use".
 bool nativeSocketErrorWasInUse(void);
 
+// True when a network-order IPv4 address is on a directly attached link -- that
+// is, inside the subnet of one of this host's own interfaces, or loopback.
+//
+// RFC 6762 section 11 requires an mDNS responder to silently ignore anything
+// arriving from further away. Without the check a responder that answers
+// unicast is an off-path reflector: a single small query from a spoofed source
+// makes it send a much larger reply to a victim it has no business talking to.
+bool nativeAddressIsOnLocalLink(uint32_t networkOrderAddress);
+
 // Puts a socket into non-blocking mode. The sketch polls everything from its
 // loop and must never block there -- that is the same constraint the box has.
 bool nativeSocketSetNonBlocking(wifilt_socket_t socket, bool nonBlocking);

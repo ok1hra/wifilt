@@ -549,7 +549,16 @@ f.onload=()=>{
       // The card is built by lan-gate.js and worded for both sub-pages, so it
       // says DATA rather than JS8Call and names the transports that still exist.
       const gd=lanGateFrame.contentDocument,lanGate=gd.querySelector('#lanGate');
-      checks.lanRequiredGate=gd.body.classList.contains('lan-gate-blocked')&&!!lanGate&&!lanGate.hidden&&!gd.querySelector('.brand')&&getComputedStyle(gd.querySelector('.radio-bar')).display==='none'&&getComputedStyle(gd.querySelector('#js8Interface')).display==='none'&&lanGate.querySelector('h1')?.textContent.trim()==='DATA requires a TRX over ICOM-LAN'&&lanGate.textContent.includes('TRXNET and CI-V carry commands only')&&!lanGate.textContent.includes('Bluetooth')&&lanGate.textContent.includes('Any Icom transceiver')&&!!lanGate.querySelector('a[href="/setup#radioSection"]');
+      // Walks the ancestor chain, because the card's own display was never the
+      // problem: a CSS specificity slip left <main> at display:none, so this
+      // card -- the only thing telling the operator why the page had stopped --
+      // was itself invisible while still computing to display:block. Checking
+      // the hidden attribute (never set here) or the card alone both pass in
+      // that state. getClientRects would catch it but is useless in this
+      // harness, whose iframes are display:none and never lay out.
+      const shownThrough=(node)=>{for(let n=node;n&&n.nodeType===1;n=n.parentElement){const st=getComputedStyle(n);if(st.display==='none'||st.visibility==='hidden')return false;if(n.tagName==='BODY')break;}return true;};
+      const gateVisible=shownThrough(lanGate);
+      checks.lanRequiredGate=gd.body.classList.contains('lan-gate-blocked')&&!!lanGate&&gateVisible&&!gd.querySelector('.brand')&&getComputedStyle(gd.querySelector('.radio-bar')).display==='none'&&getComputedStyle(gd.querySelector('#js8Interface')).display==='none'&&lanGate.querySelector('h1')?.textContent.trim()==='DATA requires a TRX over ICOM-LAN'&&lanGate.textContent.includes('TRXNET and CI-V carry commands only')&&!lanGate.textContent.includes('Bluetooth')&&lanGate.textContent.includes('Any Icom transceiver')&&!!lanGate.querySelector('a[href="/setup#radioSection"]');
       // The sub-nav is the one thing that must outlive the blanking, otherwise a
       // blocked WSPR page would have no way back to JS8LAN.
       checks.lanGateKeepsSubnav=getComputedStyle(gd.querySelector('.subtabs')).display!=='none'&&

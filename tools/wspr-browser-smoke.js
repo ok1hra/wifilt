@@ -1631,6 +1631,22 @@ addEventListener("unhandledrejection", event => {
           Boolean(bd.getElementById("lanGate")) &&
           bd.body.classList.contains("lan-gate-blocked") &&
           !blocked.contentWindow.__wspr);
+    // Present in the DOM is not the same as on the screen. A CSS specificity
+    // slip once left <main> at display:none, so this card -- the only thing
+    // telling the operator why the page had stopped -- was itself invisible and
+    // every other assertion here still passed.
+    // The ancestor chain, not the card alone: the slip that made this necessary
+    // left <main> at display:none while the card still computed to block.
+    const shownThrough = (node) => {
+      for (let n = node; n && n.nodeType === 1; n = n.parentElement) {
+        const st = blocked.contentWindow.getComputedStyle(n);
+        if (st.display === "none" || st.visibility === "hidden") return false;
+        if (n.tagName === "BODY") break;
+      }
+      return true;
+    };
+    check("the card explaining the closure is actually visible",
+          shownThrough(bd.getElementById("lanGate")));
     check("the closed WSPR page shows the JS8LAN wording",
           bd.querySelector("#lanGate h1")?.textContent.trim() === "DATA requires a TRX over ICOM-LAN" &&
           bd.getElementById("lanGateDetail")?.textContent.trim() === "no TRX connection is set to ICOM-LAN");

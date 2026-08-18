@@ -11,6 +11,43 @@ published.
 
 ## Working tree — not committed
 
+**REV 20260817.** Installer page only — no firmware behaviour changed.
+
+* **The download page now folds into three, and opens none of them.** It had grown into one
+  long scroll that laid all three roads end to end — flash an ESP32 board, install on Linux,
+  install on Windows — so every reader scrolled through two that were not theirs to reach the
+  one that was. The three are now collapsed sections that open on a click, and what decides
+  the choice is on the outside of each: what it needs, and how big the download is. They are
+  deliberately independent rather than an exclusive accordion, because comparing the Linux and
+  Windows halves is a real thing to want, and they carry the anchors `#esp32`, `#linux` and
+  `#windows` so a link can land in an open one.
+
+  Folding a page changes what a reader can be assumed to have seen, and that turned out to
+  matter more than the layout. Connecting the radio — `SETUP → Radio`, TRX1 to `ICOM-LAN`,
+  address and credentials, **Test & identify radio** — used to live inside the ESP32 half,
+  where a Linux reader met it in passing on the way down the page. Folded away, that reader
+  would never have seen the one step that decides whether any of it works. It is now a section
+  of its own below the three, with the address as a link that opens in its own tab. The same
+  reasoning moved `SHA256SUMS` into both download blocks: it was mentioned only in the Windows
+  paragraph, which a Linux reader will now never open.
+
+  It also settled a sentence that was simply untrue. The page told anyone with *"a radio
+  connected only by USB"* that they needed the interface board — a connection this project
+  has never had. Radios are reached over ICOM-LAN, over the CI-V serial bus or over TrxNet,
+  and what the board really adds over the PC build is exactly what `platform_caps.h` compiles
+  out of it: the CI-V wire, the GPIO pins behind FSK/RTTY keying and the band decoder, the
+  switched 13.8 V output and the status LED — plus running at all with no computer switched
+  on. That is now the text that helps the reader choose. In the same pass, step 0 of *the
+  whole road* stopped calling itself *Flash firmware*: it stands above all three platforms
+  now, and two of them flash nothing.
+
+  `tools/installer-page-smoke.js` grew the folds into its contract: the ESP32 section is
+  required, the desktop two are checked only when the build actually carried their archive,
+  every fold present must be closed on load and must stay open when the others are opened,
+  and the flash gate is now exercised through an open fold rather than a hidden one. Four new
+  regression guards refuse the USB sentence, a fold shipped `open`, the exclusive-accordion
+  `name=` attribute, and a step 0 that calls itself a flash again.
+
 **REV 20260816.**
 
 * **The station can now be an APRS-IS IGate for the JS8 band.** When any station on the

@@ -667,6 +667,69 @@ cat > "${OUTPUT_DIR}/index.html" <<EOF
       font-weight: 400;
     }
     .legal { margin-top: 1.75rem; font-size: 0.78rem; line-height: 1.5; }
+    /* The three platforms, collapsed. The page used to lay all three roads end
+       to end, so every reader scrolled through two that were not theirs before
+       reaching the one that was. The summary carries what actually decides the
+       choice -- what the thing needs, and how big the download is -- so the
+       click is informed rather than exploratory.
+       Deliberately not an exclusive accordion (the name= attribute on details):
+       that closes Linux the moment you open Windows, and comparing those two is
+       a real thing to want. The ids are the anchors #esp32 / #linux / #windows, which browsers
+       open on their own when a fragment targets them. */
+    .platform {
+      margin: 0.75rem 0 0;
+      border: 1px solid rgba(96, 165, 250, 0.28);
+      border-radius: 0.9rem;
+      background: rgba(30, 41, 59, 0.45);
+      overflow: hidden;
+    }
+    .platform > summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 0.95rem 1.15rem 0.95rem 2.45rem;
+      position: relative;
+    }
+    .platform > summary::-webkit-details-marker { display: none; }
+    /* Its own triangle rather than the .choice look. Opening a section and
+       answering the new/upgrade question are different acts -- one reveals text,
+       the other unlocks the flash button -- and they must not wear the same
+       clothes on a page where the second one matters. */
+    .platform > summary::before {
+      content: "";
+      position: absolute;
+      left: 1.15rem;
+      top: 1.3rem;
+      width: 0;
+      height: 0;
+      border-left: 0.42rem solid var(--accent);
+      border-top: 0.32rem solid transparent;
+      border-bottom: 0.32rem solid transparent;
+      transform-origin: 0.14rem 50%;
+      transition: transform 0.15s ease;
+    }
+    .platform[open] > summary::before { transform: rotate(90deg); }
+    .platform > summary:hover,
+    .platform > summary:focus-visible { background: rgba(59, 130, 246, 0.12); outline: none; }
+    .platform[open] > summary {
+      background: var(--accent-glow);
+      border-bottom: 1px solid rgba(96, 165, 250, 0.2);
+    }
+    .platform-name { display: block; color: #e2e8f0; font-size: 1.05rem; font-weight: 700; }
+    .platform-sub { display: block; margin-top: 0.2rem; color: #94a3b8; font-size: 0.85rem; }
+    .platform-body { padding: 0.4rem 1.15rem 1.4rem; }
+    .platform-body h3 { margin: 1.6rem 0 0.5rem; color: #93c5fd; font-size: 1.1rem; }
+    .platform-body > h3:first-child { margin-top: 0.7rem; }
+    .platform-body pre {
+      overflow-x: auto;
+      margin: 0.8rem 0 0;
+      padding: 0.8rem 0.9rem;
+      border: 1px solid rgba(96, 165, 250, 0.18);
+      border-radius: 0.6rem;
+      background: rgba(15, 23, 42, 0.7);
+    }
+    .platform-body pre code { background: none; padding: 0; }
+    .where p { margin: 0.6rem 0 0; }
+    .dl-line { margin: 0.9rem 0 0; font-size: 1rem; }
     a { color: #60a5fa; }
   </style>
 </head>
@@ -684,12 +747,15 @@ cat > "${OUTPUT_DIR}/index.html" <<EOF
       <section aria-labelledby="road-title">
         <h2 id="road-title">The whole road, before you start</h2>
         <p>
-          Flashing is step zero. Everything after it happens on the device's own
-          <strong>SETUP</strong> page, in this order — each step only needs what the
+          Installing is step zero, and it is the only step that differs between the three
+          platforms below. Everything after it happens on the device's own
+          <strong>SETUP</strong> page, in this order &mdash; each step only needs what the
           device cannot work out for itself.
         </p>
+        <!-- Step 0 does not say "flash" any more. Two of the three platforms below
+             flash nothing at all, and this list now stands above all three. -->
         <ol class="road">
-          <li class="road-now"><span class="road-n">0</span> Flash firmware</li>
+          <li class="road-now"><span class="road-n">0</span> Install WIFILT</li>
           <li><span class="road-n">1</span> Network</li>
           <li><span class="road-n">2</span> Identity</li>
           <li><span class="road-n">3</span> Radio</li>
@@ -700,8 +766,34 @@ cat > "${OUTPUT_DIR}/index.html" <<EOF
 
       <hr class="divider">
 
-      <section aria-labelledby="hardware-title">
-        <h2 id="hardware-title">Required hardware</h2>
+      <section class="where" aria-labelledby="where-title">
+        <h2 id="where-title">Where will it run?</h2>
+        <p>
+          One build, three places. Open the one that is yours &mdash; the other two stay folded
+          away.
+        </p>
+        <p>
+          <strong>A radio already on your network</strong> &mdash; an IC-705, IC-7610 or
+          IC-7300&nbsp;MK2 with <strong>Network&nbsp;Control</strong> switched on &mdash; needs no
+          hardware at all. The program on your computer reaches it over IP, and it is the same
+          software as the firmware, version <code>${FW_REV}</code>.
+        </p>
+        <p>
+          <strong>The interface board adds what a computer cannot do</strong>: the CI-V serial
+          bus, for radios that have no network port; FSK/RTTY keying and the band decoder on its
+          GPIO pins; the switched 13.8&nbsp;V output and the status LED. And it runs on its own,
+          day and night, with no computer switched on.
+        </p>
+      </section>
+
+      <details class="platform" id="esp32">
+        <summary>
+          <span class="platform-name">ESP32 interface board</span>
+          <span class="platform-sub">flash over USB &bull; runs on its own 24/7 &bull; CI-V, keying, band decoder</span>
+        </summary>
+        <div class="platform-body">
+
+        <h3>Required hardware</h3>
         <dl class="hardware-grid">
           <div class="hardware-item">
             <dt>Processor</dt>
@@ -725,191 +817,217 @@ cat > "${OUTPUT_DIR}/index.html" <<EOF
           This firmware image targets the original ESP32. It is not compatible with ESP32-C3,
           ESP32-S2, ESP32-S3, or other ESP32 chip families.
         </p>
-      </section>
 
-      <hr class="divider">
-
-      <h2>Flash firmware via USB</h2>
-      <p>
-        Open this page in <strong>Google Chrome</strong> or <strong>Microsoft Edge</strong>
-        (Web Serial is not supported in Firefox or Safari).
-        Connect the ESP32 to your computer via USB.
-      </p>
-
-      <p><strong>Is this a new device, or one that is already working?</strong>
-        This page cannot tell, and the answer decides one checkbox further on.</p>
-      <div class="choice">
-        <button type="button" id="choiceNew" aria-pressed="false">
-          New device
-          <span>Nothing on it yet — go straight to flashing.</span>
-        </button>
-        <button type="button" id="choiceUpgrade" aria-pressed="false">
-          Upgrading a working device
-          <span>It keeps its settings — as long as you leave one box unticked.</span>
-        </button>
-      </div>
-
-      <div class="warn-box fate" id="backupPanel" hidden>
-        <p><strong>Your configuration survives this — do not tick "Erase device".</strong>
-          The installer asks <em>Do you want to erase the device before installing WIFILT?</em>
-          with the box already unticked. That is the answer you want: leaving it alone writes
-          the firmware and the web pages only.</p>
-        <dl>
-          <dt>Leave "Erase device" unticked</dt>
-          <dd>The normal update. WiFi networks and passwords, callsign and locator, radio
-              connections and credentials, LOG and JS8 settings,
-              <strong>every TX audio gain calibration</strong>, CW and frequency memories, MSG BOX
-              and band decoder rows all stay$(if [[ -n "$CFG_OFFSET" ]]; then echo " — they live in NVS and in the
-              configuration partition at <code>${CFG_OFFSET}</code>, and the installer writes
-              neither"; fi).</dd>
-          <dt>Tick it only to start clean</dt>
-          <dd>It erases the <strong>whole chip</strong>: everything above goes, including the
-              WiFi credentials that let you reach the device at all. Use it for a board that will
-              not boot, or when you are deliberately starting over — then restore from a backup
-              file.</dd>
-          <dt>Not affected either way</dt>
-          <dd>Your <strong>QSO log</strong>. It is stored in your browser, not on the device,
-              so flashing cannot touch it.</dd>
-        </dl>
-        <p style="margin-top:0.7rem">
-          <strong>Coming from a release older than 20260808?</strong> Those builds kept the
-          configuration inside the web-asset filesystem that this flash replaces, so it is lost
-          whichever way you answer. Save a backup first and restore it afterwards:
-          <a href="http://wifilt.local/config/download">download it now</a>, or open your
-          device's address and use <strong>SETUP &rarr; Download config</strong>. This page
-          cannot fetch it for you — it is served over HTTPS and your device over HTTP, so the
-          browser blocks the request.
+        <h3>Flash firmware via USB</h3>
+        <p>
+          Open this page in <strong>Google Chrome</strong> or <strong>Microsoft Edge</strong>
+          (Web Serial is not supported in Firefox or Safari).
+          Connect the ESP32 to your computer via USB.
         </p>
-        <p style="margin-top:0.5rem">
-          One thing a backup file never carries: the <strong>MSG BOX</strong>. Stored messages
-          cannot be exported, so anything still waiting there is lost by an erase — read or
-          forward it first.
+
+        <p><strong>Is this a new device, or one that is already working?</strong>
+          This page cannot tell, and the answer decides one checkbox further on.</p>
+        <div class="choice">
+          <button type="button" id="choiceNew" aria-pressed="false">
+            New device
+            <span>Nothing on it yet &mdash; go straight to flashing.</span>
+          </button>
+          <button type="button" id="choiceUpgrade" aria-pressed="false">
+            Upgrading a working device
+            <span>It keeps its settings &mdash; as long as you leave one box unticked.</span>
+          </button>
+        </div>
+
+        <div class="warn-box fate" id="backupPanel" hidden>
+          <p><strong>Your configuration survives this &mdash; do not tick "Erase device".</strong>
+            The installer asks <em>Do you want to erase the device before installing WIFILT?</em>
+            with the box already unticked. That is the answer you want: leaving it alone writes
+            the firmware and the web pages only.</p>
+          <dl>
+            <dt>Leave "Erase device" unticked</dt>
+            <dd>The normal update. WiFi networks and passwords, callsign and locator, radio
+                connections and credentials, LOG and JS8 settings,
+                <strong>every TX audio gain calibration</strong>, CW and frequency memories, MSG BOX
+                and band decoder rows all stay$(if [[ -n "$CFG_OFFSET" ]]; then echo " &mdash; they live in NVS and in the
+                configuration partition at <code>${CFG_OFFSET}</code>, and the installer writes
+                neither"; fi).</dd>
+            <dt>Tick it only to start clean</dt>
+            <dd>It erases the <strong>whole chip</strong>: everything above goes, including the
+                WiFi credentials that let you reach the device at all. Use it for a board that will
+                not boot, or when you are deliberately starting over &mdash; then restore from a backup
+                file.</dd>
+            <dt>Not affected either way</dt>
+            <dd>Your <strong>QSO log</strong>. It is stored in your browser, not on the device,
+                so flashing cannot touch it.</dd>
+          </dl>
+          <p style="margin-top:0.7rem">
+            <strong>Coming from a release older than 20260808?</strong> Those builds kept the
+            configuration inside the web-asset filesystem that this flash replaces, so it is lost
+            whichever way you answer. Save a backup first and restore it afterwards:
+            <a href="http://wifilt.local/config/download">download it now</a>, or open your
+            device's address and use <strong>SETUP &rarr; Download config</strong>. This page
+            cannot fetch it for you &mdash; it is served over HTTPS and your device over HTTP, so the
+            browser blocks the request.
+          </p>
+          <p style="margin-top:0.5rem">
+            One thing a backup file never carries: the <strong>MSG BOX</strong>. Stored messages
+            cannot be exported, so anything still waiting there is lost by an erase &mdash; read or
+            forward it first.
+          </p>
+        </div>
+
+        <ul id="flashHints" hidden>
+          <li>After connecting, select the correct <code>CP210x</code> / <code>CH340</code> / <code>JTAG</code> serial device.</li>
+          <li>Choose <strong>Install WIFILT</strong>.</li>
+          <li>The next screen asks <em>Do you want to erase the device before installing WIFILT?</em>
+              &mdash; the <strong>Erase device</strong> box starts unticked. Leave it that way unless you
+              mean to wipe the whole chip, then press <strong>Next</strong>.</li>
+        </ul>
+
+        <div class="cta gate" id="flashGate" data-locked="1">
+          <esp-web-install-button manifest="manifest.json?v=${FW_REV}" baudrate="9600"></esp-web-install-button>
+        </div>
+        <p class="gate-note" id="gateNote">Answer the question above to continue.</p>
+
+        <h3>Reach the board after flashing</h3>
+        <!-- These steps assume a device with no WiFi credentials. An update that
+             left NVS alone has them, so it rejoins the network by itself and never
+             shows the hotspot -- sending that operator hunting for WIFILT-AP would
+             be the page's own fault. -->
+        <p class="muted" style="margin-top:0">
+          <strong>Updated a working device without erasing it?</strong> It keeps its WiFi
+          credentials, rejoins your network on its own and is back at the same address as before.
+          Nothing below applies &mdash; the steps are for a device that has no WiFi yet: brand new, or
+          just erased.
         </p>
-      </div>
+        <ol>
+          <li>
+            <strong>Join the device's own WiFi.</strong> On its first boot it creates the network
+            <code>WIFILT-AP</code>, password <code>remoteqth</code>. Scan this with a phone to join
+            without typing either:
+            <div class="qr-box">
+              <div class="qr" id="apQr"></div>
+              <p class="muted" style="margin:0">If the camera app does not offer to join,
+                 pick <code>WIFILT-AP</code> from the WiFi list and type the password.</p>
+            </div>
+          </li>
+          <li><strong>Open <code>http://192.168.4.1</code>.</strong> The setup page appears;
+              some phones open it by themselves.</li>
+          <li id="restoreStep" hidden><strong>Erased the device, or came from a release older
+              than 20260808? Restore your backup first</strong> &mdash; <strong>Upload config</strong> at
+              the bottom of the setup page &mdash; before setting anything by hand. Anything you type
+              before restoring will be overwritten by the file.</li>
+          <li><strong>Enter your WiFi network and password</strong>, then save. The device joins
+              your network while its hotspot is still running and <strong>shows the address it was
+              given, with a QR code</strong>. Scan or write it down: the hotspot closes when it restarts.</li>
+          <li><strong>Reconnect your phone or computer to your normal WiFi</strong> and open that
+              address. From there, <a href="#radio-title">connecting the radio</a> is the same on
+              every platform.</li>
+        </ol>
+        <p class="muted">
+          Lost the address? Try <code>http://wifilt.local/</code>, look in your router's DHCP client
+          list, or open the serial console above at <code>9600 baud</code> and press
+          <strong>Reset Device</strong> to read it from the boot log.
+        </p>
 
-      <ul id="flashHints" hidden>
-        <li>After connecting, select the correct <code>CP210x</code> / <code>CH340</code> / <code>JTAG</code> serial device.</li>
-        <li>Choose <strong>Install WIFILT</strong>.</li>
-        <li>The next screen asks <em>Do you want to erase the device before installing WIFILT?</em>
-            — the <strong>Erase device</strong> box starts unticked. Leave it that way unless you
-            mean to wipe the whole chip, then press <strong>Next</strong>.</li>
-      </ul>
+        <p class="muted">
+          The button above flashes: bootloader, partition table, boot_app0, firmware$(if [[ -n "$SPIFFS_BIN" ]]; then echo ", web assets"; fi).$(if [[ -n "$CFG_OFFSET" ]]; then echo "
+          It does <strong>not</strong> write the configuration partition at <code>${CFG_OFFSET}</code>, which is what
+          lets your settings survive an update."; fi)
+        </p>
+        <p class="muted">
+          For manual flashing there is <code>wifilt-${FW_REV}-full.bin</code> at offset <code>0x0</code>
+          with <code>esptool.py</code>. <strong>That one erases everything</strong> &mdash; it is a whole-chip
+          image, so it overwrites the WiFi credentials in NVS$(if [[ -n "$CFG_OFFSET" ]]; then echo " and the configuration partition"; fi)
+          as well. Use it to recover a board that will not boot, not to update a working one.
+        </p>
 
-      <div class="cta gate" id="flashGate" data-locked="1">
-        <esp-web-install-button manifest="manifest.json?v=${FW_REV}" baudrate="9600"></esp-web-install-button>
-      </div>
-      <p class="gate-note" id="gateNote">Answer the question above to continue.</p>
-
-      <hr class="divider">
-
-      <h2>Open the interface after flashing</h2>
-      <!-- These steps assume a device with no WiFi credentials. An update that
-           left NVS alone has them, so it rejoins the network by itself and never
-           shows the hotspot -- sending that operator hunting for WIFILT-AP would
-           be the page's own fault. -->
-      <p class="muted" style="margin-top:0">
-        <strong>Updated a working device without erasing it?</strong> It keeps its WiFi
-        credentials, rejoins your network on its own and is back at the same address as before.
-        Nothing below applies — the steps are for a device that has no WiFi yet: brand new, or
-        just erased.
-      </p>
-      <ol>
-        <li>
-          <strong>Join the device's own WiFi.</strong> On its first boot it creates the network
-          <code>WIFILT-AP</code>, password <code>remoteqth</code>. Scan this with a phone to join
-          without typing either:
-          <div class="qr-box">
-            <div class="qr" id="apQr"></div>
-            <p class="muted" style="margin:0">If the camera app does not offer to join,
-               pick <code>WIFILT-AP</code> from the WiFi list and type the password.</p>
-          </div>
-        </li>
-        <li><strong>Open <code>http://192.168.4.1</code>.</strong> The setup page appears;
-            some phones open it by themselves.</li>
-        <li id="restoreStep" hidden><strong>Erased the device, or came from a release older
-            than 20260808? Restore your backup first</strong> — <strong>Upload config</strong> at
-            the bottom of the setup page — before setting anything by hand. Anything you type
-            before restoring will be overwritten by the file.</li>
-        <li><strong>Enter your WiFi network and password</strong>, then save. The device joins
-            your network while its hotspot is still running and <strong>shows the address it was
-            given, with a QR code</strong>. Scan or write it down: the hotspot closes when it restarts.</li>
-        <li><strong>Set up the radio.</strong> Reconnect your phone or computer to your normal WiFi,
-            open that address, and go to <strong>SETUP &rarr; Radio</strong>: set TRX1 to
-            <code>ICOM-LAN</code>, enter the radio's address, network user and password, then press
-            <strong>Test &amp; identify radio</strong>. The radio needs
-            <strong>Network Control</strong> switched on in its own menu first.</li>
-      </ol>
-      <p class="muted">
-        Lost the address? Try <code>http://wifilt.local/</code>, look in your router's DHCP client
-        list, or open the serial console above at <code>9600 baud</code> and press
-        <strong>Reset Device</strong> to read it from the boot log.
-      </p>
-
-      <p class="muted">
-        The button above flashes: bootloader, partition table, boot_app0, firmware$(if [[ -n "$SPIFFS_BIN" ]]; then echo ", web assets"; fi).$(if [[ -n "$CFG_OFFSET" ]]; then echo "
-        It does <strong>not</strong> write the configuration partition at <code>${CFG_OFFSET}</code>, which is what
-        lets your settings survive an update."; fi)
-      </p>
-      <p class="muted">
-        For manual flashing there is <code>wifilt-${FW_REV}-full.bin</code> at offset <code>0x0</code>
-        with <code>esptool.py</code>. <strong>That one erases everything</strong> — it is a whole-chip
-        image, so it overwrites the WiFi credentials in NVS$(if [[ -n "$CFG_OFFSET" ]]; then echo " and the configuration partition"; fi)
-        as well. Use it to recover a board that will not boot, not to update a working one.
-      </p>
-$(if [[ -n "$DESKTOP_LINUX_NAME" || -n "$DESKTOP_WIN_NAME" ]]; then cat <<DESKTOP
-      <hr>
-      <h2>No interface board? Run it on your computer</h2>
-      <p>
-        If your transceiver is already on your network &mdash; an IC-705, IC-7610 or IC-7300&nbsp;MK2
-        with Network&nbsp;Control switched on &mdash; the same software runs as a program on your
-        PC and needs no hardware at all. It is the identical build as the firmware above,
-        version <code>${FW_REV}</code>.
-      </p>
-      <p class="muted">
-        A radio connected only by <strong>USB</strong> still needs the interface board: the desktop
-        build talks to radios over the network, not over a serial cable.
-      </p>
-      <ul>
-$(if [[ -n "$DESKTOP_LINUX_NAME" ]]; then echo "
-        <li><a href=\"${DESKTOP_LINUX_NAME}\">${DESKTOP_LINUX_NAME}</a> &nbsp;&bull;&nbsp; Linux x86-64, ${DESKTOP_LINUX_SIZE}</li>"; fi)
-$(if [[ -n "$DESKTOP_WIN_NAME" ]]; then echo "
-        <li><a href=\"${DESKTOP_WIN_NAME}\">${DESKTOP_WIN_NAME}</a> &nbsp;&bull;&nbsp; Windows x64, ${DESKTOP_WIN_SIZE}</li>"; fi)
-      </ul>
+        </div>
+      </details>
 $(if [[ -n "$DESKTOP_LINUX_NAME" ]]; then cat <<LINUX
-      <h3>Linux</h3>
-      <pre><code>tar xzf ${DESKTOP_LINUX_NAME}
+      <details class="platform" id="linux">
+        <summary>
+          <span class="platform-name">Linux PC</span>
+          <span class="platform-sub">radio on the network &bull; no hardware &bull; tar.gz, ${DESKTOP_LINUX_SIZE}</span>
+        </summary>
+        <div class="platform-body">
+          <p class="dl-line">
+            <a href="${DESKTOP_LINUX_NAME}"><strong>${DESKTOP_LINUX_NAME}</strong></a>
+            &nbsp;&bull;&nbsp; Linux x86-64, ${DESKTOP_LINUX_SIZE}$(if [[ -n "$DESKTOP_SUMS_NAME" ]]; then echo "
+            &nbsp;&bull;&nbsp; <a href=\"${DESKTOP_SUMS_NAME}\">SHA256SUMS</a>"; fi)
+          </p>
+          <pre><code>tar xzf ${DESKTOP_LINUX_NAME}
 cd wifilt-linux-x86_64
 sudo ./install.sh</code></pre>
-      <p class="muted">
-        The installer copies the program to <code>/opt/wifilt</code> and grants it permission to
-        use port&nbsp;80. That permission is not optional: ports 80, 82 and 83 are all privileged,
-        and port&nbsp;83 carries the audio, so without it JS8 and WSPR cannot work. It installs a
-        service but deliberately does not enable it &mdash; starting a transmitter's control
-        interface at boot should be your decision. To run it without installing:
-        <code>sudo ./wifilt</code> from the unpacked folder.
-      </p>
+          <p class="muted">
+            The installer copies the program to <code>/opt/wifilt</code> and grants it permission to
+            use port&nbsp;80. That permission is not optional: ports 80, 82 and 83 are all privileged,
+            and port&nbsp;83 carries the audio, so without it JS8 and WSPR cannot work. It installs a
+            service but deliberately does not enable it &mdash; starting a transmitter's control
+            interface at boot should be your decision. To run it without installing:
+            <code>sudo ./wifilt</code> from the unpacked folder.
+          </p>
+        </div>
+      </details>
 LINUX
 fi)
 $(if [[ -n "$DESKTOP_WIN_NAME" ]]; then cat <<WINDOWS
-      <h3>Windows</h3>
-      <p>
-        Unpack the ZIP anywhere and run <code>wifilt.exe</code>. There is nothing to install and no
-        runtime to add. Windows will ask once whether to allow it through the firewall &mdash; say
-        yes, or other devices on your network will not reach it. Because the file is not
-        code-signed, SmartScreen may warn on first run; choose <em>More info</em> &rarr;
-        <em>Run anyway</em>. Verify the download against <code>SHA256SUMS</code> if you would
-        rather not take that on trust.
-      </p>
+      <details class="platform" id="windows">
+        <summary>
+          <span class="platform-name">Windows PC</span>
+          <span class="platform-sub">radio on the network &bull; no hardware &bull; zip, ${DESKTOP_WIN_SIZE}</span>
+        </summary>
+        <div class="platform-body">
+          <p class="dl-line">
+            <a href="${DESKTOP_WIN_NAME}"><strong>${DESKTOP_WIN_NAME}</strong></a>
+            &nbsp;&bull;&nbsp; Windows x64, ${DESKTOP_WIN_SIZE}$(if [[ -n "$DESKTOP_SUMS_NAME" ]]; then echo "
+            &nbsp;&bull;&nbsp; <a href=\"${DESKTOP_SUMS_NAME}\">SHA256SUMS</a>"; fi)
+          </p>
+          <p>
+            Unpack the ZIP anywhere and run <code>wifilt.exe</code>. There is nothing to install and no
+            runtime to add. Windows will ask once whether to allow it through the firewall &mdash; say
+            yes, or other devices on your network will not reach it. Because the file is not
+            code-signed, SmartScreen may warn on first run; choose <em>More info</em> &rarr;
+            <em>Run anyway</em>.$(if [[ -n "$DESKTOP_SUMS_NAME" ]]; then echo " Verify the download against
+            <code>SHA256SUMS</code> if you would rather not take that on trust."; fi)
+          </p>
+        </div>
+      </details>
 WINDOWS
 fi)
-      <p>
-        Then open <a href="http://wifilt.local">http://wifilt.local</a> &mdash; the same address the
-        interface board uses. That is not a coincidence: your browser stores the QSO log per
-        address, so keeping the name identical is what lets a log started on the board carry on
-        unchanged on the computer.
-      </p>
-DESKTOP
-fi)
+
+      <hr class="divider">
+
+      <!-- Lifted out of the ESP32 section on purpose. It is identical for all
+           three platforms, and with the platforms folded away a reader who opens
+           only "Linux PC" would otherwise never meet the one step that decides
+           whether anything works at all. -->
+      <section aria-labelledby="radio-title">
+        <h2 id="radio-title">Connect your radio</h2>
+        <p>
+          Whichever of the three you installed, this part is the same &mdash; including the
+          address:
+          <a href="http://wifilt.local" target="_blank" rel="noopener">http://wifilt.local</a>.
+          That the board and the computer answer to the same name is not a coincidence: your
+          browser stores the QSO log per address, so keeping the name identical is what lets a
+          log started on the board carry on unchanged on a computer.
+        </p>
+        <ol>
+          <li><strong>Switch on Network Control in the radio.</strong> In the radio's own menu,
+              set <code>Network Control</code> to <strong>ON</strong> and invent a network user
+              name and password there.</li>
+          <li><strong>Open SETUP &rarr; Radio</strong> and set TRX1 to <code>ICOM-LAN</code>, then
+              enter the radio's address and the user name and password you just invented.</li>
+          <li><strong>Press Test &amp; identify radio.</strong> The radio reports its own model
+              back, and from then on power limits, menu paths and setup guidance follow whichever
+              transceiver actually answered.</li>
+        </ol>
+        <p class="muted">
+          The rest of the road above &mdash; identity, the transmit check, this browser's own
+          settings &mdash; the SETUP page walks you through step by step. It works out on its own
+          what is already done and asks only for what is missing.
+        </p>
+      </section>
       <p class="muted legal">
         Icom is a registered trademark of Icom Incorporated. WIFILT is an independent software
         project and is not affiliated with, endorsed by, or sponsored by Icom Incorporated.

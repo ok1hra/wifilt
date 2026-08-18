@@ -84,6 +84,49 @@ bool nativeSocketErrorWasPermission(void) {
 #endif
 }
 
+bool nativeAddressIsOnLocalLink(uint32_t networkOrderAddress) {
+  const uint32_t address = ntohl(networkOrderAddress);
+  if ((address >> 24) == 127) return true;              // loopback
+
+#ifdef _WIN32
+  ULONG size = 15 * 1024;
+  IP_ADAPTER_ADDRESSES *adapters = (IP_ADAPTER_ADDRESSES *)malloc(size);
+  if (!adapters) return false;
+  bool local = false;
+  if (GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST |
+                           GAA_FLAG_SKIP_DNS_SERVER, nullptr, adapters, &size) == NO_ERROR) {
+    for (IP_ADAPTER_ADDRESSES *a = adapters; a && !local; a = a->Next) {
+      for (IP_ADAPTER_UNICAST_ADDRESS *u = a->FirstUnicastAddress; u; u = u->Next) {
+        if (u->Address.lpSockaddr->sa_family != AF_INET) continue;
+        const uint32_t own =
+            ntohl(((struct sockaddr_in *)u->Address.lpSockaddr)->sin_addr.s_addr);
+        const uint8_t bits = u->OnLinkPrefixLength;
+        const uint32_t mask = bits == 0 ? 0 : (0xFFFFFFFFu << (32 - bits));
+        if ((own & mask) == (address & mask)) { local = true; break; }
+      }
+    }
+  }
+  free(adapters);
+  return local;
+#else
+  struct ifaddrs *interfaces = nullptr;
+  if (getifaddrs(&interfaces) != 0) return false;
+
+  bool local = false;
+  for (struct ifaddrs *entry = interfaces; entry && !local; entry = entry->ifa_next) {
+    if (!entry->ifa_addr || !entry->ifa_netmask) continue;
+    if (entry->ifa_addr->sa_family != AF_INET) continue;
+    const uint32_t own =
+        ntohl(((struct sockaddr_in *)entry->ifa_addr)->sin_addr.s_addr);
+    const uint32_t mask =
+        ntohl(((struct sockaddr_in *)entry->ifa_netmask)->sin_addr.s_addr);
+    if ((own & mask) == (address & mask)) local = true;
+  }
+  freeifaddrs(interfaces);
+  return local;
+#endif
+}
+
 bool nativeSocketErrorWasInUse(void) {
 #ifdef _WIN32
   return WSAGetLastError() == WSAEADDRINUSE;

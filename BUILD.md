@@ -52,6 +52,33 @@ Release procedure:
 # 2. Arduino IDE: Sketch → Export Compiled Binary
 ```
 
+Step 2 has a headless equivalent, for when the release is built from a terminal or a
+script:
+
+```bash
+tools/export-compiled-binary.sh            # ARDUINO_IDE=/path/to/arduino-1.8.19 if not found
+tools/export-compiled-binary.sh --clean    # from scratch, ignoring the incremental build
+```
+
+It drives the IDE's own command line (`arduino --verify`) with the FQBN the CI job uses,
+then makes the copy that *is* the export — `recipe.output.save_file` in the core's
+`platform.txt` renames `wifilt.ino.bin` to `wifilt.ino.esp32.bin`, and nothing else. The
+result was checked against an IDE export of the same source: the two images differ only in
+the embedded ELF SHA-256 and the image digest that covers it, which change with the build
+path. The code is identical.
+
+Three things it does that the IDE does not:
+
+* it builds in `build/arduino/` with its own settings folder in `build/arduino-settings/`,
+  so an open IDE cannot change what is built and the script cannot rewrite the IDE's
+  preferences. (`--preferences-file` moves Arduino's whole settings folder next to that
+  file, hence the `packages` symlink back to `~/.arduino15`.)
+* it fails if the image is not DIO. The flash mode is one word of the FQBN and a QIO image
+  bricks the boards silently — see above.
+* it reports the size against `app0` of the sketch-local `partitions.csv`, not against the
+  menu scheme. The IDE's "Sketch uses 48%" is measured against the 2 MB the menu promises;
+  the device gives the app 1.375 MB.
+
 ---
 
 ## 2. Web assets

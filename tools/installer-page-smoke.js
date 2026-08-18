@@ -63,6 +63,19 @@ const mustHave = [
   ["offers restoring the backup after flashing", /Upload config/i.test(html)],
   ["shows the road map", /road-now/.test(html) && /Transmit check/.test(html)],
   ["true flash layout", html.includes("1.375 MB application")],
+  // The three folds. The ESP32 one is the page's whole reason to exist, so it
+  // is required unconditionally; Linux and Windows are asserted further down
+  // only when the build that produced this page actually carried their archive.
+  ["the ESP32 fold", /<details class="platform" id="esp32">/.test(html)],
+  // What the board can do that a PC cannot is the criterion the reader uses to
+  // pick a fold, so it has to survive above them.
+  ["names what only the board can do", /CI-V serial/.test(html)
+    && /FSK\/RTTY keying/.test(html) && /band decoder/.test(html)],
+  // Lifted out of the ESP32 fold: whoever opens only "Linux PC" must still meet
+  // the step that decides whether any of it works.
+  ["the radio step stands outside the folds", /id="radio-title"/.test(html)
+    && /Test &amp; identify radio/.test(html)],
+  ["the device link opens in its own tab", /href="http:\/\/wifilt\.local" target="_blank"/.test(html)],
 ];
 const mustNotHave = [
   ["the false claim that flashing destroys contest logs", /contest logs/i.test(html)],
@@ -72,6 +85,16 @@ const mustNotHave = [
   // operator one story about a fate that is actually theirs to choose.
   ["the per-release config-fate wording", /last<\/strong> flash that loses it|Every flash replaces the filesystem/.test(html)],
   ["the backup acknowledgement gate", /backupDone/.test(html)],
+  // There is no USB path to a radio anywhere in this project: the board reaches
+  // radios over ICOM-LAN, over the CI-V serial bus or over TrxNet. The sentence
+  // this guards told operators to buy hardware for a connection that does not
+  // exist.
+  ["the invented USB connection to the radio", /radio connected only by/i.test(html)],
+  // A fold that ships open is the long page coming back one section at a time.
+  ["a platform fold that starts open", /<details class="platform"[^>]*\sopen/.test(html)],
+  // name= makes the folds exclusive, which closes Linux when Windows is opened.
+  ["the exclusive-accordion attribute", /<details[^>]*name="platform"/.test(html)],
+  ["step 0 calling itself a flash again", /road-n">0<\/span> Flash/.test(html)],
 ];
 
 const sourceFailures = [];
@@ -101,6 +124,35 @@ const DRIVER = `
     is(label + ": serial hints follow the gate", el("flashHints").hidden === expectLocked);
     is(label + ": gate note follows the gate", el("gateNote").hidden === !expectLocked);
   }
+
+  // -- the three platform folds ---------------------------------------------
+  // The page used to lay all three roads end to end, so everyone scrolled past
+  // two that were not theirs. Folding it only helps if the folds start closed
+  // and stay independent: an exclusive accordion would close Linux the moment
+  // someone opened Windows to compare them.
+  //
+  // Which desktop folds exist is read off the page rather than assumed. A build
+  // made without "make -C native dist" carries no archive and therefore no fold,
+  // and that is not this test's business to call a failure.
+  var folds = ["esp32", "linux", "windows"].filter(function (id) { return !!el(id); });
+  is("the ESP32 fold is on the page", folds.indexOf("esp32") >= 0);
+  folds.forEach(function (id) { is(id + ": collapsed on load", el(id).open === false); });
+
+  // Opened the way an operator opens them, not by setting .open -- the exclusive
+  // behaviour this guards against is a property of the click path.
+  folds.forEach(function (id) { el(id).querySelector("summary").click(); });
+  folds.forEach(function (id) { is(id + ": still open after the others were opened", el(id).open === true); });
+
+  // Everything below is the flash gate, and an operator only ever reaches it
+  // through an open ESP32 fold -- so that is where it gets tested.
+  folds.forEach(function (id) { if (id !== "esp32") el(id).querySelector("summary").click(); });
+  is("the ESP32 fold is open for the gate checks", el("esp32").open === true);
+
+  // The one step that is the same on all three platforms, and the only one a
+  // reader who opens a single fold would otherwise never see.
+  var deviceLink = document.querySelector('a[href="http://wifilt.local"]');
+  is("the device link sits outside every fold", !!deviceLink && !deviceLink.closest("details"));
+  is("the device link opens in its own tab", !!deviceLink && deviceLink.target === "_blank");
 
   // A cold page must never let anyone flash before answering the one question
   // it cannot answer for itself.

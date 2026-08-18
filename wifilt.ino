@@ -7640,21 +7640,30 @@ void handleSet() {
   resetSetupMessages();
   bool ERRdetect=0;
 
-  if ( requestHasArg("ssid") == false \
-    && requestHasArg("pswd") == false \
-  ) {
+  // Whether this submission is a setup form at all. On the box that question is
+  // answered by the WiFi fields, which every save carries. On a build with no
+  // WiFi they carry nothing meaningful -- and this commit hides them -- so
+  // asking about them there would make the whole save depend on the browser
+  // still posting two inputs it has been told to ignore. Delete or disable them
+  // in setup.html and every other setting (radio, TrxNet, baud, DXC, identity,
+  // memories) would silently stop being stored, with setupSaveOk left false and
+  // no error string to explain it: /setup/save would answer {"ok":false,
+  // "error":""}. De Morgan of the original test, so the ESP32 path is unchanged.
+  #if CAP_WIFI
+    const bool submissionHasForm = requestHasArg("ssid") || requestHasArg("pswd");
+  #else
+    const bool submissionHasForm = true;
+  #endif
+
+  if ( submissionHasForm == false ) {
     // Serial.println("Form NOT valid");
   }else{
     // Serial.println("Form VALID");
 
-    // Only where there is a radio to join a network with. On a build without
-    // WiFi the form still carries these fields, empty, and the length check
-    // below then refuses the whole save -- taking the radio, TrxNet and baud
-    // settings further down with it, because they all live in this same else
-    // branch. Nothing here has anywhere to be stored on such a build anyway.
-    //
-    // Guarded rather than made conditional at runtime so the ESP32 build is
-    // preprocessed to exactly the code it had before.
+    // Validated and stored only where there is a radio to join a network with.
+    // Empty fields would otherwise fail the length check below and refuse the
+    // whole save. Guarded rather than made conditional at runtime so the ESP32
+    // build is preprocessed to exactly the code it had before.
     #if CAP_WIFI
 
     // 1-20 - SSID1*
