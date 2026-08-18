@@ -48,6 +48,17 @@ published.
   unjoined, exit 134. The script reports it and carries on instead of asking, because the
   operator pressed that Ctrl-C on purpose.
 
+  That phase also settled a question that has probably cost other people an evening:
+  `http://wifilt.local` not loading while the binary sits there serving happily. The
+  responder is right — a raw multicast query answers `10.25.100.105` — but `nsswitch.conf`
+  reads `hosts: files mdns4_minimal …`, and one line of `/etc/hosts` pinning
+  `wifilt.local` to the hardware's address means no mDNS query is ever made. Pointed at a
+  network the machine is not on, that looks exactly like a broken web server. The script
+  now prints the addresses that do work and names the offending line. It also learned that
+  `getcap` is in `/sbin`, off a normal user's `PATH`: called by name alone it reported "no
+  capability" for a binary that already had one, and asked for a sudo password that
+  changed nothing.
+
 * **`Sketch → Export Compiled Binary` has a headless equivalent.**
   `tools/export-compiled-binary.sh` drives the IDE's own command line and then makes the
   copy that *is* the export — `recipe.output.save_file` renames `wifilt.ino.bin` to

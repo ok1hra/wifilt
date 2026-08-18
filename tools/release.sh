@@ -35,6 +35,13 @@ SKETCH="${ROOT_DIR}/wifilt.ino"
 FIRMWARE_BIN="${ROOT_DIR}/wifilt.ino.esp32.bin"
 DIST_DIR="${ROOT_DIR}/native/dist"
 NATIVE_BIN="${ROOT_DIR}/native/build/wifilt"
+# getcap lives in /sbin, which is not on a normal user's PATH on Debian. Looking
+# it up by name alone therefore reports "no capability" for a binary that has
+# one, and asks for a sudo password that changes nothing.
+GETCAP=""
+for _cap_candidate in "$(command -v getcap || true)" /sbin/getcap /usr/sbin/getcap; do
+  if [[ -n "$_cap_candidate" && -x "$_cap_candidate" ]]; then GETCAP="$_cap_candidate"; break; fi
+done
 RELEASE_BRANCH="main"
 PAGE_URL="https://ok1hra.github.io/wifilt/"
 FORCE=false
@@ -174,10 +181,14 @@ print_summary() {
 # the question lives in one place.
 ensure_setcap() {   # ensure_setcap WHAT-BREAKS-WITHOUT-IT
   [[ -x "$NATIVE_BIN" ]] || return 1
-  if getcap "$NATIVE_BIN" 2>/dev/null | grep -q cap_net_bind_service; then
-    return 0
+  if [[ -n "$GETCAP" ]]; then
+    if "$GETCAP" "$NATIVE_BIN" 2>/dev/null | grep -q cap_net_bind_service; then
+      return 0
+    fi
+    warn "  Binárka nemá CAP_NET_BIND_SERVICE -- $1"
+  else
+    warn "  getcap nenalezen, capability nelze ověřit -- $1"
   fi
-  warn "  Binárka nemá CAP_NET_BIND_SERVICE -- $1"
   if ask "Udělit ji přes sudo (vyžádá heslo)?" N; then
     make -C "${ROOT_DIR}/native" setcap && return 0
     warn "  setcap se nepovedl"
@@ -374,8 +385,25 @@ if [[ ! -x "$NATIVE_BIN" ]]; then
 elif ask "Spustit ./native/build/wifilt --data-dir data?" N; then
   ensure_setcap "porty 80, 82 a 83 nepůjde otevřít" || true
   say ""
+  local_ips="$(hostname -I 2>/dev/null) 127.0.0.1"
   info "  http://localhost/   -- Ctrl-C binárku ukončí a skript pokračuje"
-  info "  hlásí se na LAN jako wifilt.local, stejně jako skutečné zařízení"
+  for ip in $(hostname -I 2>/dev/null); do info "  http://${ip}/"; done
+  # The binary announces itself as wifilt.local, but that name is only as good
+  # as whatever resolves it -- and `files` precedes `mdns4_minimal` in nsswitch,
+  # so one line in /etc/hosts silences the responder completely. When that line
+  # points at an address on a network this machine is not on, the result looks
+  # exactly like a web server that does not work.
+  resolved="$(getent hosts wifilt.local 2>/dev/null | awk '{print $1; exit}')"
+  if [[ -n "$resolved" && " $local_ips " != *" $resolved "* ]]; then
+    warn "  POZOR: wifilt.local ukazuje na $resolved, což není tento počítač."
+    if grep -qs 'wifilt\.local' /etc/hosts; then
+      warn "  Zdroj je řádek v /etc/hosts, který má přednost před mDNS:"
+      warn "    $(grep -s 'wifilt\.local' /etc/hosts | head -1)"
+    fi
+    warn "  Otevři adresu výše, ne wifilt.local."
+  elif [[ -z "$resolved" ]]; then
+    info "  wifilt.local se zatím neresolvuje; responder odpovídá až po startu"
+  fi
   say ""
   # Job control, and it is not decoration: without `set -m` the binary shares
   # this script's process group, so the Ctrl-C that stops it would end the whole

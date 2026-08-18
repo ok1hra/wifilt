@@ -34,6 +34,9 @@
   Reviewed release versions: Emscripten 3.1.6, CMake 3.25.1, Node 18.20.4
   (local checks accept Node 18-20). See docs/js8call-build.md.
 
+
+  ./tools/release.sh
+
   1. Increase REV value in this .ino
   2. Arduino IDE 1.8.19 menu: Sketch/Export compiled Binary
      Board "ESP32 Dev Module", Tools/Partition Scheme:"No OTA (2MB APP/2MB SPIFFS)",

@@ -80,10 +80,24 @@ computer, to the board, or outward. Phases 4 and 5 are looks rather than steps, 
 failure there asks whether to carry on. Nothing is offered on a branch other than `main`
 from phase 8 onwards.
 
-Phase 5 has one wrinkle worth knowing before it surprises you: Ctrl-C makes the native
-binary print `shutting down` and then die on `terminate called without an active
-exception` — a thread left unjoined in its shutdown path. The script names it and carries
-on rather than asking, and the summary keeps the phase yellow so it is not forgotten.
+Phase 5 has three wrinkles worth knowing before they surprise you.
+
+Ctrl-C makes the native binary print `shutting down` and then die on `terminate called
+without an active exception` — a thread left unjoined in its shutdown path. The script
+names it and carries on rather than asking, and the summary keeps the phase yellow so it
+is not forgotten.
+
+`http://wifilt.local` may not reach the binary even though it announces exactly that name.
+`nsswitch.conf` reads `hosts: files mdns4_minimal …`, so a single line in `/etc/hosts`
+outranks the responder and no mDNS query is ever made; if that line points at the hardware
+on a network this machine is not on, the result looks precisely like a web server that
+does not work. The script prints the addresses that do work and says so when the name
+resolves somewhere else.
+
+`getcap` lives in `/sbin`, which is not on a normal user's `PATH` on Debian. Calling it by
+name alone reports "no capability" for a binary that has one, and asks for a sudo password
+that changes nothing — so the script looks in `/sbin` and `/usr/sbin` too, and says openly
+when it cannot check at all.
 
 By hand it is still two steps — bump `REV` in `wifilt.ino`, then Arduino IDE:
 Sketch → Export Compiled Binary — and step 2 has a headless equivalent, for when the
