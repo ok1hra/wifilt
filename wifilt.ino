@@ -135,7 +135,7 @@ volatile bool cwIpSendPending = false;
 #ifndef LOOP_WARN_MS
   #define LOOP_WARN_MS 200
 #endif
-#define REV 20260817
+#define REV 20260818
 #define WIFI
 #define FSK_KEYING  // RTTY by keying the FSK + PTT outputs (was UDP_TO_FSK, from when a UDP port fed it)
 #define WDT         // watchdog timer
@@ -559,6 +559,14 @@ int incomingByte = 0;   // for incoming serial data
   WiFiServer audioWsServer(83);        // AUD1 WebSocket: timed RX/TX audio for DATA page
   WiFiClient AudioWsClient;
   uint32_t audioRxPackets = 0;         // counts forwarded audio datagrams per WS session
+  // RX-audio health, per WS session. The serial log used to say nothing between
+  // "rx audio flowing" and the next reconnect, so every dropout investigation
+  // started from a log that could not distinguish "firmware starved the stream"
+  // from "WiFi ate the packets" -- these feed the once-a-minute AUD health line.
+  uint32_t audioSeqGapEvents = 0;      // holes that reached the browser as silence
+  uint32_t audioSeqGapPackets = 0;     // radio datagrams those holes cost (20 ms each)
+  uint32_t audioWsDropFrames = 0;      // AUD1 frames dropped because wsOut was full
+  uint32_t audioHealthLastMs = 0;      // last AUD health line
   uint8_t  audioTxBuf[1400];           // coalesce ~20ms radio packets into fewer WS frames
   size_t   audioTxLen = 0;
   // Outgoing browser-WS byte ring. RX audio is enqueued here (even from the LAN
@@ -8489,7 +8497,7 @@ void audioFlush(){
   bool sent = AudioSendBinary(wire, 40 + audioTxLen);
   audioRxFirstSample += audioTxLen;
   if(sent){ audioRxSequence++; audioRxFirst = false; audioRxDiscontinuity = false; }
-  else audioRxDiscontinuity = true;
+  else { audioRxDiscontinuity = true; audioWsDropFrames++; }
   audioTxLen = 0;
 }
 
@@ -9028,6 +9036,8 @@ void lanAudioHandler(const uint8_t *data, size_t len, uint16_t radioSequence){
       audioFlush();
       audioRxFirstSample += uint64_t(uint16_t(delta)) * len;
       audioRxDiscontinuity = true;
+      audioSeqGapEvents++;
+      audioSeqGapPackets += uint16_t(delta);
     }
   }
   audioRadioExpectedSequence = uint16_t(radioSequence + 1);
@@ -9197,6 +9207,8 @@ bool AudioHandleWsUpgrade(WiFiClient& webClient, const String& request, const St
   AudioWsClient.setNoDelay(true);
   wsRingReset();
   audioRxPackets = 0; audioTxLen = 0;
+  audioSeqGapEvents = audioSeqGapPackets = audioWsDropFrames = 0;
+  audioHealthLastMs = millis();
   audioStreamId = esp_random(); if(audioStreamId == 0) audioStreamId = 1;
   audioRxSequence = 0; audioRxFirstSample = 0; audioRxFirst = true; audioRxDiscontinuity = false;
   audioRadioSequenceValid = false; audioRadioExpectedSequence = 0;
@@ -9276,6 +9288,26 @@ void AudioHandleWsClient(){
   static uint32_t lastFlush = 0;
   if(millis() - lastFlush >= 100){ audioFlush(); lastFlush = millis(); }
   audioDrainWs();   // push queued frames (incl. those enqueued from the LAN path)
+  // One health line a minute while audio flows. holes = what actually reached
+  // the browser as silence after the retransmit chase; ringDrop = RX queue
+  // overflow (a loop stall longer than ~1.3 s); wsDrop = browser socket
+  // backpressure; rtx = the chase itself (asked outer seqs, holes healed by a
+  // replay, head-of-line holds given up). All per WS session except rtx and
+  // ringDrop, which reset with the LAN audio channel.
+  if(millis() - audioHealthLastMs >= 60000){
+    audioHealthLastMs = millis();
+    if(audioRxPackets){
+      IcomLanClient *healthClient = lanRadioClient();
+      Serial.print("AUD | health rx="); Serial.print(audioRxPackets);
+      Serial.print(" holes="); Serial.print(audioSeqGapEvents);
+      Serial.print("/"); Serial.print(audioSeqGapPackets);
+      Serial.print("pkt ringDrop="); Serial.print(healthClient ? healthClient->audioRxDropped() : 0);
+      Serial.print(" wsDrop="); Serial.print(audioWsDropFrames);
+      Serial.print(" rtx asked="); Serial.print(healthClient ? healthClient->audioRtxRequested() : 0);
+      Serial.print(" got="); Serial.print(healthClient ? healthClient->audioRtxRecovered() : 0);
+      Serial.print(" gaveup="); Serial.println(healthClient ? healthClient->audioRtxAbandoned() : 0);
+    }
+  }
 }
 
 void audioHandleRawClient(){

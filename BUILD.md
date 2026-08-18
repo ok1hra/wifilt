@@ -2,20 +2,24 @@
 
 Everything needed to build and flash WIFILT is in this repository. Most people never need
 this file: the [web installer](https://ok1hra.github.io/wifilt/) writes a released build to
-a blank ESP32 in about a minute, and [HARDWARE.md](HARDWARE.md) describes that route.
+a blank ESP32 in about a minute, or hands you a Linux or Windows binary that needs no
+hardware at all — [HARDWARE.md](HARDWARE.md) and [SOFTWARE.md § 1.5](SOFTWARE.md#15-where-it-runs)
+describe those routes.
 
-The firmware and the web assets are built separately, and the JS8 modem separately again —
-a change to a page does not require the WASM toolchain.
+The firmware, the native Linux/Windows build, the web assets and the JS8 modem are all built
+separately — a change to a page does not require the WASM toolchain, and a change to the
+sketch does not require touching `native/`.
 
 ## Contents
 
 1. [Firmware](#1-firmware)
 2. [Web assets](#2-web-assets)
 3. [Flashing what you built](#3-flashing-what-you-built)
-4. [The web installer page](#4-the-web-installer-page)
-5. [JS8 modem (WebAssembly)](#5-js8-modem-webassembly)
-6. [Tests](#6-tests)
-7. [Documentation in `docs/`](#7-documentation-in-docs)
+4. [Native build: Linux and Windows](#4-native-build-linux-and-windows)
+5. [The web installer page](#5-the-web-installer-page)
+6. [JS8 modem (WebAssembly)](#6-js8-modem-webassembly)
+7. [Tests](#7-tests)
+8. [Documentation in `docs/`](#8-documentation-in-docs)
 
 ---
 
@@ -184,7 +188,77 @@ partition table too, which is what the web installer writes.
 
 ---
 
-## 4. The web installer page
+## 4. Native build: Linux and Windows
+
+The same `wifilt.ino`, the same `data/`, compiled as a PC program instead of firmware. A
+browser cannot tell the two apart — same HTTP API, same WebSocket ports, same assets, and
+the same address, `http://wifilt.local`. Scope is IP only: **ICOM LAN and TrxNet.** There is
+no serial port and no GPIO on a PC, so CI-V over a wire, FSK/RTTY keying, the status LED, the
+switched 13.8 V output and the band decoder stay hardware-box features — CAT itself is
+unaffected, because ICOM LAN carries CI-V on its own UDP channel. `platform_caps.h` names the
+differences once, `/setup-data.json` reports them to the browser, and SETUP hides what cannot
+work rather than presenting a control that saves into nothing.
+
+Everything lives in `native/`, which the Arduino builder ignores. It supplies `WebServer`,
+`WiFiClient`/`Server`/`UDP`, `EEPROM` over a file, `LittleFS` over a directory, an mDNS
+responder and five FreeRTOS primitives; `String`, `Print`, `Stream` and `IPAddress` are taken
+verbatim from the ESP32 core (LGPL — see [native/arduino/NOTICE.md](native/arduino/NOTICE.md)),
+because a hand-written replacement would differ from the box in edge cases that matter. The
+sketch is compiled with `ARDUINO` still defined — the native build is the second real target
+for the same source, not a fork of it.
+
+```bash
+make -C native            # Linux binary: native/build/wifilt
+make -C native win        # Windows .exe, cross-compiled with mingw-w64: native/build-win/wifilt.exe
+make -C native run        # build and run against ./native/_run as the config directory, port 8080
+make -C native setcap     # grant cap_net_bind_service — redo after every rebuild, it lives on the inode
+```
+
+Requirements: `g++`/`gcc` with C++17 for the Linux target; for the Windows cross-build,
+`x86_64-w64-mingw32-g++-posix` / `-gcc-posix` — the **posix** thread variant specifically,
+because Debian's default `win32` variant has no `std::thread`, `std::mutex` or
+`std::condition_variable`, which the FreeRTOS shim is built from. `TRXNET_DIR` defaults to
+`$(HOME)/Arduino/libraries/TrxNet/src`; override it if the library lives elsewhere.
+
+Ports 80, 82 and 83 are all privileged, and 83 carries the audio — no `AUD1` channel means no
+JS8 and no WSPR. The Windows binary needs nothing extra to bind them; on Linux the capability
+above is required and is stored on the binary's inode, so it is lost on every rebuild.
+
+```bash
+make -C native dist       # both platforms: native/dist/wifilt-<REV>-linux-x86_64.tar.gz
+                           #                 native/dist/wifilt-<REV>-windows-x64.zip
+                           #                 + SHA256SUMS
+```
+
+`dist` builds the web assets through `tools/prepare-spiffs-tree.sh` rather than copying
+`data/` — the same re-derived `?v=` tags, minified and compressed, that the ESP32 image
+ships, so the PC binary serves byte-for-byte the same pages. `VERSION` is read from the same
+`#define REV` the firmware carries: the binary and the box must never be able to claim
+different versions of the same source.
+
+Installing what `dist` produces:
+
+| | Linux (`tar.gz`) | Windows (`.zip`) |
+|---|---|---|
+| Unpack | `tar xzf wifilt-*-linux-x86_64.tar.gz` | any zip tool |
+| Run without installing | `sudo ./wifilt` | double-click `wifilt.exe` |
+| Install | `sudo ./install.sh` → `/opt/wifilt` | — nothing to install, the `.exe` is fully static |
+| Privilege | `install.sh` grants `cap_net_bind_service`; redone on every upgrade | none — first run, allow it through the Windows Firewall prompt |
+| Autostart | a `systemd` unit is written but **not enabled** — starting a transmitter's control interface at boot is a decision, not a side effect of installing | — |
+| Configuration | `~/.config/wifilt`; reinstalling never touches it, same guarantee as the box's `cfg` partition surviving a firmware update | next to the `.exe` |
+
+Not code-signed, so Windows SmartScreen may warn on first run (*More info* → *Run anyway*);
+neither archive is signed, so `SHA256SUMS` beside them is the way to check a download rather
+than take it on trust.
+
+`tools/native-integration-test.sh` runs the whole chain against a fake radio — RS-BA1
+handshake, CI-V reaching `/state`, and the `AUD1` audio WebSocket when the binary can bind
+port 83 — with no radio and nothing on the air. `.github/workflows/build.yml` builds all
+three targets, ESP32, Linux and Windows, on every push.
+
+---
+
+## 5. The web installer page
 
 `tools/gh-pages.sh` builds the esp-web-tools installer published at
 <https://ok1hra.github.io/wifilt/>. It reads the partition geometry from `partitions.csv`
@@ -204,7 +278,7 @@ neither `cfg` nor NVS; ticked erases the whole chip.
 
 ---
 
-## 5. JS8 modem (WebAssembly)
+## 6. JS8 modem (WebAssembly)
 
 Only needed when the JS8 DSP sources or the pinned upstream change. The built artifacts are
 committed in `data/`, so a normal contributor never runs this.
@@ -227,7 +301,7 @@ Pinned versions: Emscripten 3.1.6, CMake 3.25.1, Node 18.20.4 (local checks acce
 
 ---
 
-## 6. Tests
+## 7. Tests
 
 The regression harnesses need no radio and no hardware. They are plain Node scripts; the
 browser ones start headless Chrome themselves.
@@ -259,7 +333,7 @@ python3 tools/icom-lan-login-test.py --ask
 
 ---
 
-## 7. Documentation in `docs/`
+## 8. Documentation in `docs/`
 
 `docs/` holds the maintainer's working notes, and most of them are **not** published: the
 `.gitignore` treats `docs/*.md` as an allowlist, so a new note stays private until it is

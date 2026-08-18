@@ -366,6 +366,15 @@ let audioSource = null, activeDecoder = null, activeEncoder = null;
 // failure it is retrying.
 let modemEverReady = false, modemRetried = false;
 let radioPollInFlight = false;
+// Consecutive /state poll failures. One failed poll must not flip the page
+// OFFLINE, and above all must not tear down a healthy AUD1 socket: stopAudio()
+// forces a new stream and a new media epoch, which resets the decoder and costs
+// 15-30 s of RX -- a far bigger loss than the 500 ms of stale telemetry a
+// missed poll leaves behind. And while samples are arriving, the device is
+// provably alive no matter what HTTP says, so fresh audio vetoes the teardown
+// entirely and failures only count toward the threshold.
+let radioPollFailures = 0;
+const RADIO_POLL_OFFLINE_FAILURES = 3;
 let frequencyMenuKey = "";
 const decoderActivitySeen = {messages:new Set(), frames:new Set(), calls:new Map()};
 
@@ -1293,13 +1302,37 @@ const waterfall = new Spectrum.Waterfall({
 
 function radioTransmitting() { return Boolean(state.radio.tx || sinkProxy.ptt); }
 
-function resetSpectrumAnalyzer() { waterfall.reset(); lastSlotIndex=null; }
+function resetSpectrumAnalyzer() { waterfall.reset(); lastSlotIndex=null; spectrumTimeline.epoch=null; }
 
 // Pause only the visual analyser while transmitting: a monitored carrier would
 // poison its AGC. RX samples must still reach the JS8 decoder because the radio
 // and UI can report the RX transition late after PTT release.
-function ingestSpectrum(samples) {
-  if(radioTransmitting())return;
+//
+// The waterfall used to draw only the samples that ARRIVED, so a hole in the
+// stream silently closed up: the picture stayed seamless and optimistic while
+// the decoder was fed silence, and the operator had no way to see why a station
+// "visible in the waterfall" never decoded. Track the sample timeline the AUD1
+// metadata already carries and hand every hole to the waterfall as marked gap
+// rows. An epoch change is a timeline restart (WS reconnect or a wall-clock
+// jump); its length in samples is unknowable across the restart, so it gets a
+// fixed two-row seam rather than a fake duration. TX resets the timeline
+// because the analyser is deliberately paused then -- resuming must not paint
+// the pause as loss.
+const spectrumTimeline = {epoch:null, nextSample:0};
+function ingestSpectrum(samples, metadata) {
+  if(radioTransmitting()){spectrumTimeline.epoch=null;return;}
+  const first=Number(metadata ? metadata.firstSample : NaN);
+  if(Number.isFinite(first)){
+    const epoch=metadata.mediaEpoch;
+    if(spectrumTimeline.epoch===epoch){
+      const gap=first-spectrumTimeline.nextSample;
+      if(gap>0)waterfall.gap(gap);
+    }else if(spectrumTimeline.epoch!==null){
+      waterfall.gap(HOP_SIZE*2);
+    }
+    spectrumTimeline.epoch=epoch;
+    spectrumTimeline.nextSample=first+samples.length;
+  }
   waterfall.ingest(samples);
 }
 
@@ -1336,7 +1369,7 @@ function onSamples(samples, rate, metadata) {
   let sum=0;
   for (const value of samples) sum += value * value;
   if (radioTransmitting()) silenceSplit.txSeen = true;
-  ingestSpectrum(samples);
+  ingestSpectrum(samples, metadata);
   const rms = Math.sqrt(sum / Math.max(1, samples.length));
   state.audioDb=20*Math.log10(rms + 1e-9);
   dom.audioLevel.textContent = `${Math.round(state.audioDb)} dBFS`;
@@ -7173,8 +7206,9 @@ async function pollRadio() {
   radioPollInFlight=true;
   try {
     const response=await fetch(RADIO_STATE_URL,{cache:"no-store", signal:fetchDeadline()});
-    if (!response.ok) throw new Error();
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const next=await response.json();
+    radioPollFailures=0;
     noteRadioLink(next);
     state.radio={...state.radio,...next,frequency:Number(next.frequency)||0};
     // The merge above keeps keys the reply no longer carries. For GPS that is a
@@ -7188,11 +7222,19 @@ async function pollRadio() {
     if (state.pendingFrequency && state.radio.frequency===state.pendingFrequency) state.pendingFrequency=null;
     noteRfKnob(); applyAutoRfPower(); gpsTrackTick();
     ensureAudio(); if(activityFrequencyChanged)renderActivity(); renderHeader(); renderControls();
-  } catch (_error) {
+  } catch (error) {
     // Deliberately not through noteRadioLink(): a fetch that never arrived says
     // nothing about the radio, and counting it as a link drop would re-arm the
     // power write on every WiFi flutter between the browser and the ESP32.
-    state.radio.connected=false; stopAudio(); renderHeader(); renderControls();
+    // Named in the console because this path is otherwise invisible: it leaves
+    // no serial-log trace, only the OFFLINE blink whose trigger (timeout vs
+    // refused connection vs error status) is exactly what error.name/message say.
+    radioPollFailures++;
+    console.warn(`pollRadio: /state failed (${radioPollFailures} in a row)`, error);
+    const audioFresh=state.lastAudioMs>0 && performance.now()-state.lastAudioMs<1500;
+    if (!audioFresh && radioPollFailures>=RADIO_POLL_OFFLINE_FAILURES) {
+      state.radio.connected=false; stopAudio(); renderHeader(); renderControls();
+    }
   }
   finally { radioPollInFlight=false; }
 }

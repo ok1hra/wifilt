@@ -80,6 +80,28 @@
       }
     }
 
+    // A hole in the RX timeline, in samples. Ingesting only what arrived would
+    // stitch the two sides together and the picture would stay seamless while
+    // the decoder was fed silence, so missing time is painted as visibly dead
+    // rows instead. Dark red, not floor-blue: a quiet band and a lost band must
+    // never look alike. Holes shorter than a row are ingested as true silence
+    // (they dim the row they fall into), longer ones become whole rows and
+    // restart the FFT window -- the audio before a hole and after it are not
+    // one continuous signal, and smearing them across the seam would repaint
+    // exactly the lie this method exists to remove.
+    gap(sampleCount) {
+      if (!(sampleCount > 0)) return;
+      const rows = Math.min(this.height, Math.round(sampleCount / this.hopSize));
+      if (rows < 1) { this.ingest(new Float32Array(sampleCount)); return; }
+      const canvas = this.canvas, context = this.context;
+      context.drawImage(canvas, 0, 0, canvas.width, canvas.height - rows,
+                        0, rows, canvas.width, canvas.height - rows);
+      context.fillStyle = "#38060f";
+      context.fillRect(0, 0, canvas.width, rows);
+      this.rows += rows;
+      this.ring.fill(0); this.ringPos = 0; this.hop = 0; this.fill = 0;
+    }
+
     fft(re, im) {
       const size = this.fftSize;
       for (let i = 1, j = 0; i < size; i++) {

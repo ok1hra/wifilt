@@ -21,15 +21,21 @@ firmware onto a board. Everything the web interface does once it is running is d
 10. [Enclosures, PCB and bill of materials](#10-enclosures-pcb-and-bill-of-materials)
     · [10.1 A case for a bare ESP32 dongle](#101-a-case-for-a-bare-esp32-dongle)
     · [10.2 The RemoteQTH interface](#102-the-remoteqth-interface)
+11. [Running without the ESP32 board](#11-running-without-the-esp32-board)
 
 ---
 
 ## 1. What you need
 
-**Any ESP32 WROOM module with 4 MB of flash.** No custom board is required. A plain
-ESP32 Dev Module (ESP32-WROOM-32, 4 MB) plugged into USB runs the complete web interface:
-the logbook, the DX cluster client, JS8Call, the WSPR beacon, log synchronisation and the
-whole SETUP page.
+**Any ESP32 WROOM module with 4 MB of flash** — if you want the hardware box. It is one of
+three ways to run WIFILT, not the only one: the same interface also runs as a native binary
+on a **Linux** or **Windows** PC, needing no ESP32 at all, when the radio already has its own
+network connection. See [section 11](#11-running-without-the-esp32-board). The rest of this
+manual, and everything below in this section, is about the hardware route.
+
+A plain ESP32 Dev Module (ESP32-WROOM-32, 4 MB) plugged into USB runs the complete web
+interface: the logbook, the DX cluster client, JS8Call, the WSPR beacon, log synchronisation
+and the whole SETUP page. No custom board is required.
 
 4 MB is not a recommendation, it is the requirement. The flash is fully spoken for:
 
@@ -360,6 +366,34 @@ The interface board is an open design.
 - [rev3 STL](3Dprint/ic-705-interface-3.stl) · [rev3 3MF](3Dprint/ic-705-interface-3.3mf)
 - [With mount point rev3 STL](3Dprint/ic-705-interface-3-mountpoint.stl) ·
   [With mount point rev3 3MF](3Dprint/ic-705-interface-3-mountpoint.3mf)
+
+---
+
+## 11. Running without the ESP32 board
+
+If the radio already has its own network connection — Network Control switched on, on an
+**IC-705, IC-7610, IC-9700, IC-7300 MK2 or IC-7760** — none of the hardware above is needed.
+The same source builds and runs as a native program on a **Linux** or **Windows** PC and
+reaches the radio purely over IP, serving the identical pages at the identical address,
+`http://wifilt.local`. Get it from the [web installer page](https://ok1hra.github.io/wifilt/)
+— it offers the ESP32 flash and the Linux/Windows downloads side by side, each folded until
+you open the one that is yours — or build it yourself, see [BUILD.md § 4](BUILD.md#4-native-build-linux-and-windows).
+
+The trade is symmetric with [section 2](#2-two-hardware-paths): a PC can do everything a bare
+ESP32 module does over the network — QRPLog, DXC, JS8Call, the WSPR beacon, TrxNet, LOGSYNC,
+ICOM-LAN control and bidirectional audio — but nothing that needs a physical pin. **No CI-V
+over a serial wire, no CW/RTTY GPIO keying, no Status LED, no POWER-OUT switched output, and
+no Band Decoder.** SETUP works out which build it is talking to from `/setup-data.json` and
+hides the controls that would not do anything, the same way it already hides the Band
+Decoder tab on a bare module (section 2 above); it also titles itself accordingly —
+`WIFILT-LINUX`, `WIFILT-WINDOWS` or `WIFILT-ESP32` — so a box and a desktop binary open in
+two tabs stay easy to tell apart.
+
+The Linux archive installs a `systemd` unit that is not enabled by default and needs one
+privileged step redone on every upgrade (binding ports 80/82/83); the Windows build is a
+single static `.exe` with nothing to install. Neither one runs unattended the way the ESP32
+box does when nothing is plugged into a keyboard — it is a program on a computer that has to
+be running, not an appliance.
 
 ---
 

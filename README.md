@@ -3,9 +3,11 @@
 Operate an Icom transceiver from any browser on your network — logbook, DX cluster, JS8Call
 and a WSPR beacon — with nothing installed on the phone, tablet or PC, and no internet.
 
-**All you need is any ESP32 WROOM module with 4 MB of flash.**
-Flash it straight from the web installer: **<https://ok1hra.github.io/wifilt/>**
-(plug in USB-C first, then open the page in Chrome, Edge or Opera on a desktop).
+**Runs on any ESP32 WROOM module with 4 MB of flash — or, if the radio is already on your
+network, as a native program on a Linux or Windows PC with no extra hardware at all.**
+Get whichever is yours from the web installer page: **<https://ok1hra.github.io/wifilt/>**
+(flashing the ESP32 needs Chrome, Edge or Opera on a desktop, plugged in over USB-C first;
+the Linux/Windows downloads are plain archives).
 
 ![Two radios operated from one interface](img/wifilt-two-radio-operation.png)
 
@@ -14,7 +16,8 @@ Flash it straight from the web installer: **<https://ok1hra.github.io/wifilt/>**
 - **[SOFTWARE.md](SOFTWARE.md)** — the web interface: first run, QRPLog, DXC, JS8Call, the
   WSPR beacon, SETUP, LOGSYNC and the band decoder.
 - **[HARDWARE.md](HARDWARE.md)** — the ESP32 and the RemoteQTH interface board: which radios
-  work, flashing, connectors, Status LED, schematic and 3D-printed case.
+  work, flashing, connectors, Status LED, schematic and 3D-printed case — and, for the
+  Linux/Windows route that needs none of it, [§ 11](HARDWARE.md#11-running-without-the-esp32-board).
 
 Building from source: [BUILD.md](BUILD.md).
 

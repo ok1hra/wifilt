@@ -16,6 +16,7 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
  · [1.2 Standing on other people's work](#12-standing-on-other-peoples-work)
  · [1.3 Which radios](#13-which-radios)
  · [1.4 The navigation bar](#14-the-navigation-bar)
+ · [1.5 Where it runs](#15-where-it-runs)
 
 **[2. First run](#2-first-run)**
  · [2.1 AP mode](#21-ap-mode)
@@ -105,8 +106,9 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
 ## 1. What WIFILT is
 
 WIFILT turns an Icom transceiver into a station you operate from a browser. The interface —
-an ESP32 the size of a matchbox — joins your WiFi, logs in to the radio over Icom's own
-network protocol, and serves a complete set of operating pages to any phone, tablet or
+an ESP32 the size of a matchbox, or the same program running natively on a Linux or Windows
+PC ([section 1.5](#15-where-it-runs)) — joins your network, logs in to the radio over Icom's
+own network protocol, and serves a complete set of operating pages to any phone, tablet or
 computer on the network.
 
 Nothing is installed on the client. Nothing goes through a cloud service. The radio can sit
@@ -227,6 +229,31 @@ the radio does not fill, such as altitude without a 3D fix, is simply not listed
 is pictured, open over a moving station, in [section 5.6](#56-aprsis-command-builder).
 
 If the browser loses contact with the interface, a red **OFFLINE** warning appears there.
+
+### 1.5 Where it runs
+
+The same web interface described in this manual comes in three forms — one firmware, two
+native builds — and a browser cannot tell them apart: same pages, same API, same address.
+Pick whichever matches how the radio reaches you and get it from the
+[web installer page](https://ok1hra.github.io/wifilt/), which offers all three:
+
+| | ESP32 board | Linux PC | Windows PC |
+|---|---|---|---|
+| Needs | the interface hardware, see [HARDWARE.md](HARDWARE.md) | nothing but the radio on the network | nothing but the radio on the network |
+| Runs unattended, 24/7 | yes | only while the computer and the program are running | only while the computer and the program are running |
+| CI-V over a serial wire, CW/RTTY GPIO keying, Status LED, POWER-OUT, Band Decoder | yes | no | no |
+| ICOM-LAN control + audio, TrxNet, QRPLog, DXC, JS8Call, WSPR beacon, LOGSYNC | yes | yes | yes |
+
+A radio without its own network port — reached only over CI-V on a serial wire, or over
+TrxNet — needs the ESP32 board regardless; a PC has no serial port and no GPIO to offer it.
+SETUP reads which build it is talking to and hides controls that would not do anything on
+it — a Linux or Windows install never shows WiFi fields to save into, and a slot already set
+to CI-V keeps showing it rather than being silently rewritten. Its title also carries a
+suffix naming the platform — `WIFILT-LINUX`, `WIFILT-WINDOWS`, `WIFILT-ESP32` — so a box and
+a desktop instance open in two browser tabs stay easy to tell apart.
+
+Building either native binary from source, and what `install.sh` does on Linux, is in
+[BUILD.md § 4](BUILD.md#4-native-build-linux-and-windows).
 
 ---
 

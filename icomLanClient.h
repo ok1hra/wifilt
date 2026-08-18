@@ -306,6 +306,19 @@ public:
   uint32_t audioMaxSendUs() const {
     return audioRuntime ? audioRuntime->maxSendUs : 0;
   }
+  // Retransmit-chase health, cumulative per audio channel open. asked >> got
+  // means the radio ignores audio retransmit requests (the chase then only adds
+  // its bounded hold and should be reconsidered); got tracking asked with
+  // gaveup near zero means WiFi holes are being healed.
+  uint32_t audioRtxRequested() const {
+    return audioRuntime ? audioRuntime->rtxRequested : 0;
+  }
+  uint32_t audioRtxRecovered() const {
+    return audioRuntime ? audioRuntime->rtxRecovered : 0;
+  }
+  uint32_t audioRtxAbandoned() const {
+    return audioRuntime ? audioRuntime->rtxAbandoned : 0;
+  }
   bool txTrafficActive() const { return civTxTrafficActive; }
   void setTxTrafficActive(bool active) {
     civTxTrafficActive = active;
@@ -643,6 +656,19 @@ private:
   static const size_t AUDIO_RX_QUEUE_PACKETS = 64;
   static const uint32_t AUDIO_TASK_STOP_TIMEOUT_MS = 750;
 
+  // RX retransmit (radio -> us). The radio keeps a replay history exactly like
+  // ours (it already asks US to replay lost TX audio); a lost RX datagram used
+  // to become a permanent 20 ms hole the decoder had to eat. Chase it instead:
+  // ask, hold the head of the queue briefly so the replay can land back in its
+  // hole, and give up on a wall-clock/occupancy bound so an ignored request
+  // costs one bounded delay, never a stall. 240 ms of hold spends 12 of the 64
+  // ring slots and stays far under the browser's ~1 s jitter tolerance.
+  static const uint32_t AUDIO_RTX_HOLD_MS   = 240;  // max head-of-line wait
+  static const uint32_t AUDIO_RTX_RESEND_MS = 80;   // re-ask cadence while open
+  static const uint8_t  AUDIO_RTX_ATTEMPTS  = 3;
+  static const uint16_t AUDIO_RTX_MAX_CHASE = 8;    // wider holes are not worth the storm
+  static const size_t   AUDIO_RX_HOLD_HIGH  = 48;   // occupancy bound for the hold
+
   struct AudioRxPacket {
     uint16_t sequence;
     uint16_t length;
@@ -658,6 +684,24 @@ private:
     volatile uint32_t rxDropped = 0;
     volatile uint32_t maxSendUs = 0;
     volatile uint32_t txEpoch = 1;
+    // RX reorder + retransmit-chase state, guarded by audioMux like rx[].
+    // Inner = the data-only counter (BE @0x12) lanAudioHandler accounts with;
+    // outer = the control-layer counter (LE @0x06) the replay history is keyed
+    // by. Idle control packets consume outer but never inner, so holes are
+    // detected on inner and only translated to an outer window for the ask.
+    bool     rxSeqValid = false;
+    uint16_t rxLastInner = 0;
+    uint16_t rxLastOuter = 0;
+    bool     rxReleaseValid = false;   // rxNextRelease holds a real expectation
+    uint16_t rxNextRelease = 0;        // inner seq the drain releases next
+    uint32_t rxGapWaitStartMs = 0;     // head-of-line hold start; 0 = not holding
+    uint16_t rtxFirstOuter = 0;        // open ask toward the radio (one hole at a time)
+    uint16_t rtxChase = 0;             // outer seqs still being asked; 0 = idle
+    uint8_t  rtxAttempts = 0;
+    uint32_t rtxLastSendMs = 0;
+    volatile uint32_t rtxRequested = 0;  // outer seqs asked back from the radio
+    volatile uint32_t rtxRecovered = 0;  // holes a late/replayed packet filled
+    volatile uint32_t rtxAbandoned = 0;  // head-of-line holds given up (hole stayed)
 #ifdef ARDUINO
     TaskHandle_t task = nullptr;
     volatile bool stopRequested = false;
@@ -1203,6 +1247,11 @@ private:
     audioRuntime->txEpoch++;
     audioRuntime->tx.reset();
     audioRuntime->rxRead = audioRuntime->rxWrite = audioRuntime->rxCount = 0;
+    audioRuntime->rxSeqValid = audioRuntime->rxReleaseValid = false;
+    audioRuntime->rxGapWaitStartMs = 0;
+    audioRuntime->rtxChase = 0;
+    audioRuntime->rtxRequested = audioRuntime->rtxRecovered = 0;
+    audioRuntime->rtxAbandoned = 0;
     audioRuntime->stopRequested = false;
     audioRuntime->socketFd = -1;
     audioUnlock();
@@ -1387,18 +1436,108 @@ private:
       return;
     }
     audioLock();
-    if (audioRuntime->rxCount == AUDIO_RX_QUEUE_PACKETS) {
-      audioRuntime->rxRead = (audioRuntime->rxRead + 1) % AUDIO_RX_QUEUE_PACKETS;
-      audioRuntime->rxCount--;
-      audioRuntime->rxDropped++;
+    AudioRuntime& rt = *audioRuntime;
+    if (rt.rxCount == AUDIO_RX_QUEUE_PACKETS) {
+      rt.rxRead = (rt.rxRead + 1) % AUDIO_RX_QUEUE_PACKETS;
+      rt.rxCount--;
+      rt.rxDropped++;
     }
-    AudioRxPacket& target = audioRuntime->rx[audioRuntime->rxWrite];
-    target.sequence = sequence;
-    target.length = uint16_t(length);
-    memcpy(target.payload, payload, length);
-    audioRuntime->rxWrite = (audioRuntime->rxWrite + 1) % AUDIO_RX_QUEUE_PACKETS;
-    audioRuntime->rxCount++;
+    // A replay that lost the race with the drain's bounded hold would insert at
+    // the buffer head with a sequence the drain already released past, and
+    // releasing it would walk rxNextRelease backwards -- every later packet
+    // would then look like a fresh hole and eat a spurious hold. Too late is
+    // simply dropped; lanAudioHandler would discard it anyway.
+    if (rt.rxReleaseValid && int16_t(sequence - rt.rxNextRelease) < 0) {
+      audioUnlock();
+      return;
+    }
+    // Ordered insert by inner sequence (wrap-safe). Packets arrive in order
+    // except a replayed one, which must land back in its hole rather than at
+    // the tail: the drain releases strictly by sequence and lanAudioHandler
+    // drops anything older than what it already forwarded. The scan is O(1) on
+    // the in-order path (first compare wins) and only walks on a replay.
+    size_t place = rt.rxCount;
+    bool duplicate = false;
+    while (place > 0) {
+      AudioRxPacket& before =
+          rt.rx[(rt.rxRead + place - 1) % AUDIO_RX_QUEUE_PACKETS];
+      int16_t order = int16_t(before.sequence - sequence);
+      if (order < 0) break;
+      if (order == 0) { duplicate = true; break; }
+      place--;
+    }
+    if (!duplicate) {
+      if (place != rt.rxCount) rt.rtxRecovered++;
+      for (size_t at = rt.rxCount; at > place; at--)
+        rt.rx[(rt.rxRead + at) % AUDIO_RX_QUEUE_PACKETS] =
+            rt.rx[(rt.rxRead + at - 1) % AUDIO_RX_QUEUE_PACKETS];
+      AudioRxPacket& target = rt.rx[(rt.rxRead + place) % AUDIO_RX_QUEUE_PACKETS];
+      target.sequence = sequence;
+      target.length = uint16_t(length);
+      memcpy(target.payload, payload, length);
+      rt.rxCount++;
+      rt.rxWrite = (rt.rxRead + rt.rxCount) % AUDIO_RX_QUEUE_PACKETS;
+    }
     audioUnlock();
+  }
+
+  // Watch the inner (data-only) sequence for holes and open a chase for the
+  // control-layer window that must contain the missing data packets. Detected
+  // on inner so the radio's tracked idles can never fake a hole; the asked
+  // outer window may cover an idle too -- the radio just replays it and the
+  // stray copy is dropped as a duplicate on insert.
+  void audioNoteRxSequence(uint16_t inner, uint16_t outer) {
+    if (!audioRuntime) return;
+    audioLock();
+    AudioRuntime& rt = *audioRuntime;
+    if (!rt.rxSeqValid) {
+      rt.rxSeqValid = true;
+      rt.rxLastInner = inner;
+      rt.rxLastOuter = outer;
+      audioUnlock();
+      return;
+    }
+    int16_t innerStep = int16_t(inner - rt.rxLastInner);
+    if (innerStep <= 0) { audioUnlock(); return; }  // a replay landing in its hole
+    int16_t outerStep = int16_t(outer - rt.rxLastOuter);
+    if (innerStep > 1 && outerStep > 1 && rt.rtxChase == 0) {
+      uint16_t chase = uint16_t(outerStep - 1);
+      if (chase <= AUDIO_RTX_MAX_CHASE) {
+        rt.rtxFirstOuter = uint16_t(rt.rxLastOuter + 1);
+        rt.rtxChase = chase;
+        rt.rtxAttempts = 0;
+        rt.rtxLastSendMs = 0;   // audioRetransmitTick fires on the next wake
+        rt.rtxRequested += chase;
+      }
+    }
+    rt.rxLastInner = inner;
+    rt.rxLastOuter = outer;
+    audioUnlock();
+  }
+
+  // Repeat the open ask every AUDIO_RTX_RESEND_MS until the attempts run out.
+  // Runs in the audio task, so the ask leaves within ~1 ms of the hole being
+  // seen and keeps leaving even while the cooperative loop is stalled -- which
+  // is exactly when WiFi bursts eat packets. Sends happen outside the lock.
+  void audioRetransmitTick(uint32_t now) {
+    if (!audioRuntime) return;
+    uint16_t first = 0, chase = 0;
+    audioLock();
+    AudioRuntime& rt = *audioRuntime;
+    if (rt.rtxChase &&
+        (rt.rtxLastSendMs == 0 || now - rt.rtxLastSendMs >= AUDIO_RTX_RESEND_MS)) {
+      if (rt.rtxAttempts >= AUDIO_RTX_ATTEMPTS) {
+        rt.rtxChase = 0;   // the drain's bounded hold is the backstop
+      } else {
+        first = rt.rtxFirstOuter;
+        chase = rt.rtxChase;
+        rt.rtxAttempts++;
+        rt.rtxLastSendMs = now;
+      }
+    }
+    audioUnlock();
+    for (uint16_t at = 0; at < chase; at++)
+      audioSendControl(0x01, uint16_t(first + at));
   }
 
   void audioHandleDatagram(uint8_t* packet, int length) {
@@ -1435,7 +1574,9 @@ private:
     if (type != 0x01 && declared == uint32_t(length) && length > 0x18) {
       size_t payloadLength = size_t(length - 0x18);
       audioLastDataMs = millis();
-      audioEnqueueRx(packet + 0x18, payloadLength, getBE16(packet + 0x12));
+      uint16_t inner = getBE16(packet + 0x12);
+      audioNoteRxSequence(inner, getLE16(packet + 6));
+      audioEnqueueRx(packet + 0x18, payloadLength, inner);
     }
   }
 
@@ -1521,6 +1662,7 @@ private:
       audioPumpSocket(12);
       audioServiceTx(millis());
       audioPeriodic(millis());
+      audioRetransmitTick(millis());
       ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1));
     }
 
@@ -1545,12 +1687,40 @@ private:
     for (int budget = 0; budget < 16; ++budget) {
       AudioRxPacket packet;
       bool have = false;
+      uint32_t now = millis();
       audioLock();
-      if (audioRuntime->rxCount) {
-        packet = audioRuntime->rx[audioRuntime->rxRead];
-        audioRuntime->rxRead = (audioRuntime->rxRead + 1) % AUDIO_RX_QUEUE_PACKETS;
-        audioRuntime->rxCount--;
-        have = true;
+      AudioRuntime& rt = *audioRuntime;
+      if (rt.rxCount) {
+        AudioRxPacket& head = rt.rx[rt.rxRead];
+        bool release = true;
+        // Hold a head-of-line hole briefly: the replay the task asked for
+        // inserts in front of everything queued behind it. Bounded twice -- by
+        // wall time and by occupancy -- so a request the radio ignores can only
+        // add latency once, never dam the stream.
+        if (rt.rxReleaseValid && int16_t(head.sequence - rt.rxNextRelease) > 0) {
+          if (!rt.rxGapWaitStartMs) {
+            rt.rxGapWaitStartMs = now;
+            release = false;
+          } else if (now - rt.rxGapWaitStartMs < AUDIO_RTX_HOLD_MS &&
+                     rt.rxCount < AUDIO_RX_HOLD_HIGH) {
+            release = false;
+          } else {
+            rt.rtxAbandoned++;   // the hole stays; lanAudioHandler accounts it
+          }
+        }
+        if (release) {
+          packet = head;
+          rt.rxRead = (rt.rxRead + 1) % AUDIO_RX_QUEUE_PACKETS;
+          rt.rxCount--;
+          // Forward only: the enqueue guard drops too-late replays, but the
+          // expectation must still never regress even if one slips through.
+          uint16_t next = uint16_t(packet.sequence + 1);
+          if (!rt.rxReleaseValid || int16_t(next - rt.rxNextRelease) > 0)
+            rt.rxNextRelease = next;
+          rt.rxReleaseValid = true;
+          rt.rxGapWaitStartMs = 0;
+          have = true;
+        }
       }
       audioUnlock();
       if (!have) break;
