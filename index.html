@@ -241,7 +241,7 @@
     <div class="card">
       <h1>WIFILT<span class="tagline">Web interface for Icom LAN Transceivers</span></h1>
       <p class="subtitle">
-        Firmware installer &mdash; version <code>20260817</code> &nbsp;&bull;&nbsp;
+        Firmware installer &mdash; version <code>20260818</code> &nbsp;&bull;&nbsp;
         <a href="https://github.com/ok1hra/wifilt" target="_blank">GitHub</a>
       </p>
 
@@ -279,7 +279,7 @@
           <strong>A radio already on your network</strong> &mdash; an IC-705, IC-7610 or
           IC-7300&nbsp;MK2 with <strong>Network&nbsp;Control</strong> switched on &mdash; needs no
           hardware at all. The program on your computer reaches it over IP, and it is the same
-          software as the firmware, version <code>20260817</code>.
+          software as the firmware, version <code>20260818</code>.
         </p>
         <p>
           <strong>The interface board adds what a computer cannot do</strong>: the CI-V serial
@@ -388,7 +388,7 @@
         </ul>
 
         <div class="cta gate" id="flashGate" data-locked="1">
-          <esp-web-install-button manifest="manifest.json?v=20260817" baudrate="9600"></esp-web-install-button>
+          <esp-web-install-button manifest="manifest.json?v=20260818" baudrate="9600"></esp-web-install-button>
         </div>
         <p class="gate-note" id="gateNote">Answer the question above to continue.</p>
 
@@ -439,7 +439,7 @@
           lets your settings survive an update.
         </p>
         <p class="muted">
-          For manual flashing there is <code>wifilt-20260817-full.bin</code> at offset <code>0x0</code>
+          For manual flashing there is <code>wifilt-20260818-full.bin</code> at offset <code>0x0</code>
           with <code>esptool.py</code>. <strong>That one erases everything</strong> &mdash; it is a whole-chip
           image, so it overwrites the WiFi credentials in NVS and the configuration partition
           as well. Use it to recover a board that will not boot, not to update a working one.
@@ -454,11 +454,11 @@
         </summary>
         <div class="platform-body">
           <p class="dl-line">
-            <a href="wifilt-20260817-linux-x86_64.tar.gz"><strong>wifilt-20260817-linux-x86_64.tar.gz</strong></a>
+            <a href="wifilt-20260818-linux-x86_64.tar.gz"><strong>wifilt-20260818-linux-x86_64.tar.gz</strong></a>
             &nbsp;&bull;&nbsp; Linux x86-64, 1.9 MB
             &nbsp;&bull;&nbsp; <a href="SHA256SUMS">SHA256SUMS</a>
           </p>
-          <pre><code>tar xzf wifilt-20260817-linux-x86_64.tar.gz
+          <pre><code>tar xzf wifilt-20260818-linux-x86_64.tar.gz
 cd wifilt-linux-x86_64
 sudo ./install.sh</code></pre>
           <p class="muted">
@@ -478,7 +478,7 @@ sudo ./install.sh</code></pre>
         </summary>
         <div class="platform-body">
           <p class="dl-line">
-            <a href="wifilt-20260817-windows-x64.zip"><strong>wifilt-20260817-windows-x64.zip</strong></a>
+            <a href="wifilt-20260818-windows-x64.zip"><strong>wifilt-20260818-windows-x64.zip</strong></a>
             &nbsp;&bull;&nbsp; Windows x64, 2.0 MB
             &nbsp;&bull;&nbsp; <a href="SHA256SUMS">SHA256SUMS</a>
           </p>
