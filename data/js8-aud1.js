@@ -38,15 +38,20 @@
     // used for `slotUtcMs`, because the firmware validates
     // `slotUtcMs - clientUtcMs` against a 100..35000 ms window.
     constructor({url, WebSocketImpl, reconnectMs = 1000, readyTimeoutMs = 3000,
+                 pingIntervalMs = 3000,
                  now = () => performance.now(), wallNow = () => Date.now()}) {
       this.url = url; this.WebSocketImpl = WebSocketImpl;
       this.reconnectMs = reconnectMs; this.readyTimeoutMs = readyTimeoutMs; this.now = now;
-      this.wallNow = wallNow;
+      this.wallNow = wallNow; this.pingIntervalMs = pingIntervalMs;
       this.socket = null; this.running = false; this.hello = null; this.ptt = false;
       this.sampleCallback = null; this.statusCallback = null; this.packetCallback = null;
       this.controlCallback = null;
       this.pendingPrepare = new Map(); this.drained = new Set(); this.activeTxId = 0;
       this.txFault = null;
+      // Diagnostic-only application-level RTT (native WS ping/pong is invisible to
+      // page JS). lastPingRttMs is "page RTT" for this always-open socket, not
+      // request+TCP-handshake HTTP latency -- see pollRadio's fetch timing for that.
+      this.lastPingRttMs = null; this._pingTimer = null;
     }
 
     onSamples(callback) { this.sampleCallback = callback; return this; }
@@ -83,6 +88,7 @@
         if (this.socket !== socket) return;
         this.socket = null; this.hello = null; this.ptt = false;
         this.txFault = null;
+        if (this._pingTimer) { clearTimeout(this._pingTimer); this._pingTimer = null; }
         for (const pending of this.pendingPrepare.values()) pending.reject(new Error("WebSocket lost"));
         this.pendingPrepare.clear(); this.status("closed", {ptt:false});
         if (this.running) {
@@ -133,6 +139,10 @@
             !Number.isInteger(message.streamId) || message.streamId <= 0)
           throw new Error("unsupported audio WebSocket protocol");
         this.hello = message; this.status("ready", {streamId:message.streamId});
+        this._schedulePing();
+      } else if (message.type === "pong") {
+        this.lastPingRttMs = this.now() - message.t;
+        this.status("ping", {rttMs:this.lastPingRttMs});
       } else if (message.type === "tx-ready") {
         const pending = this.pendingPrepare.get(message.txId);
         if (pending) { clearTimeout(pending.timeout); this.pendingPrepare.delete(message.txId); pending.resolve(true); }
@@ -162,6 +172,17 @@
       if (!this.socket || this.socket.readyState !== this.WebSocketImpl.OPEN)
         throw new Error("audio WebSocket is not open");
       this.socket.send(JSON.stringify(message));
+    }
+
+    // Self-paced ping loop, running for the lifetime of one hello -- stopped by
+    // onclose, restarted by the next hello. A failed send (socket mid-reconnect)
+    // just skips one sample; it is not on any critical path.
+    _schedulePing() {
+      if (this._pingTimer) clearTimeout(this._pingTimer);
+      this._pingTimer = setTimeout(() => {
+        try { this.sendControl({type:"ping", t:Math.round(this.now())}); } catch {}
+        this._schedulePing();
+      }, this.pingIntervalMs);
     }
 
     prepare(txId, metadata) {

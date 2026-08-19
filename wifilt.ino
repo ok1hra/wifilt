@@ -135,7 +135,7 @@ volatile bool cwIpSendPending = false;
 #ifndef LOOP_WARN_MS
   #define LOOP_WARN_MS 200
 #endif
-#define REV 20260818
+#define REV 20260819
 #define WIFI
 #define FSK_KEYING  // RTTY by keying the FSK + PTT outputs (was UDP_TO_FSK, from when a UDP port fed it)
 #define WDT         // watchdog timer
@@ -2067,6 +2067,12 @@ static const char *radioNameForJson(IcomLanClient *client){
   return safe;
 }
 
+// Bus-level serial CI-V RTT (single outstanding query across TRX2/TRX3) -- last
+// + max-since-boot, same shape as icomLanClient.h's link-latency fields. Declared
+// here (ahead of the CI-V polling state machine further down) because
+// buildStateJson() reports it and Arduino does not forward-declare globals.
+static uint32_t civRttMs = 0, civRttMaxMs = 0;
+
 // lanView answers "describe the radio JS8 is driving" instead of the default
 // "describe TRX1". The two are the same document whenever LAN sits on TRX1, and
 // only the JS8 page asks for the LAN view -- the log page's TRX1 tab, the band
@@ -2156,6 +2162,8 @@ void buildStateJson(char *buf, size_t bufSize, bool lanView){
     "\"audioTxQueued\":%u,\"audioTxPackets\":%u,\"audioTxReplays\":%u,"
     "\"audioTxReplayMisses\":%u,\"audioTxSendFailures\":%u,\"audioTxMaxLateMs\":%u,"
     "\"audioRxDropped\":%u,\"audioMaxSendUs\":%u,"
+    "\"pingRttCtrlMs\":%u,\"pingRttCivMs\":%u,\"pingRttAudioMs\":%u,"
+    "\"civRttLanMs\":%u,\"civRttSerialMs\":%u,\"txDefer\":%s,"
     "\"dxcConnected\":%s%s}",
     radioLinked ? "true" : "false", lanCatHealthy ? "true" : "false",
     lanAudioReady ? "true" : "false", lanAudioTxReady ? "true" : "false",
@@ -2176,6 +2184,12 @@ void buildStateJson(char *buf, size_t bufSize, bool lanView){
     (unsigned)lanAudioTx.sendFailures, (unsigned)lanAudioTx.maxLatenessMs,
     (unsigned)(client ? client->audioRxDropped() : 0),
     (unsigned)(client ? client->audioMaxSendUs() : 0),
+    (unsigned)(client ? client->pingRttCtrlMs() : 0),
+    (unsigned)(client ? client->pingRttCivMs() : 0),
+    (unsigned)(client ? client->pingRttAudioMs() : 0),
+    (unsigned)(client ? client->civReqRttMs() : 0),
+    (unsigned)civRttMs,
+    txRealtimeNow() ? "true" : "false",
     DxcTelnetStatus ? "true" : "false",
     gpsFrag
   );
@@ -2184,7 +2198,7 @@ void buildStateJson(char *buf, size_t bufSize, bool lanView){
 void handleGetState(){
   // CAT page polls /state?fast=1 — hold the fast BT poll cadence while it's open
   if (webServer.arg("fast") == "1") catFastUntil = millis() + CAT_FAST_HOLD_MS;
-  static char stateBuf[1200];
+  static char stateBuf[1536];
   // ?radio=lan -> the radio JS8 drives; anything else keeps meaning TRX1.
   buildStateJson(stateBuf, sizeof(stateBuf), webServer.arg("radio") == "lan");
   webServer.sendHeader("Cache-Control", "no-cache");
@@ -6677,6 +6691,7 @@ static uint8_t  civMiss[3]     = {0, 0, 0};
 static uint8_t  civAwaitSlot   = 0xFF;     // slot we sent the current query to
 static uint8_t  civAwaitCmd    = 0;
 static bool     civGotReply    = false;
+static uint32_t civReplyMs     = 0;        // millis() a matching reply arrived
 
 // frame parser. 40, not 20: a 23 00 GPS reply carries 27 data bytes and the
 // framer drops (not truncates) anything longer than this buffer.
@@ -6783,7 +6798,10 @@ static void civHandleFrame() {
                        && civAwaitCmd == CMD_READ_FREQ;
     bool modeReply = (cmd == CMD_READ_MODE || cmd == CMD_TRANS_MODE)
                   && civAwaitCmd == CMD_READ_MODE;
-    if (civAwaitSlot == slot && (frequencyReply || modeReply)) civGotReply = true;
+    if (civAwaitSlot == slot && (frequencyReply || modeReply)) {
+      civGotReply = true;
+      civReplyMs = millis();
+    }
     if (Debug) Serial.printf("CIV| TRX%d reply cmd=0x%02x\n", slot + 1, cmd);
   }
 }
@@ -6822,6 +6840,8 @@ void civPollTick() {
 
   if (civState == CIV_WAIT) {
     if (civGotReply) {
+      civRttMs = civReplyMs - civStateT0;
+      if (civRttMs > civRttMaxMs) civRttMaxMs = civRttMs;
       civState   = CIV_IDLE;
       civNextRun = now + CIV_GAP_MS;
     } else if (now - civStateT0 >= CIV_REPLY_TIMEOUT_MS) {
@@ -9085,6 +9105,15 @@ static void aud1HandleControl(const String& json){
       String reason = extractJsonString(json, "reason");
       aud1TxAbort(reason.length() && reason != "operator" ? String("client abort: ") + reason : "operator abort");
     }
+    return;
+  }
+  // Diagnostic RTT probe (js8-aud1.js _schedulePing): echo the client's own clock
+  // value straight back, same shape as the LAN 0x07 ping/pong. Distinct from
+  // WsprTx's "wspr.ping" keepalive below, which stays a no-op here on purpose --
+  // it exists only to keep the socket's dead-man timer fed, not to measure RTT.
+  if(type == "ping"){
+    uint32_t t = (uint32_t)aud1JsonU64(json, "t");
+    AudioSendText("{\"type\":\"pong\",\"t\":" + String(t) + "}");
     return;
   }
   if(type != "tx.prepare") return;

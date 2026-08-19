@@ -359,6 +359,9 @@ const state = {
   // separates loss on the radio->ESP32 hop from loss on the ESP32->browser one,
   // because both reach the browser looking identical: a jump in the sample counter.
   audioRxDropped:null,
+  // Link-latency diagnostics (read-only, see renderWebRttRow/renderRadioRttRow): browser-measured
+  // /state fetch time and AUD1 application-ping RTT. null until first sample.
+  pageRttMs:null, aud1PingRttMs:null,
 };
 let audioSource = null, activeDecoder = null, activeEncoder = null;
 // Whether the modem ever came up in this page's life, and whether the one free
@@ -858,6 +861,14 @@ function renderResolvedGain() {
 // Every control frame from the firmware. Only tx-level matters here, and only
 // while a calibrated transmission is in flight.
 function onAudioControl(message) {
+  // Diagnostic RTT reply for the AUD1 ping loop (js8-aud1.js _schedulePing).
+  // Recomputed here rather than read off the session object: message.t and
+  // performance.now() are the same clock WsAudioSource hands the session
+  // (monotonicNow), so this needs no extra plumbing through that wrapper.
+  if (message && message.type === "pong") {
+    state.aud1PingRttMs = performance.now() - message.t;
+    return;
+  }
   // One socket, two drivers, never at once. WsprTx acts on tx-ready/tx-state/
   // tx-error without checking txId, so handing every frame to both would let one
   // run's abort fault the other's idle driver.
@@ -3812,11 +3823,53 @@ async function openJs8Log() {
   window.open("/log","_blank");
 }
 
+// Link latency: read-only diagnostics, no alerting. Two separate rows, because
+// they measure two separate legs -- web app <-> backend, and backend <-> TRX --
+// and merging them into one line made it impossible to tell which was which.
+const LINK_RTT_WARN_MS = 500;
+
+// Web app <-> backend: measured by this browser tab. "page" = fetch()+TCP
+// handshake time (every /state reply is Connection: close, so this is not pure
+// server latency); "audio-ws" = application-level ping/pong on the always-open
+// AUD1 socket (native WebSocket ping/pong is invisible to page JS, hence the
+// JSON round-trip in js8-aud1.js's _schedulePing).
+function renderWebRttRow() {
+  const parts = [];
+  if (Number.isFinite(state.pageRttMs)) parts.push(`page ${Math.round(state.pageRttMs)} ms`);
+  if (Number.isFinite(state.aud1PingRttMs)) parts.push(`audio-ws ${Math.round(state.aud1PingRttMs)} ms`);
+  if (!parts.length) return "";
+  return `<span>Web RTT</span><code>${parts.join(" · ")}</code>`;
+}
+
+// Backend <-> TRX: the firmware's own, already-flowing ping/pong and CI-V
+// request timing (icomLanClient.h) -- it used to compute these as flow-control
+// internals and silently discard them. Only the fields for the transport TRX1
+// actually uses come back nonzero (LAN ctrl/civ/CAT need a LAN radio, CAT serial
+// needs serial CI-V; TrxNet is not covered yet), so this row stays empty on a
+// TrxNet-only setup. txDefer suppresses the warn state during the ~3s window the
+// firmware itself defers best-effort work around a TX slot -- expected
+// slowness, not a fault. Threshold is a starting guess, needs on-radio tuning.
+function renderRadioRttRow() {
+  const r = state.radio || {};
+  const parts = [];
+  if (r.pingRttCtrlMs) parts.push(`LAN ctrl ${r.pingRttCtrlMs} ms`);
+  if (r.pingRttCivMs) parts.push(`LAN civ ${r.pingRttCivMs} ms`);
+  if (r.civRttLanMs) parts.push(`CAT ${r.civRttLanMs} ms`);
+  if (r.civRttSerialMs) parts.push(`CAT serial ${r.civRttSerialMs} ms`);
+  if (!parts.length) return "";
+  const worst = Math.max(r.pingRttCtrlMs||0, r.pingRttCivMs||0,
+    r.pingRttAudioMs||0, r.civRttLanMs||0, r.civRttSerialMs||0);
+  const warn = !r.txDefer && worst > LINK_RTT_WARN_MS;
+  return `<span>Radio RTT</span><code>${warn?"<strong>":""}${parts.join(" · ")}` +
+    `${r.txDefer?" · TX slot (expected)":""}${warn?"</strong>":""}</code>`;
+}
+
 function renderDiagnostics() {
   const tb=audioSource ? audioSource.state().timebase : null;
-  if (!tb) { dom.diagnosticSummary.textContent="Audio link unavailable"; dom.diagnostics.innerHTML="<span>Transport</span><code>Waiting for ICOM-LAN audio</code>"; return; }
+  const linkRows=renderWebRttRow()+renderRadioRttRow();
+  if (!tb) { dom.diagnosticSummary.textContent="Audio link unavailable"; dom.diagnostics.innerHTML=`<span>Transport</span><code>Waiting for ICOM-LAN audio</code>${linkRows}`; return; }
   dom.diagnosticSummary.textContent=`${tb.clock.status} · ${tb.media.status} · gaps ${tb.transport.sequenceGaps}`;
-  dom.diagnostics.innerHTML=`<span>Audio WebSocket</span><code>${esc(state.audioStatus)}</code><span>Browser/system clock</span><code>${esc(tb.clock.status)} · epoch ${tb.clock.epoch} · jumps ${tb.clock.jumps} <button id="confirmClock" type="button">Confirm synchronized</button></code><span>Media epoch</span><code>${tb.media.epoch} · ${esc(tb.media.reason)} · ${esc(tb.media.status)}</code><span>Packets</span><code>${tb.transport.acceptedPackets} accepted · ${tb.transport.duplicatePackets} duplicate · ${tb.transport.sequenceGaps} gaps</code><span>Timing correction</span><code>manual ${signed(tb.correction.manualMs)} ms · auto ${signed(tb.correction.autoMs)} ms · ${esc(tb.correction.status)} <button id="resetTiming" type="button">Reset</button></code>`;
+  dom.diagnostics.innerHTML=`<span>Audio WebSocket</span><code>${esc(state.audioStatus)}</code>${linkRows}<span>Browser/system clock</span><code>${esc(tb.clock.status)} · epoch ${tb.clock.epoch} · jumps ${tb.clock.jumps} <button id="confirmClock" type="button">Confirm synchronized</button></code><span>Media epoch</span><code>${tb.media.epoch} · ${esc(tb.media.reason)} · ${esc(tb.media.status)}</code><span>Packets</span><code>${tb.transport.acceptedPackets} accepted · ${tb.transport.duplicatePackets} duplicate · ${tb.transport.sequenceGaps} gaps</code><span>Timing correction</span><code>manual ${signed(tb.correction.manualMs)} ms · auto ${signed(tb.correction.autoMs)} ms · ${esc(tb.correction.status)} <button id="resetTiming" type="button">Reset</button></code>`;
   $("confirmClock").addEventListener("click",()=>{audioSource.confirmClock();renderDiagnostics();renderHeader();});
   $("resetTiming").addEventListener("click",()=>{audioSource.resetTiming();renderDiagnostics();renderHeader();});
   renderDecodeTelemetry();
@@ -7204,10 +7257,15 @@ function updateOutgoingTxProgress(txState) {
 async function pollRadio() {
   if (radioPollInFlight) return;
   radioPollInFlight=true;
+  const pollStartMs=performance.now();
   try {
     const response=await fetch(RADIO_STATE_URL,{cache:"no-store", signal:fetchDeadline()});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const next=await response.json();
+    // "Page RTT": fetch + TCP handshake (every /state reply is Connection: close)
+    // + body. Not comparable to the firmware's own link-latency fields in `next`
+    // -- this measures the browser<->backend leg, they measure backend<->radio.
+    state.pageRttMs=performance.now()-pollStartMs;
     radioPollFailures=0;
     noteRadioLink(next);
     state.radio={...state.radio,...next,frequency:Number(next.frequency)||0};

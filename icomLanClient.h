@@ -332,6 +332,18 @@ public:
   uint32_t audioRtxAbandoned() const {
     return audioRuntime ? audioRuntime->rtxAbandoned : 0;
   }
+  // Round-trip time of the already-flowing 0x07 ping/pong on each UDP channel
+  // (500ms cadence, zero added traffic) and of the stop-and-wait CI-V request on
+  // the LAN CAT channel -- last sample plus max-since-boot, per icomLanClient.h
+  // link-latency comment above.
+  uint32_t pingRttCtrlMs() const { return ctrlPingRtt; }
+  uint32_t pingRttCtrlMaxMs() const { return ctrlPingRttMax; }
+  uint32_t pingRttCivMs() const { return civPingRtt; }
+  uint32_t pingRttCivMaxMs() const { return civPingRttMax; }
+  uint32_t pingRttAudioMs() const { return audioPingRtt; }
+  uint32_t pingRttAudioMaxMs() const { return audioPingRttMax; }
+  uint32_t civReqRttMs() const { return civReqRtt; }
+  uint32_t civReqRttMaxMs() const { return civReqRttMax; }
   bool txTrafficActive() const { return civTxTrafficActive; }
   void setTxTrafficActive(bool active) {
     civTxTrafficActive = active;
@@ -628,6 +640,11 @@ private:
   uint32_t civNextOpen = 0, lastFreqPoll = 0, lastCivDataMs = 0, lastCtrlRxMs = 0;
   uint32_t civLastAyt = 0, civLastReady = 0, civLastPing = 0, civLastIdle = 0;
   uint32_t civRequestSentMs = 0, civHealthProbeSentMs = 0, civRecoveryStartedMs = 0;
+  // Link-latency samples: last + max-since-boot only (no ring buffer/EWMA), same
+  // shape as lanHealthDrops/Stalls/Filled below -- cheap, and immune to multiple
+  // independent /state readers racing a reset-on-read scheme.
+  uint32_t civPingRtt = 0, civPingRttMax = 0;
+  uint32_t civReqRtt = 0, civReqRttMax = 0;
   uint8_t auxRot = 0;
   uint8_t txAuxRot = 0;
   bool civTxTrafficActive = false;
@@ -664,6 +681,9 @@ private:
   volatile uint32_t audioHereTime = 0, audioLastPing = 0, audioLastIdle = 0, audioLastAyt = 0;
   volatile uint32_t audioLastReady = 0;
   volatile uint32_t audioLastDataMs = 0;
+  // Written from the ESP32 audio task, read from the main loop for /state --
+  // volatile matches every other cross-task field in this group, no mutex.
+  volatile uint32_t audioPingRtt = 0, audioPingRttMax = 0;
 
   static const size_t AUDIO_RX_PACKET_BYTES = 160;
   static const size_t AUDIO_RX_QUEUE_PACKETS = 64;
@@ -730,6 +750,7 @@ private:
 
   State state = LAN_IDLE;
   uint32_t stateSince = 0, lastAyt = 0, lastPing = 0, lastIdle = 0, lastReauth = 0;
+  uint32_t ctrlPingRtt = 0, ctrlPingRttMax = 0;
 
   // Loop-stall compensation. This client is serviced cooperatively from the
   // Arduino loop and from long HTTP/audio-WS sends; a single unserviced gap of
@@ -1142,6 +1163,13 @@ private:
     // ping request -> reply
     if (n == 0x15 && type == 0x07 && r[0x10] == 0x00) {
       sendPingReply(ctrlUdp, ctrlMyId, ctrlRemoteId, getLE16(r+6), getLE32(r+0x11));
+      return;
+    }
+    // reply to OUR ping -- timestamp is our own earlier millis(), so the RTT is
+    // just now-minus-that. Previously received and silently dropped here.
+    if (n == 0x15 && type == 0x07 && r[0x10] == 0x01) {
+      ctrlPingRtt = millis() - getLE32(r+0x11);
+      if (ctrlPingRtt > ctrlPingRttMax) ctrlPingRttMax = ctrlPingRtt;
       return;
     }
     if (handleRetransmitRequest(ctrlUdp, r, n)) return;
@@ -1560,6 +1588,12 @@ private:
       audioSendPing(true, getLE16(packet + 6), getLE32(packet + 0x11));
       return;
     }
+    if (length == 0x15 && type == 0x07 && packet[0x10] == 0x01) {
+      uint32_t rtt = millis() - getLE32(packet + 0x11);
+      audioPingRtt = rtt;
+      if (rtt > audioPingRttMax) audioPingRttMax = rtt;
+      return;
+    }
     if (type == 0x01) {
       audioHandleRetransmit(packet, length);
       return;
@@ -1760,6 +1794,11 @@ private:
       sendPingReply(audioUdp, audioMyId, audioRemoteId, getLE16(r+6), getLE32(r+0x11));
       return;
     }
+    if (n == 0x15 && type == 0x07 && r[0x10] == 0x01) {
+      audioPingRtt = millis() - getLE32(r+0x11);
+      if (audioPingRtt > audioPingRttMax) audioPingRttMax = audioPingRtt;
+      return;
+    }
     if (n == 0x10) {
       if (type == 0x04 && !audioGotHere) {                       // IAmHere
         audioGotHere = true; audioRemoteId = getLE32(r+8); audioHereTime = millis();
@@ -1790,6 +1829,11 @@ private:
 
     if (n == 0x15 && type == 0x07 && r[0x10] == 0x00) {
       sendPingReply(civUdp, civMyId, civRemoteId, getLE16(r+6), getLE32(r+0x11));
+      return;
+    }
+    if (n == 0x15 && type == 0x07 && r[0x10] == 0x01) {
+      civPingRtt = millis() - getLE32(r+0x11);
+      if (civPingRtt > civPingRttMax) civPingRttMax = civPingRtt;
       return;
     }
     if (handleRetransmitRequest(civUdp, r, n)) return;
@@ -1856,6 +1900,10 @@ private:
     // tuning, but it does not prove that the radio accepts our E1 CAT polls.
     bool addressedReply = f[2] == 0xE1;
     if (addressedReply) {
+      if (civRequestPending) {
+        civReqRtt = millis() - civRequestSentMs;
+        if (civReqRtt > civReqRttMax) civReqRttMax = civReqRtt;
+      }
       civRequestPending = false;
       if (f[4] == 0x03) civHealthProbePending = false;
       if (f[4] == 0x26 && len >= 7 && f[5] == 0x00) civSelectedModeSeen = true;
