@@ -3826,40 +3826,72 @@ async function openJs8Log() {
 // Link latency: read-only diagnostics, no alerting. Two separate rows, because
 // they measure two separate legs -- web app <-> backend, and backend <-> TRX --
 // and merging them into one line made it impossible to tell which was which.
-const LINK_RTT_WARN_MS = 500;
+//
+// Each figure is shown as "value/risk ms": risk is not a guessed alarm level,
+// it is the actual code constant at which that particular number stops being
+// just slow and starts being a different (already-handled) failure mode. That
+// lets the operator see the margin, not just a bare number with no context for
+// whether it is fine. Sources:
+//   pageRttMs      FETCH_TIMEOUT_MS (data.js)        -- /state fetch aborts
+//   aud1PingRttMs  readyTimeoutMs (js8-aud1.js)       -- tx-ready wait gives up
+//   pingRttCtrlMs  \ 500ms ping/retry cadence          -- round trips start
+//   pingRttCivMs   /  (icomLanClient.h)                   overlapping the next one
+//   pingRttAudioMs AUDIO_RTX_HOLD_MS (icomLanClient.h) -- a lost audio packet can
+//                                                          no longer be chased down
+//   civRttLanMs    civSilent threshold (icomLanClient.h) -- triggers the
+//                                                            health-probe/recovery cascade
+//   civRttSerialMs CIV_REPLY_TIMEOUT_MS (wifilt.ino)   -- the request is already
+//                                                          counted a miss at this point
+// Warn (bold) once any figure crosses half its own risk threshold -- a single
+// shared threshold across metrics this different in kind would be meaningless.
+const RTT_WARN_FRACTION = 0.5;
 
 // Web app <-> backend: measured by this browser tab. "page" = fetch()+TCP
 // handshake time (every /state reply is Connection: close, so this is not pure
 // server latency); "audio-ws" = application-level ping/pong on the always-open
 // AUD1 socket (native WebSocket ping/pong is invisible to page JS, hence the
 // JSON round-trip in js8-aud1.js's _schedulePing).
+const WEB_RTT_RISK = {pageRttMs:FETCH_TIMEOUT_MS, aud1PingRttMs:3000};
 function renderWebRttRow() {
-  const parts = [];
-  if (Number.isFinite(state.pageRttMs)) parts.push(`page ${Math.round(state.pageRttMs)} ms`);
-  if (Number.isFinite(state.aud1PingRttMs)) parts.push(`audio-ws ${Math.round(state.aud1PingRttMs)} ms`);
+  const values = {pageRttMs:state.pageRttMs, aud1PingRttMs:state.aud1PingRttMs};
+  const labels = {pageRttMs:"page", aud1PingRttMs:"audio-ws"};
+  const parts = []; let worstFraction = 0;
+  for (const key of Object.keys(labels)) {
+    const value = values[key];
+    if (!Number.isFinite(value)) continue;
+    const risk = WEB_RTT_RISK[key];
+    parts.push(`${labels[key]} ${Math.round(value)}/${risk} ms`);
+    worstFraction = Math.max(worstFraction, value / risk);
+  }
   if (!parts.length) return "";
-  return `<span>Web RTT</span><code>${parts.join(" · ")}</code>`;
+  const warn = worstFraction >= RTT_WARN_FRACTION;
+  return `<span>Web RTT</span><code>${warn?"<strong>":""}${parts.join(" · ")}${warn?"</strong>":""}</code>`;
 }
 
 // Backend <-> TRX: the firmware's own, already-flowing ping/pong and CI-V
 // request timing (icomLanClient.h) -- it used to compute these as flow-control
 // internals and silently discard them. Only the fields for the transport TRX1
-// actually uses come back nonzero (LAN ctrl/civ/CAT need a LAN radio, CAT serial
-// needs serial CI-V; TrxNet is not covered yet), so this row stays empty on a
-// TrxNet-only setup. txDefer suppresses the warn state during the ~3s window the
-// firmware itself defers best-effort work around a TX slot -- expected
-// slowness, not a fault. Threshold is a starting guess, needs on-radio tuning.
+// actually uses come back nonzero (LAN ctrl/civ/audio need a LAN radio, CAT
+// serial needs serial CI-V; TrxNet is not covered yet), so this row stays empty
+// on a TrxNet-only setup. txDefer suppresses the warn state during the ~3s
+// window the firmware itself defers best-effort work around a TX slot --
+// expected slowness, not a fault.
+const RADIO_RTT_RISK = {pingRttCtrlMs:500, pingRttCivMs:500, pingRttAudioMs:240,
+  civRttLanMs:2000, civRttSerialMs:250};
 function renderRadioRttRow() {
   const r = state.radio || {};
-  const parts = [];
-  if (r.pingRttCtrlMs) parts.push(`LAN ctrl ${r.pingRttCtrlMs} ms`);
-  if (r.pingRttCivMs) parts.push(`LAN civ ${r.pingRttCivMs} ms`);
-  if (r.civRttLanMs) parts.push(`CAT ${r.civRttLanMs} ms`);
-  if (r.civRttSerialMs) parts.push(`CAT serial ${r.civRttSerialMs} ms`);
+  const labels = {pingRttCtrlMs:"LAN ctrl", pingRttCivMs:"LAN civ",
+    pingRttAudioMs:"LAN audio", civRttLanMs:"CAT", civRttSerialMs:"CAT serial"};
+  const parts = []; let worstFraction = 0;
+  for (const key of Object.keys(labels)) {
+    const value = r[key];
+    if (!value) continue;
+    const risk = RADIO_RTT_RISK[key];
+    parts.push(`${labels[key]} ${value}/${risk} ms`);
+    worstFraction = Math.max(worstFraction, value / risk);
+  }
   if (!parts.length) return "";
-  const worst = Math.max(r.pingRttCtrlMs||0, r.pingRttCivMs||0,
-    r.pingRttAudioMs||0, r.civRttLanMs||0, r.civRttSerialMs||0);
-  const warn = !r.txDefer && worst > LINK_RTT_WARN_MS;
+  const warn = !r.txDefer && worstFraction >= RTT_WARN_FRACTION;
   return `<span>Radio RTT</span><code>${warn?"<strong>":""}${parts.join(" · ")}` +
     `${r.txDefer?" · TX slot (expected)":""}${warn?"</strong>":""}</code>`;
 }
