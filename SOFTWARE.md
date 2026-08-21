@@ -106,10 +106,10 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
 ## 1. What WIFILT is
 
 WIFILT turns an Icom transceiver into a station you operate from a browser. The interface —
-an ESP32 the size of a matchbox, or the same program running natively on a Linux or Windows
-PC ([section 1.5](#15-where-it-runs)) — joins your network, logs in to the radio over Icom's
-own network protocol, and serves a complete set of operating pages to any phone, tablet or
-computer on the network.
+an ESP32 the size of a matchbox, or the same program running natively on a Linux, Windows or
+Raspberry Pi PC ([section 1.5](#15-where-it-runs)) — joins your network, logs in to the radio
+over Icom's own network protocol, and serves a complete set of operating pages to any phone,
+tablet or computer on the network.
 
 Nothing is installed on the client. Nothing goes through a cloud service. The radio can sit
 at the antenna, in the car, or on a hill, and you work it from the sofa.
@@ -219,11 +219,12 @@ without GPS the segment does not exist at all — that absence is how you tell "
 this model" from "waiting for a fix".
 
 **Click the locator** and a small panel opens below it — the same idiom as the About panel
-behind the logo — with everything the radio's GPS reports: the 8-character locator, latitude
-and longitude in degrees and minutes (hover for the decimal form), altitude, course, speed,
-the UTC time of the fix, whether the fix is live or how long ago it was lost, how the radio
-arrived at the position (GPS receiver, manual entry, or receiver off) and which radio it
-was. It refreshes every 5 seconds while
+behind the logo — with everything the radio's GPS reports: the 8-character locator, the same
+position as an MGRS grid reference (1 m precision, WGS84 — the interface computes this
+itself, the radio never sends it), latitude and longitude in degrees and minutes (hover for
+the decimal form), altitude, course, speed, the UTC time of the fix, whether the fix is live
+or how long ago it was lost, how the radio arrived at the position (GPS receiver, manual
+entry, or receiver off) and which radio it was. It refreshes every 5 seconds while
 open — the pace the radio itself is polled — and a click anywhere else closes it. A field
 the radio does not fill, such as altitude without a 3D fix, is simply not listed. The panel
 is pictured, open over a moving station, in [section 5.6](#56-aprsis-command-builder).
@@ -235,7 +236,8 @@ If the browser loses contact with the interface, a red **OFFLINE** warning appea
 The same web interface described in this manual comes in three forms — one firmware, two
 native builds — and a browser cannot tell them apart: same pages, same API, same address.
 Pick whichever matches how the radio reaches you and get it from the
-[web installer page](https://ok1hra.github.io/wifilt/), which offers all three:
+[web installer page](https://ok1hra.github.io/wifilt/), which offers all three, the Linux one
+built for both x86_64 PCs and 64-bit Raspberry Pi (aarch64):
 
 | | ESP32 board | Linux PC | Windows PC |
 |---|---|---|---|
@@ -250,10 +252,13 @@ SETUP reads which build it is talking to and hides controls that would not do an
 it — a Linux or Windows install never shows WiFi fields to save into, and a slot already set
 to CI-V keeps showing it rather than being silently rewritten. Its title also carries a
 suffix naming the platform — `WIFILT-LINUX`, `WIFILT-WINDOWS`, `WIFILT-ESP32` — so a box and
-a desktop instance open in two browser tabs stay easy to tell apart.
+a desktop instance open in two browser tabs stay easy to tell apart. A Raspberry Pi is a
+`WIFILT-LINUX` instance like any other: the CPU architecture only decides which download to
+grab, never how the interface behaves once it is running.
 
-Building either native binary from source, and what `install.sh` does on Linux, is in
-[BUILD.md § 4](BUILD.md#4-native-build-linux-and-windows).
+Building either native binary from source, and what `install.sh` does on Linux (including the
+Raspberry Pi build), is in
+[BUILD.md § 4](BUILD.md#4-native-build-linux-windows-and-raspberry-pi-arm64).
 
 ---
 

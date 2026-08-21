@@ -202,7 +202,8 @@ ensure_setcap() {   # ensure_setcap WHAT-BREAKS-WITHOUT-IT
 phase_banner 0 "kontrola nástrojů"
 
 declare -A BLOCKED=()      # phase -> reason it cannot run at all
-DEGRADED_DIST=""           # phase 3 can still build the Linux half
+DEGRADED_WINDOWS=""        # phase 3 skips the Windows archive when set
+DEGRADED_ARM64=""          # phase 3 skips the Raspberry Pi archive when set
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -240,9 +241,11 @@ have node && report_tool "node" 1 "$(command -v node)" \
 have 7z && report_tool "7z" 1 "$(command -v 7z)" \
   || { report_tool "7z" 0 "chybí (p7zip-full)"; BLOCKED[3]="7z chybí"; BLOCKED[7]="7z chybí"; BLOCKED[9]="7z chybí"; }
 have zip && report_tool "zip" 1 "$(command -v zip)" \
-  || { report_tool "zip" 0 "chybí"; DEGRADED_DIST="zip chybí"; }
+  || { report_tool "zip" 0 "chybí"; DEGRADED_WINDOWS="zip chybí"; }
 have x86_64-w64-mingw32-g++ && report_tool "mingw-w64" 1 "$(command -v x86_64-w64-mingw32-g++)" \
-  || { report_tool "mingw-w64" 0 "chybí -- jen linuxový archiv"; DEGRADED_DIST="mingw-w64 chybí"; }
+  || { report_tool "mingw-w64" 0 "chybí -- bez Windows archivu"; DEGRADED_WINDOWS="mingw-w64 chybí"; }
+have aarch64-linux-gnu-g++ && report_tool "aarch64 cross g++" 1 "$(command -v aarch64-linux-gnu-g++)" \
+  || { report_tool "aarch64 cross g++" 0 "chybí -- bez Raspberry Pi archivu"; DEGRADED_ARM64="aarch64-linux-gnu-g++ chybí"; }
 if [[ -n "$ARDUINO15_DIR" ]]; then
   report_tool "esp32 core tools" 1 "$ARDUINO15_DIR"
 else
@@ -323,16 +326,24 @@ fi
 # ---------------------------------------------------------------- phase 3 ----
 phase_banner 3 "make -C native dist"
 if ! skip_if_blocked 3; then
+  # dist-linux always; dist-windows/dist-arm64 only when their cross-toolchain
+  # was found in phase 0. Built as an explicit target list (not the Makefile's
+  # `dist` aggregate) so a missing toolchain degrades one archive at a time
+  # instead of failing the whole phase.
+  dist_targets=(dist-linux)
+  [[ -z "$DEGRADED_WINDOWS" ]] && dist_targets+=(dist-windows)
+  [[ -z "$DEGRADED_ARM64"   ]] && dist_targets+=(dist-arm64)
   dist_default=Y
-  if [[ -n "$DEGRADED_DIST" ]]; then
-    warn "  $DEGRADED_DIST -- vznikne jen linuxový archiv, stránka bude bez Windows odkazu."
+  if [[ -n "$DEGRADED_WINDOWS" || -n "$DEGRADED_ARM64" ]]; then
+    [[ -n "$DEGRADED_WINDOWS" ]] && warn "  $DEGRADED_WINDOWS -- stránka bude bez Windows odkazu."
+    [[ -n "$DEGRADED_ARM64"   ]] && warn "  $DEGRADED_ARM64 -- stránka bude bez Raspberry Pi odkazu."
     dist_default=N
   fi
-  if ask "Sestavit PC balíky pro REV $REV?" "$dist_default"; then
-    # Archives of other revisions have to go before make runs: its last step is
-    # `sha256sum *.tar.gz *.zip > SHA256SUMS`, which would otherwise publish a
-    # checksum file describing releases that are not on the page. native/dist is
-    # in .gitignore, so nothing here is worth keeping.
+  if ask "Sestavit PC balíky pro REV $REV (${dist_targets[*]})?" "$dist_default"; then
+    # Archives of other revisions have to go before make runs: the sha256sum
+    # step below would otherwise publish a checksum file describing releases
+    # that are not on the page. native/dist is in .gitignore, so nothing here
+    # is worth keeping.
     if [[ -d "$DIST_DIR" ]]; then
       while IFS= read -r -d '' stale; do
         info "  mažu $(basename "$stale")"
@@ -341,16 +352,11 @@ if ! skip_if_blocked 3; then
                  \( -type d -o -name '*.tar.gz' -o -name '*.zip' \) \
                  ! -name "*-${REV}-*" -print0)
     fi
-    if [[ -n "$DEGRADED_DIST" ]]; then
-      make -C "${ROOT_DIR}/native" dist-linux
-      dist_status=$?
-      if [[ $dist_status -eq 0 ]]; then
-        ( cd "$DIST_DIR" && sha256sum ./*.tar.gz ./*.zip >SHA256SUMS 2>/dev/null || true )
-        rm -rf "${DIST_DIR}/assets"
-      fi
-    else
-      make -C "${ROOT_DIR}/native" dist
-      dist_status=$?
+    make -C "${ROOT_DIR}/native" "${dist_targets[@]}"
+    dist_status=$?
+    if [[ $dist_status -eq 0 ]]; then
+      ( cd "$DIST_DIR" && sha256sum ./*.tar.gz ./*.zip >SHA256SUMS 2>/dev/null || true )
+      rm -rf "${DIST_DIR}/assets"
     fi
     if [[ $dist_status -eq 0 ]]; then
       mark 3 "hotovo"
@@ -602,12 +608,13 @@ if ! skip_if_blocked 9; then
   fi
 
   win_archive="${DIST_DIR}/wifilt-${REV}-windows-x64.zip"
-  if [[ ! -f "$LINUX_ARCHIVE" && ! -f "$win_archive" ]]; then
+  arm64_archive="${DIST_DIR}/wifilt-${REV}-linux-arm64.tar.gz"
+  if [[ ! -f "$LINUX_ARCHIVE" && ! -f "$win_archive" && ! -f "$arm64_archive" ]]; then
     gate "v native/dist není žádný archiv pro REV $REV -- fáze 3 neproběhla"
-  elif [[ ! -f "$LINUX_ARCHIVE" ]]; then
-    warn "  chybí linuxový archiv pro REV $REV -- stránka ho nenabídne"
-  elif [[ ! -f "$win_archive" ]]; then
-    warn "  chybí windowsový archiv pro REV $REV -- stránka ho nenabídne"
+  else
+    [[ -f "$LINUX_ARCHIVE"   ]] || warn "  chybí linuxový archiv pro REV $REV -- stránka ho nenabídne"
+    [[ -f "$win_archive"     ]] || warn "  chybí windowsový archiv pro REV $REV -- stránka ho nenabídne"
+    [[ -f "$arm64_archive"   ]] || warn "  chybí Raspberry Pi archiv pro REV $REV -- stránka ho nenabídne"
   fi
 
   if [[ -n "$(git -C "$ROOT_DIR" status --porcelain)" ]]; then

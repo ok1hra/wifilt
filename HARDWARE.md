@@ -28,10 +28,10 @@ firmware onto a board. Everything the web interface does once it is running is d
 ## 1. What you need
 
 **Any ESP32 WROOM module with 4 MB of flash** — if you want the hardware box. It is one of
-three ways to run WIFILT, not the only one: the same interface also runs as a native binary
-on a **Linux** or **Windows** PC, needing no ESP32 at all, when the radio already has its own
-network connection. See [section 11](#11-running-without-the-esp32-board). The rest of this
-manual, and everything below in this section, is about the hardware route.
+four ways to run WIFILT, not the only one: the same interface also runs as a native binary
+on a **Linux**, **Windows** or **Raspberry Pi** PC, needing no ESP32 at all, when the radio
+already has its own network connection. See [section 11](#11-running-without-the-esp32-board).
+The rest of this manual, and everything below in this section, is about the hardware route.
 
 A plain ESP32 Dev Module (ESP32-WROOM-32, 4 MB) plugged into USB runs the complete web
 interface: the logbook, the DX cluster client, JS8Call, the WSPR beacon, log synchronisation
@@ -373,11 +373,13 @@ The interface board is an open design.
 
 If the radio already has its own network connection — Network Control switched on, on an
 **IC-705, IC-7610, IC-9700, IC-7300 MK2 or IC-7760** — none of the hardware above is needed.
-The same source builds and runs as a native program on a **Linux** or **Windows** PC and
-reaches the radio purely over IP, serving the identical pages at the identical address,
-`http://wifilt.local`. Get it from the [web installer page](https://ok1hra.github.io/wifilt/)
-— it offers the ESP32 flash and the Linux/Windows downloads side by side, each folded until
-you open the one that is yours — or build it yourself, see [BUILD.md § 4](BUILD.md#4-native-build-linux-and-windows).
+The same source builds and runs as a native program on a **Linux**, **Windows** or
+**64-bit Raspberry Pi** system and reaches the radio purely over IP, serving the identical
+pages at the identical address, `http://wifilt.local`. Get it from the
+[web installer page](https://ok1hra.github.io/wifilt/) — it offers the ESP32 flash and the
+Linux/Raspberry Pi/Windows downloads side by side, each folded until you open the one that is
+yours — or build it yourself, see
+[BUILD.md § 4](BUILD.md#4-native-build-linux-windows-and-raspberry-pi-arm64).
 
 The trade is symmetric with [section 2](#2-two-hardware-paths): a PC can do everything a bare
 ESP32 module does over the network — QRPLog, DXC, JS8Call, the WSPR beacon, TrxNet, LOGSYNC,
@@ -389,11 +391,11 @@ Decoder tab on a bare module (section 2 above); it also titles itself accordingl
 `WIFILT-LINUX`, `WIFILT-WINDOWS` or `WIFILT-ESP32` — so a box and a desktop binary open in
 two tabs stay easy to tell apart.
 
-The Linux archive installs a `systemd` unit that is not enabled by default and needs one
-privileged step redone on every upgrade (binding ports 80/82/83); the Windows build is a
-single static `.exe` with nothing to install. Neither one runs unattended the way the ESP32
-box does when nothing is plugged into a keyboard — it is a program on a computer that has to
-be running, not an appliance.
+The Linux archive — Raspberry Pi included, it is the same `install.sh` — installs a `systemd`
+unit that is not enabled by default and needs one privileged step redone on every upgrade
+(binding ports 80/82/83); the Windows build is a single static `.exe` with nothing to
+install. None of them runs unattended the way the ESP32 box does when nothing is plugged into
+a keyboard — it is a program on a computer that has to be running, not an appliance.
 
 ---
 

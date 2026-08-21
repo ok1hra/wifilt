@@ -128,6 +128,17 @@
     return min < 1 ? 'lost under a minute ago' : 'lost ' + min + ' min ago';
   }
 
+  // "33U XP 04631 98765" -- zone+band, 100 km square, then the two 5-digit
+  // (1 m) halves, spaced for reading rather than the bare machine form. Mgrs
+  // is always called with 5-digit precision here, so the digit half is a
+  // fixed 10 characters and everything before it is zone+band+square.
+  function mgrsSpaced(compact) {
+    if (!compact) return null;
+    var head = compact.slice(0, -10);
+    var digits = compact.slice(-10);
+    return head.slice(0, -2) + ' ' + head.slice(-2) + ' ' + digits.slice(0, 5) + ' ' + digits.slice(5);
+  }
+
   function gpsPanelRows() {
     if (!gpsInfo) return [['GPS details', 'not answering']];
     // Two different questions, so two rows: which device the position came from,
@@ -135,6 +146,7 @@
     var from = ({0: 'receiver off', 1: 'GPS receiver', 3: 'manual entry'})[gpsInfo.sel] || '?';
     var rows = [
       ['Locator', gpsInfo.grid || 'no fix yet'],
+      ['MGRS', mgrsSpaced(typeof Mgrs !== 'undefined' ? Mgrs.latLonToMgrs(gpsInfo.lat, gpsInfo.lon, 5) : null)],
       ['Latitude', gpsDegMin(gpsInfo.lat, 'N', 'S')],
       ['Longitude', gpsDegMin(gpsInfo.lon, 'E', 'W')],
       ['Altitude', isFinite(Number(gpsInfo.altM)) && gpsInfo.altM !== null ? Number(gpsInfo.altM).toFixed(1) + ' m' : null],

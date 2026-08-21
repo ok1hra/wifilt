@@ -2,20 +2,20 @@
 
 Everything needed to build and flash WIFILT is in this repository. Most people never need
 this file: the [web installer](https://ok1hra.github.io/wifilt/) writes a released build to
-a blank ESP32 in about a minute, or hands you a Linux or Windows binary that needs no
-hardware at all — [HARDWARE.md](HARDWARE.md) and [SOFTWARE.md § 1.5](SOFTWARE.md#15-where-it-runs)
-describe those routes.
+a blank ESP32 in about a minute, or hands you a Linux, Raspberry Pi or Windows binary that
+needs no hardware at all — [HARDWARE.md](HARDWARE.md) and
+[SOFTWARE.md § 1.5](SOFTWARE.md#15-where-it-runs) describe those routes.
 
-The firmware, the native Linux/Windows build, the web assets and the JS8 modem are all built
-separately — a change to a page does not require the WASM toolchain, and a change to the
-sketch does not require touching `native/`.
+The firmware, the native Linux/Windows/ARM64 build, the web assets and the JS8 modem are all
+built separately — a change to a page does not require the WASM toolchain, and a change to
+the sketch does not require touching `native/`.
 
 ## Contents
 
 1. [Firmware](#1-firmware)
 2. [Web assets](#2-web-assets)
 3. [Flashing what you built](#3-flashing-what-you-built)
-4. [Native build: Linux and Windows](#4-native-build-linux-and-windows)
+4. [Native build: Linux, Windows and Raspberry Pi (ARM64)](#4-native-build-linux-windows-and-raspberry-pi-arm64)
 5. [The web installer page](#5-the-web-installer-page)
 6. [JS8 modem (WebAssembly)](#6-js8-modem-webassembly)
 7. [Tests](#7-tests)
@@ -188,7 +188,7 @@ partition table too, which is what the web installer writes.
 
 ---
 
-## 4. Native build: Linux and Windows
+## 4. Native build: Linux, Windows and Raspberry Pi (ARM64)
 
 The same `wifilt.ino`, the same `data/`, compiled as a PC program instead of firmware. A
 browser cannot tell the two apart — same HTTP API, same WebSocket ports, same assets, and
@@ -210,6 +210,7 @@ for the same source, not a fork of it.
 ```bash
 make -C native            # Linux binary: native/build/wifilt
 make -C native win        # Windows .exe, cross-compiled with mingw-w64: native/build-win/wifilt.exe
+make -C native arm64      # 64-bit Raspberry Pi OS, cross-compiled: native/build-arm64/wifilt
 make -C native run        # build and run against ./native/_run as the config directory, port 8080
 make -C native setcap     # grant cap_net_bind_service — redo after every rebuild, it lives on the inode
 ```
@@ -217,17 +218,27 @@ make -C native setcap     # grant cap_net_bind_service — redo after every rebu
 Requirements: `g++`/`gcc` with C++17 for the Linux target; for the Windows cross-build,
 `x86_64-w64-mingw32-g++-posix` / `-gcc-posix` — the **posix** thread variant specifically,
 because Debian's default `win32` variant has no `std::thread`, `std::mutex` or
-`std::condition_variable`, which the FreeRTOS shim is built from. `TRXNET_DIR` defaults to
-`$(HOME)/Arduino/libraries/TrxNet/src`; override it if the library lives elsewhere.
+`std::condition_variable`, which the FreeRTOS shim is built from; for the Raspberry Pi
+cross-build, `aarch64-linux-gnu-g++`/`-gcc` (Debian/Ubuntu package `g++-aarch64-linux-gnu`).
+`TRXNET_DIR` defaults to `$(HOME)/Arduino/libraries/TrxNet/src`; override it if the library
+lives elsewhere.
+
+The `arm64` binary is cross-compiled against the *build machine's* glibc (via
+`libc6-dev-arm64-cross`), not the target Pi's. That has never mattered for a same-vintage
+Debian/Ubuntu pair, but a release built on a much newer distro than the Pi is running could
+produce a binary that asks for a glibc symbol version the Pi does not have. Verify a new
+`arm64` release on real Raspberry Pi OS hardware before wide announcement — the same caution
+this project already applies to anything marked "needs on-radio check".
 
 Ports 80, 82 and 83 are all privileged, and 83 carries the audio — no `AUD1` channel means no
 JS8 and no WSPR. The Windows binary needs nothing extra to bind them; on Linux the capability
 above is required and is stored on the binary's inode, so it is lost on every rebuild.
 
 ```bash
-make -C native dist       # both platforms: native/dist/wifilt-<REV>-linux-x86_64.tar.gz
-                           #                 native/dist/wifilt-<REV>-windows-x64.zip
-                           #                 + SHA256SUMS
+make -C native dist       # all three: native/dist/wifilt-<REV>-linux-x86_64.tar.gz
+                           #            native/dist/wifilt-<REV>-windows-x64.zip
+                           #            native/dist/wifilt-<REV>-linux-arm64.tar.gz
+                           #            + SHA256SUMS
 ```
 
 `dist` builds the web assets through `tools/prepare-spiffs-tree.sh` rather than copying
@@ -238,14 +249,14 @@ different versions of the same source.
 
 Installing what `dist` produces:
 
-| | Linux (`tar.gz`) | Windows (`.zip`) |
-|---|---|---|
-| Unpack | `tar xzf wifilt-*-linux-x86_64.tar.gz` | any zip tool |
-| Run without installing | `sudo ./wifilt` | double-click `wifilt.exe` |
-| Install | `sudo ./install.sh` → `/opt/wifilt` | — nothing to install, the `.exe` is fully static |
-| Privilege | `install.sh` grants `cap_net_bind_service`; redone on every upgrade | none — first run, allow it through the Windows Firewall prompt |
-| Autostart | a `systemd` unit is written but **not enabled** — starting a transmitter's control interface at boot is a decision, not a side effect of installing | — |
-| Configuration | `~/.config/wifilt`; reinstalling never touches it, same guarantee as the box's `cfg` partition surviving a firmware update | next to the `.exe` |
+| | Linux (`tar.gz`) | Raspberry Pi (`tar.gz`) | Windows (`.zip`) |
+|---|---|---|---|
+| Unpack | `tar xzf wifilt-*-linux-x86_64.tar.gz` | `tar xzf wifilt-*-linux-arm64.tar.gz` | any zip tool |
+| Run without installing | `sudo ./wifilt` | `sudo ./wifilt` | double-click `wifilt.exe` |
+| Install | `sudo ./install.sh` → `/opt/wifilt` | `sudo ./install.sh` → `/opt/wifilt` | — nothing to install, the `.exe` is fully static |
+| Privilege | `install.sh` grants `cap_net_bind_service`; redone on every upgrade | same as Linux | none — first run, allow it through the Windows Firewall prompt |
+| Autostart | a `systemd` unit is written but **not enabled** — starting a transmitter's control interface at boot is a decision, not a side effect of installing | same as Linux | — |
+| Configuration | `~/.config/wifilt`; reinstalling never touches it, same guarantee as the box's `cfg` partition surviving a firmware update | same as Linux | next to the `.exe` |
 
 Not code-signed, so Windows SmartScreen may warn on first run (*More info* → *Run anyway*);
 neither archive is signed, so `SHA256SUMS` beside them is the way to check a download rather
@@ -254,7 +265,10 @@ than take it on trust.
 `tools/native-integration-test.sh` runs the whole chain against a fake radio — RS-BA1
 handshake, CI-V reaching `/state`, and the `AUD1` audio WebSocket when the binary can bind
 port 83 — with no radio and nothing on the air. `.github/workflows/build.yml` builds all
-three targets, ESP32, Linux and Windows, on every push.
+four targets, ESP32, Linux, Linux ARM64 and Windows, on every push — the ARM64 job runs on a
+real GitHub-hosted ARM64 runner and exercises the same integration test natively, not the
+`arm64` cross-compile target above (which exists for `tools/release.sh`, run from an x86_64
+machine — see the glibc caveat above).
 
 ---
 

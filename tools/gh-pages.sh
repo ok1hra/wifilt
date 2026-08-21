@@ -411,10 +411,13 @@ python3 "$ESPTOOL_BIN" "${MERGE_ARGS[@]}"
 
 DESKTOP_LINUX="${ROOT_DIR}/native/dist/wifilt-${FW_REV}-linux-x86_64.tar.gz"
 DESKTOP_WIN="${ROOT_DIR}/native/dist/wifilt-${FW_REV}-windows-x64.zip"
+DESKTOP_ARM64="${ROOT_DIR}/native/dist/wifilt-${FW_REV}-linux-arm64.tar.gz"
 DESKTOP_LINUX_NAME=""
 DESKTOP_WIN_NAME=""
+DESKTOP_ARM64_NAME=""
 DESKTOP_LINUX_SIZE=""
 DESKTOP_WIN_SIZE=""
+DESKTOP_ARM64_SIZE=""
 
 human_size() {
   awk -v bytes="$1" 'BEGIN { printf "%.1f MB", bytes / 1048576 }'
@@ -434,14 +437,20 @@ if [[ -f "$DESKTOP_WIN" ]]; then
   cp "$DESKTOP_WIN" "${OUTPUT_DIR}/${DESKTOP_WIN_NAME}"
   echo "==> Desktop archive: ${DESKTOP_WIN_NAME} (${DESKTOP_WIN_SIZE})"
 fi
+if [[ -f "$DESKTOP_ARM64" ]]; then
+  DESKTOP_ARM64_NAME="$(basename "$DESKTOP_ARM64")"
+  DESKTOP_ARM64_SIZE="$(human_size "$(stat -c%s "$DESKTOP_ARM64")")"
+  cp "$DESKTOP_ARM64" "${OUTPUT_DIR}/${DESKTOP_ARM64_NAME}"
+  echo "==> Desktop archive: ${DESKTOP_ARM64_NAME} (${DESKTOP_ARM64_SIZE})"
+fi
 # The page tells people to check the download against this, so it has to travel
 # with the downloads rather than being left behind in native/dist.
-if [[ -n "$DESKTOP_LINUX_NAME" || -n "$DESKTOP_WIN_NAME" ]] \
+if [[ -n "$DESKTOP_LINUX_NAME" || -n "$DESKTOP_WIN_NAME" || -n "$DESKTOP_ARM64_NAME" ]] \
    && [[ -f "${ROOT_DIR}/native/dist/SHA256SUMS" ]]; then
   DESKTOP_SUMS_NAME="SHA256SUMS"
   cp "${ROOT_DIR}/native/dist/SHA256SUMS" "${OUTPUT_DIR}/${DESKTOP_SUMS_NAME}"
 fi
-if [[ -z "$DESKTOP_LINUX_NAME" && -z "$DESKTOP_WIN_NAME" ]]; then
+if [[ -z "$DESKTOP_LINUX_NAME" && -z "$DESKTOP_WIN_NAME" && -z "$DESKTOP_ARM64_NAME" ]]; then
   echo "==> No desktop archives for REV ${FW_REV} (run: make -C native dist)"
 fi
 
@@ -667,15 +676,15 @@ cat > "${OUTPUT_DIR}/index.html" <<EOF
       font-weight: 400;
     }
     .legal { margin-top: 1.75rem; font-size: 0.78rem; line-height: 1.5; }
-    /* The three platforms, collapsed. The page used to lay all three roads end
-       to end, so every reader scrolled through two that were not theirs before
+    /* The platforms, collapsed. The page used to lay every road end to end, so
+       every reader scrolled through the ones that were not theirs before
        reaching the one that was. The summary carries what actually decides the
        choice -- what the thing needs, and how big the download is -- so the
        click is informed rather than exploratory.
        Deliberately not an exclusive accordion (the name= attribute on details):
        that closes Linux the moment you open Windows, and comparing those two is
-       a real thing to want. The ids are the anchors #esp32 / #linux / #windows, which browsers
-       open on their own when a fragment targets them. */
+       a real thing to want. The ids are the anchors #esp32 / #linux / #raspberrypi /
+       #windows, which browsers open on their own when a fragment targets them. */
     .platform {
       margin: 0.75rem 0 0;
       border: 1px solid rgba(96, 165, 250, 0.28);
@@ -752,8 +761,8 @@ cat > "${OUTPUT_DIR}/index.html" <<EOF
           <strong>SETUP</strong> page, in this order &mdash; each step only needs what the
           device cannot work out for itself.
         </p>
-        <!-- Step 0 does not say "flash" any more. Two of the three platforms below
-             flash nothing at all, and this list now stands above all three. -->
+        <!-- Step 0 does not say "flash" any more. Three of the four platforms below
+             flash nothing at all, and this list now stands above all four. -->
         <ol class="road">
           <li class="road-now"><span class="road-n">0</span> Install WIFILT</li>
           <li><span class="road-n">1</span> Network</li>
@@ -769,7 +778,7 @@ cat > "${OUTPUT_DIR}/index.html" <<EOF
       <section class="where" aria-labelledby="where-title">
         <h2 id="where-title">Where will it run?</h2>
         <p>
-          One build, three places. Open the one that is yours &mdash; the other two stay folded
+          One build, four places. Open the one that is yours &mdash; the others stay folded
           away.
         </p>
         <p>
@@ -971,6 +980,37 @@ sudo ./install.sh</code></pre>
       </details>
 LINUX
 fi)
+$(if [[ -n "$DESKTOP_ARM64_NAME" ]]; then cat <<RASPBERRYPI
+      <details class="platform" id="raspberrypi">
+        <summary>
+          <span class="platform-name">Raspberry Pi (64-bit)</span>
+          <span class="platform-sub">radio on the network &bull; no hardware &bull; tar.gz, ${DESKTOP_ARM64_SIZE}</span>
+        </summary>
+        <div class="platform-body">
+          <p class="dl-line">
+            <a href="${DESKTOP_ARM64_NAME}"><strong>${DESKTOP_ARM64_NAME}</strong></a>
+            &nbsp;&bull;&nbsp; Linux ARM64 (aarch64), ${DESKTOP_ARM64_SIZE}$(if [[ -n "$DESKTOP_SUMS_NAME" ]]; then echo "
+            &nbsp;&bull;&nbsp; <a href=\"${DESKTOP_SUMS_NAME}\">SHA256SUMS</a>"; fi)
+          </p>
+          <p class="muted">
+            Needs a <strong>64-bit</strong> Raspberry Pi OS (aarch64) &mdash; Pi&nbsp;3, 4, 5 or
+            newer. The 32-bit (armhf) Raspberry Pi OS cannot run this build.
+          </p>
+          <pre><code>tar xzf ${DESKTOP_ARM64_NAME}
+cd wifilt-linux-arm64
+sudo ./install.sh</code></pre>
+          <p class="muted">
+            The installer copies the program to <code>/opt/wifilt</code> and grants it permission to
+            use port&nbsp;80. That permission is not optional: ports 80, 82 and 83 are all privileged,
+            and port&nbsp;83 carries the audio, so without it JS8 and WSPR cannot work. It installs a
+            service but deliberately does not enable it &mdash; starting a transmitter's control
+            interface at boot should be your decision. To run it without installing:
+            <code>sudo ./wifilt</code> from the unpacked folder.
+          </p>
+        </div>
+      </details>
+RASPBERRYPI
+fi)
 $(if [[ -n "$DESKTOP_WIN_NAME" ]]; then cat <<WINDOWS
       <details class="platform" id="windows">
         <summary>
@@ -999,13 +1039,13 @@ fi)
       <hr class="divider">
 
       <!-- Lifted out of the ESP32 section on purpose. It is identical for all
-           three platforms, and with the platforms folded away a reader who opens
+           four platforms, and with the platforms folded away a reader who opens
            only "Linux PC" would otherwise never meet the one step that decides
            whether anything works at all. -->
       <section aria-labelledby="radio-title">
         <h2 id="radio-title">Connect your radio</h2>
         <p>
-          Whichever of the three you installed, this part is the same &mdash; including the
+          Whichever of the four you installed, this part is the same &mdash; including the
           address:
           <a href="http://wifilt.local" target="_blank" rel="noopener">http://wifilt.local</a>.
           That the board and the computer answer to the same name is not a coincidence: your
@@ -1154,7 +1194,7 @@ done
 # on a copy into OUTPUT_DIR: this loop is an allowlist, and anything not named
 # in it never reaches the branch -- which is how the download links 404'd while
 # the files sat happily in build/gh-pages.
-for optional_file in "$DESKTOP_LINUX_NAME" "$DESKTOP_WIN_NAME" "$DESKTOP_SUMS_NAME"; do
+for optional_file in "$DESKTOP_LINUX_NAME" "$DESKTOP_WIN_NAME" "$DESKTOP_ARM64_NAME" "$DESKTOP_SUMS_NAME"; do
   [[ -n "$optional_file" ]] || continue
   require_file "${OUTPUT_DIR}/${optional_file}" "desktop artifact ${optional_file}"
   cp "${OUTPUT_DIR}/${optional_file}" "$TMP_DIR/${optional_file}"

@@ -1,6 +1,6 @@
 name: build
 
-# One source, three targets. The point of running all of them on every commit is
+# One source, four targets. The point of running all of them on every commit is
 # that the shared sources rot the moment one target stops being compiled: an
 # ESP-only API slips into wifilt.ino and the PC build breaks silently, or a
 # POSIX-ism lands and Windows breaks. Neither is noticed by anyone until much
@@ -63,6 +63,53 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: wifilt-linux-x86_64
+          path: native/build/wifilt
+
+  linux-arm64:
+    name: Linux ARM64 build + integration
+    # A real ARM64 machine, not emulation -- GitHub's hosted Linux ARM64 runners
+    # are free for public repos. This job runs `make -C native` PLAIN, not the
+    # `arm64` cross-compile target in native/Makefile: the runner itself is
+    # already aarch64, so its own native g++ already produces an aarch64 binary.
+    # The cross target exists only for tools/release.sh, which cross-compiles
+    # the *shipped* archive from the maintainer's x86_64 machine (mirroring how
+    # the windows job below cross-compiles with mingw-w64). The two are
+    # different builds of the same source -- this job proves the source is
+    # correct on ARM64, not that it is bit-identical to what ships. See the
+    # note in BUILD.md before trusting a release archive without a real-Pi check.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch TrxNet
+        run: |
+          mkdir -p "$HOME/Arduino/libraries"
+          git clone --depth 1 https://github.com/ok1hra/TrxNet.git \
+            "$HOME/Arduino/libraries/TrxNet"
+
+      - name: Install asset tooling
+        run: sudo apt-get update && sudo apt-get install -y p7zip-full terser
+
+      - name: Build
+        run: make -C native
+
+      - name: Grant CAP_NET_BIND_SERVICE
+        run: sudo setcap cap_net_bind_service=+ep native/build/wifilt
+
+      - name: Integration test (fake radio)
+        run: tools/native-integration-test.sh
+
+      - name: Browser-free smoke tests
+        run: |
+          for test in setup-spine-smoke setup-radio-contract-smoke \
+                      state-json-budget-smoke config-backup-smoke; do
+            echo "--- $test"
+            node "tools/$test.js"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wifilt-linux-arm64
           path: native/build/wifilt
 
   windows:

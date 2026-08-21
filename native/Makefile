@@ -1,7 +1,9 @@
-# WIFILT -- native build (Linux primary, Windows via mingw-w64, macOS in-code).
+# WIFILT -- native build (Linux primary, Windows via mingw-w64, Raspberry Pi via
+# aarch64-linux-gnu, macOS in-code).
 #
 #   make            build for the host
 #   make win        cross-compile a static Windows .exe
+#   make arm64      cross-compile for 64-bit Raspberry Pi OS (aarch64)
 #   make run        build and run against ./_run as the config directory
 #   make clean
 #
@@ -65,7 +67,7 @@ OBJECTS := \
 
 VPATH := . arduino platform fs net net/mbedtls $(TRXNET_DIR) $(SKETCH_DIR)
 
-.PHONY: all clean run win setcap
+.PHONY: all clean run win arm64 setcap
 
 all: $(BUILD_DIR)/$(TARGET)
 
@@ -118,17 +120,31 @@ win:
 	  LDFLAGS="-static -static-libstdc++ -static-libgcc" \
 	  LDLIBS="-lws2_32 -liphlpapi -lwinmm"
 
+# Raspberry Pi (64-bit Raspberry Pi OS / aarch64), cross-compiled from an x86_64
+# host -- same shape as `win` above, same aarch64-linux-gnu-g++ major version as
+# the host gcc (both are Debian 12 packages). NOT fully static: same NSS trap as
+# the plain Linux target above, since this still links glibc.
+arm64:
+	$(MAKE) \
+	  CXX=aarch64-linux-gnu-g++ \
+	  CC=aarch64-linux-gnu-gcc \
+	  BUILD_DIR=build-arm64 \
+	  TARGET=wifilt \
+	  LDFLAGS="-static-libstdc++ -static-libgcc" \
+	  LDLIBS="-lpthread"
+
 run: all
 	@mkdir -p _run
 	./$(BUILD_DIR)/$(TARGET) --port 8080 --data-dir $(SKETCH_DIR)/data --config-dir _run
 
 # --- distribution ----------------------------------------------------------
 #
-# Two archives, both self-contained. Linux ships the binary plus data/ and the
-# installer; Windows ships one .exe plus data/, because the .exe is fully static
-# and needs nothing else. SHA256 sums go beside them: an unsigned download is
-# the norm for ham software, but a published checksum is the least that owes
-# the person running it.
+# Three archives, all self-contained. Linux and the Raspberry Pi ship the binary
+# plus data/ and the installer, because both still need install.sh to grant
+# cap_net_bind_service; Windows ships one .exe plus data/, because the .exe is
+# fully static and needs nothing else. SHA256 sums go beside them: an unsigned
+# download is the norm for ham software, but a published checksum is the least
+# that owes the person running it.
 
 # The SAME number the firmware carries, read from the same place tools/gh-pages.sh
 # reads it. Not a build date: the binary and the .bin flashed onto a box are the
@@ -138,9 +154,9 @@ VERSION ?= $(shell awk '/#define REV / { print $$3; exit }' $(SKETCH_DIR)/wifilt
 DIST    ?= dist
 ASSETS  := $(DIST)/assets
 
-.PHONY: dist dist-assets dist-linux dist-windows
+.PHONY: dist dist-assets dist-linux dist-windows dist-arm64
 
-dist: dist-linux dist-windows
+dist: dist-linux dist-windows dist-arm64
 	@cd $(DIST) && sha256sum *.tar.gz *.zip > SHA256SUMS 2>/dev/null || true
 	@rm -rf $(ASSETS)
 	@ls -lh $(DIST)
@@ -171,7 +187,15 @@ dist-windows: win dist-assets
 	@cd $(DIST) && zip -qr wifilt-$(VERSION)-windows-x64.zip wifilt-windows-x64
 	@rm -rf $(DIST)/wifilt-windows-x64
 
+dist-arm64: arm64 dist-assets
+	@rm -rf $(DIST)/wifilt-linux-arm64 && mkdir -p $(DIST)/wifilt-linux-arm64
+	cp build-arm64/wifilt $(DIST)/wifilt-linux-arm64/wifilt
+	cp install.sh          $(DIST)/wifilt-linux-arm64/
+	cp -r $(ASSETS)        $(DIST)/wifilt-linux-arm64/data
+	@cd $(DIST) && tar czf wifilt-$(VERSION)-linux-arm64.tar.gz wifilt-linux-arm64
+	@rm -rf $(DIST)/wifilt-linux-arm64
+
 clean:
-	rm -rf $(BUILD_DIR) build-win $(DIST)
+	rm -rf $(BUILD_DIR) build-win build-arm64 $(DIST)
 
 -include $(OBJECTS:.o=.d)
