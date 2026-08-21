@@ -130,9 +130,14 @@ print_memory_report() {
   printf '%b' "$C_OFF"
   usage_line "PROGRAM (app0)" "$FIRMWARE_SIZE" "$APP_SIZE_DEC"
   echo
-  usage_line "FILESYSTEM (spiffs)" "$staging_bytes" "$SPIFFS_SIZE_DEC"
-  printf '  %-19s %s files, gate limit %s B (256 KiB runtime reserve + 64 KiB metadata)\n' \
-    "" "$staging_files" "$(fmt_num "$max_payload_bytes")"
+  # Denominator is the GATE, not the partition. The 256 KiB runtime reserve is
+  # held for device-written data and the payload can never occupy it -- gating
+  # against SPIFFS_SIZE_DEC would put 327 680 unreachable bytes in the bar, show
+  # ~10 points less fill than is true, and fire the yellow/red warning that much
+  # too late. The partition figure stays on the detail line so nothing is hidden.
+  usage_line "FILESYSTEM (spiffs)" "$staging_bytes" "$max_payload_bytes"
+  printf '  %-19s %s files · partition %s B = gate + 256 KiB runtime reserve + 64 KiB metadata\n' \
+    "" "$staging_files" "$(fmt_num "$SPIFFS_SIZE_DEC")"
   printf '%b' "$C_CYAN"
   echo "==============================================================================="
   printf '%b' "$C_OFF"
