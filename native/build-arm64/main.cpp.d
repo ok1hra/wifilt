@@ -6,7 +6,7 @@ build-arm64/main.cpp.o: main.cpp arduino/Arduino.h arduino/esp32-hal.h \
  arduino/Printable.h fs/EEPROM.h net/ESPmDNS.h fs/FS.h net/WebServer.h \
  net/WiFi.h net/Client.h arduino/Print.h arduino/Stream.h \
  arduino/IPAddress.h net/Server.h net/socket_compat.h platform/paths.h \
- platform/process_args.h
+ ../radio_transport.h platform/process_args.h
 arduino/Arduino.h:
 arduino/esp32-hal.h:
 arduino/esp32-hal-log.h:
@@ -34,4 +34,5 @@ arduino/IPAddress.h:
 net/Server.h:
 net/socket_compat.h:
 platform/paths.h:
+../radio_transport.h:
 platform/process_args.h:

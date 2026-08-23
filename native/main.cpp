@@ -22,6 +22,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+  #include <execinfo.h> // see onCrash()'s own comment
+#endif
+#include <unistd.h>
 
 #include <chrono>
 #include <string>
@@ -55,6 +59,31 @@ namespace {
 volatile sig_atomic_t g_stopRequested = 0;
 
 void onSignal(int) { g_stopRequested = 1; }
+
+// Permanent diagnostic aid, kept deliberately: no gdb is available in this
+// environment (no passwordless sudo to install it), and a real crash was
+// once observed with zero output at all -- the process just vanished
+// (announceIpViaCw()'s first live call, root-caused to a reentrant
+// webServer.handleClient() call in the TEST harness that triggered it, not
+// a bug in the function itself -- see [[cw-ip-announce-verified]]).
+// backtrace_symbols_fd() is async-signal-safe (unlike printf/Serial), so
+// it's safe to call from inside the handler itself; re-raising the default
+// handler afterward still lets a real core file get written for deeper
+// analysis (see that same memory for how to hand-parse one without gdb).
+// Harmless on the normal path -- only fires on an actual fatal signal.
+// execinfo.h/backtrace() is glibc-only -- the mingw-w64 Windows cross-build
+// has neither it nor SIGBUS, so it just prints the bare crash marker.
+void onCrash(int sig) {
+  const char msg[] = "\n=== CRASH ===\n";
+  write(2, msg, sizeof(msg) - 1);
+#ifndef _WIN32
+  void *frames[32];
+  int n = backtrace(frames, 32);
+  backtrace_symbols_fd(frames, n, 2);
+#endif
+  signal(sig, SIG_DFL);
+  raise(sig);
+}
 
 void printUsage(const char *program) {
   printf(
@@ -146,6 +175,11 @@ int main(int argc, char **argv) {
 #endif
   signal(SIGINT, onSignal);
   signal(SIGTERM, onSignal);
+  signal(SIGSEGV, onCrash);
+  signal(SIGABRT, onCrash);
+#ifndef _WIN32
+  signal(SIGBUS, onCrash);
+#endif
 
   // (3) Raise the timer resolution so 1 ms waits really are about 1 ms.
 #ifdef _WIN32
