@@ -1442,9 +1442,28 @@
           setTestText(slot, verdict.text, verdict.cls);
           if (model) showModel(slot, model);
         }
+        // A successful login only proves the credentials work; the firmware has
+        // stored the model (rememberRadioModel) but this form's address/user/
+        // password are still nowhere but the browser. Without saving+reconnecting
+        // here, the page above reports "identified" while the live LAN client --
+        // which the test itself just stopped to run its own login -- never comes
+        // back, so JS8/WSPR/Mercury keep seeing no radio. Mirrors what the
+        // first-run wizard's own VERIFY step does (runVerify() in setup-spine.js).
+        function finish(verdict, model) {
+          show(verdict, model);
+          if (!verdict.ok || !window.setupSaveQuiet) return;
+          setTestText(slot, verdict.text + ' Saving…', verdict.cls);
+          window.setupSaveQuiet().then(function () {
+            return fetch('/lan/reconnect', {method: 'POST'}).catch(function () {});
+          }).then(function () {
+            setTestText(slot, verdict.text + ' Saved — reconnecting…', verdict.cls);
+          }).catch(function () {
+            setTestText(slot, verdict.text + ' Saving the settings failed — press Save & Restart.', 'is-bad');
+          });
+        }
         testTimer = Discovery.startTest(payload, {
           onUpdate: show,
-          onDone: show,
+          onDone: finish,
           onRefused: function (text) { setTestText(slot, text, 'is-bad'); },
           onError: function () { setTestText(slot, 'Test status unavailable.', 'is-bad'); }
         });

@@ -31,25 +31,90 @@
   </nav>
   <!-- Plain links, no target: JS8Call-ICOM/WSPR share one session token so
        navigating between them in this tab keeps the lease. Mercury does not --
-       docs/mercury-implementace.md decision 5 gives it its own lease, because
-       it is transactional (open/send/close) rather than a monitor page left
-       running for hours, so folding it into that shared token would let a
-       Mercury tab silently hold the JS8/WSPR lease (or the reverse) for no
-       reason either page needs. That lock is real now (data/mercury-session.js
-       + /mercury/session/*, its own token, separate from js8lan.session). -->
+       docs/mercury-implementace.md decision 5 gives it its own lease: folding
+       it into that shared token would let a Mercury tab silently hold the
+       JS8/WSPR lease (or the reverse) for no reason either page needs. That
+       lock is real now (data/mercury-session.js + /mercury/session/*, its own
+       token, separate from js8lan.session).
+       ("Transactional, not a monitor page left running for hours" was decision
+       5's original reasoning for a SEPARATE lease -- ch.13 (2026-08-23) makes
+       that framing stale, not the separate-lease decision itself: the
+       frequency timetable now band-hops this station while merely ARMED and
+       LISTENING, for hours, unattended -- the same shape JS8/WSPR's own leases
+       already have to support. The lease stays Mercury's own regardless; only
+       the "why" changed.) -->
   <nav class="subtabs" aria-label="DATA mode">
     <a class="subtab" href="/data">JS8Call-ICOM</a><a class="subtab" href="/wspr.html">WSPR-Beacon</a><a class="subtab subtab-active" href="/mercury.html">Mercury</a>
   </nav>
 </header>
 
 <header class="radio-bar">
+  <!-- Radio-bar parity with JS8Call-ICOM/WSPR, agreed 2026-08-23 (docs/mercury-implementace.md
+       ch.13): this page had NO live frequency/mode/power/link-state at all before --
+       trxFrequency was a disabled placeholder and nothing here ever called /state.
+       A third independent copy of pollRadio()/renderHeader(), same as data.js and
+       wspr.js already are of each other (decision: no shared module extraction now --
+       see ch.13's own note on why). -->
   <div class="trx-control">
-    <button id="trxFrequency" class="trx-frequency" type="button" disabled>
-      <span><small id="trxSlotLabel">TRX</small><b id="trxFrequencyValue">--.---.---</b></span><span class="unit">MHz</span>
+    <button id="trxFrequency" class="trx-frequency" type="button" aria-expanded="false" aria-controls="frequencyMenu">
+      <span><small id="trxSlotLabel">TRX</small><b id="trxFrequencyValue">--.---.---</b></span><span class="unit">MHz</span><span class="chevron">▾</span>
     </button>
+    <!-- Bullet 1: Mercury's own dial-frequency catalogue (data/mercury-presets.js),
+         NOT JS8's -- see that file's own header for why. -->
+    <section id="frequencyMenu" class="frequency-menu" hidden aria-label="Mercury dial frequencies"></section>
   </div>
+  <!-- Bullet 2: structurally JS8's own timetable (one frequency per 30-min UTC
+       slot), pointed at bullet 1's presets -- NOT WSPR's band-sequence matrix,
+       which is a different shape for a different job (a beacon's on-air order,
+       not "where is this station listening right now"). Retuning is held back
+       while a CALL/LISTEN session is active and catches up the instant it clears
+       (ch.13) -- never WSPR's "stop the beacon to tune by hand" or a forced
+       takeover; a due change simply waits, same rule JS8's own timetable already
+       applies to a transmission in progress. -->
+  <div class="trx-control tt-control">
+    <button id="freqTimetableButton" class="freq-timetable" type="button" aria-expanded="false" aria-controls="freqTimetablePanel" title="Frequency timetable">
+      <span><small>TIMETABLE</small><b id="freqTimetableValue">OFF</b></span><span class="chevron">▾</span>
+    </button>
+    <section id="freqTimetablePanel" class="freq-timetable-panel" hidden aria-label="Frequency timetable">
+      <header>
+        <div><strong>Frequency timetable</strong><small>Tune the TRX on a 24-hour UTC schedule · 30-min steps</small></div>
+        <div class="tt-actions">
+          <button id="freqTimetableEnable" class="tt-toggle" type="button" role="switch" aria-checked="false">OFF</button>
+          <button id="freqTimetableClear" class="tt-clear" type="button">Clear</button>
+          <button id="freqTimetableClose" class="tt-clear" type="button" title="Close">CLOSE</button>
+        </div>
+      </header>
+      <div id="freqTimetableGrid" class="tt-grid"></div>
+      <div id="freqTimetablePopover" class="tt-popover" hidden></div>
+      <footer>Empty slots leave the radio unchanged. A due change waits out an active CALL/LISTEN session and catches up the instant it clears.</footer>
+    </section>
+  </div>
+  <!-- Bullet 3: the band x power grid, same TxGainPlanUi module JS8/WSPR mount --
+       but its `cal` is data/mercury-gain-cal.js, not their tx-gain-cal-ui.js: that
+       tool's carrier is a single WsprStream tone, and calibrating Mercury's real
+       (much higher-PAPR) DATAC1 burst with a tone's gain would be measuring the
+       wrong waveform. mercury-gain-cal.js drives the already-built, already
+       real-hardware-verified data/mercury-cal-worker.js instead; the plan's own
+       sequencing, grid, antenna question and MOD-level correction are unchanged. -->
+  <div class="trx-control tt-control">
+    <button id="planButton" class="freq-timetable" type="button" aria-expanded="false"
+            aria-controls="planField" title="TX gain calibration plan">
+      <span><small>CAL PLAN</small><b id="planButtonValue">--</b></span><span class="chevron">▾</span>
+    </button>
+    <section id="planField" class="freq-timetable-panel" hidden aria-label="TX gain calibration plan"></section>
+  </div>
+  <span id="trxMode" class="trx-mode">---</span>
+  <!-- Read-only: Mercury has no operator-facing power percentage of its own
+       (unlike JS8's rfPercent field) -- this only shows what the radio itself
+       reports, same segments/watts formula as the other two pages. -->
+  <span id="trxPower" class="trx-power" hidden>
+    <span class="pwr-bar" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+    <b id="trxPowerWatts">--</b>
+  </span>
   <span id="radioModel" class="radio-model" title="Model reported by the radio itself">--</span>
   <span id="aud1State" class="pill aud1-state" title="The audio channel to the radio.">AUD1 —</span>
+  <span id="linkState" class="live">● OFFLINE</span>
+  <button id="trxReconnect" class="trx-reconnect" type="button" hidden>Reconnect</button>
   <span class="spacer"></span>
   <!-- Decision 4 (docs/mercury-implementace.md): listening is only meaningful
        armed, and the UI has to say so as plainly as WSPR's TX pledge does --
@@ -147,6 +212,24 @@
 <script src="/fw-version.js?v=b29c5317"></script>
 <script src="/station-identity.js?v=a1a20249"></script>
 <script src="/mercury-session.js?v=f569470b"></script>
-<script src="/mercury.js?v=a7916924"></script>
+<script src="/mercury-presets.js?v=9f4074aa"></script>
+<script src="/mercury-settings.js?v=aa2a4ac1"></script>
+<!-- CAL PLAN (bullet 3): icom-models.js/wspr-core.js supply model->watts and the
+     percent<->CI-V-level math (the same formulas JS8/WSPR already use, not a
+     second copy); tx-gain-cal.js/tx-gain-mod-level.js/tx-gain-plan.js are the
+     shared, carrier-agnostic search/store/sequencer; tx-gain-plan-ui.js is the
+     grid+dialog panel itself, mounted unchanged; mercury-gain-cal.js is the
+     only new piece -- the bridge to Mercury's own carrier. js8-presets.js is
+     loaded only so the plan can warn about JS8's calling window the same way
+     it already warns about WSPR's (registerBusyWindows). -->
+<script src="/icom-models.js?v=8c52dd1e"></script>
+<script src="/js8-presets.js?v=7131988f"></script>
+<script src="/wspr-core.js?v=450a9679"></script>
+<script src="/tx-gain-cal.js?v=646b1d55"></script>
+<script src="/tx-gain-mod-level.js?v=42af6a2a"></script>
+<script src="/tx-gain-plan.js?v=77bdd0a6"></script>
+<script src="/tx-gain-plan-ui.js?v=0d493edc"></script>
+<script src="/mercury-gain-cal.js?v=0fe28a29"></script>
+<script src="/mercury.js?v=aee9e016"></script>
 </body>
 </html>
