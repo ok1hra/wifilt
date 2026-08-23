@@ -493,14 +493,26 @@ function runCalibration(radio, options = {}, {maxFrames = 400, seed = 0} = {}) {
   check("and the DATA MOD input command with it", ic705.modInputCmd, "1A050119");
   check("WLAN is value 3 on that radio", ic705.modInputNet, 3);
 
+  const ic7610 = IcomModels.findModel(7610);
+  check("the IC-7610 MOD level command is the one in its own CI-V manual",
+    ic7610.modLevelCmd, "1A050090");
+  // Unlike the IC-705, verified live against a real radio, not just read from
+  // the manual: read matched the menu's own displayed 25% (BCD 0065 = 65,
+  // 65/255 ~= 25.5%), then a write+readback round-trip confirmed the address
+  // is genuinely writable before the original value was restored.
+  check("and it has no modInputCmd -- see icom-models.js's own comment on why",
+    ic7610.modInputCmd, undefined);
+
   // No number where no manual was read. This is the whole discipline: across
   // models the subaddresses have no pattern, so a guess cannot be checked.
-  for (const number of [7300, 7610, 9700, 7760]) {
+  for (const number of [7300, 9700, 7760]) {
     const model = IcomModels.findModel(number);
     check(`IC-${number} has no guessed MOD level command`, model.modLevelCmd, undefined);
     check(`IC-${number} still tells the operator where the menu is`,
       /MOD Input/.test(model.modMenu || ""), true);
   }
+  check("IC-7610 still tells the operator where the menu is",
+    /MOD Input/.test(ic7610.modMenu || ""), true);
 
   // The deny list is the backstop for the one irreversible mistake.
   check("a CI-V setting is never writable", IcomModels.writableSubaddress("1A050131"), false);

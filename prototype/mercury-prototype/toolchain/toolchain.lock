@@ -1,0 +1,7 @@
+# Reviewed Mercury WASM build environment. Shell syntax is intentional.
+# Same emcc as prototype/js8-core-prototype (verified identical version on
+# this host 2026-08-21) -- kept as an independent pin because this prototype
+# is otherwise fully isolated from the JS8 one and must not depend on it.
+EMSCRIPTEN_VERSION=3.1.6
+NODE_LOCAL_MIN_MAJOR=18
+NODE_LOCAL_MAX_MAJOR=20

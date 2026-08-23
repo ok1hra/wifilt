@@ -408,6 +408,10 @@ char CwMsg[37] = "";
 #include "unattended_events.h"  // shared event-log formatting used by native regression tests
 #include "aud1_ws_parser.h"     // incremental, non-blocking browser WebSocket framing
 #include "js8_session.h"        // single-operator lock for the JS8LAN page
+// See radio_transport.h's own comment on radioLanLocalControlPort(): 0 means
+// "use the real default (50001)", exactly today's behavior on the real
+// device and on native/ unless --lan-port-base overrides it.
+uint16_t g_lanLocalPortBaseOverride = 0;
 IcomLanClient lanClient;
 IcomLanClient* secondaryLanClients[2] = {nullptr, nullptr};
 bool    lanMode = true;         // compatibility mirror: TRX1 transport == LAN
@@ -671,6 +675,15 @@ int incomingByte = 0;   // for incoming serial data
   // only ever calibrated on the shack PC.
   static const char* TXGAIN_CONFIG_PATH = "/txgain.json";
   static const size_t TXGAIN_MAX_BYTES = 6144;   // ~40 entries; a full band plan
+  // Mercury's OWN gain table, deliberately a separate file from JS8/WSPR's
+  // (docs/mercury-implementace.md ch.8): the same audio "gain" scalar means a
+  // different real drive level depending on the waveform's PAPR -- a tone
+  // (JS8/WSPR's TUNE, ~0 dB PAPR) vs. a real Mercury OFDM burst (measured
+  // ~7.5 dB even after freedv's own clipping). Reusing one entry for the
+  // other would either leave Mercury needlessly quiet or, the more dangerous
+  // direction, let data overdrive ALC at a gain JS8/WSPR proved clean.
+  static const char* MERCURY_TXGAIN_CONFIG_PATH = "/mercury-txgain.json";
+  static const size_t MERCURY_TXGAIN_MAX_BYTES = 6144;
   // The JS8 and WSPR operating profile: speed, TX offset, heartbeat interval,
   // groups, the 24 h band schedule, the RF power percent. It used to live in
   // each browser's localStorage, which meant a second tablet ran the station
@@ -915,6 +928,8 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void handlePostIdentity(void);
   void handleGetTxGain(void);
   void handlePostTxGain(void);
+  void handleGetMercuryTxGain(void);
+  void handlePostMercuryTxGain(void);
   void handleGetCivRead(void);
   uint16_t aprsisPasscode(const String &call);
   bool aprsisFieldSafe(const String &value);
@@ -2123,6 +2138,10 @@ void buildStateJson(char *buf, size_t bufSize, bool lanView){
   unsigned viewFilter = snapView ? lanRadioSnap.filter : stateFilter;
   unsigned viewSmeter = snapView ? lanRadioSnap.smeterRaw : stateSmeterRaw;
   unsigned viewPowerMeter = snapView ? lanRadioSnap.powerMeterRaw : statePowerMeterRaw;
+  // docs/mercury-implementace.md §7: ALC now polled at idle too (icomLanClient.h's
+  // sendAuxRot), not only during TX/calibration, so this stays current between
+  // transmissions -- same TRX1-global/LAN-snapshot split as smeterRaw above.
+  unsigned viewAlcRaw = snapView ? lanRadioSnap.alcRaw : stateAlcRaw;
   unsigned viewRfPower = snapView ? lanRadioSnap.rfPower : stateRfPower;
   bool viewRfPowerSeen = snapView ? lanRadioSnap.rfPowerSeen : stateRfPowerSeen;
   float viewSupplyVolts = snapView ? lanRadioSnap.supplyVolts : stateSupplyVolts;
@@ -2154,7 +2173,7 @@ void buildStateJson(char *buf, size_t bufSize, bool lanView){
     "\"wifiRssi\":%d,\"fwRev\":\"%u\",\"bdSupported\":%s,\"power\":%s,"
     "\"frequency\":%u,\"mode\":\"%s\",\"filter\":%u,"
     "\"radioAddress\":\"%s\",\"transceiverType\":\"%s\",\"radioName\":\"%s\",\"tx\":%s,\"ritRaw\":%u,"
-    "\"smeterRaw\":%u,\"powerMeterRaw\":%u,"
+    "\"smeterRaw\":%u,\"powerMeterRaw\":%u,\"alcRaw\":%u,"
     "\"afGain\":%u,\"keySpeed\":%u,\"rfPower\":%u,\"rfPowerSeen\":%s,"
     "\"supplyVolts\":%.2f,\"swr\":%.2f,"
     "\"preamp\":%u,\"vox\":%u,"
@@ -2173,7 +2192,7 @@ void buildStateJson(char *buf, size_t bufSize, bool lanView){
     (unsigned)viewFrequency, modesSnapshot, (unsigned)viewFilter,
     addrStr, viewType, radioNameForJson(client), viewTx ? "true" : "false",
     (unsigned)(snapView ? 0 : stateRitRaw),
-    (unsigned)viewSmeter, (unsigned)viewPowerMeter,
+    (unsigned)viewSmeter, (unsigned)viewPowerMeter, (unsigned)viewAlcRaw,
     (unsigned)(snapView ? 0 : stateAfGain), (unsigned)(snapView ? 0 : stateKeySpeed), (unsigned)viewRfPower,
     viewRfPowerSeen ? "true" : "false",
     viewSupplyVolts, viewSwr,
@@ -3572,6 +3591,45 @@ void handlePostTxGain() {
   webServer.send(200, "application/json", "{\"ok\":true}");
 }
 
+// Mercury's own gain table -- identical shape and identical "the schema is
+// the browser's" contract as handleGetTxGain/handlePostTxGain above, just a
+// different file (see MERCURY_TXGAIN_CONFIG_PATH's own comment for why a
+// separate one). Kept as separate functions rather than a shared helper
+// parameterised on path: two call sites is not enough duplication to be
+// worth the indirection, and it keeps each one grep-able on its own path.
+void handleGetMercuryTxGain() {
+  webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  webServer.sendHeader("Connection", "close");
+  webServer.client().setNoDelay(true);
+  String json;
+  if (cfgFS.exists(MERCURY_TXGAIN_CONFIG_PATH)) {
+    File mf = cfgFS.open(MERCURY_TXGAIN_CONFIG_PATH, "r");
+    if (mf) { json = mf.readString(); mf.close(); json.trim(); }
+  }
+  if (json.length() < 2 || json[0] != '{') json = "{}";
+  webServer.send(200, "application/json", json);
+}
+
+void handlePostMercuryTxGain() {
+  webServer.sendHeader("Connection", "close");
+  webServer.client().setNoDelay(true);
+  String body = webServer.arg("plain");
+  body.trim();
+  if (body.length() == 0 || body.length() > MERCURY_TXGAIN_MAX_BYTES) {
+    webServer.send(400, "application/json", "{\"error\":\"bad_request\"}");
+    return;
+  }
+  if (body[0] != '{' || body[body.length()-1] != '}') {
+    webServer.send(400, "application/json", "{\"error\":\"not_json\"}");
+    return;
+  }
+  File mf = cfgFS.open(MERCURY_TXGAIN_CONFIG_PATH, "w");
+  if (!mf) { webServer.send(500, "application/json", "{\"error\":\"write\"}"); return; }
+  mf.print(body);
+  mf.close();
+  webServer.send(200, "application/json", "{\"ok\":true}");
+}
+
 // ---- the last CI-V reply a page asked for ------------------------------------
 //
 // Raw hex out, no interpretation. Unlike /txgain.json this must NOT invent an
@@ -4272,6 +4330,18 @@ void setupWebServer(void){
   webServer.on("/js8/session/claim",   HTTP_POST, handleJs8SessionClaim);
   webServer.on("/js8/session/ping",    HTTP_POST, handleJs8SessionPing);
   webServer.on("/js8/session/release", HTTP_POST, handleJs8SessionRelease);
+  // Same handlers, same js8Session record -- docs/mercury-implementace.md
+  // decision 5's "own lease" is its own URL and busy-dialog wording (see
+  // js8SessionRespond's mercuryName/Percent/RemainingMs fields), not a second
+  // lock. AUD1 ownership is checked in exactly one place
+  // (AudioHandleWsUpgrade -> js8SessionOwns(js8Session, ...)); a genuinely
+  // separate record would either never get audio or need that check taught
+  // about two locks, and either way risks silently taking JS8LAN/WSPR's
+  // audio out from under a live operator.
+  webServer.on("/mercury/session",         HTTP_GET,  handleJs8SessionGet);
+  webServer.on("/mercury/session/claim",   HTTP_POST, handleJs8SessionClaim);
+  webServer.on("/mercury/session/ping",    HTTP_POST, handleJs8SessionPing);
+  webServer.on("/mercury/session/release", HTTP_POST, handleJs8SessionRelease);
   webServer.on("/msgbox", HTTP_GET, handleMsgboxGet);
   webServer.on("/msgbox", HTTP_POST, handleMsgboxPost);
   webServer.on("/cmd", HTTP_POST, handlePostCmd);
@@ -4297,6 +4367,8 @@ void setupWebServer(void){
   webServer.on("/js8-config.json", HTTP_POST, handlePostJs8Config);
   webServer.on("/txgain.json", HTTP_GET,  handleGetTxGain);
   webServer.on("/txgain.json", HTTP_POST, handlePostTxGain);
+  webServer.on("/mercury-txgain.json", HTTP_GET,  handleGetMercuryTxGain);
+  webServer.on("/mercury-txgain.json", HTTP_POST, handlePostMercuryTxGain);
   webServer.on("/aprsis/spot",   HTTP_POST, handleAprsisSpot);
   webServer.on("/aprsis/status", HTTP_GET,  handleAprsisStatus);
   webServer.on("/civread",     HTTP_GET,  handleGetCivRead);
@@ -8693,6 +8765,15 @@ void js8SessionRespond(Js8SessionResult result, const String& token){
   json += ",\"leaseMs\":" + String((unsigned long)JS8_SESSION_LEASE_MS);
   json += ",\"takeovers\":" + String((unsigned long)js8Session.takeovers);
   json += ",\"refusals\":" + String((unsigned long)js8Session.refusals);
+  // Present only while a Mercury transfer is actually running (decision 5 +
+  // §6.3): a locked-out page needs this to show "Mercury transfer foto.jpg,
+  // 43% done" instead of the generic busy text; JS8LAN/WSPR poll the same
+  // endpoint and just never see the field.
+  if(live && js8Session.mercuryName[0] != 0){
+    json += ",\"mercuryName\":\""; json += jsonEscape(js8Session.mercuryName); json += "\"";
+    json += ",\"mercuryPercent\":" + String((unsigned)js8Session.mercuryPercent);
+    json += ",\"mercuryRemainingMs\":" + String((unsigned long)js8Session.mercuryRemainingMs);
+  }
   json += "}";
   webServer.sendHeader("Cache-Control", "no-store");
   int status = result == JS8_SESSION_BUSY      ? 409
@@ -8714,6 +8795,22 @@ void handleJs8SessionGet(){
   js8SessionRespond(js8SessionLive(js8Session, millis()) ? JS8_SESSION_BUSY : JS8_SESSION_GRANTED, String());
 }
 
+// mercuryName present in the body means "I am Mercury and this is what I'm
+// sending" (docs/mercury-implementace.md §6.3/§7) -- applied only once the
+// caller actually owns the lock, from claim (transfer start) or ping
+// (progress updates), so a refused/busy request can never write into
+// somebody else's session.
+void js8SessionApplyMercuryProgress(const String &body, const String &token){
+  String name = extractJsonString(body, "mercuryName");
+  if(name.length() == 0) return;
+  if(!js8SessionOwns(js8Session, millis(), token.c_str())) return;
+  int percent = extractJsonInt(body, "mercuryPercent");
+  int remainingMs = extractJsonInt(body, "mercuryRemainingMs");
+  js8SessionSetMercuryProgress(js8Session, name.c_str(),
+                               (uint8_t)(percent < 0 ? 0 : percent),
+                               (uint32_t)(remainingMs < 0 ? 0 : remainingMs));
+}
+
 void handleJs8SessionClaim(){
   String body  = webServer.hasArg("plain") ? webServer.arg("plain") : String();
   String token = js8SessionRequestToken();
@@ -8731,10 +8828,12 @@ void handleJs8SessionClaim(){
     Serial.print("JS8 | session "); Serial.print(js8SessionResultName(result));
     Serial.print(" from "); Serial.println(ip.toString());
   }
+  js8SessionApplyMercuryProgress(body, token);
   js8SessionRespond(result, token);
 }
 
 void handleJs8SessionPing(){
+  String body  = webServer.hasArg("plain") ? webServer.arg("plain") : String();
   String token = js8SessionRequestToken();
   char previous[JS8_SESSION_TOKEN_MAX + 1];
   strncpy(previous, js8Session.token, sizeof(previous));
@@ -8742,6 +8841,7 @@ void handleJs8SessionPing(){
                                                 uint32_t(webServer.client().remoteIP()));
   if(strcmp(previous, js8Session.token) != 0 && AudioWsClient.connected())
     AudioDisconnectWs();
+  js8SessionApplyMercuryProgress(body, token);
   js8SessionRespond(result, token);
 }
 
@@ -9116,6 +9216,14 @@ static void aud1HandleControl(const String& json){
     AudioSendText("{\"type\":\"pong\",\"t\":" + String(t) + "}");
     return;
   }
+  // Mercury's own keepalive (docs/mercury-implementace.md §3.2/§7), same idea and
+  // same no-op as "wspr.ping" just above: every WS frame already refreshes both
+  // the unattended dead-man and the session lease unconditionally, before this
+  // function is even called (see js8SessionNoteTraffic at the frame-receive
+  // site) -- so this branch changes nothing at runtime. It exists so a reader
+  // (or a future "why doesn't mercury.ping do X" question) finds this type
+  // named and explained here, not silently falling through with no trace.
+  if(type == "mercury.ping") return;
   if(type != "tx.prepare") return;
 
   uint64_t slotUtcMs = aud1JsonU64(json, "slotUtcMs");

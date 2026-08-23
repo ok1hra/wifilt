@@ -73,6 +73,17 @@
       number: 7610, label: "IC-7610", watts: 100, civAddr: "98",
       net: "LAN", netMenu: "MENU → SET → Network",
       hasPreset: false,
+      // Read in docs/IC-7610_ENG_CI-V_4.pdf's own command table: 00 90 = LAN
+      // MOD Level 0000~0255, same BCD encoding as IC-705's 01 17. Verified
+      // live against a real IC-7610 (read matched the menu's displayed 25%,
+      // then a write+readback round-trip confirmed and the original value
+      // was restored). Deliberately no modLevelCmd/modInputNet: unlike the
+      // IC-705's single global input select, the IC-7610 has a MOD input
+      // choice PER DATA PROFILE (00 91~94 = DATA OFF/1/2/3, each 00~05 with
+      // 05=LAN) with no CI-V-readable "which profile is active right now" --
+      // readInput() would have nothing honest to check, so it stays absent
+      // exactly like IC-7300/IC-9700/IC-7760 today, rather than guessing.
+      modLevelCmd: "1A050090",
       modMenu: "MENU → SET → Connectors → MOD Input → LAN MOD Level",
     },
     {

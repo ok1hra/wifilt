@@ -13,6 +13,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 
 #include "Arduino.h"
 #include "Client.h"
@@ -86,6 +87,19 @@ public:
 private:
   std::shared_ptr<SocketHandle> handle;
 };
+
+// Every WiFiServer (HTTP :80, DXC WS :82, AUD1 WS :83 -- all hardcoded ports,
+// see wifilt.ino) binds INADDR_ANY by default, same as the real device (one
+// WiFi interface, one obvious place to listen). On a PC that means two
+// wifilt processes for two different radios can never coexist on one
+// machine -- both would fight over the same three ports. --bind-ip lets a
+// test harness give each instance its own loopback alias (127.0.0.11,
+// 127.0.0.12, ...) instead, so "port 83" stops being a single global
+// resource. Empty string (the default) preserves the original INADDR_ANY
+// behavior exactly -- this is additive, not a behavior change for existing
+// callers/the ESP32 build.
+void nativeSetBindAddress(const std::string &ip);
+const std::string &nativeBindAddress();
 
 // ---------------------------------------------------------------------------
 // WiFiServer -- listening socket, non-blocking accept.

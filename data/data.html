@@ -22,15 +22,18 @@
       </details>
       <script>document.addEventListener("click",function(e){var b=document.querySelector(".brand-about");if(b.open&&!b.contains(e.target))b.open=false;});</script>
       <a class="tab" href="/log" target="_blank" rel="noopener">QRPLog</a><a class="tab" href="/dxc.html" onclick="window.open(this.href,'DXC','width=600,height=750,left=0,top=0,menubar=no,location=no,status=no'); return false;">DXC</a>
-      <a class="tab tab-active" href="/data" title="JS8Call-ICOM and WSPR over ICOM-LAN">DATA</a><a class="tab" href="/setup" target="_blank" rel="noopener">SETUP</a>
+      <a class="tab tab-active" href="/data" title="JS8Call-ICOM, WSPR-Beacon and Mercury over ICOM-LAN">DATA</a><a class="tab" href="/setup" target="_blank" rel="noopener">SETUP</a>
       <a class="tab" href="/datasync" target="_blank" rel="noopener">LOGSYNC</a><a class="tab bd-nav" href="/bd" target="_blank" rel="noopener" hidden>BD</a>
       <span id="topbarFw" class="topbar-fw"></span>
     </nav>
-    <!-- Plain links, no target: both pages share one session token in
-         sessionStorage, so navigating in this tab keeps the radio lease while a
-         new tab would land on "session busy". -->
+    <!-- Plain links, no target: JS8Call-ICOM/WSPR share one session token in
+         sessionStorage, so navigating between them in this tab keeps the radio
+         lease while a new tab would land on "session busy". Mercury does not
+         share that token (docs/mercury-implementace.md decision 5 — its own
+         lease, real since 2026-08-22), so it is still a plain link, just not one that
+         preserves anything by staying in this tab. -->
     <nav class="subtabs" aria-label="DATA mode">
-      <a class="subtab subtab-active" href="/data">JS8Call-ICOM</a><a class="subtab" href="/wspr.html">WSPR-Beacon</a>
+      <a class="subtab subtab-active" href="/data">JS8Call-ICOM</a><a class="subtab" href="/wspr.html">WSPR-Beacon</a><a class="subtab" href="/mercury.html">Mercury</a>
     </nav>
   </header>
 
@@ -569,7 +572,7 @@
   <!-- Only for RADIO_FULL_POWER_W / fullPowerWatts: the header turns the CI-V
        level into watts and must never disagree with the WSPR page about how. -->
   <!-- One table of Icom models: watts for WSPR, menu paths for the setup guides. -->
-  <script src="/icom-models.js?v=484d9084"></script>
+  <script src="/icom-models.js?v=8c52dd1e"></script>
   <script src="/trx-help.js?v=4767f20f"></script>
   <script>TrxHelp.mount(document, {kind: "js8"});</script>
   <script src="/wspr-core.js?v=450a9679"></script>

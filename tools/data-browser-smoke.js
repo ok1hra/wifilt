@@ -448,7 +448,7 @@ f.onload=()=>{
           ['qsl-query','yes','no','tu','dit-dit','grid-query','info-query','status-query']
             .every(key=>!!d.querySelector('[data-message-preset="'+key+'"]')),
         sendHidden:d.querySelector('#sendButton').hidden===true&&d.querySelector('#sendHint').textContent.trim()==='Enter sends',
-        js8Nav:d.querySelector('.tabs a[href="/data"]')?.textContent.trim()==='DATA'&&d.querySelector('.tabs a[href="/data"]')?.title==='JS8Call-ICOM and WSPR over ICOM-LAN',
+        js8Nav:d.querySelector('.tabs a[href="/data"]')?.textContent.trim()==='DATA'&&d.querySelector('.tabs a[href="/data"]')?.title==='JS8Call-ICOM, WSPR-Beacon and Mercury over ICOM-LAN',
         // WSPR moved one level down: it is reachable from DATA, not from the
         // primary bar. The sub-nav must sit outside .data-page so the gate and
         // session-busy blanking cannot strand an operator on one sub-page.
@@ -569,7 +569,7 @@ f.onload=()=>{
       checks.trxSlotLabelFollowsLan=sld.querySelector('#trxSlotLabel')?.textContent.trim()==='TRX 2'&&
         sld.querySelector('#lanGateDetail')?.textContent.trim()==='network password is missing';
       checks.lanGateNoLeaveWarning=(()=>{const event=new lanGateFrame.contentWindow.Event('beforeunload',{cancelable:true});return lanGateFrame.contentWindow.dispatchEvent(event)!==false&&!event.defaultPrevented;})();
-      checks.setupJs8Nav=sd.querySelector('a[href="/data"]')?.textContent.trim()==='DATA'&&sd.querySelector('a[href="/data"]')?.title==='JS8Call-ICOM and WSPR over ICOM-LAN'&&!sd.querySelector('a[href="/wspr.html"]');
+      checks.setupJs8Nav=sd.querySelector('a[href="/data"]')?.textContent.trim()==='DATA'&&sd.querySelector('a[href="/data"]')?.title==='JS8Call-ICOM, WSPR-Beacon and Mercury over ICOM-LAN'&&!sd.querySelector('a[href="/wspr.html"]');
       checks.setupRemovedPagesAbsentFromNav=!sd.querySelector('.bd-nav,.tab-cat-muted,a[href="/bd"],a[href="/"]');
       checks.setupBrandLogo=(()=>{const box=sd.querySelector('.tabs')?.firstElementChild,logo=box?.querySelector('summary svg');
         return box?.tagName==='DETAILS'&&!!logo?.querySelector('path')&&

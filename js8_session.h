@@ -53,6 +53,18 @@ struct Js8Session {
   uint16_t takeovers = 0;          // counters feed the diagnostics panel
   uint16_t refusals = 0;
   bool     held = false;           // a token was installed (may have expired)
+  // Mercury transfer progress (docs/mercury-implementace.md decision 5 + §6.3/§7).
+  // Mercury shares this same lock/token -- there is only one AUD1 owner, checked
+  // in exactly one place (AudioHandleWsUpgrade) -- so "its own lease" means its
+  // own URL (/mercury/session/*) and its own busy-dialog wording, not a second
+  // record. These three fields are what make that wording possible: a page
+  // locked out while a transfer is running reads "Mercury transfer foto.jpg,
+  // 43% done" instead of the generic "radio is driven from somewhere else".
+  // Set via the claim/ping body; mercuryName[0]==0 means "not a transfer" (the
+  // generic text applies) -- see js8SessionSetMercuryProgress below.
+  char     mercuryName[24] = {0};      // filename, truncated; operator-facing only
+  uint8_t  mercuryPercent = 0;         // 0..100
+  uint32_t mercuryRemainingMs = 0;     // estimated time left, as last reported
 };
 
 // Tokens are echoed into JSON and compared byte for byte, so anything outside
@@ -85,11 +97,34 @@ inline uint32_t js8SessionAgeMs(const Js8Session &session, uint32_t nowMs) {
   return (uint32_t)(nowMs - session.lastSeenMs);
 }
 
+// Not operator-facing: a stale filename left over from whoever held the lock
+// before must never be shown against a new holder that has not said anything
+// about a transfer yet.
+inline void js8SessionClearMercuryProgress(Js8Session &session) {
+  session.mercuryName[0] = 0;
+  session.mercuryPercent = 0;
+  session.mercuryRemainingMs = 0;
+}
+
+// Called from the claim/ping handler when the request body carries transfer
+// fields. Silently does nothing on a malformed name -- the caller already
+// owns the lock at that point, so there is nothing to refuse, only nothing to
+// show.
+inline void js8SessionSetMercuryProgress(Js8Session &session, const char *name,
+                                         uint8_t percent, uint32_t remainingMs) {
+  if (!name) return;
+  strncpy(session.mercuryName, name, sizeof(session.mercuryName) - 1);
+  session.mercuryName[sizeof(session.mercuryName) - 1] = 0;
+  session.mercuryPercent = percent > 100 ? 100 : percent;
+  session.mercuryRemainingMs = remainingMs;
+}
+
 inline void js8SessionClear(Js8Session &session) {
   session.token[0] = 0;
   session.ownerIpV4 = 0;
   session.held = false;
   session.lastSeenMs = 0;
+  js8SessionClearMercuryProgress(session);
 }
 
 inline void js8SessionInstall(Js8Session &session, uint32_t nowMs,
@@ -99,6 +134,10 @@ inline void js8SessionInstall(Js8Session &session, uint32_t nowMs,
   session.ownerIpV4 = ipV4;
   session.held = true;
   session.lastSeenMs = nowMs;
+  // A fresh grant or a takeover is always a new holder that has said nothing
+  // about a transfer yet -- carrying the previous holder's filename/percent
+  // forward would show someone else's transfer as this session's.
+  js8SessionClearMercuryProgress(session);
 }
 
 inline Js8SessionResult js8SessionClaim(Js8Session &session, uint32_t nowMs,

@@ -15,6 +15,9 @@
 /prototype/js8-core-prototype/build*/
 /prototype/js8-core-prototype/**/*.md
 /prototype/js8-core-prototype/*.md
+/prototype/mercury-prototype/build*/
+/prototype/mercury-prototype/**/*.md
+/prototype/mercury-prototype/*.md
 # Keep only the pinned JS8/Eigen subset required by build-js8-assets.sh.
 /JS8Call-improved-master/*
 !/JS8Call-improved-master/LICENSE

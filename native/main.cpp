@@ -32,7 +32,9 @@
 #include "ESPmDNS.h"
 #include "FS.h"
 #include "WebServer.h"
+#include "WiFi.h"
 #include "paths.h"
+#include "radio_transport.h"
 #include "process_args.h"
 #include "socket_compat.h"
 
@@ -68,6 +70,16 @@ void printUsage(const char *program) {
 #endif
       "  --data-dir PATH   web assets (default: data/ beside the executable)\n"
       "  --config-dir PATH configuration (default: ~/.config/wifilt or %%APPDATA%%)\n"
+      "  --bind-ip ADDR    bind HTTP/DXC-WS/AUD1-WS to this address instead of\n"
+      "                    INADDR_ANY (default: all interfaces) -- lets two\n"
+      "                    instances for two different radios share one host,\n"
+      "                    each on its own loopback alias (127.0.0.11, ...)\n"
+      "  --lan-port-base N override the LAN client's own local UDP ports\n"
+      "                    (ctrl/civ/audio = N/N+1/N+2, default 50001) --\n"
+      "                    needed alongside --bind-ip: two instances for two\n"
+      "                    different radios would otherwise both bind local\n"
+      "                    port 50001 and silently steal each other's\n"
+      "                    control/audio packets\n"
       "  --help            this text\n"
       "\n"
       "The operator's QSO log lives in the browser and is scoped to the origin,\n"
@@ -107,6 +119,10 @@ bool parseArguments(int argc, char **argv, uint16_t *port) {
       nativeSetDataDir(argv[++i]);
     } else if (flag == "--config-dir" && hasValue) {
       nativeSetConfigDir(argv[++i]);
+    } else if (flag == "--bind-ip" && hasValue) {
+      nativeSetBindAddress(argv[++i]);
+    } else if (flag == "--lan-port-base" && hasValue) {
+      g_lanLocalPortBaseOverride = (uint16_t)atoi(argv[++i]);
     } else {
       fprintf(stderr, "WIFILT | unknown option: %s\n", flag.c_str());
       printUsage(argv[0]);

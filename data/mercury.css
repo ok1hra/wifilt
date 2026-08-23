@@ -1,0 +1,71 @@
+/* Mercury page (docs/mercury-implementace.md §6). CALL/LISTEN/file transfer
+   (with resume, ch.5/E3) are real -- see mercury.html's build-banner and
+   mercury.js/mercury-worker.js for exactly what that covers. Shares
+   .compact-section/.gate-card/.radio-bar/.pill/.trx-* with data.css so the
+   three DATA pages read as one family; this file carries only what is
+   genuinely Mercury's, same split as wspr.css. */
+
+.build-banner {
+  margin: 8px 0 10px; padding: 10px 12px; border: 1px solid var(--amber);
+  border-radius: 6px; background: #2a2008; color: var(--amber); font-size: 13px;
+}
+
+.arm-toggle {
+  display: flex; align-items: center; gap: 6px; cursor: pointer;
+  padding: 5px 10px; border: 1px solid var(--line); border-radius: 999px;
+}
+.arm-toggle input:disabled { cursor: not-allowed; }
+.arm-toggle #armState { font-size: 11px; font-weight: 800; letter-spacing: .08em; color: var(--muted); }
+.arm-toggle input:checked ~ #armState { color: var(--green); }
+
+.mercury-call-body, .mercury-transfer-body {
+  display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; padding: 10px 12px;
+}
+.mercury-cq-body {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 0 12px 10px;
+  font-size: 12px;
+}
+.mercury-cq-body button {
+  padding: 6px 14px; border: 1px solid var(--line); border-radius: 4px;
+  background: var(--panel2); color: var(--text); font: inherit; cursor: pointer;
+}
+.mercury-cq-body button:disabled { opacity: .55; cursor: not-allowed; }
+.call-field, .file-field {
+  display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted);
+  flex: 1 1 160px; min-width: 0;
+}
+.call-field input, .file-field input {
+  padding: 7px 9px; border: 1px solid var(--line); border-radius: 4px;
+  background: var(--panel2); color: var(--text); font: inherit;
+}
+.call-field input:disabled, .file-field input:disabled { opacity: .55; cursor: not-allowed; }
+
+.mercury-page button.primary {
+  background: var(--green); border: 1px solid var(--green); color: #04170a;
+  font-weight: 700; border-radius: 6px; padding: 8px 18px;
+}
+.mercury-page button.secondary {
+  background: #16211f; border: 1px solid var(--line); border-radius: 6px; padding: 8px 18px;
+}
+.mercury-page button:disabled { opacity: .45; cursor: not-allowed; }
+
+.received-files { flex-basis: 100%; display: flex; flex-direction: column; gap: 4px; }
+.received-files:empty { display: none; }
+.received-file {
+  display: flex; align-items: center; gap: 8px; padding: 6px 9px;
+  border: 1px solid var(--line); border-radius: 4px; background: var(--panel2); font-size: 12px;
+}
+.received-file a { color: var(--green); font-weight: 700; text-decoration: none; }
+.received-file a:hover { text-decoration: underline; }
+.received-file .muted { color: var(--muted); }
+
+/* Section 6.2's connection-test screen: the answer to "did it work" and "how
+   long will this take" before a multi-hour transfer starts. .placeholder
+   marks the static mockup content until mercury.js has a real session to
+   describe. */
+.connection-test { padding: 10px 12px; }
+.connection-test-line { margin: 0 0 6px; font-size: 13px; }
+.connection-test-line:last-child { margin-bottom: 0; }
+.connection-test.placeholder { opacity: .7; }
+
+#transferProgress { width: 100%; margin-top: 4px; }

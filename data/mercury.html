@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mercury — WIFILT</title>
+<!-- Shares data.css with JS8Call-ICOM/WSPR (topbar, subnav, radio-bar, gate-card)
+     so the three cannot drift apart; mercury.css carries only what is genuinely
+     Mercury's, same split as wspr.css. -->
+<link rel="stylesheet" href="/data.css?v=f5dacdaa">
+<link rel="stylesheet" href="/mercury.css?v=4290853f">
+</head>
+<!-- lan-gate.js clears the checking class once it knows whether ICOM-LAN is set
+     up, so the page never flashes an interface it is about to replace. -->
+<body class="lan-gate-checking">
+
+<header class="site-topbar">
+  <nav class="tabs" aria-label="Primary">
+    <details class="tab brand-about" style="padding:0;position:relative">
+      <summary title="WIFILT - Web interface for Icom LAN transceivers" aria-label="About WIFILT" style="display:flex;align-items:center;list-style:none;cursor:pointer"><svg viewBox="0 -.01 14.79 16.93" fill="currentColor" aria-hidden="true" style="height:26px;width:auto;display:block"><path d="m6.77 .08c-.23-.06-.44-.09-.66-.08c-.96 .04-1.84 .7-2.1 1.67l-2.14 8.03l1.03-1.19a.68 .68 0 0 1 .13-.11l1.75-6.52c.16-.59 .65-1 1.21-1.07c.19-.03 .38-.02 .57 .03l6.36 1.71c.78 .21 1.23 .99 1.02 1.78l-2.86 10.72c-.21 .79-.99 1.24-1.78 1.03l-3.63-.97a.68 .68 0 0 1-.43 .09l-.05 .13a.68 .68 0 0 1-.39 .37l4.29 1.14c1.19 .32 2.43-.39 2.75-1.58l2.87-10.72c.32-1.2-.38-2.43-1.58-2.76l-6.36-1.7zm5.41 3.74l-5.62-1.49c-.08-.02-.17-.03-.25-.02c-.24 .03-.45 .2-.51 .45l-1.55 5.79l.13 .07a.68 .68 0 0 1 .25 1.03l-.32 .44l.31 .15a.68 .68 0 0 1 .35 .49l.19 .1l.35 .17a.68 .68 0 0 1 .37 .48l.02 .02a.68 .68 0 0 1 .03 .02l.19 .09a.68 .68 0 0 1 .34 .51a.68 .68 0 0 1 .12 .11l3.12 .85c.33 .09 .68-.12 .77-.45l2.15-8.04c.09-.33-.11-.68-.44-.76zm-8.71 5.13v.01l-.04 .01l0-.01l-1.13 1.29l-1.13 1.32l-.18-.11l-.19-.1l.28-.28l.26-.3l-.2-.11l-.19-.1l.09-.1l.1-.09l-.37-.19l-.37-.21l-.2 .19l-.2 .18l.19 .1l.19 .11l-.1 .09l-.09 .09l.19 .1l.19 .11l-.18 .19l-.19 .21l.2 .1l.19 .12l-.17 .19l-.18 .19l.2 .12l.21 .11l-.18 .22l-.17 .2l.21 .12l.2 .12l-.16 .22l-.16 .21l1.76 1.03l1.78 1.03l.11-.25l.13-.25l.2 .11l.2 .11l.17-.38l.17-.37l.21 .11l.22 .11l.36-.92l.36-.94l-.19-.09l-.18-.1l.06-.13l.05-.12l-.18-.1l-.18-.09l-.17 .39l-.17 .38l-.19-.11l-.2-.09l.25-.51l.25-.48l-.35-.18l-.36-.18l-.2 .35l-.19 .35l-.18-.1l-.19-.09l.28-.46l.28-.46l-.33-.18l-.35-.17l-.32 .43l-.3 .45l-.18-.1l-.2-.1l.74-.97l.73-.97l-.3-.14l-.32-.14zm3.08 4.28l-.23 .6l-.15 .42l.46 .12c.18 .04 .37-.06 .42-.24l.1-.37c.04-.19-.07-.38-.25-.43l-.35-.1zm2.43 .65c-.05-.01-.1-.01-.14 0c-.14 .02-.25 .1-.29 .24l-.09 .38c-.05 .19 .06 .37 .24 .42l.52 .15c.18 .05 .37-.07 .42-.25l.1-.38c.05-.18-.05-.37-.24-.42l-.52-.14z"/></svg></summary>
+      <div style="position:absolute;z-index:80;top:calc(100% + 5px);left:0;width:min(300px,calc(100vw - 16px));padding:12px 14px;border:1px solid #4b756c;border-radius:7px;background:#0c1a18;box-shadow:0 16px 44px #000c;text-align:center">
+        <a href="https://github.com/ok1hra/wifilt" target="_blank" rel="noopener" style="display:block;color:#e8f3ee;text-decoration:none"><b style="display:block;font-size:19px;font-weight:800;letter-spacing:.14em">WIFILT</b><span style="display:block;margin-top:5px;font-size:11px;color:#8ba59d">Web interface for Icom LAN transceivers</span></a>
+        <a href="https://remoteqth.com" target="_blank" rel="noopener" style="display:inline-block;margin-top:8px;font-size:11px;color:#8ba59d;text-decoration:none">by RemoteQTH.com</a>
+      </div>
+    </details>
+    <script>document.addEventListener("click",function(e){var b=document.querySelector(".brand-about");if(b.open&&!b.contains(e.target))b.open=false;});</script>
+    <a class="tab" href="/log" target="_blank" rel="noopener">QRPLog</a><a class="tab" href="/dxc.html" onclick="window.open(this.href,'DXC','width=600,height=750,left=0,top=0,menubar=no,location=no,status=no'); return false;">DXC</a>
+    <a class="tab tab-active" href="/data" title="JS8Call-ICOM, WSPR-Beacon and Mercury over ICOM-LAN">DATA</a><a class="tab" href="/setup" target="_blank" rel="noopener">SETUP</a>
+    <a class="tab" href="/datasync" target="_blank" rel="noopener">LOGSYNC</a><a class="tab bd-nav" href="/bd" target="_blank" rel="noopener" hidden>BD</a>
+    <span id="topbarFw" class="topbar-fw"></span>
+  </nav>
+  <!-- Plain links, no target: JS8Call-ICOM/WSPR share one session token so
+       navigating between them in this tab keeps the lease. Mercury does not --
+       docs/mercury-implementace.md decision 5 gives it its own lease, because
+       it is transactional (open/send/close) rather than a monitor page left
+       running for hours, so folding it into that shared token would let a
+       Mercury tab silently hold the JS8/WSPR lease (or the reverse) for no
+       reason either page needs. That lock is real now (data/mercury-session.js
+       + /mercury/session/*, its own token, separate from js8lan.session). -->
+  <nav class="subtabs" aria-label="DATA mode">
+    <a class="subtab" href="/data">JS8Call-ICOM</a><a class="subtab" href="/wspr.html">WSPR-Beacon</a><a class="subtab subtab-active" href="/mercury.html">Mercury</a>
+  </nav>
+</header>
+
+<header class="radio-bar">
+  <div class="trx-control">
+    <button id="trxFrequency" class="trx-frequency" type="button" disabled>
+      <span><small id="trxSlotLabel">TRX</small><b id="trxFrequencyValue">--.---.---</b></span><span class="unit">MHz</span>
+    </button>
+  </div>
+  <span id="radioModel" class="radio-model" title="Model reported by the radio itself">--</span>
+  <span id="aud1State" class="pill aud1-state" title="The audio channel to the radio.">AUD1 —</span>
+  <span class="spacer"></span>
+  <!-- Decision 4 (docs/mercury-implementace.md): listening is only meaningful
+       armed, and the UI has to say so as plainly as WSPR's TX pledge does --
+       "why does nobody call me" has exactly one honest answer here. -->
+  <label class="arm-toggle" title="Armed: this station may answer an incoming CALL unattended. Not armed: Mercury cannot be reached, even if this page is open.">
+    <input id="armToggle" type="checkbox" disabled>
+    <span id="armState" class="muted">NOT ARMED</span>
+  </label>
+</header>
+
+<main class="data-page mercury-page">
+
+  <div class="build-banner" role="note">
+    ✅ <b>Mercury is real and verified end to end.</b>
+    CALL, LISTEN and file transfer (with resume) genuinely key the radio and
+    run the real ARQ/MRQ1 protocol — a real file has crossed real RF between
+    two independent radios/stations, byte-exact, reproduced twice
+    (docs/mercury-implementace.md §5/E3). CQ (unaddressed broadcast) is new
+    and less exercised on the air than the rest.
+  </div>
+
+  <details class="compact-section" data-section="call" open>
+    <summary><span>CALL A STATION</span></summary>
+    <div class="mercury-call-body">
+      <label class="call-field">Station callsign
+        <input id="peerCall" type="text" placeholder="OK2XYZ" maxlength="12" disabled autocapitalize="characters">
+      </label>
+      <label class="call-field">Sked <small>(optional — leave blank to call now)</small>
+        <input id="skedTime" type="time" disabled>
+      </label>
+      <button id="callButton" class="primary" type="button" disabled>CALL</button>
+    </div>
+    <!-- Unaddressed broadcast, not the ARQ CALL/ACCEPT handshake above --
+         sendable in any connection state (LISTENING, CALLING, even
+         mid-transfer, see mercury-worker.js's sendCq()). Only says who's
+         *listening*: hearing a CQ requires being tuned/decoding, same as
+         CALL/ACCEPT, no separate scan mode. -->
+    <div class="mercury-cq-body">
+      <button id="cqButton" type="button" disabled title="Broadcast this station's callsign to anyone listening">CQ</button>
+      <span id="heardStations" class="muted"></span>
+    </div>
+  </details>
+
+  <!-- Section 6.2's "obrazovka zkušebního spojení" -- the most valuable screen
+       in the app once this is wired: after CALL/ACCEPT exchange the SNR in
+       each direction, the ARQ picked mode and a real ETA for the queued file,
+       *before* anything runs for hours. mercury.js now replaces this markup
+       with real CALLING/LISTENING/CONNECTED state (real SNR, once a peer
+       actually answers) -- the static example below is only what shows
+       before any CALL/LISTEN has been attempted this page-load. -->
+  <details class="compact-section" data-section="test-connection" open>
+    <summary><span>CONNECTION TEST</span></summary>
+    <div id="connectionTest" class="connection-test placeholder">
+      <p class="connection-test-line">Connected with <b>OK2XYZ</b> · SNR RX <b>+4 dB</b> / TX <b>+2 dB</b></p>
+      <p class="connection-test-line">Recommended mode: <b>DATAC3</b> · 12.4 B/s</p>
+      <p class="connection-test-line muted">(example — no live connection yet)</p>
+    </div>
+  </details>
+
+  <details class="compact-section" data-section="transfer" open>
+    <summary><span>SEND A FILE</span></summary>
+    <div class="mercury-transfer-body">
+      <label class="file-field">File
+        <input id="fileInput" type="file" disabled>
+      </label>
+      <p id="transferEstimate" class="muted">Pick a file to see a size and time estimate.</p>
+      <div class="tx-actions">
+        <button id="sendButton" class="primary" type="button" disabled>SEND</button>
+        <button id="cancelButton" class="secondary" type="button" disabled hidden>CANCEL</button>
+      </div>
+      <progress id="transferProgress" max="100" value="0" hidden></progress>
+      <div id="receivedFiles" class="received-files"></div>
+    </div>
+  </details>
+
+  <!-- Section 6.3's takeover dialog: what a forced takeover must say when a
+       transfer is running, not the generic "radio is busy" text JS8/WSPR use.
+       Markup only -- nothing drives it until the session lock exists. -->
+  <section id="takeoverNotice" class="gate-card session-busy" hidden role="alert">
+    <div class="gate-card-icon" aria-hidden="true">!</div>
+    <div>
+      <h1>Mercury transfer running elsewhere</h1>
+      <p id="takeoverDetail">Transfer in progress, 43% done, ~24 min remaining.</p>
+      <button id="takeoverButton" class="gate-card-action" type="button">TAKE OVER AND CANCEL</button>
+    </div>
+  </section>
+
+</main>
+
+<footer class="js8-page-footer">
+  <a href="https://github.com/ok1hra/wifilt" target="_blank" rel="noopener">GitHub</a><span aria-hidden="true">|</span><a href="/THIRD-PARTY-NOTICES.txt" target="_blank" rel="noopener">Licenses</a>
+</footer>
+
+<script src="/lan-gate.js?v=2f8a12d3"></script>
+<script src="/fw-version.js?v=b29c5317"></script>
+<script src="/station-identity.js?v=a1a20249"></script>
+<script src="/mercury-session.js?v=f569470b"></script>
+<script src="/mercury.js?v=a7916924"></script>
+</body>
+</html>

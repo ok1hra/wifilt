@@ -53,6 +53,18 @@ static inline RadioTransport radioTransportFromName(const char* value,
   return fallback;
 }
 
+// Our OWN local UDP port for a TRX slot's LAN client (ctrl/civ/audio =
+// base/+1/+2) -- distinct from the RADIO's own fixed listening port (also
+// 50001 by ICOM LAN convention, but that one is the radio's, never ours to
+// choose). Overridable ONLY so two native/ processes on the SAME machine,
+// each driving a DIFFERENT real radio, don't both bind local port 50001 and
+// silently steal each other's control/audio packets -- exactly the failure
+// this override exists to prevent (see native/main.cpp's --lan-port-base;
+// the real device only ever runs one process, so g_lanLocalPortBaseOverride
+// stays 0/default there and this is byte-identical to the original literal).
+extern uint16_t g_lanLocalPortBaseOverride;
+
 static inline uint16_t radioLanLocalControlPort(uint8_t slot) {
-  return (uint16_t)(50001u + (uint16_t)slot * 10u);
+  const uint16_t base = g_lanLocalPortBaseOverride ? g_lanLocalPortBaseOverride : 50001u;
+  return (uint16_t)(base + (uint16_t)slot * 10u);
 }

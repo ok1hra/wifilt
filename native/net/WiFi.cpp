@@ -397,6 +397,11 @@ bool WiFiClient::operator==(const WiFiClient &other) const {
 // WiFiServer
 // ---------------------------------------------------------------------------
 
+static std::string g_bindAddress; // empty = INADDR_ANY, unchanged default
+
+void nativeSetBindAddress(const std::string &ip) { g_bindAddress = ip; }
+const std::string &nativeBindAddress() { return g_bindAddress; }
+
 WiFiServer::WiFiServer(uint16_t port, uint8_t maxClients)
     : port(port), maxClients(maxClients) {}
 
@@ -427,6 +432,13 @@ void WiFiServer::begin(uint16_t newPort) {
   memset(&address, 0, sizeof(address));
   address.sin_family = AF_INET;
   address.sin_addr.s_addr = htonl(INADDR_ANY);
+  if (!g_bindAddress.empty()) {
+    if (inet_pton(AF_INET, g_bindAddress.c_str(), &address.sin_addr) != 1) {
+      fprintf(stderr, "WIFILT | --bind-ip '%s' is not a valid IPv4 address -- falling back to INADDR_ANY\n",
+              g_bindAddress.c_str());
+      address.sin_addr.s_addr = htonl(INADDR_ANY);
+    }
+  }
   address.sin_port = htons(port);
 
   if (::bind(listener, (struct sockaddr *)&address, sizeof(address)) != 0) {

@@ -552,7 +552,7 @@ public:
               case 4: { uint8_t b[]={0x15,0x11};  sendCiv(b,2); break; } // power meter
               default: sendAuxRot(auxRot - 5); break;
             }
-            auxRot = (auxRot + 1) % 15;
+            auxRot = (auxRot + 1) % 16;  // 5 direct cases + sendAuxRot's 0..10 (11 cases)
           }
           lastFreqPoll = now;
         }
@@ -1091,6 +1091,11 @@ private:
       case 7: { uint8_t b[]={0x11};      sendCiv(b,1); break; } // ATT
       case 8: { uint8_t b[]={0x16,0x02}; sendCiv(b,2); break; } // preamp
       case 9: { uint8_t b[]={0x16,0x47}; sendCiv(b,2); break; } // VOX
+      // Mercury (docs/mercury-implementace.md §7): idle ALC readback, so
+      // alcRaw/alcSeq (already parsed at civ 15 13 -- see the TX-time slots
+      // above, which have exercised that parser for months) stay current
+      // between transmissions too, not just during one.
+      case 10: { uint8_t b[]={0x15,0x13}; sendCiv(b,2); break; } // ALC
     }
   }
 

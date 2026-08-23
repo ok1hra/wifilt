@@ -1,0 +1,16 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>mercury-host worker smoke</title></head>
+<body>
+<script>
+  const worker = new Worker("worker.js");
+  worker.onmessage = (e) => {
+    fetch("/result", { method: "POST", body: JSON.stringify(e.data) })
+      .catch(() => {});
+  };
+  worker.onerror = (e) => {
+    fetch("/result", { method: "POST",
+      body: JSON.stringify({ checks: [["worker loaded without error", false, e.message]] }) })
+      .catch(() => {});
+  };
+</script>
+</body></html>
