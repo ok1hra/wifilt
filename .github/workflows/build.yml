@@ -90,26 +90,6 @@ jobs:
       - name: Install asset tooling
         run: sudo apt-get update && sudo apt-get install -y p7zip-full terser
 
-      # ubuntu-latest (x86_64) ships google-chrome preinstalled; the arm64
-      # runner image does not, and Google doesn't publish a Linux ARM64
-      # google-chrome package at all. browser-actions/setup-chrome builds and
-      # hosts its own arm64 Chrome-for-Testing builds for this gap -- but only
-      # for the "channel name" version format (stable/beta/dev/canary); its
-      # "latest snapshot" format (the action's own default) is Linux-x64-only
-      # and fails arm64 with "Unsupported platform", so this must pin a
-      # channel name explicitly. The tools/*-smoke.js scripts all spawn the
-      # literal binary name "google-chrome", so symlink it in rather than
-      # teach every script a configurable browser path.
-      - name: Install Chrome (arm64 has no preinstalled google-chrome)
-        id: setup-chrome
-        uses: browser-actions/setup-chrome@v2
-        with:
-          chrome-version: stable
-          install-dependencies: true
-
-      - name: Symlink google-chrome
-        run: sudo ln -sf "${{ steps.setup-chrome.outputs.chrome-path }}" /usr/local/bin/google-chrome
-
       - name: Build
         run: make -C native
 
@@ -119,9 +99,17 @@ jobs:
       - name: Integration test (fake radio)
         run: tools/native-integration-test.sh
 
+      # setup-spine-smoke.js drives a real headless Chrome, which the linux
+      # (x86_64) job below already covers. It's deliberately skipped here:
+      # Chrome/Chromium ship no official Linux ARM64 build at all as of this
+      # writing (tracked upstream at crbug.com/374811603, still open), and
+      # the DOM/JS logic under test isn't CPU-architecture-dependent anyway
+      # -- so there's nothing this job would gain by chasing a working
+      # browser binary for it. The rest of this job still proves the native
+      # build and non-browser integration test on real ARM64 hardware.
       - name: Browser-free smoke tests
         run: |
-          for test in setup-spine-smoke setup-radio-contract-smoke \
+          for test in setup-radio-contract-smoke \
                       state-json-budget-smoke config-backup-smoke; do
             echo "--- $test"
             node "tools/$test.js"
