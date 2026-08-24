@@ -90,6 +90,22 @@ jobs:
       - name: Install asset tooling
         run: sudo apt-get update && sudo apt-get install -y p7zip-full terser
 
+      # ubuntu-latest (x86_64) ships google-chrome preinstalled; the arm64
+      # runner image does not, and Google doesn't publish a Linux ARM64
+      # google-chrome package at all. browser-actions/setup-chrome builds and
+      # hosts its own arm64 Chrome-for-Testing snapshots specifically for
+      # this gap. The tools/*-smoke.js scripts all spawn the literal binary
+      # name "google-chrome", so symlink it in rather than teach every
+      # script a configurable browser path.
+      - name: Install Chrome (arm64 has no preinstalled google-chrome)
+        id: setup-chrome
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: latest
+
+      - name: Symlink google-chrome
+        run: sudo ln -sf "${{ steps.setup-chrome.outputs.chrome-path }}" /usr/local/bin/google-chrome
+
       - name: Build
         run: make -C native
 
