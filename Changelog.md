@@ -11,6 +11,33 @@ published.
 
 ## Working tree — not committed
 
+**M5Stack Atom Lite support, and the firmware now builds with PlatformIO.**
+
+* **New board: M5Stack Atom Lite** (ESP32-PICO-D4, 4 MB). It runs the same `wifilt.ino` as a
+  bare module — band decoder and the interface-board outputs absent, reported as revision 99.
+  Its one hardware difference is the status LED: the Atom has no plain LED on GPIO 5 but a
+  single addressable **SK6812 RGB on GPIO 27**. A small status-LED HAL in `wifilt.ino`
+  (`statusLedBegin`/`statusLedLevel`) renders the existing LED vocabulary onto either
+  indicator, selected by the `WIFILT_M5ATOM_LITE` build flag; the box's GPIO 5 LED behaviour
+  is unchanged. On the Atom the colour carries the state — blue fade in AP mode, green steady
+  when the station link is up — with brightness capped so a bare SK6812 is not dazzling.
+
+* **Embedded firmware builds with PlatformIO.** A new `platformio.ini` defines two ESP32
+  environments from the one sketch — `esp32` (the box / bare WROOM, the equivalent of the old
+  arduino-cli FQBN) and `m5atom` — pinning arduino-esp32 2.0.14 via espressif32 6.5.0, the
+  4 MB `partitions.csv`, DIO flash mode, and fetching TrxNet from `lib_deps`. `pio run` builds
+  both. The native Linux/Windows/ARM64 targets stay on `native/Makefile`.
+
+* **CI is unchanged** — it keeps compiling the box with the arduino-cli `esp32` job; building
+  the M5Atom is a PlatformIO-only, local step for now. The release scripts
+  (`tools/export-compiled-binary.sh`, `tools/release.sh`) still produce the shipped binary with
+  the Arduino IDE 1.8.
+
+* Not a regression risk for the box: `make -C native` still builds and both `pio run`
+  environments compile, link and fit `app0` (~73 %) with DIO flash-mode images.
+
+---
+
 **REV 20260817.** SETUP now names the build it is served from and the network the device is on.
 
 * **The product name carries its platform.** The heading on SETUP reads `WIFILT-ESP32`,

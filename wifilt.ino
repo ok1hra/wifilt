@@ -284,7 +284,16 @@ const int StatusPin     = 5;
 const int PowerOnPin    = 4;
 long powerTimer         = 0;
 bool statusPower        = 0;
-const int CIVmutePin    = 16;
+#if defined(WIFILT_M5ATOM_LITE)
+  // GPIO 16 and 17 are wired to the ESP32-PICO-D4's embedded flash and MUST NOT
+  // be driven -- doing so corrupts the flash bus and the board boot-loops
+  // (TG1WDT_SYS_RESET). The box's GPIO 16 CI-V mute drives external hardware the
+  // bare Atom does not have, so move the pin to GPIO 5 -- free here, since the
+  // Atom's status LED is the SK6812 on GPIO 27, not the plain LED on GPIO 5.
+  const int CIVmutePin  = 5;
+#else
+  const int CIVmutePin  = 16;
+#endif
 bool TrxNeedSet         = 0;
 bool TrxSetupDone       = false;
 volatile bool btStateBroadcastPending = false;
@@ -1040,6 +1049,8 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   // Defined static, so the prototypes must match or they declare a second,
   // externally-linked function that is never defined.
   static void statusFlashTick();
+  static void statusLedBegin(bool apMode);
+  static void statusLedLevel(uint8_t level);
   static bool trxIsPriorityName(const char* name);
   bool DxcSendWebSocketFrame(uint8_t opcode, const uint8_t* payload, size_t length);
   bool DxcSendWebSocketText(const char* text);
@@ -4869,14 +4880,7 @@ void setup(){
   Serial.print(HWidValue);
   Serial.println(" raw]");
 
-  if(APmode==true){
-    ledcSetup(pwmChannel, frequence, resolution);
-    ledcAttachPin(StatusPin, pwmChannel);
-    ledcWrite(pwmChannel, 0);
-  }else{    
-    pinMode(StatusPin, OUTPUT);
-    digitalWrite(StatusPin, LOW);
-  }
+  statusLedBegin(APmode);
 
   pinMode(PowerOnPin, OUTPUT);
     digitalWrite(PowerOnPin, LOW);
@@ -4967,11 +4971,7 @@ void setup(){
       Serial.println(WiFi.localIP());
       Serial.print("WIFI| ");
       Serial.print(WiFi.RSSI());
-      if(APmode==true){
-        ledcWrite(pwmChannel, 255);
-      }else{
-        digitalWrite(StatusPin, HIGH);
-      }
+      statusLedLevel(255);
       MACString=WiFi.macAddress();
       Serial.print(" dBm, MAC ");
       Serial.println(MACString);
@@ -5066,26 +5066,66 @@ void setup(){
 static uint32_t statusFlashStart = 0;
 static bool     statusFlashOn    = false;
 
+// ── Status-LED HAL ────────────────────────────────────────────────────────────
+// One vocabulary (HARDWARE.md §6), two very different indicators. Everything the
+// firmware needs to say is a brightness 0..255, so that -- statusLedLevel() -- is
+// the whole surface, and the builds differ only in how they render it.
+//
+//   box / bare WROOM : a plain LED on GPIO 5 (StatusPin). digitalWrite in
+//                      station mode, LEDC PWM for the AP fade. Unchanged.
+//   M5Atom Lite      : a single SK6812 RGB on GPIO 27 and no LED on GPIO 5 at
+//                      all. Colour carries the state the box can only show as
+//                      on/off -- blue while the AP fade runs, green once the
+//                      station link is up -- and the TX indications stay a gap in
+//                      the light, so they fall out of level==0 for free.
+#if STATUS_LED_RGB
+  // Full-white SK6812 is blinding on a desk; cap the brightness the fade and
+  // steady state reach.
+  static const uint8_t STATUS_LED_MAX = 40;
+  static void statusLedLevel(uint8_t level){
+    uint8_t v = (uint16_t)level * STATUS_LED_MAX / 255;
+    if (APmode) neopixelWrite(STATUS_LED_PIN, 0, 0, v);   // blue  = AP portal
+    else        neopixelWrite(STATUS_LED_PIN, 0, v, 0);   // green = station link
+  }
+  static void statusLedBegin(bool apMode){ (void)apMode; statusLedLevel(0); }
+#else
+  static void statusLedLevel(uint8_t level){
+    if (APmode) ledcWrite(pwmChannel, level);
+    else        digitalWrite(StatusPin, level ? HIGH : LOW);
+  }
+  static void statusLedBegin(bool apMode){
+    if (apMode) {
+      ledcSetup(pwmChannel, frequence, resolution);
+      ledcAttachPin(StatusPin, pwmChannel);
+      ledcWrite(pwmChannel, 0);
+    } else {
+      pinMode(StatusPin, OUTPUT);
+      digitalWrite(StatusPin, LOW);
+    }
+  }
+#endif
+
+//-------------------------------------------------------------------------------------------------------
 // The LED's resting state: lit once the station link is up, dark while waiting
 // for it. Before this the pin was written exactly twice -- LOW at boot and HIGH
 // on the first successful connect -- so after a WiFi outage the LED went on
 // claiming a link that was gone. In AP mode the PWM fade owns the pin, so the
 // only correct move is to hand it back.
 static void statusLedSteady(){
-  if (APmode) { ledcWrite(pwmChannel, 255); return; }
-  digitalWrite(StatusPin, WiFiStationReady() ? HIGH : LOW);
+  if (APmode) { statusLedLevel(255); return; }
+  statusLedLevel(WiFiStationReady() ? 255 : 0);
 }
 
 static void statusFlashKick(){
   if (APmode) return;
-  digitalWrite(StatusPin, LOW);
+  statusLedLevel(0);
   statusFlashStart = millis();
   statusFlashOn = true;
 }
 
 static void statusFlashTick(){
   if (statusFlashOn && millis() - statusFlashStart >= 100) {
-    digitalWrite(StatusPin, HIGH);
+    statusLedLevel(255);
     statusFlashOn = false;
   }
 }
@@ -5152,7 +5192,7 @@ void loop(){
         PwmValue--;
         if(PwmValue<1){ PwmDir=true; }
       }
-      ledcWrite(pwmChannel, PwmValue);
+      statusLedLevel(PwmValue);
       pwmTimer=millis();
     }
   }
@@ -7328,11 +7368,7 @@ bool sendCW(){
     // indication at all while the header comment promised one. Per-bit keying
     // was considered and rejected: one bit is 22 ms, so the eye would fuse it
     // into a dimmed LED rather than see it blink.
-    if(APmode==true){
-      ledcWrite(pwmChannel, 0);
-    }else{
-      digitalWrite(StatusPin, LOW);
-    }
+    statusLedLevel(0);
     digitalWrite(PTT, HIGH);          // PTT ON
     delay(PTTlead);                   // PTT lead delay
     // ch = ' '; Serial.print(ch); chTable(); sendFsk();   // Space before sending
