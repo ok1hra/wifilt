@@ -170,12 +170,22 @@ const PAGE_SCRIPT = `
   check("tab 1 is notified of the takeover and reports loss", tab1Lost !== null && !MercurySession.isHeld(), JSON.stringify(tab1Lost));
 
   // ---- 5. armed flag persists locally (own key, independent of the lease) ----
-  check("armed defaults to false", MercurySession.isArmed() === false);
+  // Defaults to NOT ARMED again as of 2026-08-23's LISTEN/waterfall split --
+  // the waterfall no longer depends on this flag (mercury.js's ambient
+  // "monitor" worker feeds it regardless), so unattended answering reverts
+  // to opt-in. A missing key (never touched this control) reads as not
+  // armed; an explicit "1" is a deliberate opt-in and must stick, exactly
+  // as an explicit "0" always did.
+  check("armed defaults to false (no persisted key yet)", MercurySession.isArmed() === false);
   let armedSeen = null;
   MercurySession.onArmedChange(v => { armedSeen = v; });
+  MercurySession.setArmed(false);
+  check("setArmed(false) is reflected immediately", MercurySession.isArmed() === false);
+  check("onArmedChange callback fired with the new value", armedSeen === false);
+  check("explicit opt-out persists in localStorage under its own key",
+    localStorage.getItem("mercury.session.armed.v1") === "0");
   MercurySession.setArmed(true);
   check("setArmed(true) is reflected immediately", MercurySession.isArmed() === true);
-  check("onArmedChange callback fired with the new value", armedSeen === true);
   check("armed flag persists in localStorage under its own key",
     localStorage.getItem("mercury.session.armed.v1") === "1");
 

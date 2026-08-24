@@ -87,6 +87,8 @@
     workerRole = null;
     resetTransferUi();
     dom.cqButton.disabled = true;
+    hideArqStatus(); // §6.5: no session, no stale STATUS panel
+    renderTuningLock(); // §6.6: Settings unlocks once no session is running
     if (reason) setAud1Pill(reason);
   }
 
@@ -100,7 +102,53 @@
     const busy = state.calRunning || state.planRunning;
     dom.callButton.disabled = busy;
     dom.peerCall.disabled = busy;
-    dom.armToggle.disabled = busy;
+    dom.listenToggle.disabled = busy;
+  }
+
+  // Is a Worker actively contending for the transmitter (dialing out or
+  // capable of auto-answering)? "monitor" is the ambient waterfall-only
+  // role and deliberately excluded -- it never transmits, so it must not
+  // block CALL, LISTEN, CQ or the TX-gain calibration plan the way an
+  // actual call/listen session does.
+  function activeSessionRunning() { return workerRole === "call" || workerRole === "listen"; }
+
+  // Restore the ambient "monitor" (or "listen", if the operator has LISTEN
+  // on) worker once nothing exclusive needs the AUD1 socket -- called after
+  // an outbound CALL ends, after a CAL/PLAN run finishes, after a takeover,
+  // and once at page load. Session lease stays held throughout; this never
+  // releases it, unlike the old one-shot arm/call flow.
+  async function startAmbientWorker() {
+    if (state.calRunning || state.planRunning) return; // calibration owns the socket for its own run right now
+    const identity = await withIdentity();
+    if (dom.listenToggle.checked && identity.call) {
+      dom.peerCall.disabled = true;
+      dom.callButton.disabled = true;
+      startWorker("listen", "", identity.call);
+      return;
+    }
+    if (dom.listenToggle.checked && !identity.call) {
+      // Identity got cleared since LISTEN was turned on -- fall back
+      // honestly rather than silently listening with no callsign.
+      dom.listenToggle.checked = false; MercurySession.setArmed(false); dom.listenState.textContent = "LISTEN OFF";
+    }
+    dom.peerCall.disabled = false;
+    dom.callButton.disabled = false;
+    startWorker("monitor", "", identity.call || "");
+  }
+
+  // An outbound CALL ends (peer answered and finished, or never answered):
+  // fall back to the ambient worker rather than releasing the session --
+  // the lease is now held for the page's whole lifetime, same as JS8/WSPR's
+  // own audio lease, not just for the duration of one CALL.
+  function endActiveSession() {
+    stopWorker();
+    // onCall() disables LISTEN for the duration of the call (dialing and
+    // answering must not race); nothing else on this normal end-of-call path
+    // used to turn it back on, so LISTEN stayed stuck disabled for the rest
+    // of the page's life after the very first CALL. Same busy guard as
+    // releaseIfOurs()'s own re-enable.
+    dom.listenToggle.disabled = state.calRunning || state.planRunning;
+    startAmbientWorker();
   }
 
   function handleWorkerMessage(msg) {
@@ -111,12 +159,16 @@
       setConnectionTest(`<p class="connection-test-line muted">${msg.reason}${msg.detail ? " -- " + msg.detail : ""}</p>`, true);
       stopWorker();
       sessionBusy = false;
-      if (dom.armToggle.checked) dom.armToggle.checked = false;
+      if (dom.listenToggle.checked) { dom.listenToggle.checked = false; MercurySession.setArmed(false); dom.listenState.textContent = "LISTEN OFF"; }
       releaseIfOurs();
       return;
     }
     if (msg.type === "status") {
-      setAud1Pill(msg.connState.toLowerCase());
+      // "monitor" never leaves DISCONNECTED (see mercury-worker.js's role
+      // branch) -- show it as ambient monitoring, not a misleading
+      // "disconnected", which would read as an error on a page that is
+      // deliberately not listening.
+      setAud1Pill(workerRole === "monitor" ? "monitoring" : msg.connState.toLowerCase());
       // Bullet 2's timetable busy check (timetableBusy()): plain LISTENING is
       // exactly the idle state band-hopping is FOR, so it is deliberately NOT
       // in this list -- only a state actively contending for the channel is.
@@ -124,7 +176,7 @@
       if (msg.connState === "CALLING") {
         setConnectionTest(`<p class="connection-test-line">Calling <b>${dom.peerCall.value.trim().toUpperCase()}</b>...</p>`, true);
       } else if (msg.connState === "LISTENING") {
-        setConnectionTest(`<p class="connection-test-line">Listening -- armed, waiting for an incoming CALL.</p>`, true);
+        setConnectionTest(`<p class="connection-test-line">Listening -- waiting for an incoming CALL.</p>`, true);
       }
       return;
     }
@@ -148,7 +200,7 @@
       sessionBusy = false;
       setConnectionTest(`<p class="connection-test-line muted">No response -- call ended.</p>`, true);
       resetTransferUi();
-      if (workerRole === "call") releaseIfOurs();
+      if (workerRole === "call") endActiveSession();
       return;
     }
     if (msg.type === "stopped") { sessionBusy = false; setAud1Pill("idle"); resetTransferUi(); return; }
@@ -235,6 +287,20 @@
     }
     if (msg.type === "incoming-query") return; // informational only -- the reply is sent automatically by the Worker
     if (msg.type === "cq-heard") { onCqHeard(msg.call, msg.bwHz); return; }
+
+    // ---- §6.7 waterfall (2026-08-23 grill-me) ----
+    // The Worker's own AUD1 client is the only thing that ever sees a raw
+    // sample (see mercury-worker.js's onRxTick header comment) -- forwarded
+    // here unthrottled, one message per 20ms packet. Paused during this
+    // station's own TX (radioTransmitting(), already polled for the radio
+    // bar) same as JS8/WSPR, even though the underlying LAN audio is itself
+    // duplex -- see mercury-waterfall-plan memory for why showing the live
+    // carrier was judged more confusing than informative.
+    if (msg.type === "rx-samples") { if (waterfall && !radioTransmitting()) waterfall.ingest(msg.samples); return; }
+
+    // ---- §6.5 live STATUS panel (2026-08-23 grill-me) ----
+    if (msg.type === "arq-status") { renderArqStatus(msg); return; }
+    if (msg.type === "arq-status-clear") { hideArqStatus(); return; }
   }
 
   function startWorker(role, peerCall, myCall) {
@@ -244,17 +310,24 @@
     worker.onmessage = (e) => handleWorkerMessage(e.data);
     worker.onerror = (e) => handleWorkerMessage({ type: "error", reason: "worker crashed", detail: e.message });
     worker.postMessage({ type: "start", wsPort: 83, token: MercurySession.token(), myCall, peerCall: peerCall || "", role });
-    setAud1Pill("connecting");
-    dom.cqButton.disabled = false;
+    setAud1Pill(role === "monitor" ? "monitoring" : "connecting");
+    // CQ is a real, un-gated TX broadcast -- ambient "monitor" must not
+    // enable it, same safety framing as "not listening means this station
+    // cannot be reached/transmit" (only CALL/LISTEN's own active session does).
+    dom.cqButton.disabled = (role === "monitor");
     dom.heardStations.textContent = "";
     heardStations.clear();
+    renderTuningLock(); // §6.6: Settings locks for the duration of this session
   }
 
   // "who's out there" -- doc ch.10's E4 gate's last item (CQ/unattended
   // discovery). Sendable in any connection state (LISTENING, CALLING, even
   // mid-transfer -- see mercury-worker.js's sendCq()), so this button is
-  // gated only on "is a Worker running at all", same as the arm toggle
-  // isn't gated on CONNECTED.
+  // gated only on "is an active call/listen session running" (see
+  // startWorker()'s own role check), same as the LISTEN toggle isn't gated
+  // on CONNECTED -- but unlike LISTEN/CALL, ambient "monitor" must NOT
+  // enable it: CQ is a real TX broadcast with no auto-answer semantics to
+  // hide behind.
   const heardStations = new Map(); // call -> bwHz, session-lifetime only
   function onCqClick() {
     if (!worker) return;
@@ -281,23 +354,33 @@
     if (!granted) return; // onBusy already showed the takeover panel
     ownSession = true;
     dom.callButton.disabled = true;
-    dom.armToggle.disabled = true;
+    dom.listenToggle.disabled = true;
     startWorker("call", peer, identity.call);
   }
 
-  async function onArmToggle() {
-    if (state.calRunning || state.planRunning) { dom.armToggle.checked = !dom.armToggle.checked; return; }
-    MercurySession.setArmed(dom.armToggle.checked);
-    dom.armState.textContent = dom.armToggle.checked ? "ARMED" : "NOT ARMED";
-    if (!dom.armToggle.checked) { releaseIfOurs(); setConnectionTest(`<p class="connection-test-line muted">Not armed -- Mercury cannot be reached even with this page open.</p>`, true); return; }
+  // LISTEN only ever gates whether this station may auto-answer an
+  // incoming CALL -- the waterfall/AUD1 feed keeps running regardless via
+  // the ambient "monitor" worker (see startAmbientWorker()). Turning it off
+  // no longer releases the session or tears down audio, just drops back to
+  // "monitor"; the lease is held for the whole page lifetime now, same as
+  // JS8/WSPR's own audio lease.
+  async function onListenToggle() {
+    if (state.calRunning || state.planRunning) { dom.listenToggle.checked = !dom.listenToggle.checked; return; }
+    MercurySession.setArmed(dom.listenToggle.checked);
+    dom.listenState.textContent = dom.listenToggle.checked ? "LISTENING" : "LISTEN OFF";
+    if (!dom.listenToggle.checked) {
+      setConnectionTest(`<p class="connection-test-line muted">Not listening -- Mercury cannot be reached, even with this page open.</p>`, true);
+      startAmbientWorker();
+      return;
+    }
     const identity = await withIdentity();
     if (!identity.call) {
       setConnectionTest(`<p class="connection-test-line muted">Set this station's own callsign in SETUP first.</p>`, true);
-      dom.armToggle.checked = false; MercurySession.setArmed(false); dom.armState.textContent = "NOT ARMED";
+      dom.listenToggle.checked = false; MercurySession.setArmed(false); dom.listenState.textContent = "LISTEN OFF";
       return;
     }
     const granted = await MercurySession.claim(false);
-    if (!granted) { dom.armToggle.checked = false; MercurySession.setArmed(false); dom.armState.textContent = "NOT ARMED"; return; }
+    if (!granted) { dom.listenToggle.checked = false; MercurySession.setArmed(false); dom.listenState.textContent = "LISTEN OFF"; return; }
     ownSession = true;
     dom.peerCall.disabled = true;
     dom.callButton.disabled = true;
@@ -329,6 +412,49 @@
   }
 
   // ==========================================================================
+  // §6.7 waterfall + §6.5 live STATUS panel (2026-08-23 grill-me). Built
+  // after radio-bar parity landed, reusing its state.radio/radioTransmitting()
+  // rather than polling separately.
+  // ==========================================================================
+
+  // Constructed in init(), once dom.waterfallCanvas/dom.waterfallOverlay
+  // actually exist -- unlike JS8/WSPR, this page's `dom` starts empty and is
+  // filled by init()'s own byId loop, not a module-scope literal, so a
+  // top-level `new Spectrum.Waterfall(...)` here would run before its canvas
+  // did.
+  let waterfall = null;
+
+  function renderArqStatus(msg) {
+    dom.statusSection.hidden = false;
+    const peer = msg.peerSnrDb === null ? "no report yet" : `${msg.peerSnrDb >= 0 ? "+" : ""}${msg.peerSnrDb.toFixed(0)} dB`;
+    const rateLine = msg.modeBps
+      ? `<p class="connection-test-line">Mode: <b>${msg.modeName}</b> (peer <b>${msg.peerModeName}</b>) &middot; ${msg.modeBps} B/s nominal</p>`
+      : `<p class="connection-test-line">Mode: <b>${msg.modeName}</b> (peer <b>${msg.peerModeName}</b>)</p>`;
+    const total = msg.framesOk + msg.framesRetried;
+    // "nominal" on the rate line, always -- §6.5's own decision: this is the
+    // current mode's rated bitrate (mercury-worker.js's MODE_INFO table),
+    // never a measured throughput (TX progress is deliberately time+mode
+    // estimated, not byte-counted -- see startRealDataPhase's own comment).
+    // retriesLeft is null outside an actual DATA-frame delivery attempt
+    // (mercury-worker.js only fills it in during dflow's DATA_TX/WAIT_ACK) --
+    // TURN_REQ/MODE_REQ negotiation reuses the same C-side counter from a
+    // small fixed budget, so showing it there would flag routine turn-taking
+    // as if a frame were about to be dropped.
+    const lowRetries = msg.retriesLeft !== null && msg.retriesLeft < 3;
+    const successLine = total > 0
+      ? `<p class="connection-test-line">Frames: <b>${msg.framesOk}</b> clean, <b>${msg.framesRetried}</b> needed a retry (${Math.round(100 * msg.framesOk / total)}% clean)${lowRetries ? ` <span class="muted">-- ${msg.retriesLeft} retries left on the current frame</span>` : ""}</p>`
+      : `<p class="connection-test-line muted">No frames exchanged yet this connection.</p>`;
+    dom.arqStatus.innerHTML =
+      `<p class="connection-test-line">SNR RX <b>${msg.localSnrDb >= 0 ? "+" : ""}${msg.localSnrDb.toFixed(0)} dB</b> / TX <b>${peer}</b></p>` +
+      rateLine + successLine;
+  }
+
+  function hideArqStatus() {
+    dom.statusSection.hidden = true;
+    dom.arqStatus.innerHTML = "";
+  }
+
+  // ==========================================================================
   // Radio-bar parity (2026-08-23 grill-me, docs/mercury-implementace.md ch.13).
   // Everything from here to init() is what this page never had: a live polled
   // picture of the radio, the frequency band picker, the frequency timetable
@@ -356,13 +482,20 @@
   // than through wspr.js (which this page does not otherwise depend on) --
   // it is one localStorage key, not a reason to require that page be open.
   const WSPR_SETTINGS_KEY = "wifilt.wspr.v1";
+  // See IcomModels.liveRadioModel()'s own comment for why this guard exists
+  // (the ~1s stale-radio-name window on a live LAN-slot model swap, confirmed
+  // against both an IC-705 and an IC-7610). Shared with data.js/wspr.js so
+  // the fix cannot regress in one page while staying fixed in the others.
+  function liveRadioModel() {
+    return IcomModels.liveRadioModel(state.radio);
+  }
   function fullPowerScale() {
     let override = "";
     try { override = String((JSON.parse(localStorage.getItem(WSPR_SETTINGS_KEY) || "null") || {}).modelOverride || ""); }
     catch (_error) { override = ""; }
     const manual = override && IcomModels.fullPowerWatts(override);
     if (manual) return {watts: manual, source: "manual override"};
-    const reported = IcomModels.fullPowerWatts(state.radio.radioName);
+    const reported = IcomModels.fullPowerWatts(liveRadioModel());
     return reported ? {watts: reported, source: "radio model"} : {watts: 0, source: ""};
   }
 
@@ -386,7 +519,12 @@
     const seen = state.radio.rfPowerSeen === true;
     const level = Math.max(0, Math.min(255, Number(state.radio.rfPower) || 0));
     const percent = seen ? level * 100 / 255 : 0;
-    const lit = seen ? Math.min(10, Math.ceil(percent / 10)) : 0;
+    // Round the same way the title below does (Math.round(percent)), so the
+    // segment count and the printed number never disagree -- see data.js's
+    // own renderTrxPower() for the mismatch this used to produce (ceil(percent/10)
+    // overshot by a whole segment for almost any non-multiple-of-25.5 raw level).
+    // Floor of 1 lit segment is kept for any power at all, same reasoning.
+    const lit = seen && percent > 0 ? Math.max(1, Math.min(10, Math.round(percent / 10))) : 0;
     dom.trxPowerSegments.forEach((segment, index) => segment.classList.toggle("on", index < lit));
     const scale = fullPowerScale();
     const watts = seen && scale.watts ? scale.watts * level / 255 : null;
@@ -444,7 +582,13 @@
       radioPollFailures = 0;
       state.radio = {...state.radio, ...next, frequency: Number(next.frequency) || 0};
       if (state.pendingFrequency && state.radio.frequency === state.pendingFrequency) state.pendingFrequency = null;
+      // The calibration Worker only ever sees ALC -- it has no SWR meter of its
+      // own -- so this is the one feed that can tell it an antenna is reflecting
+      // into ALC. Same 500 ms cadence /state itself refreshes on.
+      if (state.calRunning) mercuryGainCal.noteMeters({swr: state.radio.swr});
       renderHeader();
+      renderTuningPower();
+      applyAutoTuningPower();
     } catch (error) {
       radioPollFailures++;
       console.warn(`pollRadio: /state failed (${radioPollFailures} in a row)`, error);
@@ -678,21 +822,27 @@
   function mercuryBlockingReason() {
     if (!(state.radio.connected && state.radio.transceiverType === "ICOM-LAN")) return "ICOM-LAN is offline";
     if (state.radio.tx) return "TRX PTT is active";
-    if (workerRole) return "a Mercury CALL/LISTEN session is active — stop it first";
+    // Ambient "monitor" does not block this -- onRunChange/onPlanChange
+    // below tear it down for the run's duration and restart it afterward,
+    // same AUD1 socket, no operator step needed. An actual CALL/LISTEN
+    // session (dialing, connected, or armed for an incoming call) still
+    // refuses outright rather than interrupting it automatically.
+    if (activeSessionRunning()) return "a Mercury CALL/LISTEN session is active — stop it first";
     return "";
   }
 
   function renderMercuryLock() {
-    const busy = state.calRunning || state.planRunning || Boolean(workerRole);
+    const busy = state.calRunning || state.planRunning || activeSessionRunning();
     if (dom.callButton) dom.callButton.disabled = busy;
-    if (dom.armToggle) dom.armToggle.disabled = busy;
+    if (dom.listenToggle) dom.listenToggle.disabled = busy;
+    renderTuningLock(); // §6.6: Settings shares this same busy definition
   }
 
   let gainPlan = null;
   const mercuryGainCal = MercuryGainCal.create({
     store: gainStore,
     radio: () => state.radio,
-    model: () => state.radio.radioName || "",
+    model: () => liveRadioModel(),
     percentOf: radio => (radio.rfPowerSeen === true ? WsprCore.civPercent(radio.rfPower) : 0),
     // mercury-worker.js's own uncalibrated fallback (txGainMultiplier = 1.0,
     // raw/unscaled) -- NOT JS8's conservative 0.25, which is a fact about a
@@ -707,18 +857,29 @@
     audioToken: () => MercurySession.token(),
     sessionHeld: () => ownSession,
     // The Mercury session lease (mercury-session.js), not the audio socket
-    // itself: the burst authenticates with the SAME token CALL/LISTEN do, so
-    // it must hold the one lease that arbitrates between this station's own
-    // pages/devices -- exactly like onCall()/onArmToggle(). Claimed per run,
-    // not once for the whole plan, so a run that outlives a closed tab cannot
-    // leave the lease held with nothing using it.
+    // itself: the burst authenticates with the SAME token CALL/LISTEN/the
+    // ambient monitor worker do, so it must hold the one lease that
+    // arbitrates between this station's own pages/devices -- exactly like
+    // onCall()/onListenToggle(). The ambient worker already holds it for the
+    // whole page lifetime in the normal case; this is a defensive re-claim
+    // (same as onListenToggle()'s own), so a run that outlives a closed tab
+    // still cannot leave the lease held with nothing using it.
     claimSession: async () => {
       const granted = await MercurySession.claim(false);
       if (granted) ownSession = true;
       return granted;
     },
     releaseSession: () => { if (ownSession) { MercurySession.release(); ownSession = false; } },
-    onRunChange: running => { state.calRunning = running; renderMercuryLock(); },
+    // A calibration burst needs the very same exclusive AUD1 socket the
+    // ambient "monitor" worker now holds continuously (see
+    // mercuryBlockingReason()'s own comment) -- tear it down for the run's
+    // duration and bring it back once done, no operator step needed.
+    onRunChange: running => {
+      state.calRunning = running;
+      if (running && workerRole === "monitor") stopWorker();
+      else if (!running) startAmbientWorker();
+      renderMercuryLock();
+    },
     wallNow: () => Date.now(),
   });
 
@@ -729,8 +890,8 @@
       button: dom.planButton,
       store: gainStore,
       cal: mercuryGainCal,
-      model: () => state.radio.radioName || "",
-      modelNumber: () => IcomModels.modelNumber(state.radio.radioName || ""),
+      model: () => liveRadioModel(),
+      modelNumber: () => IcomModels.modelNumber(liveRadioModel()),
       radio: () => state.radio,
       send: async payload => {
         const response = await fetch(RADIO_CMD_URL, {method: "POST", signal: fetchDeadline(),
@@ -738,7 +899,18 @@
         if (!response.ok) throw new Error(`${payload.type} failed (${response.status})`);
         return response.json().catch(() => ({ok: true}));
       },
-      bands: () => MercuryTrxPresets.PRESETS.map(preset => ({band: preset.band, hz: preset.frequencyHz})),
+      // TxGainCal.bandOf(hz) -- not preset.band -- because the plan's own
+      // guard (tx-gain-plan-ui.js's blockingReason()) rejects a row whenever
+      // TxGainCal.bandOf(row.hz) !== row.band: bandOf() returns the no-space
+      // form ("20m"), while mercury-presets.js's own preset.band is the
+      // display form used in the frequency menu/timetable ("20 m"). Feeding
+      // the display form here made every single row fail that check --
+      // "20m: 14105.0 kHz is not in that band" on every band, always (found
+      // 2026-08-23 by an operator actually trying to calibrate 20 m).
+      // data.js's own bands() hook never hits this: it feeds WsprCore.PRESETS,
+      // whose own band strings happen to already be the no-space form.
+      bands: () => MercuryTrxPresets.PRESETS.map(preset =>
+        ({band: TxGainCal.bandOf(preset.frequencyHz), hz: preset.frequencyHz})),
       // So the plan can warn about JS8/WSPR's own windows too (registerBusyWindows),
       // the same courtesy those two pages already extend to each other.
       wsprPresets: typeof WsprCore !== "undefined" ? WsprCore.PRESETS : [],
@@ -786,9 +958,217 @@
         body: JSON.stringify({type: "setMode", mode, filter: filter ? "FIL" + filter : undefined})}),
       planBlockingReason: () => "", // cal.blockingReason() (mercuryBlockingReason) already covers this page's own gates
       fetchImpl: (url, options = {}) => fetch(url, {signal: fetchDeadline(FETCH_FLASH_TIMEOUT_MS), ...options}),
-      onPlanChange: running => { state.planRunning = running; renderMercuryLock(); },
+      // Same AUD1-socket handoff as mercuryGainCal's own onRunChange above.
+      onPlanChange: running => {
+        state.planRunning = running;
+        if (running && workerRole === "monitor") stopWorker();
+        else if (!running) startAmbientWorker();
+        renderMercuryLock();
+      },
     });
     return gainPlan;
+  }
+
+  // ==========================================================================
+  // §6.6 Settings (2026-08-23 grill-me): ARQ retry/CALLINT/downgrade/mode-
+  // ceiling/transfer-limit + RF power. /mercury-tuning.json, ONE station-wide
+  // source -- see mercury-tuning.js's own header for why this is not
+  // data/mercury-settings.js's MercurySettings (that one is localStorage,
+  // scoped to the frequency timetable alone). Read once at page load,
+  // written only by SAVE/RESET or a manual power SET; mercury-worker.js
+  // reads the same file itself at the START of every session (never
+  // mid-transfer -- see mercury-status-plan/mercury-settings-plan memory).
+  // ==========================================================================
+
+  const tuningStore = new MercuryTuning.TuningStore({
+    fetchImpl: (url, options = {}) => fetch(url, {signal: fetchDeadline(FETCH_FLASH_TIMEOUT_MS), ...options}),
+  });
+  let tuningDoc = MercuryTuning.defaults();
+
+  // Same busy definition as renderMercuryLock(): a running CALL/LISTEN OR a
+  // TX-gain CAL/PLAN run all use the one transmitter Settings would also
+  // have to write through (CI-V for power, the WASM engine for everything
+  // else) -- editing mid-run risks the exact inconsistency §6.6 decided
+  // against ("applied only at session start").
+  function tuningBusy() { return Boolean(state.calRunning || state.planRunning) || activeSessionRunning(); }
+
+  function renderTuningLock() {
+    const busy = tuningBusy();
+    [dom.tuningRetryCall, dom.tuningRetryAccept, dom.tuningRetryData, dom.tuningRetryDisconnect,
+     dom.tuningCallInt, dom.tuningDowngrade, dom.tuningModeCeiling, dom.tuningTransferLimit,
+     dom.tuningPowerPercentInput, dom.tuningPowerSet, dom.tuningSave, dom.tuningReset,
+    ].forEach(el => { if (el) el.disabled = busy; });
+  }
+
+  function renderTuningFields() {
+    dom.tuningRetryCall.value = tuningDoc.retryCallSlots;
+    dom.tuningRetryAccept.value = tuningDoc.retryAcceptSlots;
+    dom.tuningRetryData.value = tuningDoc.retryDataSlots;
+    dom.tuningRetryDisconnect.value = tuningDoc.retryDisconnectSlots;
+    dom.tuningCallInt.value = tuningDoc.callIntervalS;
+    dom.tuningDowngrade.value = tuningDoc.retryDowngradeThreshold;
+    dom.tuningModeCeiling.value = tuningDoc.modeCeiling;
+    dom.tuningTransferLimit.value = tuningDoc.transferLimitKb;
+    dom.tuningPowerPercentInput.value = tuningDoc.rfPowerPercent === null ? "" : tuningDoc.rfPowerPercent;
+    if (dom.settingsSummary) {
+      const power = tuningDoc.rfPowerPercent === null ? "power: radio's own" : `${tuningDoc.rfPowerPercent}%`;
+      dom.settingsSummary.textContent = `ceiling ${tuningDoc.modeCeiling} · ${power}`;
+    }
+    renderTuningLock();
+  }
+
+  function readTuningFromFields() {
+    return {
+      retryCallSlots: dom.tuningRetryCall.value,
+      retryAcceptSlots: dom.tuningRetryAccept.value,
+      retryDataSlots: dom.tuningRetryData.value,
+      retryDisconnectSlots: dom.tuningRetryDisconnect.value,
+      callIntervalS: dom.tuningCallInt.value,
+      retryDowngradeThreshold: dom.tuningDowngrade.value,
+      modeCeiling: dom.tuningModeCeiling.value,
+      transferLimitKb: dom.tuningTransferLimit.value,
+      rfPowerPercent: tuningDoc.rfPowerPercent, // SAVE never touches power -- only SET (setTuningPowerFromField) does
+    };
+  }
+
+  async function loadTuning() {
+    tuningDoc = await tuningStore.load();
+    renderTuningFields();
+  }
+
+  async function onTuningSave() {
+    dom.tuningSaveStatus.textContent = "Saving…";
+    dom.tuningSave.disabled = true;
+    try {
+      tuningDoc = await tuningStore.save(readTuningFromFields());
+      renderTuningFields();
+      dom.tuningSaveStatus.textContent = "Saved.";
+    } catch (error) {
+      dom.tuningSaveStatus.textContent = `Save failed: ${error.message || error}`;
+    } finally {
+      renderTuningLock();
+    }
+  }
+
+  function onTuningReset() {
+    tuningDoc = {...MercuryTuning.defaults(), rfPowerPercent: tuningDoc.rfPowerPercent}; // RESET never touches power either
+    renderTuningFields();
+    dom.tuningSaveStatus.textContent = "Reset to defaults — not saved yet.";
+  }
+
+  // ---- RF power: own stored target, auto-applied on load like JS8/WSPR ----
+  // (§6.6 decisions 11-17) but stored in tuningDoc/server, and gated
+  // WSPR-style with no safety pledge -- Mercury has none, and writing a
+  // power level is not transmitting (same reasoning WSPR's own
+  // applyAutoPower() comment gives).
+  let tuningPowerAutoArmed = true; // one shot per page load/reconnect, same shape as WSPR's own autoPowerArmed
+  let tuningPowerBusy = false;
+  let tuningPowerRetryAtMs = 0;
+
+  function renderTuningPower() {
+    const connected = state.radio.connected && state.radio.transceiverType === "ICOM-LAN";
+    const seen = connected && state.radio.rfPowerSeen === true;
+    const level = Math.max(0, Math.min(255, Number(state.radio.rfPower) || 0));
+    const percent = seen ? WsprCore.civPercent(level) : null;
+    const scale = fullPowerScale();
+    const watts = seen && scale.watts ? scale.watts * level / 255 : null;
+    dom.tuningPowerWatts.textContent = watts === null ? "--" : formatWatts(watts);
+    dom.tuningPowerPercent.textContent = !connected ? "radio offline" : !seen ? "reading the radio" : `${percent} %`;
+    const target = tuningDoc.rfPowerPercent;
+    const mismatch = connected && seen && target !== null && target !== percent;
+    dom.tuningPowerField.classList.toggle("mismatch", mismatch);
+    dom.tuningPowerMismatch.hidden = !mismatch;
+    if (mismatch) dom.tuningPowerMismatch.textContent = `target ${target} % not applied (radio reports ${percent} %)`;
+  }
+
+  // Reconnect (radio.lanStatus flipping to "connecting"/back) re-arms the
+  // one-shot exactly like WSPR/JS8's own knob-touch detector does, so a
+  // power write survives the radio itself dropping and coming back, not
+  // just this tab's own reload.
+  let tuningPowerLastLanStatus = "";
+  function noteTuningPowerLanStatus() {
+    if (state.radio.lanStatus !== tuningPowerLastLanStatus) {
+      if (tuningPowerLastLanStatus === "disconnected" && state.radio.lanStatus !== "disconnected") tuningPowerAutoArmed = true;
+      tuningPowerLastLanStatus = state.radio.lanStatus;
+    }
+  }
+
+  async function applyAutoTuningPower() {
+    noteTuningPowerLanStatus();
+    if (tuningPowerBusy || !tuningPowerAutoArmed) return;
+    if (tuningDoc.rfPowerPercent === null) { tuningPowerAutoArmed = false; return; } // nothing chosen -- leave the radio alone
+    if (state.calRunning || state.planRunning) return; // a calibration measures the radio as the operator set it up
+    if (Date.now() < tuningPowerRetryAtMs) return;
+    if (!state.radio.connected || state.radio.transceiverType !== "ICOM-LAN") return;
+    if (radioTransmitting()) return; // never mid-carrier
+    // Mercury-specific strengthening beyond WSPR's own gate: a running
+    // CALL/LISTEN keeps the CI-V control channel busy under real-time ARQ
+    // timing pressure ([[icom-lan-loop-stall-compensation]] -- "LAN drop =
+    // control starvation under audio load"); an unrelated power write
+    // competing for that channel mid-session is a real risk WSPR's own
+    // beacon (no ARQ timing to protect) does not have to consider. Checked
+    // via activeSessionRunning(), not raw workerRole -- the always-on
+    // ambient "monitor" role never transmits and must not block this the
+    // way an actual call/listen session does (same exclusion as every
+    // other gate in this file).
+    if (activeSessionRunning()) return;
+    if (state.radio.rfPowerSeen === true && WsprCore.civPercent(state.radio.rfPower) === tuningDoc.rfPowerPercent) {
+      tuningPowerAutoArmed = false; // already there -- no CI-V round trip needed to know it
+      return;
+    }
+    tuningPowerBusy = true;
+    try {
+      const level = WsprCore.percentToLevel(tuningDoc.rfPowerPercent);
+      await fetch(RADIO_CMD_URL, {method: "POST", signal: fetchDeadline(),
+        headers: {"Content-Type": "application/json"}, body: JSON.stringify({type: "civ.raw", data: WsprCore.civLevelCommand(level).data})});
+      tuningPowerAutoArmed = false;
+    } catch (_error) {
+      tuningPowerRetryAtMs = Date.now() + 5000; // stays armed, backs off rather than flooding a radio that refuses the write
+    } finally {
+      tuningPowerBusy = false;
+      renderTuningPower();
+    }
+  }
+
+  // The operator's own write (SET button): validates, sends, verifies via
+  // the existing 500ms /state poll, AND persists the choice to
+  // /mercury-tuning.json -- unlike WSPR/JS8's own SET, which only writes the
+  // radio, this one also has to update the stored target so the next page
+  // load/reconnect reapplies the SAME value (WSPR/JS8 keep their own target
+  // in the settings draft already visible in the field; Mercury's field
+  // IS the stored target, there is no separate draft).
+  async function setTuningPowerFromField() {
+    // Number("") is 0, not NaN, so an empty-vs-invalid check has to look at
+    // the parsed value itself, not just the raw string's truthiness --
+    // otherwise "abc" or "-5" (non-empty, but not a usable percent) slipped
+    // through as `|| 0` silently clamped to 1 and got written to the radio.
+    const rawPercent = Number(dom.tuningPowerPercentInput.value);
+    if (dom.tuningPowerPercentInput.value === "" || !Number.isFinite(rawPercent)) {
+      dom.tuningSaveStatus.textContent = "Enter a power percent first.";
+      return;
+    }
+    const percent = Math.max(1, Math.min(100, Math.round(rawPercent)));
+    dom.tuningPowerSet.disabled = true;
+    try {
+      const level = WsprCore.percentToLevel(percent);
+      await fetch(RADIO_CMD_URL, {method: "POST", signal: fetchDeadline(),
+        headers: {"Content-Type": "application/json"}, body: JSON.stringify({type: "civ.raw", data: WsprCore.civLevelCommand(level).data})});
+      const started = Date.now();
+      let confirmed = false;
+      while (Date.now() - started < 9000) {
+        await new Promise(resolve => setTimeout(resolve, 300));
+        if (state.radio.rfPowerSeen === true && WsprCore.civPercent(state.radio.rfPower) === percent) { confirmed = true; break; }
+      }
+      tuningDoc = await tuningStore.save({...readTuningFromFields(), rfPowerPercent: percent});
+      tuningPowerAutoArmed = false;
+      renderTuningFields();
+      dom.tuningSaveStatus.textContent = confirmed ? `Power set to ${percent} %.` : `Saved ${percent} % as the target — the radio has not confirmed it yet.`;
+    } catch (error) {
+      dom.tuningSaveStatus.textContent = `Power set failed: ${error.message || error}`;
+    } finally {
+      dom.tuningPowerSet.disabled = tuningBusy();
+      renderTuningPower();
+    }
   }
 
   function onSessionBusy(info) {
@@ -803,7 +1183,7 @@
     if (typeof LanGate !== "undefined") await checkLanConfiguration();
 
     [
-      "peerCall", "skedTime", "callButton", "connectionTest", "aud1State", "armToggle", "armState",
+      "peerCall", "skedTime", "callButton", "connectionTest", "aud1State", "listenToggle", "listenState",
       "takeoverNotice", "takeoverDetail", "takeoverButton",
       "fileInput", "transferEstimate", "sendButton", "cancelButton", "transferProgress", "receivedFiles",
       "cqButton", "heardStations",
@@ -812,33 +1192,60 @@
       "freqTimetableButton", "freqTimetableValue", "freqTimetablePanel", "freqTimetableEnable",
       "freqTimetableClear", "freqTimetableClose", "freqTimetableGrid", "freqTimetablePopover",
       "planButton", "planField",
+      "waterfall", "waterfallCanvas", "waterfallOverlay",
+      "statusSection", "arqStatus",
+      "settingsSummary", "tuningRetryCall", "tuningRetryAccept", "tuningRetryData", "tuningRetryDisconnect",
+      "tuningCallInt", "tuningDowngrade", "tuningModeCeiling", "tuningTransferLimit",
+      "tuningPowerField", "tuningPowerWatts", "tuningPowerPercent", "tuningPowerPercentInput",
+      "tuningPowerSet", "tuningPowerMismatch", "tuningSave", "tuningReset", "tuningSaveStatus",
     ].forEach((id) => { dom[id] = byId(id); });
     dom.trxPowerSegments = Array.from(document.querySelectorAll("#trxPower .pwr-bar i"));
+
+    // §6.7 waterfall: needs the real canvas nodes, so built here, not at
+    // module scope (see the `let waterfall = null;` declaration's own
+    // comment on why this page differs from JS8/WSPR).
+    if (typeof Spectrum !== "undefined" && dom.waterfallCanvas) {
+      waterfall = new Spectrum.Waterfall({
+        canvas: dom.waterfallCanvas, overlay: dom.waterfallOverlay, container: dom.waterfall,
+        sampleRate: 8000, lowHz: 500, highHz: 2700,
+      });
+      window.addEventListener("resize", () => waterfall.resize());
+    }
+    // §6.6 mode-ceiling <select>: built from mercury-tuning.js's own list so
+    // the two files cannot drift on which modes are offered.
+    if (dom.tuningModeCeiling) {
+      dom.tuningModeCeiling.innerHTML = MercuryTuning.MODE_CEILING_NAMES
+        .map(name => `<option value="${name}">${name}</option>`).join("");
+    }
 
     if (typeof MercurySession === "undefined") return; // gated page (no ICOM-LAN) never got this far
 
     dom.peerCall.disabled = false;
     dom.callButton.disabled = false;
-    dom.armToggle.disabled = false;
+    dom.listenToggle.disabled = false;
     dom.fileInput.disabled = false;
-    dom.cqButton.disabled = true; // enabled once a Worker is actually running -- see startWorker()
+    dom.cqButton.disabled = true; // enabled only for an active call/listen session -- see startWorker()
     dom.callButton.addEventListener("click", onCall);
-    dom.armToggle.addEventListener("change", onArmToggle);
+    dom.listenToggle.addEventListener("change", onListenToggle);
     dom.fileInput.addEventListener("change", onFileChosen);
     dom.sendButton.addEventListener("click", onSendClick);
     dom.cancelButton.addEventListener("click", onCancelClick);
     dom.cqButton.addEventListener("click", onCqClick);
-    dom.armToggle.checked = MercurySession.isArmed();
-    dom.armState.textContent = dom.armToggle.checked ? "ARMED" : "NOT ARMED";
+    dom.listenToggle.checked = MercurySession.isArmed();
+    dom.listenState.textContent = dom.listenToggle.checked ? "LISTENING" : "LISTEN OFF";
 
     MercurySession.onBusy(onSessionBusy);
     MercurySession.onLost(() => {
       stopWorker(); ownSession = false; sessionBusy = false;
-      if (dom.armToggle.checked) { dom.armToggle.checked = false; dom.armState.textContent = "NOT ARMED"; }
+      if (dom.listenToggle.checked) { dom.listenToggle.checked = false; MercurySession.setArmed(false); dom.listenState.textContent = "LISTEN OFF"; }
     });
     dom.takeoverButton.addEventListener("click", async () => {
       const granted = await MercurySession.claim(true);
-      if (granted) { dom.takeoverNotice.hidden = true; document.body.classList.remove("session-busy-only"); }
+      if (granted) {
+        dom.takeoverNotice.hidden = true; document.body.classList.remove("session-busy-only");
+        ownSession = true;
+        startAmbientWorker();
+      }
     });
 
     // ---- radio-bar wiring: band picker, timetable, CAL PLAN ----
@@ -896,6 +1303,12 @@
     });
     dom.trxReconnect.addEventListener("click", reconnectRadio);
 
+    // ---- §6.6 Settings wiring ----
+    dom.tuningSave.addEventListener("click", onTuningSave);
+    dom.tuningReset.addEventListener("click", onTuningReset);
+    dom.tuningPowerSet.addEventListener("click", setTuningPowerFromField);
+    loadTuning();
+
     createGainPlan();
     // The constructor's plan is the empty default (TxGainStore starts
     // in-memory only) -- data.js/wspr.js's own startup does the identical
@@ -904,11 +1317,20 @@
     gainStore.load().then(() => { if (gainPlan) gainPlan.reload(); });
     renderTimetableButton();
     renderHeader();
+    if (waterfall) waterfall.resize();
     pollRadio();
     setInterval(pollRadio, 500);
     setInterval(reconcileTimetable, 5000);
 
-    if (dom.armToggle.checked) onArmToggle(); // restore LISTEN across a reload, same honesty WSPR's own pledge uses
+    // Session held for the page's whole lifetime now, same as JS8/WSPR's own
+    // audio lease -- claimed once here, not re-claimed per CALL/LISTEN
+    // action. Grant starts the ambient worker immediately ("monitor", or
+    // "listen" if a previous explicit LISTEN persisted across the reload) so
+    // the waterfall is alive from the first paint, independent of whether
+    // this station will ever answer anything. Refusal already shows the
+    // takeover panel via the onBusy callback registered above.
+    const granted = await MercurySession.claim(false);
+    if (granted) { ownSession = true; startAmbientWorker(); }
 
     window.addEventListener("beforeunload", () => { stopWorker(); if (ownSession) MercurySession.release(); });
   }

@@ -137,7 +137,7 @@ const server=http.createServer((req,res)=>{
   // altM 459.9 is the real IC-705 reading (bytes 00 45 99 00) that caught the
   // firmware decoding altitude ten times too high; keep it as the fixture value.
   if(url.pathname==="/gps"){res.setHeader("Content-Type","application/json");res.end(JSON.stringify({grid:"JO60WC28",sel:1,fixAgeMs:1200,lat:50.104167,lon:12.891667,altM:459.9,courseDeg:123,speedKmh:45.6,utc:"2026-08-12 19:04:33"}));return;}
-  if(url.pathname==="/state"){if(url.searchParams.get("radio")==="lan")lanStateRequests++;else primaryStateRequests++;/* fw-version.js badge, shared by every page */res.setHeader("Content-Type","application/json");res.end(JSON.stringify({connected:radioConnected,lanStatus:radioConnected?"linked":"disconnected",transceiverType:"ICOM-LAN",power:true,frequency:7078000,mode:"USB",tx:false,rfPower:radioRfPower,rfPowerSeen:true,radioName:"IC-705",fwRev:"20260718",wifiRssi:-51,bdSupported:true,gpsGrid:"JO60WC28",gpsFixAgeMs:1200,gpsSel:1}));return;}
+  if(url.pathname==="/state"){if(url.searchParams.get("radio")==="lan")lanStateRequests++;else primaryStateRequests++;/* fw-version.js badge, shared by every page */res.setHeader("Content-Type","application/json");res.end(JSON.stringify({connected:radioConnected,lanStatus:radioConnected?"linked":"disconnected",transceiverType:"ICOM-LAN",power:true,frequency:7078000,mode:"USB",tx:false,rfPower:radioRfPower,rfPowerSeen:true,radioName:"IC-705",radioNameSeen:true,fwRev:"20260718",wifiRssi:-51,bdSupported:true,gpsGrid:"JO60WC28",gpsFixAgeMs:1200,gpsSel:1}));return;}
   // fixture=trx2 moves LAN to the second slot with one credential still blank:
   // the page must name TRX 2 and read that slot's fields, while staying gated so
   // it never competes with the main frame for the single-operator lease.
@@ -1814,8 +1814,9 @@ f.onload=()=>{
       const pwrLit=()=>Array.from(d.querySelectorAll('#trxPower .pwr-bar i')).filter(segment=>segment.classList.contains('on')).length;
       const pwrText=()=>d.querySelector('#trxPowerWatts').textContent.trim();
       f.contentWindow.__dataTest.setRadioPower(128,true,'IC-705');
-      // 128/255 is 50.2 %, and a part-filled segment lights: six of ten.
-      checks.trxPowerBar=pwrLit()===6&&pwrText()==='5.0 W';
+      // 128/255 is 50.2 %, rounded to the nearest segment (same rounding the
+      // title text uses) -- five of ten, matching the printed "50 %".
+      checks.trxPowerBar=pwrLit()===5&&pwrText()==='5.0 W';
       // The bar is specified as the height of the TIMETABLE button beside it, and
       // its ten segments divide whatever that height is. Both are in CSS, in two
       // different rules, so nothing but a measurement keeps them equal.
@@ -1841,7 +1842,7 @@ f.onload=()=>{
       f.contentWindow.__dataTest.setRadioPower(128,true,'');
       // Percent belongs to the level alone, so the bar survives a model we
       // cannot convert; only the watts go unknown.
-      checks.trxPowerUnknownModel=pwrLit()===6&&pwrText()==='--';
+      checks.trxPowerUnknownModel=pwrLit()===5&&pwrText()==='--';
       f.contentWindow.__dataTest.setRadioPower(205,false,'IC-705');
       // 205 is the firmware's fabricated default. Drawing it as a reading would
       // put an invented 8 W in the header of a radio that has never answered.

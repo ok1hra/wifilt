@@ -77,29 +77,39 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
  · [6.8 TX audio gain and CAL PLAN](#68-tx-audio-gain-and-cal-plan)
  · [6.9 Radio setup help](#69-radio-setup-help)
 
-**[7. SETUP](#7-setup)**
- · [7.1 WiFi](#71-wifi)
- · [7.2 Identity](#72-identity)
- · [7.3 Radio](#73-radio)
- · [7.4 DX Cluster](#74-dx-cluster)
- · [7.5 TrxNet](#75-trxnet)
- · [7.6 TX audio gain](#76-tx-audio-gain)
- · [7.7 LOG](#77-log)
- · [7.8 Remote management of JS8 unattended operation](#78-remote-management-of-js8-unattended-operation)
- · [7.9 Save, download and upload the configuration](#79-save-download-and-upload-the-configuration)
+**[7. DATA — Mercury file transfer](#7-data--mercury-file-transfer)**
+ · [7.1 What Mercury does](#71-what-mercury-does)
+ · [7.2 Header: radio, timetable and CAL PLAN](#72-header-radio-timetable-and-cal-plan)
+ · [7.3 Waterfall](#73-waterfall)
+ · [7.4 Calling a station, and CQ](#74-calling-a-station-and-cq)
+ · [7.5 Connection test and live status](#75-connection-test-and-live-status)
+ · [7.6 Sending and receiving a file](#76-sending-and-receiving-a-file)
+ · [7.7 A transfer running elsewhere](#77-a-transfer-running-elsewhere)
+ · [7.8 SETTINGS](#78-settings)
 
-**[8. LOGSYNC](#8-logsync)**
- · [8.1 Where your QSOs live](#81-where-your-qsos-live)
- · [8.2 Pairing and syncing](#82-pairing-and-syncing)
- · [8.3 Sync status](#83-sync-status)
- · [8.4 Backup and restore](#84-backup-and-restore)
- · [8.5 Importing ADIF, Cabrillo and EDI](#85-importing-adif-cabrillo-and-edi)
+**[8. SETUP](#8-setup)**
+ · [8.1 WiFi](#81-wifi)
+ · [8.2 Identity](#82-identity)
+ · [8.3 Radio](#83-radio)
+ · [8.4 DX Cluster](#84-dx-cluster)
+ · [8.5 TrxNet](#85-trxnet)
+ · [8.6 TX audio gain](#86-tx-audio-gain)
+ · [8.7 LOG](#87-log)
+ · [8.8 Remote management of JS8 unattended operation](#88-remote-management-of-js8-unattended-operation)
+ · [8.9 Save, download and upload the configuration](#89-save-download-and-upload-the-configuration)
 
-**[9. BD — band decoder](#9-bd--band-decoder)**
+**[9. LOGSYNC](#9-logsync)**
+ · [9.1 Where your QSOs live](#91-where-your-qsos-live)
+ · [9.2 Pairing and syncing](#92-pairing-and-syncing)
+ · [9.3 Sync status](#93-sync-status)
+ · [9.4 Backup and restore](#94-backup-and-restore)
+ · [9.5 Importing ADIF, Cabrillo and EDI](#95-importing-adif-cabrillo-and-edi)
 
-**[10. Transmit safety](#10-transmit-safety)**
+**[10. BD — band decoder](#10-bd--band-decoder)**
 
-**[11. Component licences](#11-component-licences)**
+**[11. Transmit safety](#11-transmit-safety)**
+
+**[12. Component licences](#12-component-licences)**
 
 ---
 
@@ -157,8 +167,13 @@ setup guidance follow whatever is actually connected.
 
 ### 1.2 Standing on other people's work
 
-WIFILT would not exist without three open-source projects, and the debt is worth stating
+WIFILT would not exist without five open-source projects, and the debt is worth stating
 plainly.
+
+**[ESP32 BT CAT for IC-705](https://github.com/ok1cdj/IC705-BT-CIV)** — Ondrej "OK1CDJ". WIFILT
+began as a derivative of this project — the header comment at the top of `wifilt.ino` still
+says so. The Bluetooth transport it started from is gone (LAN, CI-V and TrxNet only, since
+2026-07), but the origin is credited regardless of how much of the original code remains.
 
 **[wfview](https://gitlab.com/eliggett/wfview/)** — Elliott Liggett (W6EL), Phil Taylor
 (M0VSE) and contributors. Icom's network control protocol is undocumented. wfview worked it
@@ -177,9 +192,15 @@ Jordan's.
 theirs, and so is the FT8/JS8 modulation heritage underneath everything on the DATA page.
 The beacon's encoder is checked against WSJT-X's own golden vectors on every build.
 
+**[Mercury](https://github.com/Rhizomatica/mercury)** — Rafael Diniz and Rhizomatica. Mercury
+is a wire-compatible ARQ file-transfer modem built for the same constraint WIFILT itself is
+built around — real HF, real noise, no assumption of a clean link — and the Mercury tab on the
+DATA page ([section 7](#7-data--mercury-file-transfer)) runs its actual ARQ engine, compiled
+to WebAssembly, over the FreeDV data modem (David Rowe and the Codec 2 project) it carries.
+
 Thanks also to the authors of the smaller pieces this project leans on — the DXCC prefix
 engine, the FFT library, the compression codecs. They are listed with their licences in
-[section 11](#11-component-licences).
+[section 12](#12-component-licences).
 
 ### 1.3 Which radios
 
@@ -364,7 +385,7 @@ This is the only step with real work in it, and it is guided.
    immediately, and the page moves on — **there is no restart**.
 
 Under the guided walk sits the full **Radio** editor, folded away: three slots, transports,
-CI-V addresses, labels. It is described in [section 7.3](#73-radio).
+CI-V addresses, labels. It is described in [section 8.3](#83-radio).
 
 If the interface is still in AP mode, this step is blocked and says so — the radio lives on
 your home network and cannot be reached from the hotspot.
@@ -378,7 +399,7 @@ until the ALC just begins to act. It proves the whole transmit chain in one go �
 audio path, PTT, power, SWR — and gives the digital modes the audio level to use.
 
 This step is **advice, not a gate**. Without it JS8 and WSPR still transmit, just worse. It
-opens the calibration on the WSPR page; see [section 7.6](#76-tx-audio-gain).
+opens the calibration on the WSPR page; see [section 8.6](#86-tx-audio-gain).
 
 On a CI-V or TrxNet radio the step shows `—`: there is no network audio path, so there is
 nothing to measure and nothing missing.
@@ -408,7 +429,7 @@ permanent fix. Failing that:
 - **From the radio's headphones** — if *Announce WiFi IP via CW* is enabled, the interface
   reads its own address to you in Morse the first time it connects to the radio. It is
   sidetone only: break-in is forced off, so it never transmits. See
-  [section 7.3](#73-radio).
+  [section 8.3](#83-radio).
 
 Every method, and why the AP-mode "tap to open" prompt cannot exist on a home network, is in
 [docs/find-device-ip.md](docs/find-device-ip.md).
@@ -674,7 +695,7 @@ labels are whatever you named the slots in SETUP.
 
 **BACKUP** downloads the whole QSO database as a JSON file. Per-log **CSV** and **ADIF**
 exports are in the log manager. Everything else — restore, import, device-to-device sync —
-is on the [LOGSYNC](#8-logsync) page.
+is on the [LOGSYNC](#9-logsync) page.
 
 ### 3.13 Keyboard shortcuts
 
@@ -1663,7 +1684,7 @@ The tooltip gives the reason and the time left — *"Auto replies paused 8 min (
    anything that arrived for you.
 
 Unattended operation can also be revoked remotely from SETUP — see
-[section 7.8](#78-remote-management-of-js8-unattended-operation).
+[section 8.8](#88-remote-management-of-js8-unattended-operation).
 
 ### 5.14 SETTINGS
 
@@ -1706,7 +1727,7 @@ station's schedule.
 Once the profile is on the interface it is **shared**: every browser that opens DATA reads
 it, so a setting changed on the tablet is in force on the phone as well. That includes the
 APRS-IS gate — the login is part of the profile, and so it is also part of the configuration
-backup in [section 7.9](#79-save-download-and-upload-the-configuration).
+backup in [section 8.9](#89-save-download-and-upload-the-configuration).
 
 #### What the station answers to STATUS?
 
@@ -2097,7 +2118,140 @@ radio, so turning the knob changes what is reported, to the nearest legal WSPR l
 
 ---
 
-## 7. SETUP
+## 7. DATA — Mercury file transfer
+
+**`/mercury.html`** — the **Mercury** tab of the DATA page.
+
+### 7.1 What Mercury does
+
+Mercury is a point-to-point file transfer mode for HF: call a station, exchange a file, hang
+up — half-duplex with a full ARQ handshake, not a one-way broadcast. It runs the real Mercury
+v2 / HERMES modem ([section 12](#12-component-licences)), compiled to WebAssembly and driven
+from a background Worker, over the same ICOM-LAN audio path (AUD1) as JS8Call and WSPR — the
+page needs a radio on ICOM-LAN and refuses to open without one, the same gate as the other two
+DATA tabs.
+
+Unlike the JS8Call page, Mercury is built to be transactional — open it, call, send, close —
+but the waterfall and an ambient listening role run for as long as the page stays open, the
+same lease-holding pattern JS8Call and WSPR already use. Mercury's session lease is its own,
+separate from the one JS8Call and WSPR share: opening Mercury does not disturb a JS8Call or
+WSPR tab already using the radio, and the reverse holds too. Only one of the three, and only
+one device, can actually hold the radio at a time — a second attempt gets a takeover offer
+([section 7.7](#77-a-transfer-running-elsewhere)).
+
+### 7.2 Header: radio, timetable and CAL PLAN
+
+The frequency button opens Mercury's own dial-frequency presets — a separate catalogue from
+JS8's calling channels, built on the Winlink ARDOP/VARA-HF gateway convention rather than
+JS8's calling frequencies, since the two are different traffic that would otherwise collide on
+every band a station runs both on.
+
+**TIMETABLE** and **CAL PLAN** work exactly like their JS8-page counterparts
+([section 5.2](#52-header-radio-frequency-power-session),
+[section 5.16](#516-frequency-timetable),
+[section 6.8](#68-tx-audio-gain-and-cal-plan)), with one behavioural difference and one
+mechanical one:
+
+- The timetable retunes the radio whenever Mercury is monitoring — LISTEN on or off — not
+  only while transmitting, because band-hopping is exactly what an idle, listening station
+  needs. A due change waits out an active CALL/LISTEN session and applies the instant it
+  clears, rather than forcing a retune mid-handshake.
+- CAL PLAN keys Mercury's own **DATAC1 burst** rather than a steady tone, because a level
+  calibrated against a tone does not carry over to Mercury's real, far peakier waveform. The
+  grid, the antenna-confirmation prompt, and RUN/STOP are otherwise identical.
+
+The rest of the bar — radio model, **AUD1**, link state and **Reconnect** — reads the same as
+the JS8 and WSPR pages. Mercury has no operator-set power percentage of its own in the header;
+that readout is read-only, showing whatever the radio is set to. The power Mercury actually
+writes on load lives in SETTINGS ([section 7.8](#78-settings)).
+
+**LISTEN**, at the right of the bar, is the one header control the other two pages don't have.
+With it on, this station may answer an incoming CALL unattended, and the indicator glows red —
+the same "may transmit at any moment" convention as WSPR's TUNE and beacon lights — because
+that is exactly what it means. With it off, Mercury cannot be reached, even with the page
+open, but the waterfall and this station's own audio keep running regardless of LISTEN, from
+the moment the page loads: you can always see whether the band and the audio path are alive
+without exposing the station to an unattended CALL.
+
+### 7.3 Waterfall
+
+The same 500–2700 Hz display as JS8/WSPR ([section 5.3](#53-waterfall)), read-only — Mercury's
+ARQ modem picks its own bandwidth, so there is no offset to click. It goes blank during this
+station's own transmission, the same convention as the other two pages.
+
+### 7.4 Calling a station, and CQ
+
+Type the other station's callsign — `OK2XYZ` — into **Station callsign** and press **CALL**.
+Mercury dials out and retries the CALL/ACCEPT handshake on its own, using the retry counts and
+interval set in SETTINGS. Both CALL and an auto-answered incoming call need this station's own
+callsign set in SETUP → Identity first, and both need an active session — LISTEN on, or a CALL
+already under way — an idle, unarmed page cannot transmit at all.
+
+**CQ** broadcasts this station's own callsign to anyone listening, sendable at any point a
+call/listen session is running, including mid-transfer. It only says who is listening, not who
+can be worked — hearing it still needs the other station tuned in and decoding. Replies appear
+beside the button as they come in: `Heard: OK2XYZ (50 Hz)`, the number being the bandwidth of
+the signal that was decoded. The list is cleared each time a new session starts.
+
+### 7.5 Connection test and live status
+
+Once a CALL is answered — or an incoming one accepted while LISTEN is on — **CONNECTION TEST**
+reports what the handshake measured, once: the peer's callsign, the SNR each way, and the mode
+Mercury picked for the link, e.g. `Connected with OK2XYZ · SNR RX +4 dB / TX +2 dB` /
+`Recommended mode: DATAC3`.
+
+A separate **STATUS** section appears only **while the connection is actually up**, and
+disappears the moment it ends — nothing here is left showing a stale number. It carries the
+same SNR reading kept live, both ends' current mode and that mode's nominal bit rate, and a
+running count of clean versus retried frames for this connection — `Frames: 12 clean, 2 needed
+a retry (86% clean)` — noting when few retries are left on the frame currently in flight.
+
+### 7.6 Sending and receiving a file
+
+Pick a **File**; Mercury shows its size immediately and, once connected, an estimate of how
+long the send will take at the current mode's rate. **SEND** stays disabled until both a file
+is chosen and the call is connected. A progress bar and running byte count track the transfer;
+**CANCEL** stops it — which also ends the connection, since there is no partial-abort, and a
+cancelled send or receive keeps only what already went across.
+
+An incoming file needs nothing beyond LISTEN being on: it downloads automatically and, once
+complete, appears as a link to save with its size beside it.
+
+Two limits worth knowing: the **transfer size limit** set in SETTINGS (default 200 KiB, hard
+cap 250 KiB — [section 7.8](#78-settings)), and that a cancelled or otherwise interrupted
+receive keeps its partial bytes and can resume on a later reconnect with the same peer instead
+of starting over.
+
+### 7.7 A transfer running elsewhere
+
+Opening Mercury on a second device while a transfer is already running elsewhere does not show
+the generic "session busy" panel JS8/WSPR use — it names the file and its progress:
+
+> **Mercury transfer "foto.jpg", 43% done, ~24 min remaining. Take over and cancel?**
+
+**TAKE OVER AND CANCEL** ends that transfer and hands this device the radio.
+
+### 7.8 SETTINGS
+
+Everything here lives on the interface itself, not this browser — every device sees the same
+values — and is picked up **only at the start of the next CALL or LISTEN session**, never
+mid-transfer. The section locks while a session is already running.
+
+| Setting | Meaning |
+|---|---|
+| **Power** | Mercury's own target transmit power, applied on page load and after a reconnect, same auto-apply convention as JS8/WSPR ([section 6.3](#63-power)) — but its own value, not shared with them, because different modes want different power. Leave it blank to leave this radio's power alone. |
+| **CALL retries** / **ACCEPT retries** / **DATA retries** / **DISCONNECT retries** | how many times each step of the ARQ handshake retries before giving up. Defaults 4 / 4 / 10 / 2. |
+| **CALL/ACCEPT interval** | seconds between retries of the CALL/ACCEPT handshake; `0` uses Mercury's own built-in table. |
+| **Retry-downgrade threshold** | consecutive retries on one frame before Mercury forces the link down to a slower, more robust mode. Default 2. |
+| **Mode ceiling** | the fastest mode this station will pick for its own transmissions — the peer can still answer on anything up to it. Default DATAC3. |
+| **Transfer size limit** | the largest file this station will queue to send, in KiB. Default 200, hard cap 250 — Mercury's own session buffer cannot hold more regardless of this setting. |
+
+**SAVE** writes the fields to the interface. **RESET TO DEFAULTS** loads the factory values
+into the fields but does not save them until SAVE is pressed.
+
+---
+
+## 8. SETUP
 
 **`/setup`**
 
@@ -2117,7 +2271,7 @@ Each section carries a badge saying where its values live:
 Everything except the guided radio walk is applied by **Save & Restart** at the bottom. The
 browser waits while the device reboots and comes back on its own.
 
-### 7.1 WiFi
+### 8.1 WiFi
 
 `eeprom` — two networks, SSID and password each.
 
@@ -2129,7 +2283,7 @@ otherwise reachable only from the USB-C serial console.
 The handover screen, the QR code and what happens in AP mode are covered in
 [section 2.2](#22-the-five-steps).
 
-### 7.2 Identity
+### 8.2 Identity
 
 `eeprom` — **My callsign** (`OK1HRA`) and **My locator** (`JO70FD`).
 
@@ -2137,7 +2291,7 @@ This is the single source of truth. The DX cluster logs in with the callsign, JS
 it, WSPR encodes it, and the logbook stamps QSOs with it. The JS8 and WSPR pages show both
 values but cannot change them.
 
-### 7.3 Radio
+### 8.3 Radio
 
 `eeprom + config`
 
@@ -2175,7 +2329,7 @@ to hear it.
 
 **RADIO CONFIG INCOMPLETE** appears beside the section title when a slot is half-configured.
 
-### 7.4 DX Cluster
+### 8.4 DX Cluster
 
 `eeprom`
 
@@ -2189,7 +2343,7 @@ to hear it.
 The section says which callsign it will log in with, taken from Identity. There is nothing
 to type here — a second copy of the callsign is a second thing to get wrong.
 
-### 7.5 TrxNet
+### 8.5 TrxNet
 
 `eeprom`
 
@@ -2207,7 +2361,7 @@ TrxNet is a peer-to-peer link between RemoteQTH devices on the same network.
 
 The protocol is documented in [docs/trxnet.md](docs/trxnet.md).
 
-### 7.6 TX audio gain
+### 8.6 TX audio gain
 
 `config`
 
@@ -2226,7 +2380,7 @@ Set the band and the power you want to measure **first** — a calibration descr
 as it stands, and it is filed under that exact band and power. A whole matrix at once is what
 **CAL PLAN** in the DATA page top bar is for.
 
-### 7.7 LOG
+### 8.7 LOG
 
 `config`
 
@@ -2251,7 +2405,7 @@ The blocked list has two different effects, which is worth knowing before you us
   traffic list, the map and every automatic function. They are discarded silently, with no
   error, and transmission to them is refused outright.
 
-### 7.8 Remote management of JS8 unattended operation
+### 8.8 Remote management of JS8 unattended operation
 
 `live`
 
@@ -2273,7 +2427,7 @@ and visible on the station computer for anything to transmit at all.
 Because this is running state and nothing else, it resets when the device restarts. That is
 deliberate: a station should not come back from a power cut still armed.
 
-### 7.9 Save, download and upload the configuration
+### 8.9 Save, download and upload the configuration
 
 **Save & Restart** at the bottom of the page writes everything and reboots.
 
@@ -2292,13 +2446,13 @@ The page footer links to the licence notices the device serves from its own file
 
 ---
 
-## 8. LOGSYNC
+## 9. LOGSYNC
 
 **`/datasync`**
 
 ![LOGSYNC](img/logsync.png)
 
-### 8.1 Where your QSOs live
+### 9.1 Where your QSOs live
 
 QSO records are stored in **this browser, on this device**, in IndexedDB. The ESP32 does not
 store them and there is no cloud backup.
@@ -2313,7 +2467,7 @@ good. Firefox is the most aggressive about this, which is why it gets a standing
 with three remedies: bookmark the page (Firefox protects IndexedDB for bookmarked origins),
 add a storage exception, or export a backup after each session.
 
-### 8.2 Pairing and syncing
+### 9.2 Pairing and syncing
 
 ![Pairing](img/logsync-pairing.png)
 
@@ -2337,7 +2491,7 @@ While waiting, the page shows *Waiting for the other device…* with a **Cancel*
 the receiving side an offer appears naming who wants to sync, with **Accept** and
 **Reject**.
 
-### 8.3 Sync status
+### 9.3 Sync status
 
 ![Sync status](img/logsync-sync-status.png)
 
@@ -2362,7 +2516,7 @@ Every field has an **ⓘ** button explaining it.
 > finished — and a peer that cancels after a completed transfer does not turn it into a
 > failure. It has been tested at 16 000 QSOs.
 
-### 8.4 Backup and restore
+### 9.4 Backup and restore
 
 ![Backup and restore](img/logsync-backup-restore.png)
 
@@ -2371,7 +2525,7 @@ as a single JSON file. **Import backup** reads one back.
 
 This is the only real protection for your log. Do it after each session.
 
-### 8.5 Importing ADIF, Cabrillo and EDI
+### 9.5 Importing ADIF, Cabrillo and EDI
 
 ![Import](img/logsync-import-adif-cabrillo-edi.png)
 
@@ -2383,7 +2537,7 @@ The importer reports progress and finishes with **Done ✓**, or offers **Retry*
 
 ---
 
-## 9. BD — band decoder
+## 10. BD — band decoder
 
 **`/bd`**
 
@@ -2443,7 +2597,7 @@ An external controller can read and write the same configuration over
 
 ---
 
-## 10. Transmit safety
+## 11. Transmit safety
 
 Several functions in WIFILT key the transmitter, some of them without you pressing anything
 at that moment. They are gathered here so nothing is a surprise.
@@ -2483,7 +2637,7 @@ And two that do *not* transmit, despite appearances:
 
 ---
 
-## 11. Component licences
+## 12. Component licences
 
 WIFILT is free software under the **GNU General Public License, version 3 or later** — see
 [LICENSE](LICENSE). This repository is the corresponding source for every binary the project
@@ -2491,19 +2645,24 @@ distributes, including the firmware and filesystem images served by the web inst
 
 The parts that came from elsewhere, with their own copyright and licence, are listed in
 [data/THIRD-PARTY-NOTICES.txt](data/THIRD-PARTY-NOTICES.txt) — the same notice the device
-serves from its own web UI, linked in the footer of the SETUP, JS8 and WSPR pages.
+serves from its own web UI, linked in the footer of the SETUP, JS8, WSPR and Mercury pages.
 
 | Component | Origin | Licence |
 |---|---|---|
+| WIFILT's origin, per `wifilt.ino`'s own header | [IC705-BT-CIV](https://github.com/ok1cdj/IC705-BT-CIV) — OK1CDJ | GPL-3.0 |
 | Icom LAN passcode and packet layouts in `icomLanClient.h` | [wfview](https://gitlab.com/eliggett/wfview/) — W6EL, M0VSE | GPL-3.0 |
 | JS8 encoder and decoder (`data/js8-*.wasm`) | [JS8Call-improved](https://github.com/JS8Call-improved/JS8Call-improved) and its JS8/WSJT-X heritage | GPL-3.0 |
 | WSPR protocol constants in `data/wspr-core.js` | WSJT-X — K1JT and the WSJT-X team | GPL-3.0 |
+| Mercury ARQ engine, linked into `data/mercury-host.wasm`/`data/mercury-worker.js` | [Rhizomatica/mercury](https://github.com/Rhizomatica/mercury) — Rafael Diniz | GPL-3.0-or-later |
+| FreeDV data modem, linked into the same Mercury WASM modules | [Codec 2 / FreeDV](https://github.com/drowe67/codec2) — David Rowe and contributors | LGPL-2.1 |
 | FFTW 3.3.10, linked into `js8-decoder.wasm` | [fftw.org](https://fftw.org/); source vendored in `third_party/fftw/` | GPL-2.0-or-later |
 | Eigen 3.4 | [libeigen/eigen](https://gitlab.com/libeigen/eigen) | MPL-2.0, plus BSD-3 and Apache-2.0 files |
 | Boost 1.81 headers | [boost.org](https://www.boost.org/) | BSL-1.0 |
 | Brotli decoder in `data/js8-brotli.wasm` | [google/brotli](https://github.com/google/brotli) | MIT |
 | DXCC prefix engine in `data/dxcc.js` | DJ1YFK, with AD1C's `cty.dat` | GPL |
 | Wake-lock media in `data/wake-lock.js` | [NoSleep.js](https://github.com/richtr/NoSleep.js) — Rich Tibbett | MIT |
+| SETUP page's Wi-Fi QR code (`data/qrcode.min.js`) | [qrcodejs](https://github.com/davidshimjs/qrcodejs) — davidshimjs, after Kazuhiko Arase | MIT |
+| `String` and other core classes vendored into the native (PC) build | ESP32 Arduino core — see `native/arduino/NOTICE.md` | LGPL-2.1-or-later, one file MIT |
 
 Icom is a registered trademark of Icom Incorporated. WIFILT is an independent software
 project and is not affiliated with, endorsed by, or sponsored by Icom Incorporated.

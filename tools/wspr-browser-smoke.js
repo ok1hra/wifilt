@@ -31,7 +31,7 @@ function stateJson() {
     radioTransport: "lan", fullCat: true, tuneSupported: true,
     wifiRssi: -55, fwRev: "20260726", bdSupported: false, power: true,
     frequency: currentFrequency, mode: currentMode, filter: 1,
-    radioAddress: "0xA4", transceiverType: "ICOM-LAN", radioName,
+    radioAddress: "0xA4", transceiverType: "ICOM-LAN", radioName, radioNameSeen: true,
     tx: false, ritRaw: 0, smeterRaw: 0, powerMeterRaw: 118,
     afGain: 100, keySpeed: 20, rfPower: currentRfPower, rfPowerSeen: true,
     supplyVolts: 13.8, swr: 1.2, preamp: 0, vox: 0,

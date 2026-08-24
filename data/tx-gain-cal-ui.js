@@ -45,7 +45,7 @@
   const CAL_TARGET_FILL_BYTES = 4000;   // 0.5 s ahead of the radio, half the usual
   const CAL_RAMP_SAMPLES = 5760;        // 120 ms
   const CAL_LEAD_MS = 2500;             // shortest lead the firmware's window allows
-  const CAL_SWR_LIMIT = 3.0;            // firmware units, which overstate SWR
+  const CAL_SWR_LIMIT = TxGainCal.CAL_SWR_LIMIT; // shared with mercury-gain-cal.js -- see tx-gain-cal.js's own comment
   const MOD_LEVEL_TARGET = 0.7;         // where the knee should sit; see decision 11
   // Both pages put this driver on the SAME audio socket as their own (the WSPR
   // beacon's WsprTx, JS8's Js8Tx), and every control frame is now matched by
@@ -411,6 +411,7 @@
         // for ever. So the outcome carries the fact as well as the verdict.
         this.report({ok: false, reachedCeiling: true, knee: result.knee,
                      gain: result.gain, po: this.run.poPeak,
+                     swrMax: Number(this.run.swrPeak.toFixed(1)),
                      reason: "the level reached the ceiling and the radio " +
                              "never limited — nothing was measured"});
         return;
@@ -436,6 +437,7 @@
       this.page.onRunChange(false);
       this.render();
       this.report({ok: true, knee: result.knee, gain: result.gain, po: this.run.poPeak,
+                   swrMax: Number(this.run.swrPeak.toFixed(1)),
                    reachedCeiling: result.reachedCeiling,
                    modLevelCorrectionDb: result.modLevelCorrectionDb});
     }
@@ -444,12 +446,13 @@
       // Even when there is nothing to stop: an owed outcome must be answered, or the
       // caller waits on a run that already ended.
       if (!this.running && !this.cal) { this.report({ok: false, reason}); return; }
+      const swrMax = Number(this.run.swrPeak.toFixed(1));
       this.cal = null;
       this.run.message = reason;
       this.stopCarrier();
       this.restoreModeNow().then(() => { this.page.onRunChange(false); this.render(); });
       this.render();
-      this.report({ok: false, reason});
+      this.report({ok: false, reason, swrMax});
     }
 
     // Exactly once per run, whatever the outcome. The sequencer waits on this: a

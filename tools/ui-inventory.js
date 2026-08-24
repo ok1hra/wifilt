@@ -29,6 +29,7 @@ const PAGES = {
   "dxc.html":      {title: "DXC",     scripts: [/^dxcc?\.js$/]},
   "data.html":     {title: "DATA — JS8Call", scripts: [/^js8-/, /^data\.js$/, /^spectrum\.js$/, /^wake-lock\.js$/, /^lan-gate\.js$/, /^tx-/]},
   "wspr.html":     {title: "DATA — WSPR",    scripts: [/^wspr/, /^tx-/, /^lan-gate\.js$/]},
+  "mercury.html":  {title: "DATA — Mercury",  scripts: [/^mercury/, /^tx-/, /^spectrum\.js$/, /^lan-gate\.js$/, /^icom-models\.js$/, /^js8-presets\.js$/, /^wspr-core\.js$/]},
   "setup.html":    {title: "SETUP",   scripts: [/^setup-spine\.js$/, /^icom-/, /^station-/]},
   "datasync.html": {title: "LOGSYNC", scripts: [/^datasync\.js$/]},
   "bd.html":       {title: "BD",      scripts: [/^bd\.js$/]},
@@ -196,6 +197,12 @@ const WITHHELD = [
   // countries. The manual describes the field and its format, deliberately
   // without repeating the sample -- so the sample is not vocabulary to match.
   /^Russia/i,
+  // mercury.html: the Sked field is markup only -- mercury.js never clears its
+  // `disabled` attribute (unlike peerCall/callButton/fileInput, which all get
+  // enabled once the radio is ready), and no code path ever reads its value.
+  // Reserved by docs/mercury-implementace.md decision 12 for a future sked
+  // handshake; not reachable today, so the manual is right not to describe it.
+  /^Sked/i,
 ];
 
 // Coverage cannot be a substring test. A manual writes "SSID and password" where

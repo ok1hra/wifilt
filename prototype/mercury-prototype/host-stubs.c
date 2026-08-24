@@ -8,14 +8,19 @@
  *      it; stubbing it again would be a duplicate-symbol link error.
  *
  *   2. arq_bandwidth_allows_mode() is NOT "allow everything" like the test
- *      stub. It gates DATAC1/DATAC17/QAM16C2 off, matching
- *      docs/mercury-implementace.md decision #2 ("Etapa 1 zapíná jen
- *      DATAC16 (řízení) + DATAC3 (payload) bez gear-shiftingu") — the same
- *      mechanism arq.c's real (discarded) implementation uses to gate wide
- *      modes on a narrow configured bandwidth, just pinned narrow always.
- *      Without this, select_best_mode() in arq_fsm.c would happily climb
- *      to DATAC17/QAM16C2 on a clean high-SNR bench channel, and this
- *      prototype's freedv build doesn't compile those modes in.
+ *      stub. It permanently gates DATAC17/QAM16C2 off, because this
+ *      prototype's freedv build (build-worker-wasm.sh's -DFREEDV_MODE_*_EN
+ *      flags) does not compile either mode in at all — selecting them
+ *      would not just be slower, it would not decode. DATAC1 used to be
+ *      gated off here too (docs/mercury-implementace.md's original decision
+ *      #2, "Etapa 1 zapíná jen DATAC16 + DATAC3 bez gear-shiftingu"), but
+ *      DATAC1 *is* compiled in (FREEDV_MODE_DATAC1_EN=1) and has a real
+ *      measured throughput in mercury-worker.js's MODE_INFO table — the
+ *      hard block here was stale Etapa-1 pinning nobody had revisited.
+ *      Reachability up to DATAC1 is now governed by the runtime
+ *      ARQ_MODE_CEILING_RANK setting (§6.6 "strop módu") instead, which
+ *      defaults to DATAC3 (today's unchanged behaviour) and lets the
+ *      operator raise it. See arq_protocol.h's own comment on the constant.
  */
 
 #include <stdint.h>
@@ -102,8 +107,7 @@ int arq_get_bw(void)
 
 bool arq_bandwidth_allows_mode(int mode)
 {
-    if (mode == FREEDV_MODE_DATAC1 ||
-        mode == FREEDV_MODE_DATAC17 ||
+    if (mode == FREEDV_MODE_DATAC17 ||
         mode == FREEDV_MODE_QAM16C2)
         return false;
     return true;

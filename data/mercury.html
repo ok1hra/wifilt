@@ -8,7 +8,7 @@
      so the three cannot drift apart; mercury.css carries only what is genuinely
      Mercury's, same split as wspr.css. -->
 <link rel="stylesheet" href="/data.css?v=f5dacdaa">
-<link rel="stylesheet" href="/mercury.css?v=4290853f">
+<link rel="stylesheet" href="/mercury.css?v=1897578a">
 </head>
 <!-- lan-gate.js clears the checking class once it knows whether ICOM-LAN is set
      up, so the page never flashes an interface it is about to replace. -->
@@ -37,12 +37,14 @@
        lock is real now (data/mercury-session.js + /mercury/session/*, its own
        token, separate from js8lan.session).
        ("Transactional, not a monitor page left running for hours" was decision
-       5's original reasoning for a SEPARATE lease -- ch.13 (2026-08-23) makes
-       that framing stale, not the separate-lease decision itself: the
-       frequency timetable now band-hops this station while merely ARMED and
-       LISTENING, for hours, unattended -- the same shape JS8/WSPR's own leases
-       already have to support. The lease stays Mercury's own regardless; only
-       the "why" changed.) -->
+       5's original reasoning for a SEPARATE lease -- ch.13 (2026-08-23), then
+       the LISTEN/waterfall split later that same day, make that framing fully
+       stale, not the separate-lease decision itself: mercury.js now claims
+       this lease once at page load and holds it for the page's whole
+       lifetime (an ambient "monitor" worker feeds the waterfall regardless
+       of LISTEN), exactly the same shape JS8/WSPR's own shared lease already
+       has. The lease stays Mercury's own regardless; only the "why" changed,
+       twice now.) -->
   <nav class="subtabs" aria-label="DATA mode">
     <a class="subtab" href="/data">JS8Call-ICOM</a><a class="subtab" href="/wspr.html">WSPR-Beacon</a><a class="subtab subtab-active" href="/mercury.html">Mercury</a>
   </nav>
@@ -116,25 +118,35 @@
   <span id="linkState" class="live">● OFFLINE</span>
   <button id="trxReconnect" class="trx-reconnect" type="button" hidden>Reconnect</button>
   <span class="spacer"></span>
-  <!-- Decision 4 (docs/mercury-implementace.md): listening is only meaningful
-       armed, and the UI has to say so as plainly as WSPR's TX pledge does --
-       "why does nobody call me" has exactly one honest answer here. -->
-  <label class="arm-toggle" title="Armed: this station may answer an incoming CALL unattended. Not armed: Mercury cannot be reached, even if this page is open.">
-    <input id="armToggle" type="checkbox" disabled>
-    <span id="armState" class="muted">NOT ARMED</span>
+  <!-- Decision 4 (docs/mercury-implementace.md), redesigned 2026-08-23:
+       the waterfall above runs from page load regardless of this toggle --
+       LISTEN only gates whether this station may auto-answer an incoming
+       CALL unattended, same "why does nobody call me" honesty WSPR's TX
+       pledge already has, styled like the project's other "may transmit
+       any moment" hot indicators (.gps-beacon.active/.tune.active in
+       data.css), not a plain status pill. -->
+  <label class="listen-toggle" title="LISTEN on: this station may answer an incoming CALL unattended -- it may transmit at any moment. LISTEN off: Mercury cannot be reached, even with this page open, but the waterfall keeps monitoring.">
+    <input id="listenToggle" type="checkbox" disabled>
+    <span id="listenState" class="muted">LISTEN OFF</span>
   </label>
 </header>
 
 <main class="data-page mercury-page">
 
-  <div class="build-banner" role="note">
-    ✅ <b>Mercury is real and verified end to end.</b>
-    CALL, LISTEN and file transfer (with resume) genuinely key the radio and
-    run the real ARQ/MRQ1 protocol — a real file has crossed real RF between
-    two independent radios/stations, byte-exact, reproduced twice
-    (docs/mercury-implementace.md §5/E3). CQ (unaddressed broadcast) is new
-    and less exercised on the air than the rest.
-  </div>
+  <!-- §6.7 (Waterfall, 2026-08-23 grill-me), placed first per §6.8 -- same
+       convention JS8 (data.html) and WSPR (wspr.html) already use (their own
+       "spectrum" section is their first data-section too). mercury-worker.js
+       forwards RX samples here from inside its own Worker-resident AUD1
+       client (see that file's own onRxTick comment); mercury.js ingests them
+       directly, WSPR-style -- no JS8-only gap/epoch tracking, Mercury has no
+       timing slots for a hole to misalign. -->
+  <details class="compact-section spectrum-section" data-section="spectrum" open>
+    <summary><span>Waterfall</span><span id="spectrumSummary" class="summary-status">RX 500–2700 Hz</span></summary>
+    <div id="waterfall" class="waterfall" title="Receiver audio. Blank during this station's own TX (same as JS8/WSPR), even though the LAN audio path is itself duplex.">
+      <canvas id="waterfallCanvas" width="1024" height="64"></canvas>
+      <canvas id="waterfallOverlay" width="1024" height="64"></canvas>
+    </div>
+  </details>
 
   <details class="compact-section" data-section="call" open>
     <summary><span>CALL A STATION</span></summary>
@@ -174,6 +186,18 @@
     </div>
   </details>
 
+  <!-- §6.5 (live STATUS panel, 2026-08-23 grill-me): separate from
+       CONNECTION TEST above, which stays exactly what it always was -- a
+       one-shot post-handshake result. This section only exists while
+       CONNECTED and disappears the instant the call ends (mercury.js's
+       "arq-status-clear" handler), same no-stale-numbers rule as WSPR's own
+       pledge -- see mercury-status-plan memory. `hidden` by default; nothing
+       here to see before a connection actually stands. -->
+  <details class="compact-section" data-section="status" id="statusSection" hidden>
+    <summary><span>STATUS</span></summary>
+    <div id="arqStatus" class="connection-test"></div>
+  </details>
+
   <details class="compact-section" data-section="transfer" open>
     <summary><span>SEND A FILE</span></summary>
     <div class="mercury-transfer-body">
@@ -187,6 +211,49 @@
       </div>
       <progress id="transferProgress" max="100" value="0" hidden></progress>
       <div id="receivedFiles" class="received-files"></div>
+    </div>
+  </details>
+
+  <!-- §6.6 (Settings, 2026-08-23 grill-me), placed last per §6.8 -- same
+       convention JS8/WSPR already use (their own "settings" section sits
+       near the bottom too). Two kinds of knob share this section on
+       purpose: RF power (own stored target, auto-applied on page load like
+       JS8/WSPR -- see mercury-tuning-plan/mercury-settings-plan memory for
+       why the storage differs from theirs) and ARQ protocol tuning (retry
+       counts/CALLINT/downgrade threshold/mode ceiling/transfer size limit --
+       thin exports over engine atomics that already exist, see
+       docs/mercury-implementace.md §6.6). All of it lives in
+       /mercury-tuning.json, one station-wide source, not this browser's
+       localStorage -- data/mercury-settings.js's own MercurySettings next to
+       it is a DIFFERENT store, for the frequency timetable alone. -->
+  <details class="compact-section" data-section="settings">
+    <summary><span>SETTINGS</span><span id="settingsSummary" class="summary-status"></span></summary>
+    <div class="settings mercury-tuning-settings">
+      <label class="power-field" id="tuningPowerField">Power
+        <span class="power-row">
+          <span class="power-readout"><b id="tuningPowerWatts">--</b><small id="tuningPowerPercent">reading the radio</small></span>
+          <span class="power-arrow" aria-hidden="true">&rarr;</span>
+          <span class="power-set"><input id="tuningPowerPercentInput" type="number" min="1" max="100" step="1" placeholder="%"><button id="tuningPowerSet" type="button">SET</button></span>
+        </span>
+        <small>applied on load and after a reconnect, same as JS8/WSPR's own power target — leave blank to never touch this radio's power from Mercury</small>
+        <small id="tuningPowerMismatch" class="power-mismatch" hidden></small>
+      </label>
+      <label>CALL retries <input id="tuningRetryCall" type="number" min="0" max="30" step="1"><small>default 4</small></label>
+      <label>ACCEPT retries <input id="tuningRetryAccept" type="number" min="0" max="30" step="1"><small>default 4</small></label>
+      <label>DATA retries <input id="tuningRetryData" type="number" min="0" max="30" step="1"><small>default 10</small></label>
+      <label>DISCONNECT retries <input id="tuningRetryDisconnect" type="number" min="0" max="30" step="1"><small>default 2</small></label>
+      <label>CALL/ACCEPT interval <input id="tuningCallInt" type="number" min="0" max="60" step="0.5"><small>seconds, 0 = auto</small></label>
+      <label>Retry-downgrade threshold <input id="tuningDowngrade" type="number" min="1" max="30" step="1"><small>consecutive retries before a forced downgrade; default 2</small></label>
+      <label>Mode ceiling <select id="tuningModeCeiling"></select>
+        <small>fastest mode this station will pick for its own TX; default DATAC3</small>
+      </label>
+      <label>Transfer size limit <input id="tuningTransferLimit" type="number" min="10" max="250" step="10"><small>KiB, default 200, hard cap 250</small></label>
+      <div class="tuning-actions">
+        <button id="tuningSave" class="primary" type="button">SAVE</button>
+        <button id="tuningReset" type="button">RESET TO DEFAULTS</button>
+        <span id="tuningSaveStatus" class="muted"></span>
+      </div>
+      <p class="identity-note">Applied to the next CALL/LISTEN session only — never mid-transfer. Stored on this radio, not this browser, so every device sees the same values.</p>
     </div>
   </details>
 
@@ -211,7 +278,7 @@
 <script src="/lan-gate.js?v=2f8a12d3"></script>
 <script src="/fw-version.js?v=b29c5317"></script>
 <script src="/station-identity.js?v=a1a20249"></script>
-<script src="/mercury-session.js?v=f569470b"></script>
+<script src="/mercury-session.js?v=8e1ce3e9"></script>
 <script src="/mercury-presets.js?v=9f4074aa"></script>
 <script src="/mercury-settings.js?v=aa2a4ac1"></script>
 <!-- CAL PLAN (bullet 3): icom-models.js/wspr-core.js supply model->watts and the
@@ -222,14 +289,20 @@
      only new piece -- the bridge to Mercury's own carrier. js8-presets.js is
      loaded only so the plan can warn about JS8's calling window the same way
      it already warns about WSPR's (registerBusyWindows). -->
-<script src="/icom-models.js?v=8c52dd1e"></script>
+<script src="/icom-models.js?v=69ee9462"></script>
 <script src="/js8-presets.js?v=7131988f"></script>
 <script src="/wspr-core.js?v=450a9679"></script>
-<script src="/tx-gain-cal.js?v=646b1d55"></script>
+<script src="/tx-gain-cal.js?v=1f597675"></script>
 <script src="/tx-gain-mod-level.js?v=42af6a2a"></script>
-<script src="/tx-gain-plan.js?v=77bdd0a6"></script>
-<script src="/tx-gain-plan-ui.js?v=0d493edc"></script>
-<script src="/mercury-gain-cal.js?v=0fe28a29"></script>
-<script src="/mercury.js?v=aee9e016"></script>
+<script src="/tx-gain-plan.js?v=f0e28123"></script>
+<script src="/tx-gain-plan-ui.js?v=61e40266"></script>
+<script src="/mercury-gain-cal.js?v=15582d8e"></script>
+<!-- §6.7 waterfall: same shared module JS8/WSPR use, unmodified.
+     §6.6 settings: mercury-tuning.js is a separate store from
+     mercury-settings.js above -- see its own header for why. Both load
+     before mercury.js, which references them at top level. -->
+<script src="/spectrum.js?v=a17681d8"></script>
+<script src="/mercury-tuning.js?v=81ae98f7"></script>
+<script src="/mercury.js?v=df817e06"></script>
 </body>
 </html>

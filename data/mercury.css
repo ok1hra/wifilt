@@ -1,22 +1,26 @@
 /* Mercury page (docs/mercury-implementace.md §6). CALL/LISTEN/file transfer
-   (with resume, ch.5/E3) are real -- see mercury.html's build-banner and
-   mercury.js/mercury-worker.js for exactly what that covers. Shares
-   .compact-section/.gate-card/.radio-bar/.pill/.trx-* with data.css so the
-   three DATA pages read as one family; this file carries only what is
-   genuinely Mercury's, same split as wspr.css. */
+   (with resume, ch.5/E3) are real -- see mercury.js/mercury-worker.js for
+   exactly what that covers. Shares .compact-section/.gate-card/.radio-bar/
+   .pill/.trx-* with data.css so the three DATA pages read as one family;
+   this file carries only what is genuinely Mercury's, same split as
+   wspr.css. */
 
-.build-banner {
-  margin: 8px 0 10px; padding: 10px 12px; border: 1px solid var(--amber);
-  border-radius: 6px; background: #2a2008; color: var(--amber); font-size: 13px;
-}
-
-.arm-toggle {
+.listen-toggle {
   display: flex; align-items: center; gap: 6px; cursor: pointer;
   padding: 5px 10px; border: 1px solid var(--line); border-radius: 999px;
 }
-.arm-toggle input:disabled { cursor: not-allowed; }
-.arm-toggle #armState { font-size: 11px; font-weight: 800; letter-spacing: .08em; color: var(--muted); }
-.arm-toggle input:checked ~ #armState { color: var(--green); }
+.listen-toggle input:disabled { cursor: not-allowed; }
+.listen-toggle #listenState { font-size: 11px; font-weight: 800; letter-spacing: .08em; color: var(--muted); }
+/* Checked = this station may auto-answer and transmit unattended -- same
+   "hot"/tracking-active convention as .gps-beacon.active/.tune.active
+   (data.css), not the plain --green status color other toggles use, so it
+   reads as a warning rather than a neutral "on" state. */
+.listen-toggle input:checked ~ #listenState {
+  color: var(--red);
+}
+.listen-toggle:has(input:checked) {
+  border-color: var(--red); background: #6b1720; box-shadow: 0 0 8px #ff183866;
+}
 
 .mercury-call-body, .mercury-transfer-body {
   display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; padding: 10px 12px;
@@ -69,3 +73,19 @@
 .connection-test.placeholder { opacity: .7; }
 
 #transferProgress { width: 100%; margin-top: 4px; }
+
+/* §6.6 Settings (2026-08-23 grill-me). .settings/.power-field/.identity-note
+   themselves come from data.css, shared with JS8/WSPR's own SETTINGS
+   sections -- only the SAVE/RESET row is genuinely Mercury's. */
+.tuning-actions {
+  grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; margin-top: 2px;
+}
+.tuning-actions button {
+  padding: 6px 14px; border: 1px solid var(--line); border-radius: 4px;
+  background: var(--panel2); color: var(--text); font: inherit; cursor: pointer;
+}
+.tuning-actions button.primary {
+  background: var(--green); border-color: var(--green); color: #04170a; font-weight: 700;
+}
+.tuning-actions button:disabled { opacity: .45; cursor: not-allowed; }
+#tuningSaveStatus { font-size: 11px; color: var(--muted); }

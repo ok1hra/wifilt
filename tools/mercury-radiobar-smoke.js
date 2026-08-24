@@ -3,13 +3,24 @@
 
 // Browser-level check for the three status-bar dropdowns added to Mercury
 // 2026-08-23 (band picker, frequency timetable, TX gain calibration plan --
-// docs/mercury-implementace.md ch.13). Same dependency-free pattern as
-// tools/mercury-browser-smoke.js: a plain http server serving the production
-// data/ tree plus fixtures for /setup-data.json, /state, /cmd and
-// /mercury-txgain.json, driven in real headless Chrome. No radio involved --
-// /state is a fake IC-705 sitting on the 20 m preset, and /cmd just records
-// what it was asked and (for setFrequency) updates the fake radio so the
-// plan's own confirm-loop can succeed without a real transceiver.
+// docs/mercury-implementace.md ch.13). A plain http server serving the
+// production data/ tree plus fixtures for /setup-data.json, /state, /cmd
+// and /mercury-txgain.json. No radio involved -- /state is a fake IC-705
+// sitting on the 20 m preset, and /cmd just records what it was asked and
+// (for setFrequency) updates the fake radio so the plan's own confirm-loop
+// can succeed without a real transceiver.
+//
+// Reports via --dump-dom (a hidden <pre> the page fills with its own
+// results) rather than tools/mercury-browser-smoke.js's own long-lived
+// headless Chrome + POST /result: that pattern was unreliable for THIS
+// page's longer click sequence (~9 clicks, ~2.5 s of real waits across
+// three separate panels) -- found live 2026-08-23 debugging the "not in
+// that band" regression below, where the exact same sequence completed
+// correctly under --dump-dom/--virtual-time-budget every time but the
+// POST-based version above hung with no result and no page error, in this
+// Chrome build, for reasons that stayed unexplained even after capturing
+// stderr/console/unhandledrejection. --dump-dom sidesteps whatever that was
+// by not depending on a live network round-trip back to this process at all.
 
 const http = require("http"), fs = require("fs"), path = require("path");
 const { spawn } = require("child_process");
@@ -36,12 +47,21 @@ function finish(result) {
   process.exitCode = failures || checks.length === 0 ? 1 : 0;
 }
 
+// dump-dom serializes the page as HTML, so the JSON the page wrote into the
+// <pre>'s textContent comes back HTML-escaped; only the five entities HTML
+// ever produces for plain text content are possible here (dump-dom does not
+// use numeric escapes for this range).
+function unescapeHtml(s) {
+  return s.replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"").replace(/&#39;/g, "'").replace(/&amp;/g, "&");
+}
+
 // The fake radio this whole smoke test drives. Starts on the 20 m preset
 // (14105000 Hz, from data/mercury-presets.js) so "is this the current
 // preset" and "off-dial" both have a real, checkable answer from the first
 // poll onward.
 const fakeRadio = {
-  connected: true, transceiverType: "ICOM-LAN", radioName: "IC-705",
+  connected: true, transceiverType: "ICOM-LAN", radioName: "IC-705", radioNameSeen: true,
   frequency: 14105000, mode: "USB-D", filter: 1, tx: false,
   rfPower: 255, rfPowerSeen: true, lanStatus: "connected",
 };
@@ -50,16 +70,6 @@ let txgainDoc = { v: 2, entries: {}, plan: { powers: [], rows: [] } };
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, "http://fixture");
-
-  if (url.pathname === "/result" && req.method === "POST") {
-    const chunks = [];
-    req.on("data", (c) => chunks.push(c));
-    req.on("end", () => {
-      try { finish(JSON.parse(Buffer.concat(chunks).toString())); }
-      catch (e) { finish({ checks: [["result parses", false, e.message]] }); }
-    });
-    return;
-  }
 
   if (url.pathname === "/setup-data.json") {
     res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
@@ -209,20 +219,63 @@ const PAGE_SCRIPT = `
   check("the plan grid renders (tx-gain-plan-ui.js's own markup, unmodified)",
     Boolean(planField?.querySelector(".plan-grid, .plan-tools, .plan-field")));
 
-  window.parent === window && fetch("/result", { method: "POST", body: JSON.stringify({ checks }) });
+  // Regression, found live 2026-08-23 by an operator, not by this suite (it
+  // never actually pressed RUN before): bands() fed row.band the DISPLAY
+  // label ("20 m", mercury-presets.js's own form) while tx-gain-plan-ui.js's
+  // own blockingReason() compares it against TxGainCal.bandOf(row.hz), which
+  // returns the no-space form ("20m") -- so the auto-seeded row for a radio
+  // sitting exactly ON its 20 m preset was rejected as "not in that band" on
+  // every single RUN, always. Fixed by having bands() derive the label from
+  // TxGainCal.bandOf() itself instead of the display preset's own .band.
+  //
+  // RUN presses far enough into begin() to hit this fake harness's own real
+  // ceiling next (no simulated CI-V MOD-level read, so this.mod.capability.
+  // readable's own message appears) -- that is a property of the test double,
+  // not a bug, and proves the band check specifically is what got past.
+  const runButton = planField.querySelector('[data-plan="run"]');
+  check("RUN button exists", Boolean(runButton));
+  if (runButton) {
+    click(runButton);
+    await wait(400);
+    const errorLine = planField.querySelector('[data-plan="error"]');
+    const errorText = errorLine ? errorLine.textContent : "";
+    check("RUN does not reject the auto-seeded 20 m row as 'not in that band'",
+      !errorText.includes("is not in that band"), errorText);
+  }
+
+  // Written into the DOM, not POSTed: see this file's own header for why.
+  const pre = document.createElement("pre");
+  pre.id = "__smoke_result";
+  pre.hidden = true;
+  pre.textContent = JSON.stringify(checks);
+  document.body.appendChild(pre);
 })();
 `;
 
 server.listen(0, () => {
   const port = server.address().port;
   const url = `http://127.0.0.1:${port}/mercury.html?fixture=lan`;
+  // Virtual time budget in ms: comfortably above the ~2.5 s the page script's
+  // own real-time waits add up to, since --dump-dom fires once that budget
+  // (or the load event, whichever is later) is exhausted.
   chrome = spawn("google-chrome", [
     "--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
-    "--no-proxy-server", url,
-  ], { stdio: ["ignore", "ignore", "pipe"] });
-  let chromeErrors = "";
+    "--no-proxy-server", "--virtual-time-budget=8000", "--dump-dom", url,
+  ], { stdio: ["ignore", "pipe", "pipe"] });
+  let out = "", chromeErrors = "";
+  chrome.stdout.on("data", (c) => { out += c; });
   chrome.stderr.on("data", (c) => { chromeErrors += c; });
   chrome.on("error", (e) => finish({ checks: [["chrome started", false, e.message]] }));
-  chrome.on("close", (code) => { if (!finished) finish({ checks: [["chrome stayed up", false, `exit ${code} ${chromeErrors.slice(-400)}`]] }); });
-  timer = setTimeout(() => finish({ checks: [["page reported within timeout", false, "no /result POST"]] }), 20000);
+  chrome.on("close", (code) => {
+    if (finished) return;
+    const m = out.match(/<pre id="__smoke_result"[^>]*>([\s\S]*?)<\/pre>/);
+    if (!m) {
+      finish({ checks: [["page reported a result", false,
+        `no #__smoke_result found (exit ${code}); chrome stderr: ${chromeErrors.slice(-800)}`]] });
+      return;
+    }
+    try { finish({ checks: JSON.parse(unescapeHtml(m[1])) }); }
+    catch (e) { finish({ checks: [["result parses", false, e.message]] }); }
+  });
+  timer = setTimeout(() => finish({ checks: [["page reported within timeout", false, "chrome never closed"]] }), 20000);
 });

@@ -135,6 +135,24 @@ int host_rx_expected(sim_endpoint_t *ep) { return (int)sim_endpoint_session(ep)-
 EMSCRIPTEN_KEEPALIVE
 int host_tx_seq(sim_endpoint_t *ep) { return (int)sim_endpoint_session(ep)->tx_seq; }
 
+/* docs/mercury-implementace.md §6.5 (live STATUS panel): consecutive_retries
+ * and tx_success_count are STREAKS, not cumulative session totals -- both
+ * reset to 0 on the opposite outcome (record_tx_outcome() in arq_fsm.c).
+ * The Worker watches these three read-only getters tick and reconstructs its
+ * own session-lifetime retry/success tally from the deltas (a 0->positive
+ * transition on consecutive_retries is one retry; a tx_seq advance while
+ * consecutive_retries stays 0 is one clean delivery) -- deliberately no new
+ * accumulator field was added to arq_session_t itself, to keep this feature
+ * out of the FSM's own hot path entirely (see mercury-status-plan memory). */
+EMSCRIPTEN_KEEPALIVE
+int host_consecutive_retries(sim_endpoint_t *ep) { return sim_endpoint_session(ep)->consecutive_retries; }
+
+EMSCRIPTEN_KEEPALIVE
+int host_tx_success_count(sim_endpoint_t *ep) { return sim_endpoint_session(ep)->tx_success_count; }
+
+EMSCRIPTEN_KEEPALIVE
+int host_tx_retries_left(sim_endpoint_t *ep) { return sim_endpoint_session(ep)->tx_retries_left; }
+
 /* The real caller's callsign once a CALL is accepted -- arq_session_t's own
  * remote_call, not sim_endpoint_t's construction-time peer_call (which for a
  * LISTEN role is empty until someone actually dials in, and would stay
@@ -165,6 +183,41 @@ void host_set_channel_guard_ms(int ms) { atomic_store(&arq_channel_guard_ms, ms)
 
 EMSCRIPTEN_KEEPALIVE
 void host_set_iss_post_ack_guard_ms(int ms) { atomic_store(&arq_iss_post_ack_guard_ms, ms); }
+
+/* docs/mercury-implementace.md §6.6 (Settings): thin exports over atomics
+ * that already exist and are already unit-tested (native `mercury`'s own
+ * RETRIES/CALLINT TCP commands drive the same four fields via
+ * tcp_interfaces.c -- a path this WASM build never links in, since the FSM
+ * here is wired directly through this shim). No new FSM logic; each setter
+ * is a direct atomic_store, applied once by mercury-worker.js before the
+ * first event of a new CALL/LISTEN session (never mid-session). Values are
+ * not range-checked here -- same trust boundary as host_set_channel_guard_ms
+ * above; mercury.js's Settings UI is where sane ranges/defaults live. */
+EMSCRIPTEN_KEEPALIVE
+void host_set_retry_slots(int call_slots, int accept_slots, int data_slots, int disconnect_slots) {
+  atomic_store(&arq_call_retry_slots, call_slots);
+  atomic_store(&arq_accept_retry_slots, accept_slots);
+  atomic_store(&arq_data_retry_slots, data_slots);
+  atomic_store(&arq_disconnect_retry_slots, disconnect_slots);
+}
+
+/* seconds; 0 = table default, matching ARQ_CALLINT_DEFAULT_S. Native's own
+ * CALLINT command enforces ARQ_CALLINT_MIN_S (4.0) itself on the read side
+ * (arq_protocol_call_retry_interval_s()) -- a too-low override here is
+ * clamped there, not here. */
+EMSCRIPTEN_KEEPALIVE
+void host_set_callint(float seconds) { atomic_store(&arq_callint_override_s, seconds); }
+
+EMSCRIPTEN_KEEPALIVE
+void host_set_retry_downgrade_threshold(int n) { atomic_store(&arq_retry_downgrade_threshold, n); }
+
+/* Rank per arq_fsm.c's mode_rank(): 0=DATAC15 .. 5=QAM16C2 (arq_protocol.h's
+ * own comment on ARQ_MODE_CEILING_RANK has the full mapping and the
+ * DATAC17/QAM16C2 caveat -- they stay hard-blocked by
+ * arq_bandwidth_allows_mode() regardless of what is set here, since this
+ * WASM build's freedv modem does not have either compiled in). */
+EMSCRIPTEN_KEEPALIVE
+void host_set_mode_ceiling_rank(int rank) { atomic_store(&arq_mode_ceiling_rank, rank); }
 
 /* ---- CQ (docs/mercury-implementace.md ch.10's E4 gate, last item) ----
  *

@@ -47,6 +47,11 @@ importScripts("mercury-file.js");
 importScripts("icom-models.js");
 importScripts("tx-gain-mod-level.js");
 importScripts("tx-gain-cal.js");
+// §6.6 (Settings, 2026-08-23 grill-me): ARQ retry/CALLINT/downgrade/mode-
+// ceiling + transfer-size-limit, read once below before CALL/LISTEN is
+// dispatched. See mercury-tuning.js's own header for why this is a
+// different store from mercury-settings.js's MercurySettings.
+importScripts("mercury-tuning.js");
 
 const EV = {
   APP_LISTEN: 0, APP_STOP_LISTEN: 1, APP_CONNECT: 2, APP_DISCONNECT: 3, APP_DATA_READY: 4,
@@ -55,6 +60,14 @@ const EV = {
 const CONN_STATE = ["DISCONNECTED", "LISTENING", "CALLING", "ACCEPTING", "CONNECTED", "DISCONNECTING"];
 const FREEDV_MODE_DATAC16 = 23;
 const ARQ_DFLOW_IDLE_IRS = 3; // arq_fsm.h: "IRS: waiting for peer data frame" -- the only state expecting a payload-mode frame
+// arq_fsm.h's dflow_state values where tx_retries_left actually counts down
+// DATA-frame delivery attempts (ARQ_DATA_RETRY_SLOTS budget). The same field
+// is reused verbatim during TURN_REQ/MODE_REQ negotiation (ARQ_DFLOW_TURN_REQ_*=6/7,
+// ARQ_DFLOW_MODE_REQ_*=9/10), which always starts from a small fixed budget
+// of 2 -- showing "retries left on the current frame" there would flash a
+// false warning on completely healthy turn-taking/mode-ladder traffic.
+const ARQ_DFLOW_DATA_TX = 1, ARQ_DFLOW_WAIT_ACK = 2;
+function isDataRetryPhase(ds) { return ds === ARQ_DFLOW_DATA_TX || ds === ARQ_DFLOW_WAIT_ACK; }
 const SAMPLE_RATE = 48000, PACKET_MS = 20, SAMPLES_PER_PACKET = (SAMPLE_RATE * PACKET_MS) / 1000;
 // sim_endpoint.c (mercury/tests/sim/, upstream, unmodified) backs
 // host_queue_tx()/host_delivered() with a fixed 256 KiB buffer for the
@@ -67,7 +80,13 @@ const SAMPLE_RATE = 48000, PACKET_MS = 20, SAMPLES_PER_PACKET = (SAMPLE_RATE * P
 // "no silent half-truths" rule -- WSPR's pledge, JS8's busy-card) rather
 // than risking either failure mode. Kept well under 256 KiB to leave room
 // for the QUERY/REPLY round trip and protocol overhead alongside it.
-const MAX_TRANSFER_BYTES = 200 * 1024;
+// mercury-tuning.js's own transferSizeKb Setting can raise this (§6.6,
+// "limit velikosti přenosu") but never past MAX_TRANSFER_BYTES_HARD_CAP --
+// SESSION_BYTE_CAP below is sim_endpoint.c's fixed 256 KiB buffer, upstream
+// and unchangeable, and this must stay comfortably under it to leave room
+// for the QUERY/REPLY resume round trip and protocol overhead.
+let MAX_TRANSFER_BYTES = 200 * 1024;
+const MAX_TRANSFER_BYTES_HARD_CAP = 250 * 1024;
 const SESSION_BYTE_CAP = 256 * 1024;
 
 // freedv_api.h's real mode numbers (mercury/modem/freedv/freedv_api.h) with
@@ -93,7 +112,10 @@ const MODE_INFO = {
 };
 function describeMode(modeNum) { return MODE_INFO[modeNum] || { name: `mode ${modeNum}`, bps: null }; }
 
-function post(fields) { postMessage(fields); }
+// `transfer` (optional) is Worker.postMessage()'s own transfer-list arg --
+// only rx-samples (§6.7 waterfall) uses it, to hand the main thread a
+// Float32Array's buffer instead of structured-cloning a copy of it 50x/sec.
+function post(fields, transfer) { if (transfer) postMessage(fields, transfer); else postMessage(fields); }
 
 function clamp16(v) { return Math.max(-32768, Math.min(32767, v)); }
 
@@ -191,6 +213,20 @@ async function main(config) {
   const deliveredFn = cw("host_delivered", "number", ["number", "number", "number"]);
   const setChannelGuardMs = cw("host_set_channel_guard_ms", null, ["number"]);
   const setIssPostAckGuardMs = cw("host_set_iss_post_ack_guard_ms", null, ["number"]);
+  // docs/mercury-implementace.md §6.6 (Settings): thin exports over atomics
+  // that already exist and are already unit-tested natively -- see
+  // host-shim.c's own comment on each. Applied once below, before CALL/LISTEN
+  // is dispatched, never mid-session.
+  const setRetrySlots = cw("host_set_retry_slots", null, ["number", "number", "number", "number"]);
+  const setCallint = cw("host_set_callint", null, ["number"]);
+  const setRetryDowngradeThreshold = cw("host_set_retry_downgrade_threshold", null, ["number"]);
+  const setModeCeilingRank = cw("host_set_mode_ceiling_rank", null, ["number"]);
+  // §6.5 (live STATUS panel): read-only, see host-shim.c's own comment --
+  // consecutive_retries/tx_success_count are STREAKS, this file reconstructs
+  // its own session-lifetime tally from their deltas (see pumpArqStatus()).
+  const consecutiveRetries = cw("host_consecutive_retries", "number", ["number"]);
+  const txSuccessCount = cw("host_tx_success_count", "number", ["number"]);
+  const txRetriesLeft = cw("host_tx_retries_left", "number", ["number"]);
   // Diagnostic-only, see host-shim.c's own comment: chasing a real split
   // where the ISS side declared a file fully delivered while the IRS side's
   // delivered-byte count never grew past the first message.
@@ -279,6 +315,28 @@ async function main(config) {
   let lastConnState = -1;
   let rxHeartbeatTickCount = 0; // diagnostic only -- see the heartbeat log in onRxTick
   let dispatched = false; // true once CALL/LISTEN has actually been dispatched to the FSM
+
+  // ---- §6.5 live STATUS panel: session-lifetime retry tally -------------
+  // consecutive_retries/tx_success_count are STREAKS in the C engine (reset
+  // on the opposite outcome) -- this reconstructs a cumulative "N of M
+  // frames needed a retry this session" by watching their deltas each tick,
+  // exactly as docs/mercury-implementace.md §6.5 decided (no new C
+  // accumulator field). Two engine-internal resets complicate a naive delta,
+  // both handled below: record_tx_outcome() (arq_fsm.c) also zeroes
+  // tx_success_count the moment it reaches the ladder-up threshold (in the
+  // SAME call that credited the triggering frame, so a plain "successCount >
+  // lastTxSuccessCount" check never sees that last increment); and the
+  // hard-loss-to-floor recovery (select_best_mode(), arq_fsm.c) zeroes
+  // consecutive_retries mid-outage, before the channel has actually
+  // recovered. `retryStreakOpen` tracks the real state ("has this streak
+  // been closed by an actual clean delivery yet?") instead of trusting a
+  // bare 0 reading.
+  let arqTally = {framesOk: 0, framesRetried: 0};
+  let retryStreakOpen = false;
+  let lastTxSuccessCount = 0;
+  let lastArqStatusPostMs = 0;
+  let lastArqStatusDflow = -1; // -1 = not currently tracking a CONNECTED session
+  let lastArqStatusTxSeq = -1;
 
   // ---- MRQ1 file layer state ----
   let deliveredSoFar = 0; // host_delivered() is a cumulative PEEK (sim_endpoint_delivered), not a drain
@@ -680,6 +738,27 @@ async function main(config) {
   }
 
   function onRxTick(floatSamples) {
+    // §6.7 (Waterfall, 2026-08-23 grill-me): mercury.js's own AUD1 client
+    // lives entirely in here (see this file's header comment) -- the main
+    // thread never sees a raw sample otherwise. Forwarded unthrottled, one
+    // postMessage per 20ms packet, same cadence WSPR's own onSamples()
+    // already runs at directly on its main thread; a copy (not the live
+    // buffer) because floatSamples is still needed below for the modem.
+    // WSPR-style direct ingest, no gap/epoch metadata -- see
+    // mercury-waterfall-plan memory for why that JS8-only complexity does
+    // not apply here.
+    // Skipped outright while this station's OWN transmitter is keyed
+    // (txBusy, the same real-PTT event mercury.js's radioTransmitting()
+    // observes from the other side via /state polling -- mercury.js already
+    // discards this message when it arrives during TX, but during a file
+    // transfer TX can stay busy for the transfer's whole duration, so
+    // skipping the allocation+postMessage here rather than after is what
+    // actually avoids the cost, not just the render).
+    if (!txBusy) {
+      const waterfallCopy = floatSamples.slice();
+      post({ type: "rx-samples", samples: waterfallCopy }, [waterfallCopy.buffer]);
+    }
+
     const n = Math.min(floatSamples.length, 65535);
     for (let i = 0; i < n; i++) {
       const s = Math.max(-32768, Math.min(32767, Math.round(floatSamples[i] * 32768)));
@@ -802,6 +881,70 @@ async function main(config) {
         post({ type: "disconnected", connState: CONN_STATE[cs] || cs });
       }
     }
+
+    // §6.5 (live STATUS panel). Only meaningful once CONNECTED (cs === 4) --
+    // SNR/mode/retry tally reset to nothing shown the moment the connection
+    // drops, mercury.js's own honesty rule (no stale numbers, same as WSPR's
+    // pledge). Throttled to 1s + immediate on a mode or dflow change, same
+    // pattern as pendingSend's own lastProgressPostMs throttle above.
+    if (cs === 4) {
+      const consRetries = consecutiveRetries(ep);
+      const successCount = txSuccessCount(ep);
+      const txSeqNow = txSeqFn(ep);
+      const ds = dflowState(ep);
+      // A 0->positive transition is one retry EVENT (not "however high it
+      // counted up to" -- that would double-count a stalled retry loop that
+      // keeps incrementing the same streak tick after tick) -- gated on
+      // retryStreakOpen rather than the raw previous reading so the
+      // hard-loss recovery's own mid-outage reset (still no clean delivery)
+      // can't be mistaken for the outage ending and a new one starting.
+      if (consRetries > 0 && !retryStreakOpen) { arqTally.framesRetried++; retryStreakOpen = true; }
+      // tx_success_count only advances on a CLEAN (no-retry) delivery -- one
+      // clean frame per increment, same as consecutive_retries' own streak.
+      // The normal case sums the delta; the ladder-up reset (successCount
+      // drops straight to 0) is distinguished from a failure reset by
+      // consRetries reading 0 at the same instant -- a failure resets BOTH
+      // counters together in the same C call, so consRetries>0 there would
+      // mean this 0 came from a retry, not a threshold crossing. Only one
+      // frame's outcome can resolve between two ticks in practice (FSM frame
+      // times run far longer than this Worker's ~20ms tick), so the credit
+      // is always exactly 1, not the reset counter's old value.
+      if (successCount > lastTxSuccessCount) {
+        arqTally.framesOk += successCount - lastTxSuccessCount;
+        retryStreakOpen = false;
+      } else if (successCount === 0 && lastTxSuccessCount > 0 && consRetries === 0) {
+        arqTally.framesOk += 1;
+        retryStreakOpen = false;
+      }
+      lastTxSuccessCount = successCount;
+
+      const modeChanged = ds !== lastArqStatusDflow || txSeqNow !== lastArqStatusTxSeq;
+      const now = Date.now();
+      if (modeChanged || now - lastArqStatusPostMs >= 1000) {
+        lastArqStatusPostMs = now;
+        lastArqStatusDflow = ds;
+        lastArqStatusTxSeq = txSeqNow;
+        const mode = describeMode(payloadMode(ep));
+        const peerMode = describeMode(peerTxMode(ep));
+        post({
+          type: "arq-status",
+          localSnrDb: localSnrX10(ep) / 10,
+          peerSnrDb: peerSnrValid(ep) ? peerSnrX10(ep) / 10 : null,
+          modeName: mode.name, modeBps: mode.bps,
+          peerModeName: peerMode.name,
+          framesOk: arqTally.framesOk, framesRetried: arqTally.framesRetried,
+          retriesLeft: isDataRetryPhase(ds) ? txRetriesLeft(ep) : null,
+        });
+      }
+    } else if (lastArqStatusDflow !== -1) {
+      // Left CONNECTED (lastArqStatusDflow !== -1 means a status WAS being
+      // tracked): zero the tally for the next connection and tell
+      // mercury.js to hide the panel rather than freeze it on stale numbers.
+      arqTally = {framesOk: 0, framesRetried: 0};
+      retryStreakOpen = false; lastTxSuccessCount = 0; lastArqStatusDflow = -1; lastArqStatusTxSeq = -1;
+      post({ type: "arq-status-clear" });
+    }
+
     if (!txBusy) startTxBurst();
   }
 
@@ -825,14 +968,69 @@ async function main(config) {
 
   if (stopping) { session.stop(); return; }
 
-  dispatched = true;
-  if (role === "listen") {
-    dispatchSimple(ep, EV.APP_LISTEN);
-    post({ type: "log", line: "LISTEN ON (armed)" });
-  } else {
-    connectCall(ep, peerCall);
-    post({ type: "log", line: `dialing ${peerCall}...` });
+  // §6.6 (Settings): applied once, HERE, before CALL/LISTEN ever reaches the
+  // FSM -- never mid-session (the grill-me's own decision: a running
+  // transfer keeps whatever it started with). Awaited, unlike the TX-gain
+  // fire-and-forget load above: a retry count or mode ceiling that lands
+  // AFTER CALL/ACCEPT has already gone out at the compiled default would be
+  // a silent inconsistency, not a harmless delay.
+  try {
+    const tuning = await new MercuryTuning.TuningStore().load();
+    // Mode ceiling first, and outside the rest of this try: it is the one
+    // tuning setting with real on-air safety weight (it is what keeps
+    // DATAC1/QAM16C2 unreachable -- see host-stubs.c's arq_bandwidth_allows_mode()),
+    // and the engine's own compiled default for it is UNLIMITED, not this
+    // module's DATAC3 policy default (see mercury-tuning.js's own comment).
+    // Applying it first means a later setter throwing (a stale/mismatched
+    // mercury-host.wasm export) can only cost a retry-count tweak, never
+    // silently reopen the fast/unsafe modes.
+    setModeCeilingRank(MercuryTuning.modeCeilingRank(tuning.modeCeiling));
+    setRetrySlots(tuning.retryCallSlots, tuning.retryAcceptSlots, tuning.retryDataSlots, tuning.retryDisconnectSlots);
+    setCallint(tuning.callIntervalS);
+    setRetryDowngradeThreshold(tuning.retryDowngradeThreshold);
+    MAX_TRANSFER_BYTES = Math.min(tuning.transferLimitKb * 1024, MAX_TRANSFER_BYTES_HARD_CAP);
+    post({ type: "log", line: `tuning: retry=${tuning.retryCallSlots}/${tuning.retryAcceptSlots}/${tuning.retryDataSlots}/${tuning.retryDisconnectSlots} callint=${tuning.callIntervalS || "auto"} downgrade=${tuning.retryDowngradeThreshold} ceiling=${tuning.modeCeiling} maxTransfer=${MAX_TRANSFER_BYTES}B` });
+  } catch (e) {
+    // A tuning file that fails to load is not a reason to refuse the
+    // session -- TuningStore.load() self-catches and always resolves to its
+    // own DEFAULTS, so this branch only fires if one of the setters above
+    // itself throws. That is NOT the same as "the engine's compiled
+    // defaults", which for the mode ceiling are UNLIMITED -- setModeCeilingRank()
+    // running first above is what keeps this branch from meaning "DATAC1
+    // silently reachable".
+    post({ type: "log", line: `tuning: apply failed partway, some settings may be at engine defaults: ${e && e.message || e}` });
   }
+
+  // One table for the three roles mercury.js's startWorker() ever sends,
+  // shared between the enter dispatch here and the exit dispatch below --
+  // previously two independently-shaped if/else-if chains, where a 4th role
+  // (or a typo in one of the three literal strings) would silently no-op in
+  // both instead of failing loudly.
+  const ROLE_HANDLERS = {
+    listen: {
+      enter: () => { dispatchSimple(ep, EV.APP_LISTEN); post({ type: "log", line: "LISTEN ON (armed)" }); },
+      exit: () => dispatchSimple(ep, EV.APP_STOP_LISTEN),
+    },
+    call: {
+      enter: () => { connectCall(ep, peerCall); post({ type: "log", line: `dialing ${peerCall}...` }); },
+      exit: () => dispatchSimple(ep, EV.APP_DISCONNECT),
+    },
+    monitor: {
+      // Ambient role for the waterfall/AUD1 feed only -- the FSM stays
+      // DISCONNECTED forever (never dispatched APP_LISTEN or connected), so
+      // this station cannot be reached and will not transmit. rx-samples
+      // still flows (posted before any FSM push, see onRxTick's own
+      // comment), so the waterfall is unaffected by staying in this role.
+      // Never left DISCONNECTED, so nothing to dispatch on the way out.
+      enter: () => post({ type: "log", line: "monitoring (not listening)" }),
+      exit: () => {},
+    },
+  };
+  const roleHandler = ROLE_HANDLERS[role];
+  if (!roleHandler) post({ type: "error", reason: "unknown worker role", detail: role });
+
+  dispatched = true;
+  if (roleHandler) roleHandler.enter();
 
   // Exposed for self.onmessage's "send-file" case, set only once this
   // session's ep/beginSend actually exist (a message arriving before "start"
@@ -874,8 +1072,7 @@ async function main(config) {
   onSendFileRequested = null;
   onCancelTransferRequested = null;
   onSendCqRequested = null;
-  if (role === "listen") dispatchSimple(ep, EV.APP_STOP_LISTEN);
-  else dispatchSimple(ep, EV.APP_DISCONNECT);
+  if (roleHandler) roleHandler.exit();
   session.stop();
   post({ type: "stopped" });
 }

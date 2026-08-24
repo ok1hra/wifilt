@@ -733,14 +733,14 @@
           onOutcome: outcome => finish(
             outcome.ok
               ? {type: "measured", knee: outcome.knee, gain: outcome.gain,
-                 po: outcome.po, reachedCeiling: outcome.reachedCeiling}
+                 po: outcome.po, swrMax: outcome.swrMax, reachedCeiling: outcome.reachedCeiling}
               // A ceiling is neither a measurement nor an ordinary failure: it is
               // the one observation the MOD-level correction is made of, and
               // folding it into cellFailed is what left that correction unable to
               // fire on the only stations that need it.
               : outcome.reachedCeiling
                 ? {type: "ceiling", knee: outcome.knee, gain: outcome.gain,
-                   po: outcome.po, reason: outcome.reason}
+                   po: outcome.po, swrMax: outcome.swrMax, reason: outcome.reason}
                 : isStationFailure(outcome.reason)
                   ? {type: "stationFailed", reason: outcome.reason}
                   : {type: "cellFailed", reason: outcome.reason}),

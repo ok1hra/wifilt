@@ -1,7 +1,8 @@
 # WIFILT — Web interface for Icom LAN Transceivers
 
-Operate an Icom transceiver from any browser on your network — logbook, DX cluster, JS8Call
-and a WSPR beacon — with nothing installed on the phone, tablet or PC, and no internet.
+Operate an Icom transceiver from any browser on your network — logbook, DX cluster, JS8Call,
+a WSPR beacon and Mercury file transfer — with nothing installed on the phone, tablet or PC,
+and no internet.
 
 **Runs on any ESP32 WROOM module with 4 MB of flash — or, if the radio is already on your
 network, as a native program on a Linux, Windows or Raspberry Pi PC with no extra hardware at
@@ -15,7 +16,7 @@ archives).
 ## Manuals
 
 - **[SOFTWARE.md](SOFTWARE.md)** — the web interface: first run, QRPLog, DXC, JS8Call, the
-  WSPR beacon, SETUP, LOGSYNC and the band decoder.
+  WSPR beacon, Mercury file transfer, SETUP, LOGSYNC and the band decoder.
 - **[HARDWARE.md](HARDWARE.md)** — the ESP32 and the RemoteQTH interface board: which radios
   work, flashing, connectors, Status LED, schematic and 3D-printed case — and, for the
   Linux/Raspberry Pi/Windows route that needs none of it,
@@ -29,7 +30,7 @@ WIFILT is free software, distributed under the **GNU General Public License, ver
 later** — see [LICENSE](LICENSE). This repository is the corresponding source for every
 binary the project distributes, including the images served by the web installer. The
 licences of the individual third-party components are listed in
-[SOFTWARE.md § 11](SOFTWARE.md#11-component-licences) and in
+[SOFTWARE.md § 12](SOFTWARE.md#12-component-licences) and in
 [data/THIRD-PARTY-NOTICES.txt](data/THIRD-PARTY-NOTICES.txt).
 
 Icom is a registered trademark of Icom Incorporated. WIFILT is an independent software

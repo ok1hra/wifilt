@@ -36,6 +36,7 @@
 /tools/__pycache__/
 *.pyc
 /.claude/
+/.vscode/
 /log/
 /wfview-master/
 /ic705-history-backup.json

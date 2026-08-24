@@ -8,13 +8,18 @@ The following files are copied **verbatim** from the ESP32 Arduino core
 |---|---|
 | `WString.h`, `WString.cpp` | © 2009-10 Hernando Barragan; © 2011 Paul Stoffregen — **LGPL 2.1 or later** |
 | `Print.h`, `Print.cpp` | © 2008 David A. Mellis — **LGPL 2.1 or later** |
-| `Stream.h`, `Stream.cpp` | Arduino core — **LGPL 2.1 or later** |
-| `IPAddress.h`, `IPAddress.cpp` | Arduino core — **LGPL 2.1 or later** |
-| `Printable.h` | Arduino core — **LGPL 2.1 or later** |
-| `stdlib_noniso.h`, `stdlib_noniso.c` | Arduino core |
-| `pgmspace.h` | Arduino core |
+| `Stream.h`, `Stream.cpp` | © 2008/2010 David A. Mellis — **LGPL 2.1 or later** |
+| `IPAddress.h`, `IPAddress.cpp` | © 2011 Adrian McEwen — **LGPL 2.1 or later** |
+| `Printable.h` | © 2011 Adrian McEwen — **LGPL 2.1 or later** |
+| `WCharacter.h` | © 2010 Hernando Barragan — **LGPL 2.1 or later** |
+| `stdlib_noniso.h`, `stdlib_noniso.c` | © 2014 Ivan Grokhotkov — **LGPL 2.1 or later** |
+| `pgmspace.h` | © 2015 Hristo Gochkov — **LGPL 2.1 or later** |
+| `../net/Client.h`, `../net/Server.h` | © 2011 Adrian McEwen — **LGPL 2.1 or later** |
+| `../net/Udp.h` | © 2008 Bjoern Hartmann — **MIT** (older Arduino UDP base class, not LGPL like the rest of this list) |
 
-Their original licence headers are intact and must stay that way.
+Their original licence headers are intact and must stay that way. The full
+notice, in the form served to the operator, is
+[data/THIRD-PARTY-NOTICES.txt](../../data/THIRD-PARTY-NOTICES.txt).
 
 ## Why copied rather than referenced in place
 

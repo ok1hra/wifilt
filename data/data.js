@@ -621,7 +621,7 @@ function createGainCal() {
     wallNow:() => js8Clock.now(),
     now:() => Date.now(),
     radio:() => state.radio,
-    model:() => state.radio.radioName || "",
+    model:() => liveRadioModel(),
     manualGain:() => Number(currentJs8().txGain) || 0.25,
     dbm:() => null,          // WSPR files power references; this page has none to file
     blockingReason:() => {
@@ -672,8 +672,8 @@ function createGainPlan() {
     button:dom.planButton,
     store:gainStore,
     cal:gainCal,
-    model:() => state.radio.radioName || "",
-    modelNumber:() => IcomModels.modelNumber(state.radio.radioName || ""),
+    model:() => liveRadioModel(),
+    modelNumber:() => IcomModels.modelNumber(liveRadioModel()),
     radio:() => state.radio,
     send:async payload => {
       const response = await fetch(RADIO_CMD_URL,{method:"POST", signal:fetchDeadline(),
@@ -1658,6 +1658,14 @@ function renderTrxSlotLabel() {
   dom.trxSlotLabel.title=slot ? `TRX${slot} is the LAN radio` : "TRX";
 }
 
+// See IcomModels.liveRadioModel()'s own comment for why this guard exists
+// (the ~1s stale-radio-name window on a live LAN-slot model swap, confirmed
+// against both an IC-705 and an IC-7610). Shared with wspr.js/mercury.js so
+// the fix cannot regress in one page while staying fixed in the others.
+function liveRadioModel() {
+  return IcomModels.liveRadioModel(state.radio);
+}
+
 // Full scale of the LAN radio, on the very cascade wspr.js fullPower() uses: the
 // operator's manual override outranks what the radio calls itself, so the two
 // pages can never put different watts on the same transmitter. An unrecognised
@@ -1670,8 +1678,9 @@ function fullPowerScale() {
   catch(_error) { override=""; }
   const manual=override && WsprCore.fullPowerWatts(override);
   if(manual)return {watts:manual, source:"manual override"};
-  const reported=WsprCore.fullPowerWatts(state.radio.radioName);
-  return reported ? {watts:reported, source:`reported as ${state.radio.radioName}`} : {watts:null, source:""};
+  const model=liveRadioModel();
+  const reported=WsprCore.fullPowerWatts(model);
+  return reported ? {watts:reported, source:`reported as ${model}`} : {watts:null, source:""};
 }
 
 // The CI-V level is quantised to 1/255 and the radio's own scale is not exactly
@@ -1697,9 +1706,14 @@ function renderTrxPower(connected,mismatch=false) {
   const seen=state.radio.rfPowerSeen===true;
   const level=Math.max(0,Math.min(255,Number(state.radio.rfPower)||0));
   const percent=seen ? level*100/255 : 0;
-  // ceil, so any power at all lights the bottom segment: a radio left on the
-  // WSPR beacon's 1 % must not read as a dead transmitter.
-  const lit=seen ? Math.min(10,Math.ceil(percent/10)) : 0;
+  // Round the same way the title below does (Math.round(percent)), so the
+  // segment count and the printed number never disagree -- ceil(percent/10)
+  // used to overshoot by a whole segment for almost any non-multiple-of-25.5
+  // raw level (e.g. IC-7610 at 128/255=50.196% showed "50%" but lit 6/10
+  // segments). Floor of 1 lit segment is kept for any power at all, so a
+  // radio left on the WSPR beacon's 1 % still doesn't read as a dead
+  // transmitter.
+  const lit=seen && percent>0 ? Math.max(1,Math.min(10,Math.round(percent/10))) : 0;
   dom.trxPowerSegments.forEach((segment,index)=>segment.classList.toggle("on",index<lit));
   const scale=fullPowerScale();
   const watts=seen && scale.watts ? scale.watts*level/255 : null;
@@ -1789,7 +1803,11 @@ async function applyAutoRfPower() {
   // Nothing chosen, nothing to apply. There is no safe value to invent for a
   // QSO mode, so a page nobody has configured leaves the radio alone.
   if(target===null){rfAutoArmed=false;return;}
-  if(!currentJs8().txSafetyAccepted)return;
+  // No TX-safety-pledge gate here (2026-08-23, operator request, for
+  // consistency with WSPR's own applyAutoPower() and Mercury's
+  // applyAutoTuningPower()): writing a power level is not transmitting.
+  // WSPR keeps its own 10 W ceiling -- that is WSPR's legal band limit, not
+  // a general safety cap -- JS8 and Mercury deliberately have none.
   if(!state.radio.connected || state.radio.transceiverType!=="ICOM-LAN")return;
   // Never mid-transmission: LAN drops on this setup happen under audio load,
   // which is exactly when something is on the air.
@@ -7306,8 +7324,10 @@ async function pollRadio() {
     // frozen gpsFixAgeMs from minutes ago would keep looking "fresh" forever.
     if(!("gpsGrid" in next)){delete state.radio.gpsGrid;delete state.radio.gpsFixAgeMs;delete state.radio.gpsSel;}
     // The setup guide follows the radio, not the page: whatever model this reports
-    // is the procedure the help dialog opens on. No-op when unchanged.
-    if(root_TrxHelp())root_TrxHelp().setReportedModel(state.radio.radioName);
+    // is the procedure the help dialog opens on. No-op when unchanged. Must be
+    // liveRadioModel(), not the raw radioName -- see liveRadioModel()'s own
+    // comment on the ~1s stale-name window after a live LAN-slot model swap.
+    if(root_TrxHelp())root_TrxHelp().setReportedModel(liveRadioModel());
     const activityFrequencyChanged=selectActivityFrequency(state.radio.frequency);
     if (state.pendingFrequency && state.radio.frequency===state.pendingFrequency) state.pendingFrequency=null;
     noteRfKnob(); applyAutoRfPower(); gpsTrackTick();

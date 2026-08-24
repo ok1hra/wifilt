@@ -13,6 +13,16 @@ Icom is a registered trademark of Icom Incorporated. WIFILT is an independent
 software project and is not affiliated with, endorsed by, or sponsored by Icom
 Incorporated.
 
+IC705-BT-CIV (OK1CDJ)
+---------------------
+WIFILT began as a derivative of "ESP32 BT CAT for IC-705" — see the header
+comment at the top of wifilt.ino. The Bluetooth transport itself was later
+removed (LAN/CI-V/TrxNet only), but the project's origin is credited here
+regardless of how much of the original code remains today.
+Copyright Ondrej "OK1CDJ" <ondra@ok1cdj.com>.
+License: GNU GPL version 3.
+Upstream: https://github.com/ok1cdj/IC705-BT-CIV
+
 wfview
 ------
 Portions of the Icom LAN implementation, including the credential passcode
@@ -129,6 +139,25 @@ License: GNU GPL version 3.
 Protocol description this implementation was written from: docs/wspr.md
 Upstream: https://sourceforge.net/projects/wsjt/
 
+Mercury / HERMES modem (Rhizomatica)
+------------------------------------
+The Mercury page's file-transfer engine (arq_fsm.c, arq_protocol.c, arq_timing.c, arith.c,
+virtual_clock.c) is unmodified code from the Mercury v2 / HERMES modem project, compiled to
+WebAssembly as data/mercury-host.wasm and data/mercury-worker.js.
+Copyright (C) 2025 Rhizomatica. Author: Rafael Diniz <rafael@riseup.net>.
+License: GNU GPL version 3 or later.
+Upstream: https://github.com/Rhizomatica/mercury
+Source pin: prototype/mercury-prototype/UPSTREAM.md (branch mercuryv2)
+Build: prototype/mercury-prototype/build-host-wasm.sh, build-worker-wasm.sh
+
+FreeDV / Codec 2
+-----------------
+The same WASM modules statically link the FreeDV data modem (DATAC1/DATAC3/DATAC4/DATAC13/
+DATAC15/DATAC16 modes only), vendored unmodified inside the Mercury source tree.
+Copyright (C) David Rowe and the Codec 2 / FreeDV contributors.
+License: GNU Lesser General Public License version 2.1.
+Upstream: https://github.com/drowe67/codec2
+
 DXCC prefix data
 ----------------
 data/dxcc.js is a JavaScript port of the dxcc prefix lookup engine, carrying the
@@ -145,3 +174,34 @@ data/wake-lock.js. The surrounding keeper code is original.
 Copyright (c) 2017 Rich Tibbett.
 License: MIT, under the same terms printed in the Brotli section above.
 Source: https://github.com/richtr/NoSleep.js
+
+qrcode.min.js (QR code generator)
+----------------------------------
+data/qrcode.min.js, lazy-loaded on the SETUP page to draw the Wi-Fi/AP QR
+code, is a minified, unmodified copy of the qrcodejs library. No copyright
+header survives minification; the file is identified by its distinctive
+source structure (the SVG/Canvas/table draw-strategy split, the Android 2.1
+devicePixelRatio workaround, the RS_BLOCK_TABLE Reed-Solomon constants).
+Copyright (c) 2012 davidshimjs, based on the original QR code generator by
+Kazuhiko Arase.
+License: MIT, under the same terms printed in the Brotli section above.
+Upstream: https://github.com/davidshimjs/qrcodejs
+
+Vendored ESP32 Arduino core files (native build)
+--------------------------------------------------
+The native (Linux/Windows/Raspberry Pi) build reuses several Arduino/ESP32
+core source files verbatim rather than reimplementing them, so `String` and
+friends behave identically to the firmware. See native/arduino/NOTICE.md.
+Copyright and license vary by file:
+  * WString.h/.cpp — (c) 2009-10 Hernando Barragan, (c) 2011 Paul Stoffregen
+  * Print.h/.cpp, Stream.h/.cpp — (c) 2008/2010 David A. Mellis
+  * IPAddress.h/.cpp, Printable.h, net/Client.h, net/Server.h —
+    (c) 2011 Adrian McEwen
+  * WCharacter.h — (c) 2010 Hernando Barragan
+  * pgmspace.h — (c) 2015 Hristo Gochkov
+  * stdlib_noniso.h/.c — (c) 2014 Ivan Grokhotkov
+  All of the above: GNU LGPL version 2.1 or later.
+  * net/Udp.h — (c) 2008 Bjoern Hartmann. License: MIT.
+Source: native/arduino/, native/net/ (unmodified copies from the
+esp32:esp32@2.0.14 Arduino core).
+Upstream: https://github.com/espressif/arduino-esp32

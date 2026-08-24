@@ -50,7 +50,7 @@ function makeRadio(modLevel = 128) {
 // Runs a plan to completion against the radio, recording every intent.
 function drive(run, radio, {answer = () => "ok", failCells = [], stopAfter = null,
                             measureFail = () => false, poFor = null,
-                            kneeOverride = null} = {}) {
+                            kneeOverride = null, swrFor = null} = {}) {
   const log = [];
   for (let guard = 0; guard < 400; guard++) {
     const step = run.next();
@@ -95,10 +95,11 @@ function drive(run, radio, {answer = () => "ok", failCells = [], stopAfter = nul
           // on the air.
           const knee = Math.min(0.8, raw);
           const po = poFor ? poFor(step) : Math.round(radio.percent * 2);
+          const swrMax = swrFor ? swrFor(step) : 0;
           if (raw > 0.8)
-            run.note({type: "ceiling", knee, gain: knee, po,
+            run.note({type: "ceiling", knee, gain: knee, po, swrMax,
                       reason: "the level reached the ceiling and the radio never limited"});
-          else run.note({type: "measured", knee, gain: knee, po});
+          else run.note({type: "measured", knee, gain: knee, po, swrMax});
         }
         break;
       }
@@ -652,6 +653,42 @@ check("percent columns are whole, sorted, deduplicated and capped at four",
     String(run.snapshot().modLevel));
   check("and the refusal names the real cause",
     Boolean(run.snapshot().modAdvice) && /too hot/.test(run.snapshot().modAdvice.reason),
+    run.snapshot().modAdvice ? run.snapshot().modAdvice.reason : "no advice");
+}
+
+{
+  // A radio that starts well ABOVE the floor is a different case from the one
+  // above: moving to 26 costs nothing extra and IS strictly safer than leaving
+  // the current, hotter value standing, so this time the plan must actually
+  // write it rather than only advise. The constant kneeOverride does not scale
+  // down with the write (a real knee would), so the second survey still asks
+  // for less than the floor -- which is exactly the point: it proves the plan
+  // stops at 26 rather than trying to write below it a second time.
+  const plan = Plan.normalizePlan({powers: [100], rows: [{band: "40m", hz: 7040000, cells: [1]}]});
+  const run = new Plan.TxGainPlanRun({plan, modLevel: 64});
+  run.begin();
+  const log = drive(run, makeRadio(64), {kneeOverride: () => 0.02, swrFor: () => 2.4});
+  const writes = log.filter(step => step.type === "writeMod");
+  check("a MOD level with room above the floor is moved TO the floor, not left alone",
+    writes.length === 1 && writes[0].value === Plan.MOD_RAW_MIN,
+    writes.length ? String(writes[0].value) : "no write");
+  check("and it stops there rather than writing below the floor a second time",
+    run.snapshot().modLevel === Plan.MOD_RAW_MIN,
+    String(run.snapshot().modLevel));
+  check("and a suspect SWR seen during that measurement is named, not just the audio",
+    Boolean(run.snapshot().modAdvice) && /SWR measured 2\.4 on 40m/.test(run.snapshot().modAdvice.reason),
+    run.snapshot().modAdvice ? run.snapshot().modAdvice.reason : "no advice");
+}
+
+{
+  // A clean antenna (SWR near 1) must not get blamed -- the caveat is only for
+  // the suspect range, not appended to every floor refusal regardless of SWR.
+  const plan = Plan.normalizePlan({powers: [100], rows: [{band: "40m", hz: 7040000, cells: [1]}]});
+  const run = new Plan.TxGainPlanRun({plan, modLevel: 23});
+  run.begin();
+  drive(run, makeRadio(23), {kneeOverride: () => 0.02, swrFor: () => 1.1});
+  check("a clean SWR reading is not turned into a caveat",
+    Boolean(run.snapshot().modAdvice) && !/SWR/.test(run.snapshot().modAdvice.reason),
     run.snapshot().modAdvice ? run.snapshot().modAdvice.reason : "no advice");
 }
 

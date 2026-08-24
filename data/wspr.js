@@ -95,7 +95,7 @@
   const DIAL_TOLERANCE_HZ = 500;
 
   const state = {
-    radio: {connected: false, transceiverType: "", radioName: "", mode: "", frequency: 0,
+    radio: {connected: false, transceiverType: "", radioName: "", radioNameSeen: false, mode: "", frequency: 0,
             tx: false, powerMeterRaw: 0, swr: 0, rfPower: 0, rfPowerSeen: false, supplyVolts: 0,
             lanDrops: 0, lanStalls: 0, lanFilled: 0},
     beacon: "stopped",          // stopped | armed | tuning | transmitting | paused
@@ -432,6 +432,7 @@
         connected: Boolean(json.connected),
         transceiverType: String(json.transceiverType || ""),
         radioName: String(json.radioName || ""),
+        radioNameSeen: json.radioNameSeen === true,
         // fall through to setReportedModel below -- the guide follows the radio
         mode: String(json.mode || ""),
         frequency: Number(json.frequency) || 0,
@@ -461,6 +462,12 @@
 
   const isLan = () => state.radio.transceiverType === "ICOM-LAN";
 
+  // See IcomModels.liveRadioModel()'s own comment for why this guard exists
+  // (the ~1s stale-radio-name window on a live LAN-slot model swap, confirmed
+  // against both an IC-705 and an IC-7610). Shared with data.js/mercury.js so
+  // the fix cannot regress in one page while staying fixed in the others.
+  const liveRadioModel = () => IcomModels.liveRadioModel(state.radio);
+
   // Full power of the transmitter on the CI-V percentage scale. Order matters:
   // an explicit override wins, then what the radio itself reported, and an
   // unknown model yields null so the UI refuses to start rather than guessing a
@@ -468,10 +475,11 @@
   function fullPower() {
     if (settings.modelOverride)
       return {watts: WsprCore.fullPowerWatts(settings.modelOverride), source: "manual override"};
-    const reported = WsprCore.fullPowerWatts(state.radio.radioName);
-    if (reported) return {watts: reported, source: `reported as ${state.radio.radioName}`};
-    return {watts: null, source: state.radio.radioName
-      ? `unknown model ${state.radio.radioName}` : "radio has not reported a model yet"};
+    const model = liveRadioModel();
+    const reported = WsprCore.fullPowerWatts(model);
+    if (reported) return {watts: reported, source: `reported as ${model}`};
+    return {watts: null, source: model
+      ? `unknown model ${model}` : "radio has not reported a model yet"};
   }
 
   // What this radio can be set to, cheapest first. The floor is its own
@@ -1660,7 +1668,7 @@
   const beaconGuard = new TxAlcGuard.TxAlcGuard();
   let calArmed = false;           // #autogain: also suppresses the automatic power write
 
-  const calModel = () => settings.modelOverride || state.radio.radioName || "";
+  const calModel = () => settings.modelOverride || liveRadioModel() || "";
 
   // Declared before the single-shot tool because that tool's adapter asks the plan
   // panel for the radio's MOD level. `const` here would be a temporal dead zone: a
@@ -1966,10 +1974,13 @@
     if (!dom.frequencyMenu.hidden) renderFrequencyMenu();
     maybeOfferSetupHelp();
     dom.trxMode.textContent = state.radio.mode || "---";
-    dom.radioModel.textContent = state.radio.radioName || "model unknown";
+    dom.radioModel.textContent = liveRadioModel() || "model unknown";
     // Same string drives the setup guide, so the dialog can never explain a radio
-    // other than the one on the air. No-op while it does not change.
-    if (typeof TrxHelp !== "undefined") TrxHelp.setReportedModel(state.radio.radioName);
+    // other than the one on the air. No-op while it does not change. Must be
+    // liveRadioModel(), not the raw radioName -- radioName can still hold the
+    // PREVIOUS radio's name for ~1s after a live LAN-slot model swap, before
+    // radioNameSeen catches up (see liveRadioModel()'s own comment above).
+    if (typeof TrxHelp !== "undefined") TrxHelp.setReportedModel(liveRadioModel());
     dom.linkState.textContent = state.radio.connected ? "● LINKED" : "● OFFLINE";
     dom.linkState.classList.toggle("up", state.radio.connected);
 

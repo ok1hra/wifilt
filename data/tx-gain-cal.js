@@ -26,6 +26,15 @@
 
   const ULAW_BYTES_PER_SECOND = 8000;
 
+  // Antenna-fault abort threshold shared by every calibration UI built on
+  // this module (tx-gain-cal-ui.js's WSPR/JS8 tool, mercury-gain-cal.js) --
+  // firmware SWR units overstate real SWR at low RF power (a calibration
+  // runs a carrier well below rated output), so this is deliberately
+  // generous: a "something is reflecting" trip point, not a match-quality
+  // one. Lives here, not in either UI file, so a future retune cannot land
+  // in only one of them.
+  const CAL_SWR_LIMIT = 3.0;
+
   const DEFAULTS = {
     // Cold start. Low enough to be clean on any sane setup, high enough not to
     // spend the whole carrier climbing; a stored knee overrides it anyway.
@@ -504,7 +513,7 @@
     return {...doc, v: SCHEMA_VERSION, entries, plan};
   }
 
-  return {TxGainCal, TxGainStore, DEFAULTS, ULAW_BYTES_PER_SECOND,
+  return {TxGainCal, TxGainStore, DEFAULTS, ULAW_BYTES_PER_SECOND, CAL_SWR_LIMIT,
           bandOf, entryKey, compact, expand, STORE_URL, SCHEMA_VERSION, migrate,
           entryStatus, seedFrom, toDb, fromDb};
 });

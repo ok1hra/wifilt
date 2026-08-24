@@ -52,6 +52,18 @@
   // for less, the honest conclusion is not "write it" but "the audio path is far too
   // hot for this RF power" -- and that is what gets said.
   const MOD_RAW_MIN = 26, MOD_RAW_MAX = 255;
+  // Firmware SWR units read high against a true VSWR meter (see CAL_SWR_LIMIT's own
+  // comment in tx-gain-cal-ui.js), so this sits well below the 3.0 hard-abort: it only
+  // has to be worth a second look, not worth stopping the carrier for. A knee this low
+  // can be an antenna reflecting into ALC rather than audio that is genuinely too hot,
+  // and a MOD-level number alone cannot tell the two apart -- the SWR reading taken
+  // during the very same measurement can.
+  const SWR_SUSPECT = 2.0;
+
+  const swrCaveat = entry => entry.swrMax >= SWR_SUSPECT
+    ? ` — SWR measured ${entry.swrMax.toFixed(1)} on ${entry.band} during this ` +
+      "measurement; check the antenna before trusting that the audio is what's hot"
+    : "";
   // The survey only has to rank the bands, so it stops eight times earlier than
   // the clean pass. ~8 s of carrier instead of ~15.
   const SURVEY_RESOLUTION_DB = 1.5;
@@ -435,12 +447,25 @@
       // the wrong direction, so step by the smallest amount the radio can express.
       // Asking for less than the floor is a finding, not a value to write.
       if (wanted < MOD_RAW_MIN) {
+        // The exact target is out of reach, but the floor itself is still BELOW
+        // what the radio has now -- decision 11's own "26 is sane" already applies
+        // to it. Moving there is strictly safer than leaving the current, hotter
+        // value standing, even though the re-measurement below will likely land
+        // outside tolerance again. Silent, like the ceiling correction above: the
+        // advice is worth having only once there is nowhere left to move.
+        if (this.modLevel > MOD_RAW_MIN && this.modCorrections < MOD_MAX_CORRECTIONS) {
+          this.modTarget = MOD_RAW_MIN;
+          return {type: "writeMod", value: MOD_RAW_MIN, from: this.modLevel,
+                  band: worst.band, knee: worst.knee, atCeiling: false, atFloor: true,
+                  verifyPercent: worst.percent, verifyHz: worst.hz};
+        }
         return this.enterMatrix({
           advice: {offDb: Number(offDb.toFixed(1)), band: worst.band, knee: worst.knee,
                    target: MOD_RAW_MIN,
                    reason: `the MOD level would have to go below ${MOD_RAW_MIN} of 255 ` +
                      "(10 %), which is a radio that barely modulates — the audio path " +
-                     "is far too hot for this RF power, so nothing was written"}});
+                     "is far too hot for this RF power, so nothing was written" +
+                     swrCaveat(worst)}});
       }
       if (clamped === this.modLevel && Math.abs(offDb) > MOD_TOLERANCE_DB)
         clamped = worst.knee > MOD_LEVEL_TARGET
@@ -457,7 +482,7 @@
                    reason: wanted > MOD_RAW_MAX
                      ? "the MOD level is already at maximum — the RF power is higher " +
                        "than this audio path can drive"
-                     : "the MOD level is already at minimum"}});
+                     : "the MOD level is already at minimum" + swrCaveat(worst)}});
       }
       this.modTarget = clamped;
       return {type: "writeMod", value: clamped, from: this.modLevel,
@@ -505,6 +530,7 @@
           const knee = Number(event.knee) || 0;
           if (cell.survey) this.surveyKnees.push({band: cell.band, hz: cell.hz,
                                                   percent: cell.percent, knee,
+                                                  swrMax: Number(event.swrMax) || 0,
                                                   reachedCeiling: Boolean(event.reachedCeiling)});
           // A survey reading is not a stored calibration -- it was taken coarsely
           // and, once the MOD level moves, at a level nothing will transmit at.
@@ -529,7 +555,8 @@
           const cell = this.queue[this.index] || {};
           if (cell.survey) {
             this.surveyKnees.push({band: cell.band, hz: cell.hz, percent: cell.percent,
-                                   knee: Number(event.knee) || 0, reachedCeiling: true});
+                                   knee: Number(event.knee) || 0,
+                                   swrMax: Number(event.swrMax) || 0, reachedCeiling: true});
             this.results.push({...cell, status: "survey", knee: Number(event.knee) || 0,
                                gain: Number(event.gain) || 0, po: Number(event.po) || 0,
                                reachedCeiling: true, note: ""});

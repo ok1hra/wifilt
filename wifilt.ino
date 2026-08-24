@@ -135,7 +135,7 @@ volatile bool cwIpSendPending = false;
 #ifndef LOOP_WARN_MS
   #define LOOP_WARN_MS 200
 #endif
-#define REV 20260823
+#define REV 20260824
 #define WIFI
 #define FSK_KEYING  // RTTY by keying the FSK + PTT outputs (was UDP_TO_FSK, from when a UDP port fed it)
 #define WDT         // watchdog timer
@@ -684,6 +684,15 @@ int incomingByte = 0;   // for incoming serial data
   // direction, let data overdrive ALC at a gain JS8/WSPR proved clean.
   static const char* MERCURY_TXGAIN_CONFIG_PATH = "/mercury-txgain.json";
   static const size_t MERCURY_TXGAIN_MAX_BYTES = 6144;
+  // ARQ retry/CALLINT/downgrade/mode-ceiling + transfer-size-limit + RF power
+  // (docs/mercury-implementace.md §6.6, the 2026-08-23 grill-me). A separate
+  // file from MERCURY_TXGAIN_CONFIG_PATH above (different concern) and from
+  // data/mercury-settings.js's own MercurySettings (that one is localStorage,
+  // per-browser, scoped to the frequency timetable alone -- see
+  // data/mercury-tuning.js's own header for why the two must not merge).
+  // Small flat blob, same generous headroom style as MERCURY_TXGAIN_MAX_BYTES.
+  static const char* MERCURY_TUNING_CONFIG_PATH = "/mercury-tuning.json";
+  static const size_t MERCURY_TUNING_MAX_BYTES = 2048;
   // The JS8 and WSPR operating profile: speed, TX offset, heartbeat interval,
   // groups, the 24 h band schedule, the RF power percent. It used to live in
   // each browser's localStorage, which meant a second tablet ran the station
@@ -930,6 +939,8 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void handlePostTxGain(void);
   void handleGetMercuryTxGain(void);
   void handlePostMercuryTxGain(void);
+  void handleGetMercuryTuning(void);
+  void handlePostMercuryTuning(void);
   void handleGetCivRead(void);
   uint16_t aprsisPasscode(const String &call);
   bool aprsisFieldSafe(const String &value);
@@ -2082,6 +2093,20 @@ static const char *radioNameForJson(IcomLanClient *client){
   return safe;
 }
 
+// Is radioNameForJson's answer about the radio that is linked RIGHT NOW, or the
+// remembered fallback from before this connection had capabilities? The two
+// look identical in the JSON -- both are just a string -- but a reconnect to a
+// DIFFERENT model walks straight through the fallback window, and every reader
+// that turns the name into watts or a CI-V subaddress (RF power scale, MOD
+// level command) would silently keep using the previous radio's numbers for as
+// long as that window lasts. rfPower already has rfPowerSeen for exactly this
+// reason; radioName never had its own until a live reconfigure test (switching
+// TRX1 from an IC-705 to an IC-7610 without restarting) reproduced it: /state
+// answered "IC-705" for about a second while "connecting" was still true.
+static bool radioNameSeenForJson(IcomLanClient *client){
+  return client && client->radioModelName()[0] != 0;
+}
+
 // Bus-level serial CI-V RTT (single outstanding query across TRX2/TRX3) -- last
 // + max-since-boot, same shape as icomLanClient.h's link-latency fields. Declared
 // here (ahead of the CI-V polling state machine further down) because
@@ -2172,7 +2197,7 @@ void buildStateJson(char *buf, size_t bufSize, bool lanView){
     "\"radioTransport\":\"%s\",\"fullCat\":%s,\"tuneSupported\":true,"
     "\"wifiRssi\":%d,\"fwRev\":\"%u\",\"bdSupported\":%s,\"power\":%s,"
     "\"frequency\":%u,\"mode\":\"%s\",\"filter\":%u,"
-    "\"radioAddress\":\"%s\",\"transceiverType\":\"%s\",\"radioName\":\"%s\",\"tx\":%s,\"ritRaw\":%u,"
+    "\"radioAddress\":\"%s\",\"transceiverType\":\"%s\",\"radioName\":\"%s\",\"radioNameSeen\":%s,\"tx\":%s,\"ritRaw\":%u,"
     "\"smeterRaw\":%u,\"powerMeterRaw\":%u,\"alcRaw\":%u,"
     "\"afGain\":%u,\"keySpeed\":%u,\"rfPower\":%u,\"rfPowerSeen\":%s,"
     "\"supplyVolts\":%.2f,\"swr\":%.2f,"
@@ -2190,7 +2215,8 @@ void buildStateJson(char *buf, size_t bufSize, bool lanView){
     radioTransportName(primaryTransport), fullCat ? "true" : "false",
     rssi, (unsigned)REV, bdEnabled ? "true" : "false", viewPower ? "true" : "false",
     (unsigned)viewFrequency, modesSnapshot, (unsigned)viewFilter,
-    addrStr, viewType, radioNameForJson(client), viewTx ? "true" : "false",
+    addrStr, viewType, radioNameForJson(client),
+    radioNameSeenForJson(client) ? "true" : "false", viewTx ? "true" : "false",
     (unsigned)(snapView ? 0 : stateRitRaw),
     (unsigned)viewSmeter, (unsigned)viewPowerMeter, (unsigned)viewAlcRaw,
     (unsigned)(snapView ? 0 : stateAfGain), (unsigned)(snapView ? 0 : stateKeySpeed), (unsigned)viewRfPower,
@@ -3630,6 +3656,44 @@ void handlePostMercuryTxGain() {
   webServer.send(200, "application/json", "{\"ok\":true}");
 }
 
+// docs/mercury-implementace.md §6.6: ARQ retry/CALLINT/downgrade/mode-ceiling
+// + transfer-size-limit + RF power. Same "the schema is the browser's"
+// contract as the txgain pair above -- the firmware stores/returns the blob
+// verbatim and never parses it; data/mercury-tuning.js owns normalization
+// and defaults on both the read and write side.
+void handleGetMercuryTuning() {
+  webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  webServer.sendHeader("Connection", "close");
+  webServer.client().setNoDelay(true);
+  String json;
+  if (cfgFS.exists(MERCURY_TUNING_CONFIG_PATH)) {
+    File mf = cfgFS.open(MERCURY_TUNING_CONFIG_PATH, "r");
+    if (mf) { json = mf.readString(); mf.close(); json.trim(); }
+  }
+  if (json.length() < 2 || json[0] != '{') json = "{}";
+  webServer.send(200, "application/json", json);
+}
+
+void handlePostMercuryTuning() {
+  webServer.sendHeader("Connection", "close");
+  webServer.client().setNoDelay(true);
+  String body = webServer.arg("plain");
+  body.trim();
+  if (body.length() == 0 || body.length() > MERCURY_TUNING_MAX_BYTES) {
+    webServer.send(400, "application/json", "{\"error\":\"bad_request\"}");
+    return;
+  }
+  if (body[0] != '{' || body[body.length()-1] != '}') {
+    webServer.send(400, "application/json", "{\"error\":\"not_json\"}");
+    return;
+  }
+  File mf = cfgFS.open(MERCURY_TUNING_CONFIG_PATH, "w");
+  if (!mf) { webServer.send(500, "application/json", "{\"error\":\"write\"}"); return; }
+  mf.print(body);
+  mf.close();
+  webServer.send(200, "application/json", "{\"ok\":true}");
+}
+
 // ---- the last CI-V reply a page asked for ------------------------------------
 //
 // Raw hex out, no interpretation. Unlike /txgain.json this must NOT invent an
@@ -4369,6 +4433,8 @@ void setupWebServer(void){
   webServer.on("/txgain.json", HTTP_POST, handlePostTxGain);
   webServer.on("/mercury-txgain.json", HTTP_GET,  handleGetMercuryTxGain);
   webServer.on("/mercury-txgain.json", HTTP_POST, handlePostMercuryTxGain);
+  webServer.on("/mercury-tuning.json", HTTP_GET,  handleGetMercuryTuning);
+  webServer.on("/mercury-tuning.json", HTTP_POST, handlePostMercuryTuning);
   webServer.on("/aprsis/spot",   HTTP_POST, handleAprsisSpot);
   webServer.on("/aprsis/status", HTTP_GET,  handleAprsisStatus);
   webServer.on("/civread",     HTTP_GET,  handleGetCivRead);

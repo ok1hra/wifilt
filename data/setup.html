@@ -50,7 +50,7 @@
            cursor. It only orients and links; the fields themselves stay in the
            sections they have always been in. -->
       <div id="setupSpineHost"></div>
-      <script src="/icom-models.js?v=8c52dd1e"></script>
+      <script src="/icom-models.js?v=69ee9462"></script>
       <script src="/icom-discovery.js?v=dc5654a5"></script>
       <script src="/setup-spine.js?v=f2f44550"></script>
       <!-- The identity fields on this page are the only editable copy in the
@@ -1420,6 +1420,27 @@
       function showModel(slot, model) {
         var e = document.querySelector('[data-icom-model="' + slot + '"]');
         if (e) e.textContent = model ? 'Detected: ' + model : '';
+        if (model) fillDetectedDefaults(slot, model);
+      }
+      // A freshly identified radio knows its own label and CI-V address --
+      // icom-models.js carries both per model -- better than the blank fields
+      // this form starts with. Never overwrites a value already typed: a custom
+      // label or a CI-V address moved off the factory default (e.g. two radios
+      // of the same model on one bus) is deliberate, and this only ever touches
+      // a plain form field pending Save, never the radio itself.
+      function fillDetectedDefaults(slot, model) {
+        var row = window.IcomModels && window.IcomModels.findModel(model);
+        if (!row) return;
+        function fillIfEmpty(suffix, value) {
+          if (!value) return;
+          var input = field(slot + suffix);
+          if (!input || input.value.trim()) return;
+          input.value = value;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        fillIfEmpty('label', row.label);
+        fillIfEmpty('civaddr', row.civAddr);
       }
       function stopTest() {
         if (testTimer) { testTimer(); testTimer = null; }

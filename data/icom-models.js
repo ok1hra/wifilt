@@ -162,6 +162,22 @@
   // lists are in one order and neither can gain a model the other lacks.
   function models() { return MODELS.slice(); }
 
+  // radio.radioName can be a carryover from the PREVIOUS radio on a LAN slot:
+  // while a reconnect is still "connecting", the firmware fills radioName
+  // from what it remembers rather than leave it blank (so a page does not go
+  // dead on a link blip), and that remembered value is exactly the wrong
+  // answer the moment the physical radio behind it has actually changed.
+  // radioNameSeen is true only once the CURRENT connection has itself read a
+  // capabilities packet -- confirmed live against both an IC-705 and an
+  // IC-7610 (switching a LAN slot's radio without restarting held the old
+  // name for about a second while "connecting" was still true). Every reader
+  // that turns the name into watts or a CI-V subaddress should go through
+  // this rather than radio.radioName direct -- one shared copy so the fix
+  // cannot regress in data.js/wspr.js/mercury.js independently of each other.
+  function liveRadioModel(radio) {
+    return radio && radio.radioNameSeen === true ? (radio.radioName || "") : "";
+  }
+
   return {MODELS, BRIDGED_ONLY_WATTS, modelNumber, findModel, fullPowerWatts, models,
-          FORBIDDEN_WRITE_SUBADDRESSES, writableSubaddress};
+          FORBIDDEN_WRITE_SUBADDRESSES, writableSubaddress, liveRadioModel};
 });

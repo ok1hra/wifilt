@@ -49,6 +49,14 @@
   // fire first. This one only protects against this file itself, not against
   // the plan.
   const WATCHDOG_MS = 95000;
+  // Shared with tx-gain-cal-ui.js via tx-gain-cal.js's own export (see its
+  // comment there). The Worker only ever sees ALC -- it has no forward-power
+  // or SWR meter of its own -- so without this an antenna reflecting into
+  // ALC looks exactly like audio that is genuinely too hot, and the plan's
+  // MOD-level advice would name the wrong cause. WSPR/JS8's own tool has
+  // carried this guard since before this file existed; Mercury's
+  // calibration never did.
+  const CAL_SWR_LIMIT = TxGainCal.CAL_SWR_LIMIT;
 
   class MercuryGainCalRun {
     constructor(adapter) {
@@ -60,6 +68,17 @@
       this.watchdog = null;
       this._running = false;
       this.onOutcome = null;
+      this.swrPeak = 0;
+    }
+
+    // Polled by the host page, exactly like tx-gain-cal-ui.js's own noteMeters().
+    // Guarded on `_running` for the same reason: the page polls the radio's meters
+    // continuously, on and off any calibration.
+    noteMeters({swr}) {
+      if (!this._running) return;
+      this.swrPeak = Math.max(this.swrPeak, Number(swr) || 0);
+      if ((Number(swr) || 0) >= CAL_SWR_LIMIT)
+        this.stop(`SWR reached ${Number(swr).toFixed(1)} — check the antenna`);
     }
 
     get running() { return this._running; }
@@ -167,6 +186,7 @@
         : (stored ? TxGainCal.seedFrom(stored, modLevel) : 0);
 
       this._running = true;
+      this.swrPeak = 0;
       this.cal = {phase: "starting", state: "starting", gain: seed || 0, steps: 0, alcMax: 0};
       this.endsAtMs = this.page.wallNow() + WATCHDOG_MS;
       this.page.onRunChange(true);
@@ -216,13 +236,14 @@
     finish(outcome) {
       if (!this._running) return;
       this._running = false;
+      const swrMax = Number(this.swrPeak.toFixed(1));
       this.cal = null;
       if (this.watchdog) { clearTimeout(this.watchdog); this.watchdog = null; }
       if (this.worker) { try { this.worker.terminate(); } catch (_e) {} this.worker = null; }
       this.page.onRunChange(false);
       if (this.claimedHere) { this.page.releaseSession(); this.claimedHere = false; }
       const cb = this.onOutcome; this.onOutcome = null;
-      if (cb) cb(outcome);
+      if (cb) cb({...outcome, swrMax});
     }
 
     stop(reason) { this.finish({ok: false, reason: reason || "operator stop"}); }

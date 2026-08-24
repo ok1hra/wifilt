@@ -55,7 +55,15 @@
   let held = false, confirmed = false, since = 0, localHolder = null;
   let pingTimer = null, retryTimer = null;
   let grantedCb = null, busyCb = null, lostCb = null;
-  let armed = (() => { const s = localStore(); return !!(s && s.getItem(ARMED_KEY) === "1"); })();
+  // Defaults to NOT ARMED (unattended answering is opt-in, same convention
+  // as WSPR's own TX pledge) -- reverted 2026-08-23 once the waterfall
+  // stopped depending on this flag (mercury.js's ambient "monitor" worker
+  // now feeds it regardless of armed state, so the earlier "defaults to
+  // ARMED" fix for an empty waterfall no longer applies). A missing key is
+  // "never touched this control", treated as the default; an explicit "1"
+  // is a deliberate opt-in and stays respected forever after, same as an
+  // explicit "0" always was.
+  let armed = (() => { const s = localStore(); const v = s && s.getItem(ARMED_KEY); return v === null || v === undefined ? false : v === "1"; })();
   let armedCb = null;
 
   if (channel) channel.onmessage = (event) => {
