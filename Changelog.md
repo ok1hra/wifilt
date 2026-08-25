@@ -18,23 +18,25 @@ published.
   Its one hardware difference is the status LED: the Atom has no plain LED on GPIO 5 but a
   single addressable **SK6812 RGB on GPIO 27**. A small status-LED HAL in `wifilt.ino`
   (`statusLedBegin`/`statusLedLevel`) renders the existing LED vocabulary onto either
-  indicator, selected by the `WIFILT_M5ATOM_LITE` build flag; the box's GPIO 5 LED behaviour
-  is unchanged. On the Atom the colour carries the state — blue fade in AP mode, green steady
-  when the station link is up — with brightness capped so a bare SK6812 is not dazzling.
+  indicator; the box's GPIO 5 LED behaviour is unchanged. On the Atom the colour carries the
+  state — blue fade in AP mode, green steady when the station link is up — with brightness
+  capped so a bare SK6812 is not dazzling. The board **selects itself**: both toolchains define
+  `ARDUINO_M5Stack_ATOM`, which `platform_caps.h` turns into `WIFILT_M5ATOM_LITE`, so no build
+  flag is required (the flag stays as a manual override).
 
-* **Embedded firmware builds with PlatformIO.** A new `platformio.ini` defines two ESP32
-  environments from the one sketch — `esp32` (the box / bare WROOM, the equivalent of the old
-  arduino-cli FQBN) and `m5atom` — pinning arduino-esp32 2.0.14 via espressif32 6.5.0, the
-  4 MB `partitions.csv`, DIO flash mode, and fetching TrxNet from `lib_deps`. `pio run` builds
-  both. The native Linux/Windows/ARM64 targets stay on `native/Makefile`.
+* **Both boards build with `arduino-cli`** — `esp32:esp32:esp32` for the box and
+  `esp32:esp32:m5stack-atom` for the Atom — as well as with **PlatformIO** (a new
+  `platformio.ini` with `esp32` and `m5atom` environments). Both pin arduino-esp32 2.0.14, use
+  the 4 MB `partitions.csv`, and pull TrxNet automatically. The native Linux/Windows/ARM64
+  targets stay on `native/Makefile`.
 
-* **CI is unchanged** — it keeps compiling the box with the arduino-cli `esp32` job; building
-  the M5Atom is a PlatformIO-only, local step for now. The release scripts
-  (`tools/export-compiled-binary.sh`, `tools/release.sh`) still produce the shipped binary with
-  the Arduino IDE 1.8.
+* **CI** now compiles both boards with `arduino-cli` (the box and the M5Atom Lite), keeping the
+  upstream toolchain. The release scripts (`tools/export-compiled-binary.sh`,
+  `tools/release.sh`) still produce the shipped binary with the Arduino IDE 1.8.
 
-* Not a regression risk for the box: `make -C native` still builds and both `pio run`
-  environments compile, link and fit `app0` (~73 %) with DIO flash-mode images.
+* Not a regression risk for the box: `make -C native` still builds and every board — both
+  `arduino-cli` FQBNs and both `pio run` environments — compiles, links and fits `app0`
+  (~73 %) with DIO flash-mode images.
 
 ---
 

@@ -54,15 +54,24 @@ The images land in `.pio/build/<env>/firmware.bin`. Everything below is pinned i
 > The Atom Lite is a **bare-module** build: same firmware and capabilities as the
 > box, with the band decoder auto-disabled at runtime (no hardware-revision
 > divider). It differs only in the status LED — it has no plain LED on GPIO 5 but
-> a single SK6812 RGB on GPIO 27, selected by the `WIFILT_M5ATOM_LITE` build flag.
-> See [HARDWARE.md § 6](HARDWARE.md#6-status-led).
+> a single SK6812 RGB on GPIO 27. The board **selects itself**: both toolchains
+> define `ARDUINO_M5Stack_ATOM`, which `platform_caps.h` turns into
+> `WIFILT_M5ATOM_LITE` — no build flag needed. See
+> [HARDWARE.md § 6](HARDWARE.md#6-status-led).
 
-PlatformIO is the primary path for local development (and the only one that
-builds the M5Atom). CI still compiles the box with `arduino-cli`, and the
-**release binary** is still produced with the Arduino IDE 1.8 by
-`tools/export-compiled-binary.sh` (see the release procedure below), which
-performs the same DIO and partition-fit checks. All three build the same
-`wifilt.ino` with the same core version, so their output is equivalent.
+Both boards also build with `arduino-cli`, so no PlatformIO is required and CI
+covers them on the upstream toolchain:
+
+```bash
+arduino-cli compile --fqbn "esp32:esp32:esp32:PartitionScheme=no_ota,FlashMode=dio" .
+arduino-cli compile --fqbn "esp32:esp32:m5stack-atom" .
+```
+
+PlatformIO remains a convenience for local work; the **release binary** is still
+produced with the Arduino IDE 1.8 by `tools/export-compiled-binary.sh` (see the
+release procedure below), which performs the same DIO and partition-fit checks.
+All three build the same `wifilt.ino` with the same core version, so their output
+is equivalent.
 
 Two of the pinned values need explaining.
 

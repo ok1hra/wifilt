@@ -155,7 +155,7 @@ jobs:
           path: native/build-win/wifilt.exe
 
   esp32:
-    name: ESP32 firmware
+    name: ESP32 + M5Atom firmware
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -176,8 +176,20 @@ jobs:
           git clone --depth 1 https://github.com/ok1hra/TrxNet.git \
             "$HOME/Arduino/libraries/TrxNet"
 
-      - name: Compile
+      # The RemoteQTH box / bare WROOM. FlashMode=dio for the Zbit clone flash;
+      # the sketch-local partitions.csv overrides the PartitionScheme menu.
+      - name: Compile (ESP32 box)
         run: |
           arduino-cli compile \
             --fqbn "esp32:esp32:esp32:PartitionScheme=no_ota,FlashMode=dio" \
+            --libraries "$HOME/Arduino/libraries" .
+
+      # The M5Stack Atom Lite. No extra flag: this FQBN defines
+      # ARDUINO_M5Stack_ATOM, which platform_caps.h turns into WIFILT_M5ATOM_LITE
+      # (SK6812 status LED on GPIO 27, CI-V mute pin off the PICO-D4's flash pins).
+      # The same partitions.csv applies.
+      - name: Compile (M5Atom Lite)
+        run: |
+          arduino-cli compile \
+            --fqbn "esp32:esp32:m5stack-atom" \
             --libraries "$HOME/Arduino/libraries" .

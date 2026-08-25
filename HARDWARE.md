@@ -243,7 +243,7 @@ device.
 
 On the box and a bare WROOM the LED is a plain one on **GPIO 5**. On a **M5Stack Atom Lite**
 there is no LED on GPIO 5; its single built-in **SK6812 RGB LED on GPIO 27** is used instead,
-and the firmware picks the right one at build time (the `WIFILT_M5ATOM_LITE` flag). The
+and the firmware picks the right one automatically when built for the Atom board. The
 vocabulary is the same on both — the Atom only adds colour to it:
 
 | Pattern | Plain LED (box) | Atom Lite RGB | Meaning |
