@@ -59,8 +59,14 @@ It is an ESP32-PICO-D4 with the same 4 MB of flash, so it runs the identical fir
 bare module — the band decoder and the other interface-board outputs are simply absent (it
 reports as an unidentified board, revision 99). Its one visible difference is the status
 LED: it has no plain LED on GPIO 5 but a single addressable **SK6812 RGB LED on GPIO 27**,
-which the firmware drives instead — see [section 6](#6-status-led). Flash it from the web
-installer, or build it yourself with `pio run -e m5atom` ([BUILD.md § 1](BUILD.md#1-firmware)).
+which the firmware drives instead — see [section 6](#6-status-led).
+
+**Build and flash it yourself** — the [web installer](https://ok1hra.github.io/wifilt/) does
+not offer an Atom image yet, only the box's. That image is wrong for the Atom: it drives
+GPIO 16, which the box uses for CI-V mute but the Atom's PICO-D4 wires to its own embedded
+flash, and driving it boot-loops the board. Use `pio run -e m5atom -t upload` or
+`arduino-cli` with the `esp32:esp32:m5stack-atom` FQBN instead
+([BUILD.md § 1](BUILD.md#1-firmware)).
 
 You also need:
 
@@ -168,9 +174,11 @@ Firmware is installed straight from a web page — no Arduino IDE, no drivers to
    your settings — see below.
 5. Wait for the write to finish, then close the dialog. The board restarts on its own.
 
-A **M5Stack Atom Lite** flashes exactly the same way over its own USB-C socket; pick its
-port in step 3. To build and flash it from source instead, use `pio run -e m5atom -t upload`
-([BUILD.md § 1](BUILD.md#1-firmware)).
+**This page is for the box and a bare WROOM.** A M5Stack Atom Lite is not on it yet — the
+web installer above only offers the box's firmware, and that image is wrong for the Atom: it
+drives GPIO 16, which the Atom's PICO-D4 wires to its own embedded flash, and boot-loops the
+board. Build and flash the Atom from source instead: `pio run -e m5atom -t upload`, or
+`arduino-cli` with the `esp32:esp32:m5stack-atom` FQBN ([BUILD.md § 1](BUILD.md#1-firmware)).
 
 ### The "Erase device" checkbox
 
