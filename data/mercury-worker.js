@@ -460,6 +460,13 @@ async function main(config) {
     const peer = currentPeerCall();
     const hashHex = MercuryFile.hex(header.sha256);
     if (header.offset === 0) {
+      // A fresh transfer starting from byte 0 -- discard any prior partial
+      // record under this exact (peer, name, hash) key first. Without this,
+      // a peer that falls back to sending from offset 0 (its own REPLY
+      // never arrived, or it isn't resume-aware) would have its bytes
+      // appended onto a stale leftover from an earlier interrupted receive,
+      // corrupting the file instead of starting it clean.
+      await resumeStore.clear(peer, header.name, hashHex);
       post({ type: "incoming-file", name: header.name, totalSize: header.totalSize });
       activeReceive = { name: header.name, startMs: Date.now(), startBytes: 0 };
     } else if (!activeReceive || activeReceive.name !== header.name) {

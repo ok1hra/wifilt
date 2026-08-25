@@ -179,7 +179,12 @@ async function main(config) {
   session.complete(txId);
   session.stop();
 
-  if (cal.state === "done" && cal.result) {
+  // A ceiling result is NOT a calibration -- same reasoning as
+  // tx-gain-cal-ui.js's own finish(): "the level reached the ceiling and the
+  // radio never limited" means no knee was found, so storing that gain as
+  // usable would let a real burst go out at an unvalidated level the next
+  // time this key is looked up.
+  if (cal.state === "done" && cal.result && !cal.result.reachedCeiling) {
     try {
       const store = new TxGainStore({ url: MERCURY_TXGAIN_URL });
       const key = entryKey(model, band, percent);

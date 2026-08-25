@@ -60,7 +60,28 @@
       .replace(/[\x00-\x1f\x7f]/g, "")
       .replace(/[<>&"'`]/g, "_")
       .trim();
-    return text.slice(0, 200) || "file";
+    // Truncate by UTF-8 BYTES, not UTF-16 code units: buildHeader()'s own
+    // 255-byte cap counts encoded bytes, and any multi-byte alphabet
+    // (Czech, Cyrillic, CJK) can put 2-4 bytes in what String.slice() counts
+    // as one unit. Truncating by code units first let an ordinary ~90-char
+    // Czech filename encode past 255 bytes and throw there instead.
+    return truncateUtf8(text, 200) || "file";
+  }
+
+  // Trims `text` to at most `maxBytes` of UTF-8, cutting on a codepoint
+  // boundary (never inside a surrogate pair) so the result re-encodes to
+  // exactly the byte count it was measured at.
+  function truncateUtf8(text, maxBytes) {
+    const encoder = new TextEncoder();
+    if (encoder.encode(text).length <= maxBytes) return text;
+    let result = "", byteLen = 0;
+    for (const ch of text) { // iterates by Unicode codepoint
+      const chBytes = encoder.encode(ch).length;
+      if (byteLen + chBytes > maxBytes) break;
+      result += ch;
+      byteLen += chBytes;
+    }
+    return result;
   }
 
   function buildHeader({ flags = 0, totalSize = 0, offset = 0, sha256 = null, name = "" }) {

@@ -1180,7 +1180,12 @@
   }
 
   async function init() {
-    if (typeof LanGate !== "undefined") await checkLanConfiguration();
+    // Must return on false rather than rendering a degraded version of
+    // itself -- same contract data.js/wspr.js follow (see lan-gate.js).
+    // Previously the result was awaited but discarded, so the page kept
+    // claiming the Mercury session lease and opening the AUD1 Worker/socket
+    // even when the gate said not to start.
+    if (typeof LanGate !== "undefined" && !(await checkLanConfiguration())) return;
 
     [
       "peerCall", "skedTime", "callButton", "connectionTest", "aud1State", "listenToggle", "listenState",

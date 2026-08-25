@@ -26,12 +26,21 @@ const buildDir = path.join(proto, "build-worker");
 const mime = { ".html": "text/html", ".js": "application/javascript", ".wasm": "application/wasm" };
 
 let finished = false, chrome = null, timer = null, pingTimer = null;
+// SIGKILL, reachable even if THIS process is the one killed -- see
+// mercury-two-station-live.js's killAllChrome() comment for the real
+// orphaned-Chrome-keeps-a-real-radio-transmitting incident this guards
+// against. This driver can target a REAL IC-705, so an external kill must
+// never leave headless Chrome (and the radio it's keying) running.
+function killChrome() { if (chrome) { try { chrome.kill("SIGKILL"); } catch (_e) {} } }
+process.on("SIGTERM", () => { killChrome(); process.exit(143); });
+process.on("SIGINT", () => { killChrome(); process.exit(130); });
+
 function finish(result) {
   if (finished) return;
   finished = true;
   clearTimeout(timer);
   if (pingTimer) clearInterval(pingTimer);
-  if (chrome) chrome.kill("SIGTERM");
+  killChrome();
   server.close();
   console.log(JSON.stringify(result, null, 2));
   if (Array.isArray(result.slotDrifts) && result.slotDrifts.length) {

@@ -111,11 +111,14 @@ inline void js8SessionClearMercuryProgress(Js8Session &session) {
 // owns the lock at that point, so there is nothing to refuse, only nothing to
 // show.
 inline void js8SessionSetMercuryProgress(Js8Session &session, const char *name,
-                                         uint8_t percent, uint32_t remainingMs) {
+                                         int percent, uint32_t remainingMs) {
   if (!name) return;
   strncpy(session.mercuryName, name, sizeof(session.mercuryName) - 1);
   session.mercuryName[sizeof(session.mercuryName) - 1] = 0;
-  session.mercuryPercent = percent > 100 ? 100 : percent;
+  // Clamp on the wide `int` BEFORE narrowing to uint8_t -- narrowing first
+  // (e.g. a caller passing (uint8_t)percent) wraps any percent >= 256 mod
+  // 256, which this clamp would then no longer see as out of range.
+  session.mercuryPercent = (uint8_t)(percent < 0 ? 0 : (percent > 100 ? 100 : percent));
   session.mercuryRemainingMs = remainingMs;
 }
 

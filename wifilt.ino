@@ -8873,7 +8873,7 @@ void js8SessionApplyMercuryProgress(const String &body, const String &token){
   int percent = extractJsonInt(body, "mercuryPercent");
   int remainingMs = extractJsonInt(body, "mercuryRemainingMs");
   js8SessionSetMercuryProgress(js8Session, name.c_str(),
-                               (uint8_t)(percent < 0 ? 0 : percent),
+                               percent,
                                (uint32_t)(remainingMs < 0 ? 0 : remainingMs));
 }
 
