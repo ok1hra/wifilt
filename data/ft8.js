@@ -574,37 +574,55 @@
 
   // ---------------------------------------------------------------- boot
 
-  dom.sessionTakeover.addEventListener("click", () => claimSession(true));
-  if (dom.trxReconnect) dom.trxReconnect.addEventListener("click", () => pollState());
+  // Nothing starts until ICOM-LAN is known to be configured -- not even the
+  // session claim. FT8-ICOM has no audio path to the radio without the LAN
+  // transport, and taking the single-operator lease in that state would lock a
+  // working JS8Call-ICOM or WSPR-Beacon out of the radio for no reason. On a
+  // failed gate lan-gate.js shows the shared "DATA requires a TRX over
+  // ICOM-LAN" card, matching the JS8Call and WSPR pages.
+  LanGate.gate().then(ready => {
+    if (!ready) return;
 
-  renderFrequencyMenu();
-  dom.trxFrequency.addEventListener("click", () => {
-    const open = dom.frequencyMenu.hidden;
-    dom.frequencyMenu.hidden = !open;
-    dom.trxFrequency.setAttribute("aria-expanded", String(open));
-  });
-  dom.frequencyMenu.addEventListener("click", event => {
-    if (event.target.closest("[data-menu-close]")) { closeFrequencyMenu(); return; }
-    const button = event.target.closest("[data-frequency]");
-    if (button) requestFrequency(Number(button.dataset.frequency)).catch(() => {});
-  });
-  // Click-away and Escape close the menu, matching the JS8Call page's behaviour.
-  document.addEventListener("click", event => {
-    if (dom.frequencyMenu.hidden) return;
-    if (!dom.frequencyMenu.contains(event.target) && !dom.trxFrequency.contains(event.target))
-      closeFrequencyMenu();
-  });
-  document.addEventListener("keydown", event => {
-    if (event.key === "Escape") closeFrequencyMenu();
-  });
+    // Open the guide on the model this radio reported last time, until a live
+    // answer replaces it. radioSlots[].model survives a reboot for exactly this.
+    if (typeof TrxHelp !== "undefined") {
+      const slot = LanGate.slot ? LanGate.slot() : 0;
+      const config = LanGate.config() || {};
+      if (slot) TrxHelp.setReportedModel(config[`trx${slot}model`] || "");
+    }
 
-  waterfall.resize();
-  window.addEventListener("resize", () => waterfall.resize());
+    dom.sessionTakeover.addEventListener("click", () => claimSession(true));
+    if (dom.trxReconnect) dom.trxReconnect.addEventListener("click", () => pollState());
 
-  startWorker();
-  claimSession();
-  pollState();
-  setInterval(pollState, STATE_POLL_MS);
-  setInterval(renderClock, 250);
-  setInterval(maybeDecodeSlot, 200);
+    renderFrequencyMenu();
+    dom.trxFrequency.addEventListener("click", () => {
+      const open = dom.frequencyMenu.hidden;
+      dom.frequencyMenu.hidden = !open;
+      dom.trxFrequency.setAttribute("aria-expanded", String(open));
+    });
+    dom.frequencyMenu.addEventListener("click", event => {
+      if (event.target.closest("[data-menu-close]")) { closeFrequencyMenu(); return; }
+      const button = event.target.closest("[data-frequency]");
+      if (button) requestFrequency(Number(button.dataset.frequency)).catch(() => {});
+    });
+    // Click-away and Escape close the menu, matching the JS8Call page's behaviour.
+    document.addEventListener("click", event => {
+      if (dom.frequencyMenu.hidden) return;
+      if (!dom.frequencyMenu.contains(event.target) && !dom.trxFrequency.contains(event.target))
+        closeFrequencyMenu();
+    });
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape") closeFrequencyMenu();
+    });
+
+    waterfall.resize();
+    window.addEventListener("resize", () => waterfall.resize());
+
+    startWorker();
+    claimSession();
+    pollState();
+    setInterval(pollState, STATE_POLL_MS);
+    setInterval(renderClock, 250);
+    setInterval(maybeDecodeSlot, 200);
+  });
 })();
