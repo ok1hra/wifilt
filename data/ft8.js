@@ -27,8 +27,26 @@
   // LAN is exclusive to one of TRX1-TRX3; ?radio=lan makes the firmware answer
   // for that slot instead of the primary radio, same as data.js/wspr.js.
   const RADIO_STATE_URL = "/state?radio=lan";
+  const RADIO_CMD_URL = "/cmd?radio=lan";
 
   const RX_LOW = 200, RX_HIGH = 3000, AUDIO_RATE = 8000;
+
+  // Standard FT8 dial frequencies (USB), the counterpart to js8-presets.js. Same
+  // menu and behaviour as the JS8Call page; only the numbers differ.
+  const FT8_PRESETS = Object.freeze([
+    {id: "160m", band: "160 m", frequencyHz: 1840000},
+    {id: "80m", band: "80 m", frequencyHz: 3573000},
+    {id: "60m", band: "60 m", frequencyHz: 5357000},
+    {id: "40m", band: "40 m", frequencyHz: 7074000},
+    {id: "30m", band: "30 m", frequencyHz: 10136000},
+    {id: "20m", band: "20 m", frequencyHz: 14074000},
+    {id: "17m", band: "17 m", frequencyHz: 18100000},
+    {id: "15m", band: "15 m", frequencyHz: 21074000},
+    {id: "12m", band: "12 m", frequencyHz: 24915000},
+    {id: "10m", band: "10 m", frequencyHz: 28074000},
+    {id: "6m", band: "6 m", frequencyHz: 50313000},
+    {id: "2m", band: "2 m", frequencyHz: 144174000},
+  ]);
 
   // FT8: 15 s slots; the transmission is 12.64 s starting at the slot boundary.
   const SLOT_MS = 15000;
@@ -44,11 +62,12 @@
   const RING_SAMPLES = 18 * AUDIO_RATE;
 
   const AUD1_LIVE_MS = 3000;      // dot filled while RX audio is this fresh
-  const MAX_SLOT_GROUPS = 60;     // decode history kept in the DOM
+  const MAX_SLOT_GROUPS = 4;      // decode history kept in the DOM: last 4 periods
 
   const $ = id => document.getElementById(id);
   const dom = {};
   for (const id of [
+    "trxFrequency", "frequencyMenu",
     "trxFrequencyValue", "trxMode", "radioModel", "linkState", "trxReconnect",
     "aud1State", "utcClock", "timingState", "trxSlotLabel",
     "sessionBusy", "sessionBusyWhere", "sessionTakeover",
@@ -75,7 +94,9 @@
     lastAudioMs: 0,
     lastDecode: null,        // {slotUtcMs, count, elapsedMs}
     workerReady: false,
+    pendingFrequency: null,  // tuned but not yet confirmed by /state
   };
+  let frequencyMenuKey = "";
 
   // ---------------------------------------------------------------- decode worker
 
@@ -445,6 +466,9 @@
         mode: String(json.mode || ""),
         frequency: Number(json.frequency) || 0,
       };
+      // The tune has arrived once the radio reports the frequency we asked for.
+      if (state.pendingFrequency && state.radio.frequency === state.pendingFrequency)
+        state.pendingFrequency = null;
     } catch (_error) {
       state.radio.connected = false;
     } finally { statePollInFlight = false; }
@@ -455,17 +479,76 @@
     (globalThis.IcomModels && IcomModels.liveRadioModel)
       ? IcomModels.liveRadioModel(state.radio) : (state.radio.radioName || "");
 
+  // ---------------------------------------------------------------- dial menu
+  //
+  // Same shape as the JS8Call page (data.js): a button toggles a preset list,
+  // choosing a band tunes the LAN radio and sets USB-D. CSS comes from data.css.
+
+  const fmtFreq = hz =>
+    (globalThis.Js8TrxPresets && Js8TrxPresets.formatFrequency)
+      ? Js8TrxPresets.formatFrequency(hz || 0)
+      : ((hz || 0) / 1e6).toFixed(6);
+
+  const offDialFrequency = () => {
+    const hz = state.pendingFrequency || state.radio.frequency;
+    return Boolean(hz) && !FT8_PRESETS.some(p => p.frequencyHz === hz);
+  };
+
+  function closeFrequencyMenu() {
+    dom.frequencyMenu.hidden = true;
+    dom.trxFrequency.setAttribute("aria-expanded", "false");
+  }
+
+  function renderFrequencyMenu() {
+    const selected = state.pendingFrequency || state.radio.frequency;
+    dom.frequencyMenu.innerHTML =
+      `<header><strong>FT8 dial frequencies</strong><small>Choose a band to tune the TRX</small>` +
+      `<span class="tt-actions"><button class="tt-clear" type="button" data-menu-close title="Close">CLOSE</button></span></header>` +
+      `<div class="frequency-presets">${FT8_PRESETS.map(item =>
+        `<button class="frequency-preset${item.frequencyHz === selected ? " current" : ""}" data-frequency="${item.frequencyHz}" type="button">` +
+        `<strong>${item.band}</strong><span>${fmtFreq(item.frequencyHz)}</span></button>`).join("")}</div>` +
+      `<footer>Standard FT8 dial frequencies (USB)</footer>`;
+    frequencyMenuKey = String(selected);
+  }
+
+  async function ensureUsbDataMode() {
+    if (!state.radio.connected || state.radio.mode === "USB-D") return;
+    try {
+      await fetch(RADIO_CMD_URL, {method: "POST", signal: fetchDeadline(),
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({type: "civ.raw", data: "2600010101"})});
+    } catch (_error) { /* mode is advisory; the tune already happened */ }
+  }
+
+  async function requestFrequency(frequency) {
+    state.pendingFrequency = frequency;
+    closeFrequencyMenu();
+    render();
+    try {
+      const response = await fetch(RADIO_CMD_URL, {method: "POST", signal: fetchDeadline(),
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({type: "setFrequency", frequency: String(frequency)})});
+      if (!response.ok) throw new Error(`TRX request ${response.status}`);
+      await ensureUsbDataMode();
+    } catch (_error) {
+      state.pendingFrequency = null;
+      render();
+    }
+  }
+
   // ---------------------------------------------------------------- render
 
   function render() {
     const radio = state.radio;
 
-    if (globalThis.Js8TrxPresets && Js8TrxPresets.formatFrequency)
-      dom.trxFrequencyValue.textContent = radio.frequency
-        ? Js8TrxPresets.formatFrequency(radio.frequency) : "--.---.---";
-    else
-      dom.trxFrequencyValue.textContent = radio.frequency
-        ? (radio.frequency / 1e6).toFixed(6) : "--.---.---";
+    const shownHz = state.pendingFrequency || radio.frequency;
+    dom.trxFrequencyValue.textContent = shownHz ? fmtFreq(shownHz) : "--.---.---";
+    dom.trxFrequency.classList.toggle("pending", Boolean(state.pendingFrequency));
+    const offDial = !state.pendingFrequency && offDialFrequency();
+    dom.trxFrequency.classList.toggle("off-dial", offDial);
+    dom.trxFrequency.title = offDial
+      ? "Not a standard FT8 dial frequency — choose a band from the menu" : "";
+    if (frequencyMenuKey !== String(shownHz)) renderFrequencyMenu();
 
     dom.trxMode.textContent = radio.mode || "---";
     dom.radioModel.textContent = liveRadioModel() || "--";
@@ -493,6 +576,27 @@
 
   dom.sessionTakeover.addEventListener("click", () => claimSession(true));
   if (dom.trxReconnect) dom.trxReconnect.addEventListener("click", () => pollState());
+
+  renderFrequencyMenu();
+  dom.trxFrequency.addEventListener("click", () => {
+    const open = dom.frequencyMenu.hidden;
+    dom.frequencyMenu.hidden = !open;
+    dom.trxFrequency.setAttribute("aria-expanded", String(open));
+  });
+  dom.frequencyMenu.addEventListener("click", event => {
+    if (event.target.closest("[data-menu-close]")) { closeFrequencyMenu(); return; }
+    const button = event.target.closest("[data-frequency]");
+    if (button) requestFrequency(Number(button.dataset.frequency)).catch(() => {});
+  });
+  // Click-away and Escape close the menu, matching the JS8Call page's behaviour.
+  document.addEventListener("click", event => {
+    if (dom.frequencyMenu.hidden) return;
+    if (!dom.frequencyMenu.contains(event.target) && !dom.trxFrequency.contains(event.target))
+      closeFrequencyMenu();
+  });
+  document.addEventListener("keydown", event => {
+    if (event.key === "Escape") closeFrequencyMenu();
+  });
 
   waterfall.resize();
   window.addEventListener("resize", () => waterfall.resize());

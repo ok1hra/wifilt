@@ -40,13 +40,14 @@
 
 <header class="radio-bar">
   <button id="trxHelpButton" class="trx-help-button" type="button" aria-haspopup="dialog" aria-controls="trxHelpDialog" aria-label="Radio setup help" title="Radio setup help">?</button>
-  <!-- Display only in the RX-only build: FT8-ICOM does not tune the radio yet.
-       The dial and mode are read from /state so the operator can confirm the
-       band the decodes belong to. -->
+  <!-- Same dial menu as the JS8Call page, with FT8 frequencies. Choosing a band
+       tunes the LAN radio and sets USB-D. The dial and mode are read back from
+       /state so the operator can confirm the band the decodes belong to. -->
   <div class="trx-control">
-    <div class="trx-frequency" title="Dial frequency reported by the radio">
-      <span><small id="trxSlotLabel">TRX</small><b id="trxFrequencyValue">--.---.---</b></span><span class="unit">MHz</span>
-    </div>
+    <button id="trxFrequency" class="trx-frequency" type="button" aria-expanded="false" aria-controls="frequencyMenu">
+      <span><small id="trxSlotLabel">TRX</small><b id="trxFrequencyValue">--.---.---</b></span><span class="unit">MHz</span><span class="chevron">▾</span>
+    </button>
+    <section id="frequencyMenu" class="frequency-menu" hidden aria-label="FT8 dial frequencies"></section>
   </div>
   <span id="trxMode" class="trx-mode">---</span>
   <span id="radioModel" class="radio-model" title="Model reported by the radio itself">--</span>
@@ -126,6 +127,6 @@
 <script src="/js8-aud1.js?v=b5d81c6f"></script>
 <!-- ft8.js reads its own ?v= and hands it to the decode worker, which
      importScripts()es the vendored /ft8ts.js at the same revision. -->
-<script src="/ft8.js?v=f85a9993"></script>
+<script src="/ft8.js?v=df0d91a5"></script>
 </body>
 </html>
