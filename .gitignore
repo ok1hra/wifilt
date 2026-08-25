@@ -8,6 +8,10 @@
 /native/build-win/
 /native/dist/
 /native/_run/
+
+# PlatformIO firmware build output and its local cache (the fetched TrxNet
+# library lives here too). All reproducible from source.
+/.pio/
 /data/*.gz
 /data/*.br
 /data/*.js.min

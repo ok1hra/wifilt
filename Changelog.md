@@ -11,6 +11,35 @@ published.
 
 ## Working tree — not committed
 
+**M5Stack Atom Lite support, and the firmware now builds with PlatformIO.**
+
+* **New board: M5Stack Atom Lite** (ESP32-PICO-D4, 4 MB). It runs the same `wifilt.ino` as a
+  bare module — band decoder and the interface-board outputs absent, reported as revision 99.
+  Its one hardware difference is the status LED: the Atom has no plain LED on GPIO 5 but a
+  single addressable **SK6812 RGB on GPIO 27**. A small status-LED HAL in `wifilt.ino`
+  (`statusLedBegin`/`statusLedLevel`) renders the existing LED vocabulary onto either
+  indicator; the box's GPIO 5 LED behaviour is unchanged. On the Atom the colour carries the
+  state — blue fade in AP mode, green steady when the station link is up — with brightness
+  capped so a bare SK6812 is not dazzling. The board **selects itself**: both toolchains define
+  `ARDUINO_M5Stack_ATOM`, which `platform_caps.h` turns into `WIFILT_M5ATOM_LITE`, so no build
+  flag is required (the flag stays as a manual override).
+
+* **Both boards build with `arduino-cli`** — `esp32:esp32:esp32` for the box and
+  `esp32:esp32:m5stack-atom` for the Atom — as well as with **PlatformIO** (a new
+  `platformio.ini` with `esp32` and `m5atom` environments). Both pin arduino-esp32 2.0.14, use
+  the 4 MB `partitions.csv`, and pull TrxNet automatically. The native Linux/Windows/ARM64
+  targets stay on `native/Makefile`.
+
+* **CI** now compiles both boards with `arduino-cli` (the box and the M5Atom Lite), keeping the
+  upstream toolchain. The release scripts (`tools/export-compiled-binary.sh`,
+  `tools/release.sh`) still produce the shipped binary with the Arduino IDE 1.8.
+
+* Not a regression risk for the box: `make -C native` still builds and every board — both
+  `arduino-cli` FQBNs and both `pio run` environments — compiles, links and fits `app0`
+  (~73 %) with DIO flash-mode images.
+
+---
+
 **REV 20260817.** SETUP now names the build it is served from and the network the device is on.
 
 * **The product name carries its platform.** The heading on SETUP reads `WIFILT-ESP32`,

@@ -823,8 +823,16 @@ label.setup-radio-enable {
     padding: 18px;
   }
 
+  /* minmax(0, 1fr), never a bare 1fr: a grid track's automatic minimum is its
+     content's min-content, and an <input>'s min-content is its default ~20-char
+     size. Chrome lets the flex `min-width: 0` inside collapse that to zero, but
+     stricter engines (Safari, the in-app/captive-portal webviews on phones) do
+     not, so the field kept its full width and pushed the password reveal button
+     and the ? tip off the right edge -- where the section's overflow:hidden hid
+     them. The desktop rule above already learned this; the mobile override had
+     regressed to a bare 1fr. */
   label {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   label .msg,
@@ -835,7 +843,7 @@ label.setup-radio-enable {
   }
 
   .ip-row {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .actions {

@@ -54,6 +54,20 @@ module cannot hold the assets.
 Any WROOM form factor will do: a dev board, or one of the USB-dongle style carriers, for
 which there is a printed case in [section 10.1](#101-a-case-for-a-bare-esp32-dongle).
 
+A **M5Stack Atom Lite** works too, and comes ready-cased with a USB-C socket and a button.
+It is an ESP32-PICO-D4 with the same 4 MB of flash, so it runs the identical firmware as a
+bare module — the band decoder and the other interface-board outputs are simply absent (it
+reports as an unidentified board, revision 99). Its one visible difference is the status
+LED: it has no plain LED on GPIO 5 but a single addressable **SK6812 RGB LED on GPIO 27**,
+which the firmware drives instead — see [section 6](#6-status-led).
+
+**Build and flash it yourself** — the [web installer](https://ok1hra.github.io/wifilt/) does
+not offer an Atom image yet, only the box's. That image is wrong for the Atom: it drives
+GPIO 16, which the box uses for CI-V mute but the Atom's PICO-D4 wires to its own embedded
+flash, and driving it boot-loops the board. Use `pio run -e m5atom -t upload` or
+`arduino-cli` with the `esp32:esp32:m5stack-atom` FQBN instead
+([BUILD.md § 1](BUILD.md#1-firmware)).
+
 You also need:
 
 - **A radio.** See [section 3](#3-the-radio-side).
@@ -83,6 +97,11 @@ cannot do.
 | POWER-OUT 13.8 V / 0.5 A switched output | ❌ | ✅ |
 | Status LED | ⚠️ any LED on GPIO 5 | ✅ |
 | Band Decoder (`/bd`) | ❌ | ✅ **rev 04 and later only** |
+
+A **M5Stack Atom Lite** follows the *Bare ESP32 WROOM* column throughout, with one
+improvement: it has a built-in SK6812 RGB status LED (GPIO 27) rather than needing one
+wired to GPIO 5. Everything else — CI-V level conversion, isolated outputs, POWER-OUT, the
+band decoder — is equally absent, because it too is a bare module.
 
 ### How the board identifies itself
 
@@ -155,6 +174,12 @@ Firmware is installed straight from a web page — no Arduino IDE, no drivers to
    your settings — see below.
 5. Wait for the write to finish, then close the dialog. The board restarts on its own.
 
+**This page is for the box and a bare WROOM.** A M5Stack Atom Lite is not on it yet — the
+web installer above only offers the box's firmware, and that image is wrong for the Atom: it
+drives GPIO 16, which the Atom's PICO-D4 wires to its own embedded flash, and boot-loops the
+board. Build and flash the Atom from source instead: `pio run -e m5atom -t upload`, or
+`arduino-cli` with the `esp32:esp32:m5stack-atom` FQBN ([BUILD.md § 1](BUILD.md#1-firmware)).
+
 ### The "Erase device" checkbox
 
 | Checkbox | What is written | What survives |
@@ -182,7 +207,8 @@ whole configuration as a file you can upload back afterwards.
 If you ever build and flash by hand, the flash mode must be **DIO**, not QIO. The RemoteQTH
 interface boards ship a Zbit clone flash chip whose QIO reads are unreliable; a QIO
 bootloader leaves the board unable to boot at all. The web installer already does this
-correctly. See [BUILD.md](BUILD.md).
+correctly, as does `platformio.ini` for both boards — DIO is harmless on the Atom Lite's
+genuine PICO flash. See [BUILD.md](BUILD.md).
 
 ---
 
@@ -223,24 +249,29 @@ device.
 
 ## 6. Status LED
 
-The LED is on GPIO 5. Its whole vocabulary:
+On the box and a bare WROOM the LED is a plain one on **GPIO 5**. On a **M5Stack Atom Lite**
+there is no LED on GPIO 5; its single built-in **SK6812 RGB LED on GPIO 27** is used instead,
+and the firmware picks the right one automatically when built for the Atom board. The
+vocabulary is the same on both — the Atom only adds colour to it:
 
-| Pattern | Meaning |
-|---|---|
-| Slow fade in and out, continuously | AP mode — the device is showing its own `WIFILT-AP` hotspot |
-| Dark | Station mode, waiting for a WiFi network — before the first connection **and after a link is lost** |
-| Steady on | Station mode, connected — this is the normal resting state |
-| One 100 ms dark pulse | a CW message was just keyed out to the radio |
-| Dark for as long as the transmission lasts | an RTTY message is being keyed on the FSK and PTT outputs |
+| Pattern | Plain LED (box) | Atom Lite RGB | Meaning |
+|---|---|---|---|
+| Slow fade in and out, continuously | fades | **blue**, fading | AP mode — the device is showing its own `WIFILT-AP` hotspot |
+| Dark | dark | dark | Station mode, waiting for a WiFi network — before the first connection **and after a link is lost** |
+| Steady on | lit | **green**, steady | Station mode, connected — this is the normal resting state |
+| One 100 ms dark pulse | pulse | pulse | a CW message was just keyed out to the radio |
+| Dark for as long as the transmission lasts | dark | dark | an RTTY message is being keyed on the FSK and PTT outputs |
 
-A steadily lit LED is the signal that the device is on the network and ready. If it stays
-dark, the WiFi credentials are wrong or neither configured network is on the air; if it
-fades, no credentials were ever stored — connect to `WIFILT-AP` and set them.
+A steadily lit (green, on the Atom) LED is the signal that the device is on the network and
+ready. If it stays dark, the WiFi credentials are wrong or neither configured network is on
+the air; if it fades (blue, on the Atom), no credentials were ever stored — connect to
+`WIFILT-AP` and set them.
 
 Because the LED sits lit the whole time WiFi is up, both transmit indications have to be the
 other way round: a *gap* in the light rather than a flash. CW gets a pulse because the radio
 generates the Morse itself and the interface only hands over the message; RTTY is keyed here,
-bit by bit, so the LED stays dark for the whole of it.
+bit by bit, so the LED stays dark for the whole of it. On the Atom the RGB is capped well
+below full brightness — a single SK6812 at full white is dazzling on a desk.
 
 Until REV 20260810 the LED was written exactly twice — dark at boot, lit on the first
 successful connection — so it went on claiming a link long after WiFi had dropped, and RTTY
@@ -350,6 +381,10 @@ Dongle boards like this come and go, and the one it was drawn around may not be 
 long. Check the model page against the board actually in your hand before printing. Nothing
 about WIFILT depends on it: the requirement is still **any ESP32 WROOM module with 4 MB of
 flash**.
+
+If you would rather not print anything, a **M5Stack Atom Lite** is a compact, ready-cased
+alternative to a bare dongle: a boxed ESP32-PICO with a USB-C socket, a button and a
+built-in RGB status LED. It runs the same firmware — see [section 1](#1-what-you-need).
 
 ### 10.2 The RemoteQTH interface
 

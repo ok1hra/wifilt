@@ -4,12 +4,13 @@ Operate an Icom transceiver from any browser on your network — logbook, DX clu
 a WSPR beacon and Mercury file transfer — with nothing installed on the phone, tablet or PC,
 and no internet.
 
-**Runs on any ESP32 WROOM module with 4 MB of flash — or, if the radio is already on your
-network, as a native program on a Linux, Windows or Raspberry Pi PC with no extra hardware at
-all.** Get whichever is yours from the web installer page:
+**Runs on any ESP32 WROOM module with 4 MB of flash — or on a ready-cased M5Stack Atom Lite
+(built from source, see [BUILD.md](BUILD.md#1-firmware)) — or, if the radio is already on
+your network, as a native program on a Linux, Windows or Raspberry Pi PC with no extra
+hardware at all.** Get the WROOM image or the desktop program from the web installer page:
 **<https://ok1hra.github.io/wifilt/>** (flashing the ESP32 needs Chrome, Edge or Opera on a
 desktop, plugged in over USB-C first; the Linux/Raspberry Pi/Windows downloads are plain
-archives).
+archives — the Atom Lite is not on this page yet, see BUILD.md).
 
 ![Two radios operated from one interface](img/wifilt-two-radio-operation.png)
 

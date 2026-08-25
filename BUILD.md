@@ -25,16 +25,55 @@ the sketch does not require touching `native/`.
 
 ## 1. Firmware
 
-| Requirement | Version |
-|---|---|
-| Arduino IDE | 1.8.19 or 2.x |
-| Espressif Arduino-ESP32 core | **2.0.14** |
-| Board | **ESP32 Dev Module** |
-| Partition Scheme | **No OTA (2MB APP/2MB SPIFFS)** |
-| Library | [TrxNet 0.3.0](https://github.com/ok1hra/TrxNet) |
-| Flash mode | **DIO**, not QIO |
+The firmware builds with **PlatformIO**, which pins the toolchain and fetches the
+one external library for you. `platformio.ini` defines two ESP32 boards from the
+single `wifilt.ino`:
 
-Two of those need explaining.
+| Environment | Board | Hardware |
+|---|---|---|
+| `esp32` | ESP32 Dev Module (`esp32dev`) | the RemoteQTH box or a bare ESP32-WROOM |
+| `m5atom` | `m5stack-atom` | M5Stack **Atom Lite** (ESP32-PICO-D4, 4 MB) |
+
+```bash
+pip install platformio          # once
+pio run                         # build both boards
+pio run -e m5atom               # build only the Atom Lite
+pio run -e esp32 -t upload      # build and flash the box over USB
+```
+
+The images land in `.pio/build/<env>/firmware.bin`. Everything below is pinned in
+`platformio.ini` and needs no board-manager clicking:
+
+| Requirement | Value |
+|---|---|
+| PlatformIO platform | **espressif32 @ 6.5.0** (arduino-esp32 **2.0.14**) |
+| Partition table | sketch-local `partitions.csv` (`board_build.partitions`) |
+| Library | [TrxNet](https://github.com/ok1hra/TrxNet) (fetched from `lib_deps`) |
+| Flash mode | **DIO**, not QIO (`board_build.flash_mode`) |
+
+> The Atom Lite is a **bare-module** build: same firmware and capabilities as the
+> box, with the band decoder auto-disabled at runtime (no hardware-revision
+> divider). It differs only in the status LED — it has no plain LED on GPIO 5 but
+> a single SK6812 RGB on GPIO 27. The board **selects itself**: both toolchains
+> define `ARDUINO_M5Stack_ATOM`, which `platform_caps.h` turns into
+> `WIFILT_M5ATOM_LITE` — no build flag needed. See
+> [HARDWARE.md § 6](HARDWARE.md#6-status-led).
+
+Both boards also build with `arduino-cli`, so no PlatformIO is required and CI
+covers them on the upstream toolchain:
+
+```bash
+arduino-cli compile --fqbn "esp32:esp32:esp32:PartitionScheme=no_ota,FlashMode=dio" .
+arduino-cli compile --fqbn "esp32:esp32:m5stack-atom" .
+```
+
+PlatformIO remains a convenience for local work; the **release binary** is still
+produced with the Arduino IDE 1.8 by `tools/export-compiled-binary.sh` (see the
+release procedure below), which performs the same DIO and partition-fit checks.
+All three build the same `wifilt.ino` with the same core version, so their output
+is equivalent.
+
+Two of the pinned values need explaining.
 
 **The partition scheme menu choice is almost irrelevant.** A sketch-local `partitions.csv`
 sits next to `wifilt.ino` and overrides the menu; that file is what actually lands on the

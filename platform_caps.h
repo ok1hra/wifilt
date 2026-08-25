@@ -45,6 +45,10 @@
 
   #define CAP_BAND_DECODER 0
 
+  // No status LED either -- the PC binary has no pin to drive. Named here only
+  // so #if STATUS_LED_RGB is never an undefined macro.
+  #define STATUS_LED_RGB 0
+
 #else
 
   #define CAP_PLATFORM_NAME "esp32"
@@ -52,5 +56,27 @@
   #define CAP_CIV           1
   #define CAP_GPIO          1
   #define CAP_BAND_DECODER  1
+
+  // The M5Atom Lite selects itself. Both toolchains define ARDUINO_M5Stack_ATOM
+  // when that board is chosen -- PlatformIO via `board = m5stack-atom`,
+  // arduino-cli via `--fqbn esp32:esp32:m5stack-atom` -- so the firmware needs no
+  // special build flag to know it is on the Atom. WIFILT_M5ATOM_LITE stays as a
+  // manual override, and everything downstream keeps keying off it.
+  #if defined(ARDUINO_M5Stack_ATOM) && !defined(WIFILT_M5ATOM_LITE)
+    #define WIFILT_M5ATOM_LITE
+  #endif
+
+  // Which status-LED indicator this board physically has. The RemoteQTH box and
+  // a bare WROOM have a plain LED on GPIO 5 (StatusPin), driven directly or via
+  // LEDC PWM for the AP fade. The M5Atom Lite has NO LED on GPIO 5 -- its only
+  // indicator is a single addressable SK6812 RGB on GPIO 27. The status-LED HAL
+  // in wifilt.ino renders the one LED vocabulary (HARDWARE.md §6) onto whichever
+  // of the two this build has.
+  #if defined(WIFILT_M5ATOM_LITE)
+    #define STATUS_LED_RGB 1
+    #define STATUS_LED_PIN 27
+  #else
+    #define STATUS_LED_RGB 0
+  #endif
 
 #endif
