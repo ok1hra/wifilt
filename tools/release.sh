@@ -33,6 +33,10 @@ set -uo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SKETCH="${ROOT_DIR}/wifilt.ino"
 FIRMWARE_BIN="${ROOT_DIR}/wifilt.ino.esp32.bin"
+# M5Stack Atom Lite -- built alongside the box in phase 2, gated alongside it in
+# phase 9. Same first-class treatment as the box: a failed Atom export aborts
+# the release the same way a failed box export does, see phase 2 below.
+FIRMWARE_BIN_M5ATOM="${ROOT_DIR}/wifilt.ino.m5stack_atom.bin"
 DIST_DIR="${ROOT_DIR}/native/dist"
 NATIVE_BIN="${ROOT_DIR}/native/build/wifilt"
 # getcap lives in /sbin, which is not on a normal user's PATH on Debian. Looking
@@ -312,9 +316,19 @@ fi
 phase_banner 2 "export compiled binary"
 if ! skip_if_blocked 2; then
   info "  ESP32 Dev Module | No OTA (2MB APP/2MB SPIFFS) | DIO"
-  if ask "Přeložit a vyexportovat firmware?" Y; then
+  info "  + M5Stack Atom Lite | same partitions.csv | DIO (board default)"
+  if ask "Přeložit a vyexportovat firmware (box + M5Atom Lite)?" Y; then
     if ARDUINO_IDE="$ARDUINO_BIN" "${ROOT_DIR}/tools/export-compiled-binary.sh"; then
-      mark 2 "hotovo"
+      # Same script, same Arduino 1.8 headless path, just the other FQBN --
+      # export-compiled-binary.sh names the output after the board's
+      # build.variant (m5stack-atom -> m5stack_atom), so FIRMWARE_BIN_M5ATOM
+      # above is exactly what this run produces.
+      if ARDUINO_IDE="$ARDUINO_BIN" "${ROOT_DIR}/tools/export-compiled-binary.sh" \
+          --fqbn "esp32:esp32:m5stack-atom"; then
+        mark 2 "hotovo"
+      else
+        mark 2 "selhalo"; abort "Překlad M5Atom Lite selhal." 2
+      fi
     else
       mark 2 "selhalo"; abort "Překlad selhal." 2
     fi
@@ -597,15 +611,19 @@ if ! skip_if_blocked 9; then
   # only one that cannot be taken back. Each check below is a way the page could
   # end up describing something that does not exist.
   [[ -f "$FIRMWARE_BIN" ]] || gate "chybí $(basename "$FIRMWARE_BIN") -- fáze 2 neproběhla"
-  if [[ -f "$FIRMWARE_BIN" ]]; then
+  [[ -f "$FIRMWARE_BIN_M5ATOM" ]] || gate "chybí $(basename "$FIRMWARE_BIN_M5ATOM") -- fáze 2 neproběhla"
+  check_export_fresh() {  # check_export_fresh BIN
+    local bin="$1" source
     while IFS= read -r -d '' source; do
-      if [[ "$source" -nt "$FIRMWARE_BIN" ]]; then
-        gate "export je starší než $(basename "$source") -- firmware neodpovídá zdroji"
-        break
+      if [[ "$source" -nt "$bin" ]]; then
+        gate "export $(basename "$bin") je starší než $(basename "$source") -- neodpovídá zdroji"
+        return
       fi
     done < <(find "$ROOT_DIR" -maxdepth 1 -type f \
              \( -name '*.ino' -o -name '*.h' -o -name '*.hpp' -o -name '*.cpp' \) -print0)
-  fi
+  }
+  [[ -f "$FIRMWARE_BIN" ]] && check_export_fresh "$FIRMWARE_BIN"
+  [[ -f "$FIRMWARE_BIN_M5ATOM" ]] && check_export_fresh "$FIRMWARE_BIN_M5ATOM"
 
   win_archive="${DIST_DIR}/wifilt-${REV}-windows-x64.zip"
   arm64_archive="${DIST_DIR}/wifilt-${REV}-linux-arm64.tar.gz"

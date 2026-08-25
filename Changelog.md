@@ -32,11 +32,26 @@ published.
 
 * **CI** now compiles both boards with `arduino-cli` (the box and the M5Atom Lite), keeping the
   upstream toolchain. The release scripts (`tools/export-compiled-binary.sh`,
-  `tools/release.sh`) still produce the shipped binary with the Arduino IDE 1.8.
+  `tools/release.sh`) still produce the shipped binaries with the Arduino IDE 1.8.
 
 * Not a regression risk for the box: `make -C native` still builds and every board — both
   `arduino-cli` FQBNs and both `pio run` environments — compiles, links and fits `app0`
   (~73 %) with DIO flash-mode images.
+
+* **The web installer now offers the M5Atom Lite too**, closing the gap the PR above left open
+  (`HARDWARE.md`/`README.md` pointed Atom owners at a page that could only give them the box's
+  image — wrong for the Atom, and a boot-loop risk via the GPIO 16 conflict). `tools/release.sh`
+  phase 2 now exports both boards as one step, first-class like the box: an Atom compile failure
+  aborts the release the same way a box failure does. `tools/gh-pages.sh` publishes a second,
+  optional manifest (`manifest-m5atom.json`) and platform panel — sharing the box's
+  bootloader/partition-table/spiffs images byte-for-byte (same `partitions.csv`, same DIO mode),
+  differing only in the application image — with its own hardware description (bare module, no
+  CI-V/FSK/band decoder/13.8 V) rather than a copy of the box's claims. The Atom's binary is
+  optional: absent, the page renders exactly as it did before this board existed.
+  The page's "new device or upgrading" gate — previously one set of ids, safe only because there
+  was one flashable platform — is now wired per platform (`tools/installer-page-smoke.js` gained
+  an independence check: answering the box's question must never perturb the Atom's, and vice
+  versa).
 
 ---
 

@@ -71,6 +71,9 @@ const mustHave = [
   // pick a fold, so it has to survive above them.
   ["names what only the board can do", /CI-V serial/.test(html)
     && /FSK\/RTTY keying/.test(html) && /band decoder/.test(html)],
+  // The M5Atom fold is optional -- it exists only when gh-pages.sh found an
+  // Atom export -- so it is checked dynamically in the driver below, alongside
+  // the rest of the fold-dependent behaviour, not asserted unconditionally here.
   // Lifted out of the ESP32 fold: whoever opens only "Linux PC" must still meet
   // the step that decides whether any of it works.
   ["the radio step stands outside the folds", /id="radio-title"/.test(html)
@@ -114,27 +117,33 @@ const DRIVER = `
   }, true);
 
   function el(id) { return document.getElementById(id); }
-  function locked() { return el("flashGate").getAttribute("data-locked"); }
+  function locked(suffix) { return el("flashGate-" + suffix).getAttribute("data-locked"); }
   function is(name, cond) { checks.push({ name: name, ok: !!cond }); }
 
-  function state(label, expectLocked, expectPanel, expectRestore) {
-    is(label + ": flash button " + (expectLocked ? "locked" : "unlocked"), locked() === (expectLocked ? "1" : "0"));
-    is(label + ": backup panel " + (expectPanel ? "shown" : "hidden"), el("backupPanel").hidden === !expectPanel);
-    is(label + ": restore step " + (expectRestore ? "shown" : "hidden"), el("restoreStep").hidden === !expectRestore);
-    is(label + ": serial hints follow the gate", el("flashHints").hidden === expectLocked);
-    is(label + ": gate note follows the gate", el("gateNote").hidden === !expectLocked);
+  // Every flashable platform (the box, and the M5Atom Lite when its fold
+  // exists) wires the same gate under its own "-<suffix>" ids -- see the
+  // wireFlashGate() comment in gh-pages.sh -- so this checks whichever one is
+  // named, and a second flashable platform is exercised for real, not assumed
+  // identical to the first.
+  function state(suffix, label, expectLocked, expectPanel, expectRestore) {
+    is(label + ": flash button " + (expectLocked ? "locked" : "unlocked"), locked(suffix) === (expectLocked ? "1" : "0"));
+    is(label + ": backup panel " + (expectPanel ? "shown" : "hidden"), el("backupPanel-" + suffix).hidden === !expectPanel);
+    is(label + ": restore step " + (expectRestore ? "shown" : "hidden"), el("restoreStep-" + suffix).hidden === !expectRestore);
+    is(label + ": serial hints follow the gate", el("flashHints-" + suffix).hidden === expectLocked);
+    is(label + ": gate note follows the gate", el("gateNote-" + suffix).hidden === !expectLocked);
   }
 
-  // -- the three platform folds ---------------------------------------------
-  // The page used to lay all three roads end to end, so everyone scrolled past
-  // two that were not theirs. Folding it only helps if the folds start closed
+  // -- the platform folds -----------------------------------------------------
+  // The page used to lay every road end to end, so everyone scrolled past the
+  // ones that were not theirs. Folding it only helps if the folds start closed
   // and stay independent: an exclusive accordion would close Linux the moment
   // someone opened Windows to compare them.
   //
-  // Which desktop folds exist is read off the page rather than assumed. A build
-  // made without "make -C native dist" carries no archive and therefore no fold,
-  // and that is not this test's business to call a failure.
-  var folds = ["esp32", "linux", "windows"].filter(function (id) { return !!el(id); });
+  // Which folds exist is read off the page rather than assumed. A build made
+  // without "make -C native dist", or without an M5Atom export, carries no
+  // archive/manifest and therefore no fold, and that is not this test's
+  // business to call a failure.
+  var folds = ["esp32", "m5atom", "linux", "windows"].filter(function (id) { return !!el(id); });
   is("the ESP32 fold is on the page", folds.indexOf("esp32") >= 0);
   folds.forEach(function (id) { is(id + ": collapsed on load", el(id).open === false); });
 
@@ -143,39 +152,71 @@ const DRIVER = `
   folds.forEach(function (id) { el(id).querySelector("summary").click(); });
   folds.forEach(function (id) { is(id + ": still open after the others were opened", el(id).open === true); });
 
-  // Everything below is the flash gate, and an operator only ever reaches it
-  // through an open ESP32 fold -- so that is where it gets tested.
-  folds.forEach(function (id) { if (id !== "esp32") el(id).querySelector("summary").click(); });
-  is("the ESP32 fold is open for the gate checks", el("esp32").open === true);
+  // Everything below is a flash gate, and an operator only ever reaches one
+  // through its own open fold -- both esp32 and (when present) m5atom carry
+  // one, tested one after the other so a mistake shared between them (a copy-
+  // pasted id, a helper that reads the wrong suffix) shows up as a failure
+  // instead of silently passing because only one was ever exercised.
+  var flashable = ["esp32", "m5atom"].filter(function (id) { return !!el("flashGate-" + id); });
+  is("at least the ESP32 gate is on the page", flashable.indexOf("esp32") >= 0);
 
-  // The one step that is the same on all three platforms, and the only one a
+  // The one step that is the same on every platform, and the only one a
   // reader who opens a single fold would otherwise never see.
   var deviceLink = document.querySelector('a[href="http://wifilt.local"]');
   is("the device link sits outside every fold", !!deviceLink && !deviceLink.closest("details"));
   is("the device link opens in its own tab", !!deviceLink && deviceLink.target === "_blank");
 
   // A cold page must never let anyone flash before answering the one question
-  // it cannot answer for itself.
-  state("cold", true, false, false);
+  // it cannot answer for itself -- true of every flashable platform, not just
+  // the first one on the page.
+  flashable.forEach(function (id) { state(id, id + " cold", true, false, false); });
 
-  el("choiceNew").click();
-  state("new device", false, false, false);
-  is("new device: choice is marked pressed", el("choiceNew").getAttribute("aria-pressed") === "true");
+  el("choiceNew-esp32").click();
+  state("esp32", "esp32 new device", false, false, false);
+  is("esp32 new device: choice is marked pressed", el("choiceNew-esp32").getAttribute("aria-pressed") === "true");
+  // Independence: answering the box's question must not reach across to the
+  // Atom's gate, which a shared (un-suffixed) id would have done silently.
+  if (flashable.indexOf("m5atom") >= 0) state("m5atom", "m5atom still cold after esp32 answered", true, false, false);
 
   // Upgrading no longer locks anything. A flash that keeps the configuration has
   // nothing to demand an acknowledgement for, and a warning gate that fires when
   // nothing is at stake is how operators learn to click past the ones that matter.
-  el("choiceUpgrade").click();
-  state("upgrade", false, true, true);
-  is("upgrade: previous choice is released", el("choiceNew").getAttribute("aria-pressed") === "false");
-  is("upgrade: no acknowledgement checkbox survives", !el("backupDone"));
+  el("choiceUpgrade-esp32").click();
+  state("esp32", "esp32 upgrade", false, true, true);
+  is("esp32 upgrade: previous choice is released", el("choiceNew-esp32").getAttribute("aria-pressed") === "false");
+  is("esp32 upgrade: no acknowledgement checkbox survives", !el("backupDone-esp32"));
 
   // Switching back and forth must keep the panel in step with the choice.
-  el("choiceNew").click();
-  state("back to new device", false, false, false);
+  el("choiceNew-esp32").click();
+  state("esp32", "esp32 back to new device", false, false, false);
 
-  var qr = el("apQr");
-  is("AP join QR was rendered", !!(qr && qr.children.length > 0));
+  if (flashable.indexOf("m5atom") >= 0) {
+    // The Atom answers its own question independently -- and, just as
+    // importantly, answering it must not perturb the box's gate, which by now
+    // holds a different state ("new device") than the Atom is about to.
+    is("m5atom still cold before it is answered", locked("m5atom") === "1");
+    el("choiceUpgrade-m5atom").click();
+    state("m5atom", "m5atom upgrade", false, true, true);
+    state("esp32", "esp32 unaffected by the Atom's answer", false, false, false);
+
+    // The Atom is a bare module: its own fold must say so. Its prose is
+    // allowed to name CI-V/band decoder while explaining it has neither, so
+    // what this guards is the one-line summary tagline -- the same spot the
+    // ESP32 fold uses to *claim* "CI-V, keying, band decoder" -- staying an
+    // honest, un-copy-pasted description instead of inheriting that claim.
+    var atomBody = el("m5atom").textContent;
+    var atomTagline = el("m5atom").querySelector(".platform-sub").textContent;
+    is("m5atom fold says bare module", /bare module/i.test(atomBody));
+    is("m5atom tagline does not claim the box's CI-V serial port", !/CI-V/.test(atomTagline));
+    is("m5atom tagline does not claim the box's band decoder", !/band decoder/.test(atomTagline));
+  }
+
+  // Only the flashable platforms have a "join WIFILT-AP" step -- Linux/Windows
+  // never flash anything, so they carry no apQr element to check.
+  flashable.forEach(function (id) {
+    var qr = el("apQr-" + id);
+    is(id + ": AP join QR was rendered", !!(qr && qr.children.length > 0));
+  });
   is("no unexpected script errors", errors.length === 0);
 
   fetch("/result", {

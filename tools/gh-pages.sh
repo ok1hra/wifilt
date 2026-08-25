@@ -6,6 +6,14 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 OUTPUT_DIR="${ROOT_DIR}/build/gh-pages"
 FIRMWARE_BIN="${ROOT_DIR}/wifilt.ino.esp32.bin"
+# M5Stack Atom Lite (ESP32-PICO-D4). Optional, unlike FIRMWARE_BIN: this script
+# is also run by hand, and forcing every caller to have an Atom export sitting
+# around would break that. Present -> a second manifest and platform panel are
+# published alongside the box's; absent -> the page looks exactly as it did
+# before this board existed. tools/export-compiled-binary.sh names it after the
+# board's build.variant (m5stack-atom -> m5stack_atom), so the default here is
+# what `--fqbn esp32:esp32:m5stack-atom` produces without any extra flag.
+FIRMWARE_BIN_M5ATOM="${ROOT_DIR}/wifilt.ino.m5stack_atom.bin"
 DATA_DIR="${ROOT_DIR}/data"
 SKETCH_FILE="${ROOT_DIR}/wifilt.ino"
 GZIP_ASSETS_SCRIPT="${ROOT_DIR}/tools/gzip-assets.sh"
@@ -80,6 +88,9 @@ Steps:
 Options:
   --output-dir PATH      Output directory       (default: ./build/gh-pages)
   --firmware PATH        Firmware .bin file      (default: ./wifilt.ino.esp32.bin)
+  --firmware-m5atom PATH M5Atom Lite .bin file   (default: ./wifilt.ino.m5stack_atom.bin;
+                                                   optional -- its platform panel is left out
+                                                   of the page when this file is absent)
   --esp32-core PATH      ESP32 Arduino core root (auto-detected if not set)
   --bootloader PATH      Prebuilt bootloader .bin (skips ELF conversion)
   --bootloader-elf PATH  Bootloader ELF          (auto-detected; DIO .bin built from it)
@@ -104,6 +115,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --output-dir)   OUTPUT_DIR="$2";          shift 2 ;;
     --firmware)     FIRMWARE_BIN="$2";        shift 2 ;;
+    --firmware-m5atom) FIRMWARE_BIN_M5ATOM="$2"; shift 2 ;;
     --esp32-core)   ESP32_CORE_ROOT="$2";     shift 2 ;;
     --bootloader)     BOOTLOADER_BIN="$2";    shift 2 ;;
     --bootloader-elf) BOOTLOADER_ELF="$2";    shift 2 ;;
@@ -201,6 +213,9 @@ require_file() {
 }
 
 require_file "$FIRMWARE_BIN"   "Firmware binary"
+# Optional, unlike the box's binary above -- see the FIRMWARE_BIN_M5ATOM comment.
+HAVE_M5ATOM=0
+[[ -f "$FIRMWARE_BIN_M5ATOM" ]] && HAVE_M5ATOM=1
 require_file "$SKETCH_FILE"    "Sketch file"
 require_file "$BOOT_APP0_BIN"  "boot_app0.bin"
 require_file "$GEN_PART_BIN"   "gen_esp32part.py"
@@ -213,15 +228,21 @@ else
   require_file "$BOOTLOADER_ELF" "Bootloader ELF"
 fi
 
-# Refuse a release built from a stale Arduino export.
-while IFS= read -r -d '' source; do
-  if [[ "$source" -nt "$FIRMWARE_BIN" ]]; then
-    echo "ERROR: exported firmware is stale; newer source: $source" >&2
-    echo "       Run Sketch -> Export Compiled Binary again." >&2
-    exit 1
-  fi
-done < <(find "$ROOT_DIR" -maxdepth 1 -type f \
-  \( -name '*.ino' -o -name '*.h' -o -name '*.hpp' -o -name '*.cpp' \) -print0)
+# Refuse a release built from a stale Arduino export. Both binaries share the
+# same source tree, so one staleness check covers whichever of them exist.
+check_export_fresh() {  # check_export_fresh BIN LABEL
+  local bin="$1" label="$2" source
+  while IFS= read -r -d '' source; do
+    if [[ "$source" -nt "$bin" ]]; then
+      echo "ERROR: exported ${label} is stale; newer source: $source" >&2
+      echo "       Run Sketch -> Export Compiled Binary (or tools/export-compiled-binary.sh) again." >&2
+      exit 1
+    fi
+  done < <(find "$ROOT_DIR" -maxdepth 1 -type f \
+    \( -name '*.ino' -o -name '*.h' -o -name '*.hpp' -o -name '*.cpp' \) -print0)
+}
+check_export_fresh "$FIRMWARE_BIN" "box firmware"
+[[ "$HAVE_M5ATOM" -eq 1 ]] && check_export_fresh "$FIRMWARE_BIN_M5ATOM" "M5Atom firmware"
 
 # A Pages release must always contain the complete DATA/JS8 runtime.
 for asset in data.html data.css data.js dxcc.js js8-adapter.js js8-aud1.js \
@@ -373,6 +394,12 @@ echo "==> Copying binaries"
   cp "$BOOTLOADER_BIN" "${OUTPUT_DIR}/bootloader.bin"
 cp "$BOOT_APP0_BIN"  "${OUTPUT_DIR}/boot_app0.bin"
 cp "$FIRMWARE_BIN"   "${OUTPUT_DIR}/firmware.bin"
+# The M5Atom shares bootloader.bin/partitions.bin/boot_app0.bin/spiffs.bin with
+# the box byte-for-byte -- same partitions.csv, same DIO flash mode -- so only
+# its application image needs its own copy, under its own name.
+if [[ "$HAVE_M5ATOM" -eq 1 ]]; then
+  cp "$FIRMWARE_BIN_M5ATOM" "${OUTPUT_DIR}/firmware-m5atom.bin"
+fi
 
 # ---------------------------------------------------------------------------
 # Build merged binary (for manual esptool flashing)
@@ -394,6 +421,25 @@ if [[ -n "$SPIFFS_BIN" ]]; then
   MERGE_ARGS+=("${SPIFFS_OFFSET}" "$SPIFFS_BIN")
 fi
 python3 "$ESPTOOL_BIN" "${MERGE_ARGS[@]}"
+
+if [[ "$HAVE_M5ATOM" -eq 1 ]]; then
+  echo "==> Building merged binary (M5Atom Lite)"
+  MERGE_ARGS_M5ATOM=(
+    --chip esp32 merge_bin
+    -o "${OUTPUT_DIR}/wifilt-${FW_REV}-m5atom-full.bin"
+    --flash_mode "$FLASH_MODE"
+    --flash_freq "$FLASH_FREQ"
+    --flash_size "$FLASH_SIZE"
+    "${BOOTLOADER_OFFSET}" "${OUTPUT_DIR}/bootloader.bin"
+    "${PARTITIONS_OFFSET}" "${OUTPUT_DIR}/partitions.bin"
+    "${BOOT_APP0_OFFSET}"  "${OUTPUT_DIR}/boot_app0.bin"
+    "${APP_OFFSET}"        "${OUTPUT_DIR}/firmware-m5atom.bin"
+  )
+  if [[ -n "$SPIFFS_BIN" ]]; then
+    MERGE_ARGS_M5ATOM+=("${SPIFFS_OFFSET}" "$SPIFFS_BIN")
+  fi
+  python3 "$ESPTOOL_BIN" "${MERGE_ARGS_M5ATOM[@]}"
+fi
 
 # ---------------------------------------------------------------------------
 # Desktop archives (optional)
@@ -453,6 +499,11 @@ fi
 if [[ -z "$DESKTOP_LINUX_NAME" && -z "$DESKTOP_WIN_NAME" && -z "$DESKTOP_ARM64_NAME" ]]; then
   echo "==> No desktop archives for REV ${FW_REV} (run: make -C native dist)"
 fi
+if [[ "$HAVE_M5ATOM" -eq 1 ]]; then
+  echo "==> M5Atom Lite firmware: $(basename "$FIRMWARE_BIN_M5ATOM") -- manifest-m5atom.json included"
+else
+  echo "==> No M5Atom Lite firmware for REV ${FW_REV} (run: tools/export-compiled-binary.sh --fqbn esp32:esp32:m5stack-atom)"
+fi
 
 # ---------------------------------------------------------------------------
 # Generate manifest.json
@@ -486,6 +537,37 @@ ${PARTS_JSON}
   ]
 }
 EOF
+
+if [[ "$HAVE_M5ATOM" -eq 1 ]]; then
+  echo "==> Generating manifest-m5atom.json"
+  # Same bootloader/partitions/boot_app0/spiffs as the box manifest above --
+  # only the application image differs -- so this parts list is identical
+  # except for its one "firmware.bin" line.
+  PARTS_JSON_M5ATOM="        { \"path\": \"bootloader.bin\",      \"offset\": $((BOOTLOADER_OFFSET)) },
+        { \"path\": \"partitions.bin\",      \"offset\": $((PARTITIONS_OFFSET)) },
+        { \"path\": \"boot_app0.bin\",       \"offset\": $((BOOT_APP0_OFFSET)) },
+        { \"path\": \"firmware-m5atom.bin\", \"offset\": $((APP_OFFSET)) }"
+  if [[ -n "$SPIFFS_BIN" ]]; then
+    PARTS_JSON_M5ATOM="${PARTS_JSON_M5ATOM},
+        { \"path\": \"spiffs.bin\",          \"offset\": $((SPIFFS_OFFSET)) }"
+  fi
+  cat > "${OUTPUT_DIR}/manifest-m5atom.json" <<EOF
+{
+  "name": "WIFILT (M5Stack Atom Lite)",
+  "version": "${FW_REV}",
+  "new_install_prompt_erase": true,
+  "new_install_improv_wait_time": 0,
+  "builds": [
+    {
+      "chipFamily": "ESP32",
+      "parts": [
+${PARTS_JSON_M5ATOM}
+      ]
+    }
+  ]
+}
+EOF
+fi
 
 # ---------------------------------------------------------------------------
 # Generate index.html
@@ -778,7 +860,7 @@ cat > "${OUTPUT_DIR}/index.html" <<EOF
       <section class="where" aria-labelledby="where-title">
         <h2 id="where-title">Where will it run?</h2>
         <p>
-          One build, four places. Open the one that is yours &mdash; the others stay folded
+          One source, several forms. Open the one that is yours &mdash; the others stay folded
           away.
         </p>
         <p>
@@ -837,17 +919,17 @@ cat > "${OUTPUT_DIR}/index.html" <<EOF
         <p><strong>Is this a new device, or one that is already working?</strong>
           This page cannot tell, and the answer decides one checkbox further on.</p>
         <div class="choice">
-          <button type="button" id="choiceNew" aria-pressed="false">
+          <button type="button" id="choiceNew-esp32" aria-pressed="false">
             New device
             <span>Nothing on it yet &mdash; go straight to flashing.</span>
           </button>
-          <button type="button" id="choiceUpgrade" aria-pressed="false">
+          <button type="button" id="choiceUpgrade-esp32" aria-pressed="false">
             Upgrading a working device
             <span>It keeps its settings &mdash; as long as you leave one box unticked.</span>
           </button>
         </div>
 
-        <div class="warn-box fate" id="backupPanel" hidden>
+        <div class="warn-box fate" id="backupPanel-esp32" hidden>
           <p><strong>Your configuration survives this &mdash; do not tick "Erase device".</strong>
             The installer asks <em>Do you want to erase the device before installing WIFILT?</em>
             with the box already unticked. That is the answer you want: leaving it alone writes
@@ -885,7 +967,7 @@ cat > "${OUTPUT_DIR}/index.html" <<EOF
           </p>
         </div>
 
-        <ul id="flashHints" hidden>
+        <ul id="flashHints-esp32" hidden>
           <li>After connecting, select the correct <code>CP210x</code> / <code>CH340</code> / <code>JTAG</code> serial device.</li>
           <li>Choose <strong>Install WIFILT</strong>.</li>
           <li>The next screen asks <em>Do you want to erase the device before installing WIFILT?</em>
@@ -893,10 +975,10 @@ cat > "${OUTPUT_DIR}/index.html" <<EOF
               mean to wipe the whole chip, then press <strong>Next</strong>.</li>
         </ul>
 
-        <div class="cta gate" id="flashGate" data-locked="1">
+        <div class="cta gate" id="flashGate-esp32" data-locked="1">
           <esp-web-install-button manifest="manifest.json?v=${FW_REV}" baudrate="9600"></esp-web-install-button>
         </div>
-        <p class="gate-note" id="gateNote">Answer the question above to continue.</p>
+        <p class="gate-note" id="gateNote-esp32">Answer the question above to continue.</p>
 
         <h3>Reach the board after flashing</h3>
         <!-- These steps assume a device with no WiFi credentials. An update that
@@ -915,14 +997,14 @@ cat > "${OUTPUT_DIR}/index.html" <<EOF
             <code>WIFILT-AP</code>, password <code>remoteqth</code>. Scan this with a phone to join
             without typing either:
             <div class="qr-box">
-              <div class="qr" id="apQr"></div>
+              <div class="qr" id="apQr-esp32"></div>
               <p class="muted" style="margin:0">If the camera app does not offer to join,
                  pick <code>WIFILT-AP</code> from the WiFi list and type the password.</p>
             </div>
           </li>
           <li><strong>Open <code>http://192.168.4.1</code>.</strong> The setup page appears;
               some phones open it by themselves.</li>
-          <li id="restoreStep" hidden><strong>Erased the device, or came from a release older
+          <li id="restoreStep-esp32" hidden><strong>Erased the device, or came from a release older
               than 20260808? Restore your backup first</strong> &mdash; <strong>Upload config</strong> at
               the bottom of the setup page &mdash; before setting anything by hand. Anything you type
               before restoring will be overwritten by the file.</li>
@@ -953,6 +1035,167 @@ cat > "${OUTPUT_DIR}/index.html" <<EOF
 
         </div>
       </details>
+$(if [[ "$HAVE_M5ATOM" -eq 1 ]]; then cat <<M5ATOM
+      <details class="platform" id="m5atom">
+        <summary>
+          <span class="platform-name">M5Stack Atom Lite</span>
+          <span class="platform-sub">flash over USB-C &bull; runs on its own 24/7 &bull; bare module, same web UI</span>
+        </summary>
+        <div class="platform-body">
+
+        <h3>Required hardware</h3>
+        <dl class="hardware-grid">
+          <div class="hardware-item">
+            <dt>Board</dt>
+            <dd>M5Stack <strong>Atom Lite</strong> (ESP32-PICO-D4).</dd>
+          </div>
+          <div class="hardware-item">
+            <dt>Flash memory</dt>
+            <dd><strong>4 MB</strong>, built into the PICO-D4 module &mdash; nothing to configure.</dd>
+          </div>
+          <div class="hardware-item">
+            <dt>RAM</dt>
+            <dd>Standard ESP32 internal SRAM (520 KB). External PSRAM is not required.</dd>
+          </div>
+          <div class="hardware-item">
+            <dt>Flash layout</dt>
+            <dd>Identical to the box: No OTA, 1.375 MB application and ${SPIFFS_SIZE_MB} MB LittleFS web assets$(if [[ -n "$CFG_OFFSET" ]]; then echo ", plus a
+                separate ${CFG_SIZE_KB} kB configuration partition the installer never writes"; fi).</dd>
+          </div>
+        </dl>
+        <p class="muted compatibility-note">
+          This image targets the M5Stack <strong>Atom Lite</strong> (ESP32-PICO-D4) specifically
+          &mdash; the only Atom variant this project has tested. The Atom S3 family (AtomS3,
+          AtomS3 Lite/U) uses a different chip (ESP32-S3) and cannot run it; other classic Atom
+          boards (Matrix, Echo, U) share the same PICO-D4 but have not been tried. It runs as a
+          <strong>bare module</strong>: no CI-V serial port, FSK/RTTY keying, band decoder outputs
+          or switched 13.8&nbsp;V &mdash; only the built-in SK6812 RGB status LED.
+        </p>
+
+        <h3>Flash firmware via USB</h3>
+        <p>
+          Open this page in <strong>Google Chrome</strong> or <strong>Microsoft Edge</strong>
+          (Web Serial is not supported in Firefox or Safari).
+          Connect the Atom Lite to your computer via its USB-C socket.
+        </p>
+
+        <p><strong>Is this a new device, or one that is already working?</strong>
+          This page cannot tell, and the answer decides one checkbox further on.</p>
+        <div class="choice">
+          <button type="button" id="choiceNew-m5atom" aria-pressed="false">
+            New device
+            <span>Nothing on it yet &mdash; go straight to flashing.</span>
+          </button>
+          <button type="button" id="choiceUpgrade-m5atom" aria-pressed="false">
+            Upgrading a working device
+            <span>It keeps its settings &mdash; as long as you leave one box unticked.</span>
+          </button>
+        </div>
+
+        <div class="warn-box fate" id="backupPanel-m5atom" hidden>
+          <p><strong>Your configuration survives this &mdash; do not tick "Erase device".</strong>
+            The installer asks <em>Do you want to erase the device before installing WIFILT?</em>
+            with the box already unticked. That is the answer you want: leaving it alone writes
+            the firmware and the web pages only.</p>
+          <dl>
+            <dt>Leave "Erase device" unticked</dt>
+            <dd>The normal update. WiFi networks and passwords, callsign and locator, radio
+                connections and credentials, LOG and JS8 settings,
+                <strong>every TX audio gain calibration</strong>, CW and frequency memories and MSG
+                BOX all stay$(if [[ -n "$CFG_OFFSET" ]]; then echo " &mdash; they live in NVS and in the
+                configuration partition at <code>${CFG_OFFSET}</code>, and the installer writes
+                neither"; fi).</dd>
+            <dt>Tick it only to start clean</dt>
+            <dd>It erases the <strong>whole chip</strong>: everything above goes, including the
+                WiFi credentials that let you reach the device at all. Use it for a board that will
+                not boot, or when you are deliberately starting over &mdash; then restore from a backup
+                file.</dd>
+            <dt>Not affected either way</dt>
+            <dd>Your <strong>QSO log</strong>. It is stored in your browser, not on the device,
+                so flashing cannot touch it.</dd>
+          </dl>
+          <p style="margin-top:0.7rem">
+            <strong>Coming from a release older than 20260808?</strong> Those builds kept the
+            configuration inside the web-asset filesystem that this flash replaces, so it is lost
+            whichever way you answer. Save a backup first and restore it afterwards:
+            <a href="http://wifilt.local/config/download">download it now</a>, or open your
+            device's address and use <strong>SETUP &rarr; Download config</strong>. This page
+            cannot fetch it for you &mdash; it is served over HTTPS and your device over HTTP, so the
+            browser blocks the request.
+          </p>
+          <p style="margin-top:0.5rem">
+            One thing a backup file never carries: the <strong>MSG BOX</strong>. Stored messages
+            cannot be exported, so anything still waiting there is lost by an erase &mdash; read or
+            forward it first.
+          </p>
+        </div>
+
+        <ul id="flashHints-m5atom" hidden>
+          <li>After connecting, select the correct <code>CP210x</code> / <code>CH340</code> / <code>JTAG</code> serial device.</li>
+          <li>Choose <strong>Install WIFILT</strong>.</li>
+          <li>The next screen asks <em>Do you want to erase the device before installing WIFILT?</em>
+              &mdash; the <strong>Erase device</strong> box starts unticked. Leave it that way unless you
+              mean to wipe the whole chip, then press <strong>Next</strong>.</li>
+        </ul>
+
+        <div class="cta gate" id="flashGate-m5atom" data-locked="1">
+          <esp-web-install-button manifest="manifest-m5atom.json?v=${FW_REV}" baudrate="9600"></esp-web-install-button>
+        </div>
+        <p class="gate-note" id="gateNote-m5atom">Answer the question above to continue.</p>
+
+        <h3>Reach the board after flashing</h3>
+        <p class="muted" style="margin-top:0">
+          <strong>Updated a working device without erasing it?</strong> It keeps its WiFi
+          credentials, rejoins your network on its own and is back at the same address as before.
+          Nothing below applies &mdash; the steps are for a device that has no WiFi yet: brand new, or
+          just erased.
+        </p>
+        <ol>
+          <li>
+            <strong>Join the device's own WiFi.</strong> On its first boot it creates the network
+            <code>WIFILT-AP</code>, password <code>remoteqth</code>. Scan this with a phone to join
+            without typing either:
+            <div class="qr-box">
+              <div class="qr" id="apQr-m5atom"></div>
+              <p class="muted" style="margin:0">If the camera app does not offer to join,
+                 pick <code>WIFILT-AP</code> from the WiFi list and type the password.</p>
+            </div>
+          </li>
+          <li><strong>Open <code>http://192.168.4.1</code>.</strong> The setup page appears;
+              some phones open it by themselves.</li>
+          <li id="restoreStep-m5atom" hidden><strong>Erased the device, or came from a release older
+              than 20260808? Restore your backup first</strong> &mdash; <strong>Upload config</strong> at
+              the bottom of the setup page &mdash; before setting anything by hand. Anything you type
+              before restoring will be overwritten by the file.</li>
+          <li><strong>Enter your WiFi network and password</strong>, then save. The device joins
+              your network while its hotspot is still running and <strong>shows the address it was
+              given, with a QR code</strong>. Scan or write it down: the hotspot closes when it restarts.</li>
+          <li><strong>Reconnect your phone or computer to your normal WiFi</strong> and open that
+              address. From there, <a href="#radio-title">connecting the radio</a> is the same on
+              every platform.</li>
+        </ol>
+        <p class="muted">
+          Lost the address? Try <code>http://wifilt.local/</code>, look in your router's DHCP client
+          list, or open the serial console above at <code>9600 baud</code> and press
+          <strong>Reset Device</strong> to read it from the boot log.
+        </p>
+
+        <p class="muted">
+          The button above flashes: bootloader, partition table, boot_app0, firmware$(if [[ -n "$SPIFFS_BIN" ]]; then echo ", web assets"; fi).$(if [[ -n "$CFG_OFFSET" ]]; then echo "
+          It does <strong>not</strong> write the configuration partition at <code>${CFG_OFFSET}</code>, which is what
+          lets your settings survive an update."; fi)
+        </p>
+        <p class="muted">
+          For manual flashing there is <code>wifilt-${FW_REV}-m5atom-full.bin</code> at offset <code>0x0</code>
+          with <code>esptool.py</code>. <strong>That one erases everything</strong> &mdash; it is a whole-chip
+          image, so it overwrites the WiFi credentials in NVS$(if [[ -n "$CFG_OFFSET" ]]; then echo " and the configuration partition"; fi)
+          as well. Use it to recover a board that will not boot, not to update a working one.
+        </p>
+
+        </div>
+      </details>
+M5ATOM
+fi)
 $(if [[ -n "$DESKTOP_LINUX_NAME" ]]; then cat <<LINUX
       <details class="platform" id="linux">
         <summary>
@@ -1079,48 +1322,66 @@ fi)
     (function () {
       // The AP name and password are compiled into the firmware (ssidAP /
       // passwordAP in wifilt.ino), so they are a constant of this release --
-      // there is no device to ask yet when this page is on screen.
+      // there is no device to ask yet when this page is on screen. Every
+      // flashable platform panel carries its own "Join the device's own WiFi"
+      // step (id="apQr-<platform>"), because the join flow is identical no
+      // matter which board got flashed -- so one QR is rendered per panel that
+      // exists on the page, not just one for the page as a whole.
       var AP_JOIN = "WIFI:S:WIFILT-AP;T:WPA;P:remoteqth;;";
-      var qr = document.getElementById("apQr");
-      if (qr && window.QRCode) {
-        new window.QRCode(qr, { text: AP_JOIN, width: 132, height: 132 });
-      } else if (qr && qr.parentNode) {
-        // No encoder, no white square: the written instructions stand alone.
-        qr.parentNode.removeChild(qr);
+      Array.prototype.forEach.call(document.querySelectorAll('[id^="apQr-"]'), function (qr) {
+        if (window.QRCode) {
+          new window.QRCode(qr, { text: AP_JOIN, width: 132, height: 132 });
+        } else if (qr.parentNode) {
+          // No encoder, no white square: the written instructions stand alone.
+          qr.parentNode.removeChild(qr);
+        }
+      });
+
+      // Each flashable platform (the box, and the M5Atom Lite when its panel
+      // exists) asks its own "new device or upgrade?" question and gates its
+      // own install button -- they are different pieces of hardware, flashed
+      // independently, so answering for one must not silently unlock the
+      // other. wireFlashGate is called once per "-<suffix>" id family found in
+      // the page, discovered from the choiceNew elements rather than
+      // hard-coded, so a platform panel that gh-pages.sh left out (no M5Atom
+      // build, say) is simply never wired instead of throwing on a null.
+      function wireFlashGate(suffix) {
+        var asNew = document.getElementById("choiceNew-" + suffix);
+        var asUpgrade = document.getElementById("choiceUpgrade-" + suffix);
+        var panel = document.getElementById("backupPanel-" + suffix);
+        var gate = document.getElementById("flashGate-" + suffix);
+        var note = document.getElementById("gateNote-" + suffix);
+        var hints = document.getElementById("flashHints-" + suffix);
+        var restore = document.getElementById("restoreStep-" + suffix);
+        if (!asNew || !asUpgrade || !panel || !gate || !note || !hints || !restore) return;
+        var mode = null;
+
+        // There used to be a second gate here -- a checkbox saying the backup
+        // was saved -- because a flash really did destroy the configuration.
+        // It no longer does, so demanding the acknowledgement every time would
+        // be crying wolf, and a warning nobody believes is worse than none.
+        // The only gate left is the question the page genuinely cannot answer
+        // for itself.
+        function apply() {
+          var locked = mode === null;
+          gate.setAttribute("data-locked", locked ? "1" : "0");
+          hints.hidden = locked;
+          note.hidden = !locked;
+          note.textContent = "Answer the question above to continue.";
+          panel.hidden = mode !== "upgrade";
+          restore.hidden = mode !== "upgrade";
+          asNew.setAttribute("aria-pressed", mode === "new" ? "true" : "false");
+          asUpgrade.setAttribute("aria-pressed", mode === "upgrade" ? "true" : "false");
+        }
+
+        asNew.addEventListener("click", function () { mode = "new"; apply(); });
+        asUpgrade.addEventListener("click", function () { mode = "upgrade"; apply(); });
+        apply();
       }
 
-      // Whether there is anything to back up is the one thing this page cannot
-      // work out for itself -- so it asks once, and a new device is never
-      // nagged about saving a configuration that does not exist.
-      var asNew = document.getElementById("choiceNew");
-      var asUpgrade = document.getElementById("choiceUpgrade");
-      var panel = document.getElementById("backupPanel");
-      var gate = document.getElementById("flashGate");
-      var note = document.getElementById("gateNote");
-      var hints = document.getElementById("flashHints");
-      var restore = document.getElementById("restoreStep");
-      var mode = null;
-
-      // There used to be a second gate here -- a checkbox saying the backup was
-      // saved -- because a flash really did destroy the configuration. It no
-      // longer does, so demanding the acknowledgement every time would be
-      // crying wolf, and a warning nobody believes is worse than none. The only
-      // gate left is the question the page genuinely cannot answer for itself.
-      function apply() {
-        var locked = mode === null;
-        gate.setAttribute("data-locked", locked ? "1" : "0");
-        hints.hidden = locked;
-        note.hidden = !locked;
-        note.textContent = "Answer the question above to continue.";
-        panel.hidden = mode !== "upgrade";
-        restore.hidden = mode !== "upgrade";
-        asNew.setAttribute("aria-pressed", mode === "new" ? "true" : "false");
-        asUpgrade.setAttribute("aria-pressed", mode === "upgrade" ? "true" : "false");
-      }
-
-      asNew.addEventListener("click", function () { mode = "new"; apply(); });
-      asUpgrade.addEventListener("click", function () { mode = "upgrade"; apply(); });
-      apply();
+      Array.prototype.forEach.call(document.querySelectorAll('[id^="choiceNew-"]'), function (el) {
+        wireFlashGate(el.id.slice("choiceNew-".length));
+      });
     }());
   </script>
 </body>
@@ -1199,6 +1460,13 @@ for optional_file in "$DESKTOP_LINUX_NAME" "$DESKTOP_WIN_NAME" "$DESKTOP_ARM64_N
   require_file "${OUTPUT_DIR}/${optional_file}" "desktop artifact ${optional_file}"
   cp "${OUTPUT_DIR}/${optional_file}" "$TMP_DIR/${optional_file}"
 done
+
+if [[ "$HAVE_M5ATOM" -eq 1 ]]; then
+  for m5atom_file in manifest-m5atom.json firmware-m5atom.bin "wifilt-${FW_REV}-m5atom-full.bin"; do
+    require_file "${OUTPUT_DIR}/${m5atom_file}" "M5Atom artifact ${m5atom_file}"
+    cp "${OUTPUT_DIR}/${m5atom_file}" "$TMP_DIR/${m5atom_file}"
+  done
+fi
 
 git -C "$TMP_DIR" add --all
 
