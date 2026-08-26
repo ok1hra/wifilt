@@ -1,0 +1,63 @@
+/* FT8-ICOM page — only what is genuinely FT8's. The topbar, radio bar, disclosure
+   sections and waterfall come from data.css, shared with the JS8Call/WSPR pages. */
+
+.ft8-controls { gap: 18px; }
+
+/* Decode table. A 4-column fixed head plus rows; the message column takes the
+   rest. Monospaced numerics so columns line up like a real FT8 client. */
+.ft8-decodes-body { padding: 4px 2px 8px; }
+
+.ft8-decodes-head,
+.ft8-decode-row {
+  display: grid;
+  grid-template-columns: 44px 40px 52px 1fr;
+  gap: 8px;
+  align-items: baseline;
+  font-variant-numeric: tabular-nums;
+}
+
+.ft8-decodes-head {
+  padding: 4px 8px;
+  color: #7e918b;
+  font-size: 11px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  border-bottom: 1px solid #24413b;
+}
+/* The head carries a leading UTC label the rows fold into their divider, so drop
+   its first cell into the same grid by spanning db/dt/freq/msg after it. */
+.ft8-decodes-head .col-utc { display: none; }
+
+.ft8-decodes-list {
+  max-height: 60vh;
+  overflow-y: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+}
+
+.ft8-slot-group { padding: 2px 0; }
+
+.ft8-slot-divider {
+  padding: 6px 8px 3px;
+  color: #6f857e;
+  font-size: 11px;
+  letter-spacing: .04em;
+}
+
+.ft8-decode-row {
+  padding: 2px 8px;
+  color: #d7e6df;
+  border-radius: 4px;
+}
+.ft8-decode-row:hover { background: #12241f; }
+
+.ft8-decode-row .col-db { color: #9fb4ac; text-align: right; }
+.ft8-decode-row .col-dt { color: #9fb4ac; text-align: right; }
+.ft8-decode-row .col-freq { color: #9fb4ac; text-align: right; }
+.ft8-decode-row .col-msg { color: #eaf4ee; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* CQ stands out — it is the one line an operator scans for. */
+.ft8-decode-row.is-cq .col-msg { color: #7ee0a6; font-weight: 700; }
+
+.aud1-state.live { color: #7ee0a6; }
+#linkState.linked { color: #7ee0a6; }
