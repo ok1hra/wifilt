@@ -261,6 +261,34 @@
       this._resetAutoTiming(true);
     }
 
+    // The transport (WsAudioSource) calls this the moment its WebSocket closes --
+    // BEFORE any packet of a future reconnect exists to trigger observePacket()'s
+    // own stream-change detection. Without it `mediaStatus` stays "locked" from the
+    // dead stream across the whole reconnect+hello handshake, since nothing else
+    // ever clears it proactively: only a NEW packet's streamId mismatch does
+    // (_beginMediaEpoch, below), and that cannot happen before the new stream's
+    // first packet arrives. Confirmed on real hardware (2026-08-25): a WS drop
+    // mid-TX left mediaStatus="locked" stale, so `txBlockReasons()`'s "audio
+    // timebase is not locked" gate read false-clear, and the resend plan's one
+    // automatic retry (docs/js8-tx-resend-plan.md decision 4, meant to wait for
+    // "the gate to open again") fired within milliseconds into a session whose
+    // `hello` was still null, burning the single attempt on "AUD1 hello not
+    // received" instead of the real recovery a few seconds later.
+    noteStreamLost() {
+      if (this.streamId === null && this.mediaStatus === "unanchored") return;
+      this.streamId = null;
+      this.mediaStatus = "unanchored";
+      this.mediaEpochReason = "closed";
+      this.anchorUtcSample0Ms = null;
+      this.anchorCandidates = [];
+      this.anchorCandidateCount = 0;
+      this.minCandidateSinceLockMs = null;
+      this.anchorLateMs = 0;
+      this.anchorProofs = 0;
+      this.expectedSample = null;
+      this.expectedSequence = null;
+    }
+
     confirmClock() {
       this.clockConfirmed = true;
     }

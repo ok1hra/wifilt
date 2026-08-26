@@ -19,6 +19,9 @@
 const http = require("http");
 const { spawn } = require("child_process");
 const crypto = require("crypto");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 
 const [targetA, targetB] = [process.argv[2] || "127.0.0.11:8301", process.argv[3] || "127.0.0.12:8302"];
 const [hostA, portA] = targetA.split(":");
@@ -33,6 +36,7 @@ const FILE_SHA256_HEX = crypto.createHash("sha256").update(Buffer.from(FILE_CONT
 
 let finished = false;
 const chromeProcs = [];
+const chromeProfileDirs = [];
 let timer = null;
 const state = { A: {}, B: {} };
 
@@ -50,6 +54,7 @@ const state = { A: {}, B: {} };
 // for ~10 minutes after the driving node process had already exited.
 function killAllChrome() {
   for (const c of chromeProcs) { try { c.kill("SIGKILL"); } catch (_e) {} }
+  for (const d of chromeProfileDirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch (_e) {} }
 }
 
 function finish(ok, reason) {
@@ -164,7 +169,9 @@ const DRIVER_A = `
       await post({ rawMsgs: window.__mercuryDebug.slice(debugSent) });
       debugSent = window.__mercuryDebug.length;
     }
-    await post({ connState: document.getElementById("aud1State")?.textContent || "", testText, estText, reallyConnected });
+    const statusVisible = document.getElementById("statusSection") ? !document.getElementById("statusSection").hidden : false;
+    const statusText = document.getElementById("arqStatus")?.textContent || "";
+    await post({ connState: document.getElementById("aud1State")?.textContent || "", testText, estText, reallyConnected, statusVisible, statusText });
 
     if (!fileQueued && reallyConnected) {
       const fileInput = document.getElementById("fileInput");
@@ -218,10 +225,10 @@ const DRIVER_B = `
   window.__mercuryDebug = [];
   let debugSent = 0;
   await new Promise((r) => setTimeout(r, 800));
-  const armToggle = document.getElementById("armToggle");
-  if (!armToggle || armToggle.disabled) { await post({ receiveError: "arm control not ready" }); return; }
-  if (!armToggle.checked) armToggle.click();
-  await post({ log: "armed, listening" });
+  const listenToggle = document.getElementById("listenToggle");
+  if (!listenToggle || listenToggle.disabled) { await post({ receiveError: "listen control not ready" }); return; }
+  if (!listenToggle.checked) listenToggle.click();
+  await post({ log: "LISTEN on" });
 
   const deadline = Date.now() + ${timeoutMs};
   while (Date.now() < deadline) {
@@ -232,7 +239,9 @@ const DRIVER_B = `
       await post({ rawMsgs: window.__mercuryDebug.slice(debugSent) });
       debugSent = window.__mercuryDebug.length;
     }
-    await post({ connState: document.getElementById("aud1State")?.textContent || "", testText, estText, receivedCount: received });
+    const statusVisible = document.getElementById("statusSection") ? !document.getElementById("statusSection").hidden : false;
+    const statusText = document.getElementById("arqStatus")?.textContent || "";
+    await post({ connState: document.getElementById("aud1State")?.textContent || "", testText, estText, receivedCount: received, statusVisible, statusText });
 
     if (received > 0) {
       const link = document.querySelector("#receivedFiles .received-file a");
@@ -251,8 +260,8 @@ const DRIVER_B = `
     // driver failed to clean up last time) unchecks the arm toggle and
     // mercury.js goes no further; "listening" on its own is normal/expected
     // for a long time and must NOT be treated as terminal.
-    if (!document.getElementById("armToggle")?.checked) {
-      await post({ receiveError: "arm was refused or dropped (session already held?)" });
+    if (!document.getElementById("listenToggle")?.checked) {
+      await post({ receiveError: "LISTEN was refused or dropped (session already held?)" });
       return;
     }
     const pill = (document.getElementById("aud1State")?.textContent || "").toLowerCase();
@@ -282,9 +291,25 @@ function launch(server, label, bindHost) {
     // proxy was on 127.0.0.1 while --bind-ip put AUD1 on 127.0.0.11/.12).
     server.listen(0, bindHost, () => {
       const port = server.address().port;
+      // Separate --user-data-dir per station, REQUIRED: without one, a
+      // second `google-chrome --headless=new` invocation with no profile
+      // dir of its own reuses whatever default/most-recent profile is
+      // already running and just opens a second TAB in that same browser
+      // process instead of a genuinely independent one -- confirmed live
+      // 2026-08-25 (mercury-call-accept-regression memory) via `pgrep -af
+      // chrome` after a "two independent stations" run showing only ONE
+      // top-level chrome process for both A and B. Chrome throttles
+      // JS timers (setTimeout/setInterval) in background tabs, which is
+      // exactly where js8-aud1.js's self-paced ping loop and this driver's
+      // own reconnect grace timers live -- a real, reproducible source of
+      // the "audio session did not recover within 10000ms" hiccups seen
+      // during testing, unrelated to anything in the shipped firmware/JS.
+      const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), `mercury-live-chrome-${label}-`));
+      chromeProfileDirs.push(profileDir);
       const chrome = spawn("google-chrome", [
         "--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
-        "--no-proxy-server", `http://${bindHost}:${port}/mercury.html`,
+        "--no-proxy-server", `--user-data-dir=${profileDir}`,
+        `http://${bindHost}:${port}/mercury.html`,
       ], { stdio: ["ignore", "ignore", "pipe"] });
       chromeProcs.push(chrome);
       let errs = "";

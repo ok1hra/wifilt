@@ -41,6 +41,15 @@
     v: SCHEMA_VERSION,
     retryCallSlots: 4,        // ARQ_CALL_RETRY_SLOTS_DEFAULT
     retryAcceptSlots: 4,      // ARQ_ACCEPT_RETRY_SLOTS_DEFAULT
+    // Tried raising both to 7 on 2026-08-25 (compounding more retries against
+    // the callint jitter below), on the theory that jittered retries are
+    // close to independent draws so more of them should compound to a much
+    // higher session success rate. Live testing did not show a clear
+    // improvement over a small sample (arguably worse -- also makes a
+    // genuinely bad session take longer to give up), so reverted to the
+    // engine's own compiled defaults rather than keep an unproven change.
+    // If revisited, needs a much larger sample to judge against pure jitter
+    // alone.
     retryDataSlots: 10,       // ARQ_DATA_RETRY_SLOTS_DEFAULT
     retryDisconnectSlots: 2,  // ARQ_DISCONNECT_RETRY_SLOTS_DEFAULT
     callIntervalS: 0,         // ARQ_CALLINT_DEFAULT_S -- 0 = table default ("auto")

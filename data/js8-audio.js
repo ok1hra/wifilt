@@ -124,6 +124,11 @@ function (Transport, Timebase) {
       } else if (status.type === "closed") {
         this._readyStreamId = null;
         this._pending = [];
+        // See Js8Timebase.noteStreamLost()'s own comment: without this,
+        // mediaStatus stays "locked" (stale, from the dead stream) for the
+        // whole reconnect+hello handshake, letting txBlockReasons()'s "audio
+        // timebase is not locked" gate read clear too early.
+        this._timebase.noteStreamLost();
       }
       this._emitStatus(status);
     }

@@ -59,14 +59,33 @@ const EV = {
 };
 const CONN_STATE = ["DISCONNECTED", "LISTENING", "CALLING", "ACCEPTING", "CONNECTED", "DISCONNECTING"];
 const FREEDV_MODE_DATAC16 = 23;
-const ARQ_DFLOW_IDLE_IRS = 3; // arq_fsm.h: "IRS: waiting for peer data frame" -- the only state expecting a payload-mode frame
 // arq_fsm.h's dflow_state values where tx_retries_left actually counts down
 // DATA-frame delivery attempts (ARQ_DATA_RETRY_SLOTS budget). The same field
 // is reused verbatim during TURN_REQ/MODE_REQ negotiation (ARQ_DFLOW_TURN_REQ_*=6/7,
 // ARQ_DFLOW_MODE_REQ_*=9/10), which always starts from a small fixed budget
 // of 2 -- showing "retries left on the current frame" there would flash a
 // false warning on completely healthy turn-taking/mode-ladder traffic.
-const ARQ_DFLOW_DATA_TX = 1, ARQ_DFLOW_WAIT_ACK = 2;
+const ARQ_DFLOW_IDLE_ISS = 0, ARQ_DFLOW_DATA_TX = 1, ARQ_DFLOW_WAIT_ACK = 2,
+      ARQ_DFLOW_IDLE_IRS = 3, ARQ_DFLOW_DATA_RX = 4;
+// Every dflow state whose arq_fsm.c handler has an ARQ_EV_RX_DATA case --
+// i.e. a state in which the C engine can legitimately deliver a real payload
+// frame right now, not just a control frame. Found 2026-08-25 (mercury-call-
+// accept-regression memory): the previous rule ("only IDLE_IRS") was a
+// plausible-sounding but wrong guess -- WAIT_ACK's RX_DATA case is precisely
+// the peer's DATA arriving as an *implicit ACK* of our own pending frame
+// (go-back-N/piggyback turn-taking), and IDLE_ISS's/DATA_RX's own RX_DATA
+// cases exist for the same reason (peer sending while we hold the TX turn;
+// mid-burst continuation frames). Live two-station testing caught this the
+// hard way: after CALL/ACCEPT and the ARQ frame accounting both went clean,
+// B's own byte count still stalled forever at just the header/query bytes --
+// B's dflow spent nearly the whole transfer cycling through WAIT_ACK/DATA_TX/
+// ACK_TX (its own piggybacked ISS turn) while this line kept the payload
+// demodulator parked on control mode instead of the peer's real DATAC-n, so
+// a genuine payload frame arriving during that window was structurally
+// undecodable no matter how clean the ARQ layer was.
+const ARQ_DFLOW_EXPECTS_RX_DATA = new Set([
+  ARQ_DFLOW_IDLE_ISS, ARQ_DFLOW_WAIT_ACK, ARQ_DFLOW_IDLE_IRS, ARQ_DFLOW_DATA_RX,
+]);
 function isDataRetryPhase(ds) { return ds === ARQ_DFLOW_DATA_TX || ds === ARQ_DFLOW_WAIT_ACK; }
 const SAMPLE_RATE = 48000, PACKET_MS = 20, SAMPLES_PER_PACKET = (SAMPLE_RATE * PACKET_MS) / 1000;
 // sim_endpoint.c (mercury/tests/sim/, upstream, unmodified) backs
@@ -259,8 +278,24 @@ async function main(config) {
   // loss"). Doubled defensively; this only costs idle-air time per turn, not
   // correctness, and can come back down once real per-radio turnaround is
   // actually measured.
-  setChannelGuardMs(1400);
-  setIssPostAckGuardMs(1800);
+  //
+  // Doubling alone was not enough: confirmed live 2026-08-25, two real
+  // radios still collided PTT-on-PTT repeatedly (S-meter/PTT logged every
+  // 250ms independently of this app showed ~6% of ticks with BOTH stations
+  // transmitting at once) and a real two-station file transfer failed
+  // outright -- root cause is that EVERY timer here (this guard pair, and
+  // separately the CALL/ACCEPT retry interval jittered below) is the exact
+  // same fixed value on both stations, an ALOHA-style lockstep with nothing
+  // to make two real stations' turn-taking drift apart. Add per-station
+  // jitter ON TOP of the doubled floor (never below it -- that margin is
+  // load-bearing) so two stations starting a session near the same
+  // wall-clock moment do not keep re-colliding on every single turn.
+  const GUARD_JITTER_MS = 400;
+  const channelGuardMs = 1400 + Math.floor(Math.random() * GUARD_JITTER_MS);
+  const issPostAckGuardMs = 1800 + Math.floor(Math.random() * GUARD_JITTER_MS);
+  setChannelGuardMs(channelGuardMs);
+  setIssPostAckGuardMs(issPostAckGuardMs);
+  post({ type: "log", line: `guards: channel=${channelGuardMs}ms issPostAck=${issPostAckGuardMs}ms` });
   const wallStart = Date.now();
   let currentRxMode = FREEDV_MODE_DATAC16;
   rxSetMode(currentRxMode); // payload-mode demodulator, follows dflow_state/peer_tx_mode
@@ -411,6 +446,7 @@ async function main(config) {
     pendingSend.phase = "sending-data";
     pendingSend.offset = offset;
     pendingSend.sawBusy = false; // set once dflow_state actually leaves idle for this phase -- see the onRxTick completion check
+    pendingSend.idleSinceMs = null; // when the post-busy idle settle window started, if any -- see the same check
     const remainder = pendingSend.bytes.subarray(offset);
     const header = MercuryFile.dataHeader({ totalSize: pendingSend.totalSize, sha256: pendingSend.sha256, name: pendingSend.name, offset, deflated: false });
     const frame = new Uint8Array(header.length + remainder.length);
@@ -772,10 +808,12 @@ async function main(config) {
       m.HEAP16[(rxScratchPtr >> 1) + i] = s;
     }
 
-    // Follow a real data phase's mode, exactly like host_peer_tx_mode()'s
-    // own comment describes: IDLE_IRS expects a real DATA frame in
-    // peer_tx_mode, every other dflow state expects control mode.
-    const wantMode = dflowState(ep) === ARQ_DFLOW_IDLE_IRS ? peerTxMode(ep) : FREEDV_MODE_DATAC16;
+    // Follow the peer's real payload mode in every dflow state where a real
+    // DATA frame can legitimately arrive (see ARQ_DFLOW_EXPECTS_RX_DATA above),
+    // control mode everywhere else (turn/mode/keepalive housekeeping, or we
+    // are the one actively transmitting so our own RX mode is moot anyway).
+    const ds = dflowState(ep);
+    const wantMode = ARQ_DFLOW_EXPECTS_RX_DATA.has(ds) ? peerTxMode(ep) : FREEDV_MODE_DATAC16;
     if (wantMode !== currentRxMode && wantMode > 0) {
       currentRxMode = wantMode;
       rxSetMode(currentRxMode);
@@ -832,11 +870,43 @@ async function main(config) {
     const dflowIsIdle = (ds) => ds === 0 || ds === 3;
     if (pendingSend && pendingSend.phase === "sending-data") {
       const ds = dflowState(ep);
-      if (!dflowIsIdle(ds)) pendingSend.sawBusy = true;
-      else if (pendingSend.sawBusy) {
-        post({ type: "send-progress", name: pendingSend.name, sentBytes: pendingSend.totalSize, totalBytes: pendingSend.totalSize, phase: "delivered" });
-        post({ type: "send-complete", name: pendingSend.name });
-        pendingSend = null;
+      if (!dflowIsIdle(ds)) {
+        pendingSend.sawBusy = true;
+        pendingSend.idleSinceMs = null; // busy again -- not the terminal idle yet
+      } else if (pendingSend.sawBusy) {
+        // Real bug, found 2026-08-25 chasing a false "delivered": dflow_state
+        // returns to IDLE_ISS on BOTH a genuine clean completion AND after
+        // the engine gives up (arq_fsm.c's own comment on the ISS retry
+        // path: "the ISS enters IDLE_ISS (or after retries are exhausted)")
+        // -- confirmed live, A reported "delivered" (122/122B) while B's own
+        // receive-side byte count had stalled partway and never surfaced a
+        // received file at all. host_tx_retries_left()==0 catches the
+        // give-up case (checked below), but a SECOND, separate false-idle
+        // exists: a mid-transfer MODE UPGRADE (DATAC15->DATAC4 etc, a
+        // MODE_REQ/MODE_ACK exchange) also passes dflow through this same
+        // IDLE_ISS momentarily as a NORMAL part of a healthy transfer --
+        // confirmed live, B's own arq-status showed framesOk=1 (of 2 needed)
+        // and retriesLeft=10 (untouched) at the exact moment A had already
+        // posted "delivered". Neither dflow-idle nor the retry check alone
+        // can tell a genuine finish from this transient blip; a real
+        // completion, unlike a mode-change pause, STAYS idle. Require idle
+        // to persist before believing it.
+        const now = Date.now();
+        if (pendingSend.idleSinceMs === null) pendingSend.idleSinceMs = now;
+        const IDLE_SETTLE_MS = 3000; // comfortably longer than a MODE_REQ/ACK round trip (channel guard + one DATAC16 control frame each way, ~2-3s)
+        if (now - pendingSend.idleSinceMs < IDLE_SETTLE_MS) {
+          // Not yet -- could still be a mode-change pause. Keep waiting.
+        } else {
+          const retriesLeft = txRetriesLeft(ep);
+          if (retriesLeft <= 0) {
+            post({ type: "log", line: `send gave up: retry budget exhausted (txRetriesLeft=0, consecutiveRetries=${consecutiveRetries(ep)}, txSeq=${txSeqFn(ep)})` });
+            post({ type: "send-error", reason: "peer stopped acknowledging (retries exhausted)" });
+          } else {
+            post({ type: "send-progress", name: pendingSend.name, sentBytes: pendingSend.totalSize, totalBytes: pendingSend.totalSize, phase: "delivered" });
+            post({ type: "send-complete", name: pendingSend.name });
+          }
+          pendingSend = null;
+        }
       } else {
         // Time+mode-based ETA (not byte-counted -- see startRealDataPhase's
         // own comment on why): estimated from the CURRENT mode's real
@@ -993,10 +1063,62 @@ async function main(config) {
     // silently reopen the fast/unsafe modes.
     setModeCeilingRank(MercuryTuning.modeCeilingRank(tuning.modeCeiling));
     setRetrySlots(tuning.retryCallSlots, tuning.retryAcceptSlots, tuning.retryDataSlots, tuning.retryDisconnectSlots);
-    setCallint(tuning.callIntervalS);
+    // "auto" (0) used to mean "pass 0 straight through", which makes
+    // arq_protocol_call_interval_s() fall back to the SAME compiled table
+    // constant (DATAC16's ~7-8s) on every station -- fine for one station
+    // alone, but two real stations that both dial in near the same wall-clock
+    // moment (an operator calling right after seeing the other come up, or
+    // this project's own two-station test tooling) then retry CALL/ACCEPT on
+    // near-identical periods with zero jitter, an ALOHA-style lockstep that
+    // does not drift apart on its own. Confirmed live 2026-08-25: two real
+    // radios (IC-705 dialling IC-7610) collided PTT-on-PTT repeatedly
+    // (~6% of 250ms-sampled ticks showed both stations transmitting at once)
+    // and the call never completed, reproduced with byte-for-byte reverted
+    // 2026-08-23 code too -- ruling out everything else changed since, this
+    // engine-level retry-interval collision is the actual cause. Fix: "auto"
+    // now means "the table default, jittered a few seconds per session" --
+    // an explicit operator-set value (>0) is a deliberate choice and stays
+    // exact, un-jittered.
+    const BASE_CALLINT_S = 8.0; // mirrors arq_protocol.c's own DATAC16 table row; keep in sync if that ever changes
+    // Wide enough that two stations drawing close-by values by chance (a real
+    // observed near-miss: 6.35s vs 6.42s, only 70ms apart, stayed collision-
+    // prone for the whole 4-retry budget since the PERIOD barely differs) is
+    // rare -- this jitters the retry PERIOD itself, so a small gap between
+    // two draws does not drift the two stations' phases apart quickly. +/-4s
+    // keeps every draw safely above CALLINT_MIN_S (4.0) while spreading draws
+    // across a wide enough range that two stations landing within ~0.5s of
+    // each other is unlikely.
+    const CALLINT_JITTER_S = 4.0;
+    function drawCallIntS() { return BASE_CALLINT_S + (Math.random() * 2 - 1) * CALLINT_JITTER_S; }
+    const firstCallIntS = tuning.callIntervalS > 0 ? tuning.callIntervalS : drawCallIntS();
+    setCallint(firstCallIntS);
     setRetryDowngradeThreshold(tuning.retryDowngradeThreshold);
     MAX_TRANSFER_BYTES = Math.min(tuning.transferLimitKb * 1024, MAX_TRANSFER_BYTES_HARD_CAP);
-    post({ type: "log", line: `tuning: retry=${tuning.retryCallSlots}/${tuning.retryAcceptSlots}/${tuning.retryDataSlots}/${tuning.retryDisconnectSlots} callint=${tuning.callIntervalS || "auto"} downgrade=${tuning.retryDowngradeThreshold} ceiling=${tuning.modeCeiling} maxTransfer=${MAX_TRANSFER_BYTES}B` });
+    post({ type: "log", line: `tuning: retry=${tuning.retryCallSlots}/${tuning.retryAcceptSlots}/${tuning.retryDataSlots}/${tuning.retryDisconnectSlots} callint=${tuning.callIntervalS || "auto"}(${firstCallIntS.toFixed(2)}s applied) downgrade=${tuning.retryDowngradeThreshold} ceiling=${tuning.modeCeiling} maxTransfer=${MAX_TRANSFER_BYTES}B` });
+
+    // A single per-session draw was not enough on its own (confirmed live: a
+    // 70ms-apart near-miss stayed collision-prone for the whole 4-retry
+    // budget, since the engine re-reads the SAME atomic override on every
+    // ARQ_EV_TIMER_RETRY -- one bad draw is one bad draw for the entire
+    // session, not four independent ones). Re-draw periodically instead, so
+    // each actual retry is likely to see a DIFFERENT value than the one
+    // before it -- turning "one shot at a good phase relationship" into
+    // "several". Only while "auto"; an operator's explicit value is a
+    // deliberate choice and must stay exact for the whole session, matching
+    // this plan's own "settings apply once at session start, never mid-
+    // session" rule -- this loop is the one narrow exception, justified only
+    // because it is fixing a real collision bug, not changing operator intent.
+    // Stops itself once past the phase it can help (CONNECTED/DISCONNECTING),
+    // per the same "never mid-session" reasoning: an established transfer
+    // must not have its retry timing perturbed underneath it.
+    let rejitterTimer = null;
+    if (!(tuning.callIntervalS > 0)) {
+      rejitterTimer = setInterval(() => {
+        const cs = connState(ep);
+        if (cs >= 4 || stopping) { clearInterval(rejitterTimer); rejitterTimer = null; return; }
+        setCallint(drawCallIntS());
+      }, 1500);
+    }
   } catch (e) {
     // A tuning file that fails to load is not a reason to refuse the
     // session -- TuningStore.load() self-catches and always resolves to its
