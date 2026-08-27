@@ -184,6 +184,15 @@ void host_set_channel_guard_ms(int ms) { atomic_store(&arq_channel_guard_ms, ms)
 EMSCRIPTEN_KEEPALIVE
 void host_set_iss_post_ack_guard_ms(int ms) { atomic_store(&arq_iss_post_ack_guard_ms, ms); }
 
+/* arq_protocol.h's own comment on ARQ_DATA_RETRY_JITTER_PCT has the full
+ * story: the DATA-phase WAIT_ACK retry loop had the exact same missing-
+ * jitter problem CALL/ACCEPT did (fixed above), just never noticed until a
+ * live two-station transfer's own resume-query REPLY and the peer's real
+ * DATA_TX collided on every identical, unjittered retry for the length of
+ * the test. 0 (default) = off, unreachable by native unit/sim tests. */
+EMSCRIPTEN_KEEPALIVE
+void host_set_data_retry_jitter_pct(int pct) { atomic_store(&arq_data_retry_jitter_pct, pct); }
+
 /* docs/mercury-implementace.md §6.6 (Settings): thin exports over atomics
  * that already exist and are already unit-tested (native `mercury`'s own
  * RETRIES/CALLINT TCP commands drive the same four fields via

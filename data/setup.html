@@ -499,6 +499,17 @@
                 <span class="help-tip" data-tip="DXCC entity names to block (one per line, e.g. Russia). In the QRPLog journal matching callsigns are highlighted red; on the DATA page they are hidden from stations, traffic and the MSG BOX, automatic functions never answer them, and manual TX to them is refused.">?</span>
               </div>
             </label>
+            <!-- docs/rtty-implementace.md §8.2/8.3: QRPlog's own free-text send
+                 uses this station's AUD1 audio-stream RTTY encoder instead of
+                 POST /cmd sendCw -- only while the active TRX is LAN-connected
+                 (log.js's own !app.trxOi3[activeTrx] check); OI3/K3NG external
+                 keyer TRX ignore this checkbox entirely, since AUD1 has no
+                 relationship to that keyer. -->
+            <label class="checkbox-row">
+              <input type="checkbox" id="ls_rttyAudioTx" name="rttyAudioTx" form="setup-form">
+              Send QRPlog RTTY text via AUD1 audio-stream (LAN TRX only)
+              <span class="help-tip" data-tip="When on, and the active TRX is LAN-connected, QRPlog's own free-text send uses the same AFSK audio-stream TX path as the RTTY-ICOM page instead of the existing GPIO FSK-backend (POST /cmd sendCw). OI3/K3NG-keyer TRX are unaffected either way -- AUD1 has no relationship to an external keyer.">?</span>
+            </label>
           </div>
         </details>
 
@@ -642,6 +653,8 @@
           'dxchost', 'dxcport',
           'dxccall', 'dxclocator', 'blockedDxcc'
         ];
+        // rttyAudioTx is a checkbox, same shape as cwIpOnConnect below --
+        // setValue() already handles both uniformly (el.type==='checkbox').
         ['trx1', 'trx2', 'trx3'].forEach(function (prefix) {
           ['label', 'transport', 'civaddr', 'netid', 'lanip', 'lanuser', 'lanpass'].forEach(function (suffix) {
             setupNames.push(prefix + suffix);
@@ -650,6 +663,7 @@
         setupNames.forEach(function (name) { setValue(name, data[name]); });
 
         setValue('cwIpOnConnect', data.cwIpOnConnect);
+        setValue('rttyAudioTx', data.rttyAudioTx);
         setValue('trx2enable', data.trx2enabled);
         setValue('trx3enable', data.trx3enabled);
 

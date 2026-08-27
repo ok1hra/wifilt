@@ -715,6 +715,11 @@ int incomingByte = 0;   // for incoming serial data
   String g_lcTrx2Label = "TRX2";
   String g_lcTrx3Label = "TRX3";
   String g_lcBlockedDxcc = "Russia\nBelarus\nKaliningrad";
+  // docs/rtty-implementace.md §8.2: QRPlog's own free-text send uses this
+  // station's AUD1 audio-stream RTTY encoder instead of POST /cmd sendCw,
+  // only while the active TRX is LAN-connected. Default off -- the existing
+  // FSK-backend path is what QRPlog's RTTY macros already use today.
+  bool g_lcRttyAudioTx = false;
 
   // TrxNet peer cache for TRX2 (index 0) and TRX3 (index 1) — written by onHz/onMode callbacks
   static volatile long g_trxFreq[2]    = {0, 0};
@@ -1250,6 +1255,7 @@ void loadLogConfigVars(void){
   v = extractJsonString(j, "trx2Label"); if (v.length() > 0) g_lcTrx2Label = v;
   v = extractJsonString(j, "trx3Label"); if (v.length() > 0) g_lcTrx3Label = v;
   if (j.indexOf("\"blockedDxcc\"") >= 0) g_lcBlockedDxcc = extractJsonString(j, "blockedDxcc");
+  g_lcRttyAudioTx = extractJsonBool(j, "rttyAudioTx", g_lcRttyAudioTx);
 }
 
 String jsonEscape(const String &value){
@@ -1425,12 +1431,26 @@ static String readLogConfigJson() {
   return json;
 }
 
+// `existingJson` is read by its one caller (the /setup/save handler, via
+// readLogConfigJson()) but never actually used below -- this function always
+// rebuilds the object from scratch out of its fixed parameter list (code-
+// review 2026-08-27: flagged as a latent trap, not fixed here, since a real
+// fix needs a general "preserve unknown JSON keys" merge this codebase's
+// ad-hoc string-based JSON handling has no primitive for). Any key that ever
+// lands in log-config.json outside this parameter list -- whether hand-typed
+// via POST /log-config's own "replace, not merge" contract (see that
+// handler's own comment) or added by a future feature ahead of this one --
+// is silently dropped on the very next Setup-page save. Every new field
+// belongs on this parameter list AND in loadLogConfigVars() AND in
+// handleSetupData() (that third one is easy to miss -- it already was once,
+// for rttyAudioTx, see docs/rtty-implementace.md §8.2).
 static String buildLogConfigJson(
   const String &existingJson,
   const String &trx1Label,
   const String &trx2Label,
   const String &trx3Label,
-  const String &blockedDxcc
+  const String &blockedDxcc,
+  bool rttyAudioTx
 ) {
   String json;
   json.reserve(256);
@@ -1439,6 +1459,7 @@ static String buildLogConfigJson(
   json += ",\"trx2Label\":\""; json += jsonEscape(trx2Label); json += "\"";
   json += ",\"trx3Label\":\""; json += jsonEscape(trx3Label); json += "\"";
   json += ",\"blockedDxcc\":\""; json += jsonEscape(blockedDxcc); json += "\"";
+  json += ",\"rttyAudioTx\":"; json += (rttyAudioTx ? "true" : "false");
   json += "}";
   return json;
 }
@@ -1836,6 +1857,13 @@ void handleSetupData(){
   j += ",\"dxccall\":\""; j += configJsonEscape(DxcCallsign); j += "\"";
   j += ",\"dxclocator\":\""; j += configJsonEscape(DxcLocator); j += "\"";
   j += ",\"blockedDxcc\":\""; j += configJsonEscape(g_lcBlockedDxcc); j += "\"";
+  // docs/rtty-implementace.md §8.2 names loadLogConfigVars()/buildLogConfigJson()/
+  // the /setup/save handler for this field, but misses this one -- handleSetupData()
+  // is a SEPARATE serialization of the same g_lc* cache (feeding setup.html's own
+  // /setup-data.json fetch, not /log-config.json), same as cwIpOnConnect just above.
+  // Without this the checkbox would always render unchecked on page load regardless
+  // of what was actually saved.
+  j += ",\"rttyAudioTx\":"; j += g_lcRttyAudioTx ? "true" : "false";
   for (uint8_t i = 0; i < CW_MEMORY_COUNT; i++) {
     j += ",\"cwmem"; j += (i + 1); j += "\":\""; j += configJsonEscape(cwMemoryText[i]); j += "\"";
   }
@@ -3434,6 +3462,12 @@ void handleGetLogConfig() {
   webServer.send(200, "application/json", out);
 }
 
+// Replace, not merge (docs/trx-http-api.md §2.4, code-review 2026-08-27):
+// whatever the caller posts overwrites the whole file verbatim, so a caller
+// that posts a partial object (e.g. only trx1Label) silently drops every
+// other field already stored there, including blockedDxcc and rttyAudioTx.
+// In-app writes never hit this generic blob-store endpoint -- /setup/save is
+// the merge-by-construction path the frontend actually uses (kap.8.2).
 void handlePostLogConfig() {
   webServer.sendHeader("Connection", "close");
   webServer.client().setNoDelay(true);
@@ -4510,6 +4544,7 @@ void setupWebServer(void){
   webServer.on("/log",      HTTP_GET,  [](){ handleFileFromSPIFFS("/log.html"); });
   webServer.on("/datasync", HTTP_GET,  [](){ handleFileFromSPIFFS("/datasync.html"); });
   webServer.on("/data",     HTTP_GET,  [](){ handleFileFromSPIFFS("/data.html"); });
+  webServer.on("/rtty",     HTTP_GET,  [](){ handleFileFromSPIFFS("/rtty.html"); });
 
   // Band Decoder web configuration (backend runs regardless; this restores the UI).
   webServer.on("/bd", HTTP_GET, [](){
@@ -8221,16 +8256,18 @@ void handleSet() {
       String trx3Label = trimMemoryValue(requestArg("trx3label"), 10);
       if (trx3Label.length() == 0) trx3Label = "TRX3";
       String blockedDxcc = requestArg("blockedDxcc");
+      bool rttyAudioTx = requestHasArg("rttyAudioTx");
 
       g_lcTrx1Label = trx1Label;
       g_lcTrx2Label = trx2Label;
       g_lcTrx3Label = trx3Label;
       g_lcBlockedDxcc = blockedDxcc;
+      g_lcRttyAudioTx = rttyAudioTx;
 
       String nextLogConfig = buildLogConfigJson(
         readLogConfigJson(),
         trx1Label, trx2Label, trx3Label,
-        blockedDxcc
+        blockedDxcc, rttyAudioTx
       );
       if (!saveLogConfigJson(nextLogConfig)) {
         ERRdetect = 1;

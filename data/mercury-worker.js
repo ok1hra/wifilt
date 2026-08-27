@@ -232,6 +232,7 @@ async function main(config) {
   const deliveredFn = cw("host_delivered", "number", ["number", "number", "number"]);
   const setChannelGuardMs = cw("host_set_channel_guard_ms", null, ["number"]);
   const setIssPostAckGuardMs = cw("host_set_iss_post_ack_guard_ms", null, ["number"]);
+  const setDataRetryJitterPct = cw("host_set_data_retry_jitter_pct", null, ["number"]);
   // docs/mercury-implementace.md §6.6 (Settings): thin exports over atomics
   // that already exist and are already unit-tested natively -- see
   // host-shim.c's own comment on each. Applied once below, before CALL/LISTEN
@@ -295,7 +296,24 @@ async function main(config) {
   const issPostAckGuardMs = 1800 + Math.floor(Math.random() * GUARD_JITTER_MS);
   setChannelGuardMs(channelGuardMs);
   setIssPostAckGuardMs(issPostAckGuardMs);
-  post({ type: "log", line: `guards: channel=${channelGuardMs}ms issPostAck=${issPostAckGuardMs}ms` });
+  // Same lockstep problem, one layer deeper: found 2026-08-27, live two-
+  // station RF testing AFTER the CALL/ACCEPT collision above was already
+  // fixed. A resume-query REPLY (an ordinary piggybacked DATA_TX burst, no
+  // different from any other outbound frame) and the peer's own real file
+  // DATA_TX ended up in arq_fsm.c's WAIT_ACK retry loop at close to the same
+  // moment and stayed there, neither side ever hearing the other, for the
+  // rest of a multi-minute test -- ack_timeout_s/retry_interval_s come from
+  // a fixed per-mode table, identical on both stations, with nothing to
+  // desynchronize repeated retries the way the guards above now do. Unlike
+  // the CALL/ACCEPT fix (a *reactive* resend -- each side hears direct
+  // evidence the other is still waiting), a true double-blind mutual
+  // collision here gives neither side anything to react to, so this one
+  // needs real jitter. See arq_protocol.h's ARQ_DATA_RETRY_JITTER_PCT
+  // comment for the full mechanism (applied once per retry, not once per
+  // session, so a colliding pair actively drifts apart afterward).
+  const DATA_RETRY_JITTER_PCT = 20;
+  setDataRetryJitterPct(DATA_RETRY_JITTER_PCT);
+  post({ type: "log", line: `guards: channel=${channelGuardMs}ms issPostAck=${issPostAckGuardMs}ms dataRetryJitter=${DATA_RETRY_JITTER_PCT}%` });
   const wallStart = Date.now();
   let currentRxMode = FREEDV_MODE_DATAC16;
   rxSetMode(currentRxMode); // payload-mode demodulator, follows dflow_state/peer_tx_mode

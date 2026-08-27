@@ -895,6 +895,10 @@ const app = {
   activeTrx:  1,       // 1 | 2 | 3
   trxLabels:  ['TRX1', 'TRX2', 'TRX3'],
   trxOi3:     [false, false, false],  // OI3 mode per TRX (true when NET_ID != 0)
+  // docs/rtty-implementace.md §8.2/8.3: hand the text to whichever RTTY-ICOM
+  // tab currently holds the AUD1 session instead of the GPIO FSK-backend --
+  // only meaningful on a LAN-connected TRX (!trxOi3[activeTrx]).
+  rttyAudioTx: false,
 
   // TRX state from /state polling
   connected:  false,
@@ -1635,14 +1639,110 @@ function sendMacroText(macroType) {
   });
 }
 
+// ── RTTY-ICOM audio-stream hand-off (docs/rtty-implementace.md §8.2/8.3) ────
+//
+// QRPlog never opens an AUD1 socket itself. Only one page may hold the
+// shared session (wifilt.ino: AudioHandleWsUpgrade -> js8SessionOwns is ONE
+// record for JS8Call-ICOM/WSPR-Beacon/Mercury/RTTY-ICOM alike, confirmed
+// against the firmware source, not four independent locks) -- and QRPlog is
+// routinely open ALONGSIDE one of those pages, not instead of it, precisely
+// for the click-a-callsign hand-off this same file already answers the other
+// direction (BroadcastChannel('wifilt-dxc-action'), below). Claiming the
+// session from here to open our own socket would contest whatever DATA page
+// the operator already has open. So instead: hand the text to whichever
+// RTTY-ICOM tab currently holds that session, over a dedicated channel, and
+// let it transmit with its own already-open socket.
+//
+// Two-phase on purpose: a fast probe (is any RTTY-ICOM tab listening at all)
+// kept separate from the actual send (which can legitimately take several
+// seconds for a longer message) -- one combined timeout could not tell "still
+// transmitting" from "nobody is there" apart.
+const rttyTxChannel = (() => { try { return new BroadcastChannel('wifilt-rtty-tx'); } catch (_error) { return null; } })();
+// A Map, not one pending-slot variable (code-review asked): sendRawText()
+// itself has no busy-guard of its own -- nothing here disables the Enter key
+// or a macro button while a previous send is still resolving, unlike
+// rtty.js's own composer (its SEND button IS disabled while audioTx/
+// fskSending). A second rapid call genuinely can start a second probe/send
+// before the first settles, and each needs its own waiter kept apart by id.
+const rttyTxWaiters = new Map(); // requestId -> {resolve, reject, timeout}
+
+if (rttyTxChannel) rttyTxChannel.onmessage = event => {
+  const msg = event.data || {};
+  // Type checked BEFORE touching the waiter (code-review): the old order
+  // cleared the timeout and deleted the Map entry for ANY message carrying a
+  // matching requestId, then checked type -- so a message of some other type
+  // (a future protocol extension reusing the id, or a stray broadcast) fell
+  // through neither branch below and stranded the waiting promise forever,
+  // with no timeout left to rescue it. Not reachable with today's exact
+  // message set, but nothing enforced that.
+  if (msg.type !== 'rtty-tx-probe-ack' && msg.type !== 'rtty-tx-result') return;
+  const waiter = rttyTxWaiters.get(msg.requestId);
+  if (!waiter) return;
+  clearTimeout(waiter.timeout);
+  rttyTxWaiters.delete(msg.requestId);
+  if (msg.type === 'rtty-tx-probe-ack') { waiter.resolve(); return; }
+  if (msg.ok) waiter.resolve(); else waiter.reject(new Error(msg.error || 'RTTY-ICOM send failed'));
+};
+
+function rttyTxRequestId() {
+  return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+}
+
+function rttyTxWait(requestId, timeoutMs, timeoutMessage) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => { rttyTxWaiters.delete(requestId); reject(new Error(timeoutMessage)); }, timeoutMs);
+    rttyTxWaiters.set(requestId, { resolve, reject, timeout });
+  });
+}
+
+// No fallback to the FSK-backend path on any failure here (busy, refused,
+// nobody listening, or a real TX error) -- once the operator has opted into
+// audio-stream, silently keying the radio a different way instead would be
+// exactly the kind of "answered ok regardless" dishonesty this project's
+// other TX paths were fixed to stop doing.
+async function sendViaRttyIcomPage(text) {
+  if (!rttyTxChannel) throw new Error('BroadcastChannel is unavailable in this browser');
+  // One id for both phases (code-review simplification): they are strictly
+  // sequential -- the probe's waiter is always settled and removed from
+  // rttyTxWaiters before the send phase posts its own message -- so a 2nd id
+  // bought nothing.
+  const requestId = rttyTxRequestId();
+  rttyTxChannel.postMessage({ type: 'rtty-tx-probe', requestId: requestId });
+  await rttyTxWait(requestId, 300, 'no RTTY-ICOM page is open — open /rtty.html in another tab first');
+  rttyTxChannel.postMessage({ type: 'rtty-tx-send', requestId: requestId, text: text });
+  // Long enough for the actual transmission: 45.45 Bd is ~165 ms/char at 7.5
+  // bits/char, plus Baudot LTRS/FIGS shift overhead and the ~1.8 s TX lead +
+  // prebuffer (kap.3), with margin. A fixed 30 s (code-review) was too short
+  // past roughly 150-170 characters, a plausible QRPlog exchange line length --
+  // the real result would then arrive after the waiter was already gone
+  // (timed out and deleted), silently discarded by onmessage's own `if
+  // (!waiter) return`.
+  const sendTimeoutMs = Math.min(120000, Math.max(30000, text.length * 250 + 15000));
+  await rttyTxWait(requestId, sendTimeoutMs, 'the RTTY-ICOM page did not confirm the send in time');
+}
+
 function sendRawText(text) {
   if (!text || !window.LogMacros) return;
-  const mg = LogMacros.modeGroup(app.mode);
-  if (mg === 'PHONE') { showHint('Phone mode — send manually'); return; }
-  if (mg === 'NONE')  { showHint(app.mode + ' cannot be keyed — send manually'); return; }
   const trxIdx = app.activeTrx - 1;
   const isOi3  = app.trxOi3[trxIdx] && trxIdx > 0;
+  const mg = LogMacros.modeGroup(app.mode);
+  if (mg === 'PHONE') { showHint('Phone mode — send manually'); return; }
   if (!app.connected && !isOi3) { showHint('TRX not connected'); return; }
+  // Bypasses ONLY the mg==='NONE' refusal below, not the two checks just
+  // above: audio-stream needs a live AUD1 socket held by the RTTY-ICOM tab,
+  // not a CI-V "can this mode key" answer, and typical audio-stream operation
+  // runs in USB-D/LSB-D, which IS 'NONE' today -- but sending an AFSK tone
+  // burst while the radio is actually in PHONE mode, or while this page
+  // itself has no live TRX connection, is wrong regardless of AUD1 (code-
+  // review: this used to run before both checks, bypassing them too, not
+  // just the NONE one docs/rtty-implementace.md §8.3 documents). OI3 TRX
+  // (external K3NG keyer) ignore this entirely; AUD1 has no relationship to
+  // that keyer.
+  if (app.rttyAudioTx === true && !isOi3) {
+    sendViaRttyIcomPage(text).catch(error => showHint(String(error.message || error)));
+    return;
+  }
+  if (mg === 'NONE') { showHint(app.mode + ' cannot be keyed — send manually'); return; }
   const url  = isOi3 ? '/oi3/send' : '/cmd';
   const body = isOi3 ? { trx: app.activeTrx, text } : { type: 'sendCw', text };
   fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
@@ -2449,6 +2549,7 @@ function init() {
     if (cfg.trx1Label) app.trxLabels[0] = cfg.trx1Label;
     if (cfg.trx2Label) app.trxLabels[1] = cfg.trx2Label;
     if (cfg.trx3Label) app.trxLabels[2] = cfg.trx3Label;
+    app.rttyAudioTx = cfg.rttyAudioTx === true;
     // A TRX is "remote" (controlled via the ESP, not the local CAT link) when it has
     // Unified radio config explicitly carries active state. Fall back to the
     // legacy peer/address inference for backups from older firmware.

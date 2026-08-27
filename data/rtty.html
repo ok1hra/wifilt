@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RTTY-ICOM — WIFILT</title>
+<!-- Shares data.css with JS8Call-ICOM/WSPR/Mercury (topbar, subnav, radio-bar,
+     gate-card) so the four cannot drift apart; rtty.css carries only what is
+     genuinely RTTY's, same split as wspr.css/mercury.css.
+     docs/rtty-implementace.md -- grilled 2026-08-27. -->
+<link rel="stylesheet" href="/data.css?v=f5dacdaa">
+<link rel="stylesheet" href="/rtty.css?v=1">
+</head>
+<!-- lan-gate.js clears the checking class once it knows whether ICOM-LAN is set
+     up, so the page never flashes an interface it is about to replace. -->
+<body class="lan-gate-checking">
+
+<header class="site-topbar">
+  <nav class="tabs" aria-label="Primary">
+    <details class="tab brand-about" style="padding:0;position:relative">
+      <summary title="WIFILT - Web interface for Icom LAN transceivers" aria-label="About WIFILT" style="display:flex;align-items:center;list-style:none;cursor:pointer"><svg viewBox="0 -.01 14.79 16.93" fill="currentColor" aria-hidden="true" style="height:26px;width:auto;display:block"><path d="m6.77 .08c-.23-.06-.44-.09-.66-.08c-.96 .04-1.84 .7-2.1 1.67l-2.14 8.03l1.03-1.19a.68 .68 0 0 1 .13-.11l1.75-6.52c.16-.59 .65-1 1.21-1.07c.19-.03 .38-.02 .57 .03l6.36 1.71c.78 .21 1.23 .99 1.02 1.78l-2.86 10.72c-.21 .79-.99 1.24-1.78 1.03l-3.63-.97a.68 .68 0 0 1-.43 .09l-.05 .13a.68 .68 0 0 1-.39 .37l4.29 1.14c1.19 .32 2.43-.39 2.75-1.58l2.87-10.72c.32-1.2-.38-2.43-1.58-2.76l-6.36-1.7zm5.41 3.74l-5.62-1.49c-.08-.02-.17-.03-.25-.02c-.24 .03-.45 .2-.51 .45l-1.55 5.79l.13 .07a.68 .68 0 0 1 .25 1.03l-.32 .44l.31 .15a.68 .68 0 0 1 .35 .49l.19 .1l.35 .17a.68 .68 0 0 1 .37 .48l.02 .02a.68 .68 0 0 1 .03 .02l.19 .09a.68 .68 0 0 1 .34 .51a.68 .68 0 0 1 .12 .11l3.12 .85c.33 .09 .68-.12 .77-.45l2.15-8.04c.09-.33-.11-.68-.44-.76zm-8.71 5.13v.01l-.04 .01l0-.01l-1.13 1.29l-1.13 1.32l-.18-.11l-.19-.1l.28-.28l.26-.3l-.2-.11l-.19-.1l.09-.1l.1-.09l-.37-.19l-.37-.21l-.2 .19l-.2 .18l.19 .1l.19 .11l-.1 .09l-.09 .09l.19 .1l.19 .11l-.18 .19l-.19 .21l.2 .1l.19 .12l-.17 .19l-.18 .19l.2 .12l.21 .11l-.18 .22l-.17 .2l.21 .12l.2 .12l-.16 .22l-.16 .21l1.76 1.03l1.78 1.03l.11-.25l.13-.25l.2 .11l.2 .11l.17-.38l.17-.37l.21 .11l.22 .11l.36-.92l.36-.94l-.19-.09l-.18-.1l.06-.13l.05-.12l-.18-.1l-.18-.09l-.17 .39l-.17 .38l-.19-.11l-.2-.09l.25-.51l.25-.48l-.35-.18l-.36-.18l-.2 .35l-.19 .35l-.18-.1l-.19-.09l.28-.46l.28-.46l-.33-.18l-.35-.17l-.32 .43l-.3 .45l-.18-.1l-.2-.1l.74-.97l.73-.97l-.3-.14l-.32-.14zm3.08 4.28l-.23 .6l-.15 .42l.46 .12c.18 .04 .37-.06 .42-.24l.1-.37c.04-.19-.07-.38-.25-.43l-.35-.1zm2.43 .65c-.05-.01-.1-.01-.14 0c-.14 .02-.25 .1-.29 .24l-.09 .38c-.05 .19 .06 .37 .24 .42l.52 .15c.18 .05 .37-.07 .42-.25l.1-.38c.05-.18-.05-.37-.24-.42l-.52-.14z"/></svg></summary>
+      <div style="position:absolute;z-index:80;top:calc(100% + 5px);left:0;width:min(300px,calc(100vw - 16px));padding:12px 14px;border:1px solid #4b756c;border-radius:7px;background:#0c1a18;box-shadow:0 16px 44px #000c;text-align:center">
+        <a href="https://github.com/ok1hra/wifilt" target="_blank" rel="noopener" style="display:block;color:#e8f3ee;text-decoration:none"><b style="display:block;font-size:19px;font-weight:800;letter-spacing:.14em">WIFILT</b><span style="display:block;margin-top:5px;font-size:11px;color:#8ba59d">Web interface for Icom LAN transceivers</span></a>
+        <a href="https://remoteqth.com" target="_blank" rel="noopener" style="display:inline-block;margin-top:8px;font-size:11px;color:#8ba59d;text-decoration:none">by RemoteQTH.com</a>
+      </div>
+    </details>
+    <script>document.addEventListener("click",function(e){var b=document.querySelector(".brand-about");if(b.open&&!b.contains(e.target))b.open=false;});</script>
+    <a class="tab" href="/log" target="_blank" rel="noopener">QRPLog</a><a class="tab" href="/dxc.html" onclick="window.open(this.href,'DXC','width=600,height=750,left=0,top=0,menubar=no,location=no,status=no'); return false;">DXC</a>
+    <a class="tab tab-active" href="/data" title="JS8Call-ICOM, WSPR-Beacon, Mercury and RTTY-ICOM over ICOM-LAN">DATA</a><a class="tab" href="/setup" target="_blank" rel="noopener">SETUP</a>
+    <a class="tab" href="/datasync" target="_blank" rel="noopener">LOGSYNC</a><a class="tab bd-nav" href="/bd" target="_blank" rel="noopener" hidden>BD</a>
+    <span id="topbarFw" class="topbar-fw"></span>
+  </nav>
+  <!-- Plain links, no target: shares the js8lan.session token with
+       JS8Call-ICOM/WSPR (docs/rtty-implementace.md §1 decision 9) -- navigating
+       between the three in this tab keeps the lease, exactly as JS8/WSPR
+       already do between themselves. Mercury alone has its own separate
+       lease (mercury-session.js) -- see that page's own header for why. -->
+  <nav class="subtabs" aria-label="DATA mode">
+    <a class="subtab" href="/data">JS8Call-ICOM</a><a class="subtab" href="/wspr.html">WSPR-Beacon</a><a class="subtab" href="/mercury.html">Mercury</a><a class="subtab subtab-active" href="/rtty.html">RTTY-ICOM</a>
+  </nav>
+</header>
+
+<header class="radio-bar">
+  <div class="trx-control">
+    <button id="trxFrequency" class="trx-frequency" type="button" aria-expanded="false" aria-controls="frequencyMenu">
+      <span><small id="trxSlotLabel">TRX</small><b id="trxFrequencyValue">--.---.---</b></span><span class="unit">MHz</span><span class="chevron">▾</span>
+    </button>
+    <section id="frequencyMenu" class="frequency-menu" hidden aria-label="RTTY dial frequencies"></section>
+  </div>
+  <div class="trx-control tt-control">
+    <button id="planButton" class="freq-timetable" type="button" aria-expanded="false"
+            aria-controls="planField" title="TX gain calibration plan">
+      <span><small>CAL PLAN</small><b id="planButtonValue">--</b></span><span class="chevron">▾</span>
+    </button>
+    <section id="planField" class="freq-timetable-panel" hidden aria-label="TX gain calibration plan"></section>
+  </div>
+  <span id="trxMode" class="trx-mode">---</span>
+  <span id="trxPower" class="trx-power" hidden>
+    <span class="pwr-bar" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+    <b id="trxPowerWatts">--</b>
+  </span>
+  <span id="radioModel" class="radio-model" title="Model reported by the radio itself">--</span>
+  <span id="aud1State" class="pill aud1-state" title="The audio channel to the radio.">AUD1 —</span>
+  <span id="linkState" class="live">● OFFLINE</span>
+  <button id="trxReconnect" class="trx-reconnect" type="button" hidden>Reconnect</button>
+  <span class="spacer"></span>
+  <!-- kap.9: Normal/Reverse and TX method are switches (kap.1 decisions 3/6),
+       squelch and SNR are read-only live indicators. -->
+  <button id="rttyReverse" class="rtty-toggle-pill" type="button"
+          title="Swap mark/space on RX. TX is unaffected -- it always sends standard polarity; Reverse exists for stations whose TX is inverted.">NORMAL</button>
+  <button id="rttyTxMethod" class="rtty-toggle-pill" type="button"
+          title="TX method: audio-stream (AFSK over AUD1, this page's own encoder) or FSK-backend (existing GPIO bit-bang, same path QRPlog's RTTY macros already use).">TX: AUDIO</button>
+  <span id="rttySquelch" class="pill rtty-squelch closed" title="Amplitude squelch state">SQL —</span>
+  <span id="rttySnr" class="pill rtty-snr" title="Goertzel mark/space magnitude ratio at the last successfully decoded character">SNR —</span>
+</header>
+
+<main class="data-page rtty-page">
+
+  <!-- Shared lease (kap.1 decision 9): the same "one radio, one operator" gate
+       JS8/WSPR already show, reusing their /js8/session/* endpoints. -->
+  <section id="sessionBusy" class="gate-card session-busy" hidden role="alert">
+    <div class="gate-card-icon" aria-hidden="true">!</div>
+    <div>
+      <h1>The radio is driven from somewhere else</h1>
+      <p>One radio, one operator: JS8Call-ICOM, WSPR-Beacon and RTTY-ICOM all drive the transceiver
+         through a single audio link, so only one page can run at a time.</p>
+      <p id="sessionBusyWhere" class="session-busy-where"></p>
+      <button id="sessionTakeover" class="gate-card-action" type="button">TAKE THE SESSION OVER HERE</button>
+    </div>
+  </section>
+
+  <details class="compact-section spectrum-section" data-section="spectrum" open>
+    <summary><span>Waterfall</span><span id="spectrumSummary" class="summary-status">RX 500–2700 Hz</span></summary>
+    <!-- kap.7: live spectrum above the waterfall, same width, no second FFT --
+         reads spectrum.js's `Waterfall.state().lastValues` (see rtty.css's
+         own comment). -->
+    <div class="rtty-live-spectrum"><canvas id="liveSpectrumCanvas" width="1024" height="54"></canvas></div>
+    <div id="waterfall" class="waterfall" title="Receiver audio. Blank during this station's own TX (same as JS8/WSPR/Mercury), even though the LAN audio path is itself duplex.">
+      <canvas id="waterfallCanvas" width="1024" height="64"></canvas>
+      <canvas id="waterfallOverlay" width="1024" height="64"></canvas>
+    </div>
+  </details>
+
+  <!-- kap.5: append-only decoded text, click a token to hand it to QRPlog
+       (BroadcastChannel('wifilt-dxc-action'), same channel dxc.html already
+       uses -- zero change in log.js's own listener). -->
+  <details class="compact-section" data-section="rx" open>
+    <summary><span>RX</span><span id="rxSummary" class="summary-status"></span></summary>
+    <div id="rttyRxLog" class="rtty-rx-log" aria-live="polite"></div>
+  </details>
+
+  <!-- kap.6: two TX methods, chosen via the radio-bar TX-method pill. The RF
+       safety checkbox only gates the audio-stream method (modem-implementation.md
+       §2.2's warning is about this page's own new WLAN-audio TX path); the
+       FSK-backend method reuses the existing QRPlog /cmd sendCw path exactly
+       as-is, at its existing friction level. -->
+  <details class="compact-section" data-section="tx" open>
+    <summary><span>TX</span></summary>
+    <div class="rtty-tx-body">
+      <label class="rtty-tx-field">Message
+        <textarea id="rttyTxText" rows="2" maxlength="200" placeholder="CQ CQ DE OK1HRA OK1HRA K" autocapitalize="characters"></textarea>
+      </label>
+      <label class="rtty-safety" id="rttySafetyField">
+        <input id="rttyTxSafety" type="checkbox">
+        I have confirmed the antenna/dummy load and RF path before transmitting (audio-stream TX only)
+      </label>
+      <div class="rtty-tx-actions">
+        <button id="rttyTxSend" class="primary" type="button" disabled>SEND</button>
+        <button id="rttyTxAbort" class="secondary" type="button" hidden>ABORT</button>
+        <span id="rttyTxState" class="muted">idle</span>
+      </div>
+    </div>
+  </details>
+
+  <details class="compact-section" data-section="settings">
+    <summary><span>SETTINGS</span><span id="settingsSummary" class="summary-status"></span></summary>
+    <div class="settings">
+      <label>Squelch threshold
+        <!-- Static fallback for the instant before rtty.js's boot sequence
+             overwrites min/max from RttySettings.SQUELCH_MIN/MAX -- see that
+             file's own comment for where 500 comes from. -->
+        <input id="rttySquelchInput" type="range" min="0" max="500" step="1">
+        <small class="rtty-squelch-live" id="rttySquelchLive">4</small>
+      </label>
+      <label>Default TX/RX tone
+        <!-- Static fallback matching RttySettings.TONE_MIN_HZ/MAX_HZ; same note as the squelch input above. -->
+        <input id="rttyToneInput" type="number" min="500" max="2700" step="10">
+        <small>Hz -- same convention as JS8's TX offset: click the waterfall to set it live</small>
+      </label>
+    </div>
+    <!-- CAL PLAN's single-shot measuring device (kap.9): hidden, mounted here
+         only so TxGainCalUi has a DOM node -- same as wspr.html/data.html's
+         own #calField. The operator-facing panel is the CAL PLAN button above. -->
+    <div id="calField" hidden></div>
+  </details>
+
+</main>
+
+<footer class="js8-page-footer">
+  <a href="https://github.com/ok1hra/wifilt" target="_blank" rel="noopener">GitHub</a><span aria-hidden="true">|</span><a href="/THIRD-PARTY-NOTICES.txt" target="_blank" rel="noopener">Licenses</a>
+</footer>
+
+<script src="/lan-gate.js?v=2f8a12d3"></script>
+<script src="/fw-version.js?v=b29c5317"></script>
+<script src="/rtty-codec.js?v=1"></script>
+<script src="/rtty-presets.js?v=1"></script>
+<script src="/rtty-settings.js?v=1"></script>
+<script src="/spectrum.js?v=a17681d8"></script>
+<!-- js8-aud1.js: the shared AUD1 RX+TX contract, unchanged, same file
+     wspr.html loads directly (no Worker here, unlike Mercury). js8-tx.js is
+     loaded ONLY for its packetizeTxPcm48k() (kap.3/6.1, mode-agnostic, reused
+     verbatim) -- wspr-tx.js has its own same-named internal function but does
+     not export it (checked: its own return list is
+     {WsprTx, WsprTxError, RING_CAPACITY_BYTES, ..., STATES}, no
+     packetizeTxPcm48k), so js8-tx.js is the one actual source of a public,
+     reusable copy. Js8Tx.TxController/CaptureTxSink/planSlot go unused here
+     (JS8's own periodic-slot shape, kap.3 explicitly wants immediate PTT
+     instead) -- only Js8Tx.packetizeTxPcm48k is called. -->
+<script src="/js8-aud1.js?v=b5d81c6f"></script>
+<script src="/js8-tx.js?v=1"></script>
+<!-- CAL PLAN (kap.9): the same TxGainCalUi/TxGainPlanUi tools JS8/WSPR mount,
+     unchanged -- the calibration carrier is WsprTx's own tone (wspr-core.js/
+     wspr-tx.js), reused as a generic ALC-knee probe regardless of which page
+     mounts it (data.js/wspr.js do exactly this too; only Mercury's own
+     much-higher-PAPR DATAC1 burst needed a different carrier). -->
+<script src="/icom-models.js?v=69ee9462"></script>
+<script src="/js8-presets.js?v=7131988f"></script>
+<script src="/wspr-core.js?v=450a9679"></script>
+<script src="/wspr-tx.js?v=20c527f9"></script>
+<script src="/tx-gain-cal.js?v=1f597675"></script>
+<script src="/tx-gain-cal-ui.js?v=ba7e0222"></script>
+<script src="/tx-gain-mod-level.js?v=42af6a2a"></script>
+<script src="/tx-gain-plan.js?v=f0e28123"></script>
+<script src="/tx-gain-plan-ui.js?v=61e40266"></script>
+<script src="/rtty.js?v=1"></script>
+</body>
+</html>

@@ -67,6 +67,9 @@
 # (its own git repository -- vendor it deliberately if it is ever needed).
 /backups/
 /mercury/
+# Own git repository (remote ok1cdj/FT8web), not a registered submodule --
+# vendor it deliberately if it is ever needed.
+/FT8web/
 *.zip
 /convert_logs.py
 /AGENTS.md

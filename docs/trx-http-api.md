@@ -354,12 +354,15 @@ GET /log-config HTTP/1.1
 **Response:** `200 OK`, `Content-Type: application/json`
 Body: any JSON object the client stored (or `{}` when empty).
 
-The fields the log writes and reads:
+The fields the log writes and reads (not exhaustive — the device round-trips
+whatever object was last stored, whole; see the warning under 2.4 below):
 ```json
 {
   "trx1Label": "IC-705",
   "trx2Label": "FT-991",
-  "trx3Label": "SDR"
+  "trx3Label": "SDR",
+  "blockedDxcc": "Russia\nBelarus\nKaliningrad",
+  "rttyAudioTx": false
 }
 ```
 
@@ -377,7 +380,15 @@ Content-Type: application/json
 **Response:** `{"ok": true}`
 
 - The device stores the JSON as-is (the ESP32 puts it in `/log-config.json` on
-  the filesystem)
+  the filesystem) — this is a **replace, not a merge**: any field present in
+  the previously stored object but missing from this POST's body is dropped,
+  not carried over. A caller that wants to change one field (say, just
+  `trx1Label`) must `GET /log-config` first, edit that field in the object it
+  gets back, and `POST` the whole merged object — posting `{"trx1Label":
+  "IC-705"}` alone would silently erase `blockedDxcc`/`rttyAudioTx`/anything
+  else already stored. (In-app writes never hit this endpoint at all: the
+  Setup page's own save path merges by construction, since it always POSTs
+  every field it owns together — see `/setup/save`, not documented here.)
 - Validation: a non-empty JSON object, 2048 B maximum
 
 ---

@@ -60,8 +60,16 @@
     }
 
     state() {
+      // lastValues included (code-review 2026-08-27) so RTTY-ICOM's live
+      // spectrum (kap.7) can read it through the same accessor every other
+      // consumer here already uses (data.js's own spectrumState(){return
+      // waterfall.state();}), instead of a second ad hoc `.lastValues`
+      // property access path -- the property itself stays too (see its own
+      // comment above draw()'s last line) since a per-animation-frame read
+      // is the one place going through this array-allocating spread is worth
+      // skipping.
       return {agcLow: this.agcLow, agcHigh: this.agcHigh, agcReady: this.agcReady,
-              rows: this.rows, fill: this.fill};
+              rows: this.rows, fill: this.fill, lastValues: this.lastValues};
     }
 
     hzToX(hz, width = this.overlay ? this.overlay.width : this.canvas.width) {
@@ -163,6 +171,10 @@
       context.putImageData(row, 0, 0);
       if (this.markRow) this.markRow(context, canvas.width);
       this.rows++;
+      // RTTY-ICOM's live-spectrum panel (docs/rtty-implementace.md §7) reads
+      // this each animation frame instead of running a second FFT. Backward
+      // compatible: JS8/WSPR/Mercury never read it, so this is otherwise inert.
+      this.lastValues = values;
     }
 
     resize() {
