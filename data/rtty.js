@@ -759,7 +759,7 @@
     dxcChannel.postMessage({type: "dxc-tune", callsign, trx: LanGate.slot ? LanGate.slot() : 0});
   });
 
-  // ---- AFC (grilled 2026-08-28, 3rd session) -------------------------------
+  // ---- AFC (grilled 2026-08-28, 3rd/4th sessions) --------------------------
   //
   // Tracks the OTHER station's drift by nudging only the decoder's own
   // runtime tone offset (decoder.setToneOffset(), via syncDecoderTone()
@@ -769,19 +769,22 @@
   // The "carrier detector" reuses the waterfall's own live FFT tap
   // (spectrum.js's liveDraw(), already running at liveHopSize=512 -- ~64 ms
   // @ 8 kHz -- for the live-spectrum panel above the waterfall) instead of
-  // adding a second FFT: every time a fresh liveValues array lands, search
-  // two small windows (around the currently expected mark and space, each
-  // ±afcMaxDeviationHz) for the strongest bin, classify it as mark or space
-  // by whichever expected position it's closer to (afcMaxDeviationHz is
-  // capped at SHIFT_HZ/2 in rtty-settings.js specifically so this
-  // classification is never ambiguous), and refine the peak with parabolic
-  // interpolation in the dB domain (liveValues is already dB). That
-  // instantaneous estimate becomes this tick's target; the actual detector
-  // offset chases it -- or chases 0 whenever decoder.squelchOpen is false --
-  // at a fixed max Hz/s slew rate (afcRateHzPerChar converted from Hz/char).
-  // One rule for both "track the signal" and "spring back to centre", per
-  // the grilled spec.
+  // adding a second FFT. That instantaneous estimate (afcFindOffset() below)
+  // becomes this tick's target; the actual detector offset chases it -- or
+  // chases 0 whenever decoder.squelchOpen is false -- at a fixed max Hz/s
+  // slew rate (afcRateHzPerChar converted from Hz/char). One rule for both
+  // "track the signal" and "spring back to centre", per the grilled spec.
   let afcOffsetHz = 0, afcTargetHz = 0, afcLastLiveValues = null, afcLastTickMs = null;
+
+  // 4th session: how far a found peak must stand out above this scan's own
+  // median (a stand-in noise floor -- the real peak is a small minority of
+  // the samples, so the median tracks the floor around it) before it's
+  // trusted at all. Added because decoder.squelchOpen alone re-evaluates
+  // from raw magnitude every ~1 ms (rtty-codec.js's own hop) and readily
+  // flickers true on pure noise at a low/default threshold -- every flicker
+  // used to feed straight into a fresh, meaningless target, visible as the
+  // detector line jittering with no real signal present.
+  const AFC_PROMINENCE_DB = 8;
 
   function afcRateHzPerSec() {
     return settings.afcRateHzPerChar * 1000 / RttyCodec.CHAR_DURATION_MS;
@@ -803,22 +806,60 @@
     return delta;
   }
 
-  // Strongest bin's frequency inside [loHz, hiHz] of a liveValues array
-  // spanning [waterfall.lowHz, waterfall.highHz] -- null if the window falls
-  // outside what's actually in `values` (e.g. right after a zoom change).
-  // Same lowHz + i*(span/(length-1)) approximation hzToX()/draw() already
-  // use elsewhere in this file for this exact array -- close enough at this
-  // bin spacing, and consistent with how the rest of the page treats it.
-  function peakHzInRange(values, loHz, hiHz) {
+  // dB value at the bin nearest `hz` in a liveValues array spanning
+  // [waterfall.lowHz, waterfall.highHz] -- -Infinity outside that span (e.g.
+  // right after a zoom change narrows what's actually in `values`). Same
+  // lowHz + i*(span/(length-1)) approximation hzToX()/draw() already use
+  // elsewhere in this file for this exact array.
+  function valueAtHz(values, hz) {
+    const span = waterfall.highHz - waterfall.lowHz;
+    if (!(span > 0) || !values || values.length < 2) return -Infinity;
+    const idx = Math.round((hz - waterfall.lowHz) * (values.length - 1) / span);
+    return idx >= 0 && idx < values.length ? values[idx] : -Infinity;
+  }
+
+  // Grilled 2026-08-28 (4th session, items 2/3): a peak search independently
+  // per candidate tone (the original design) can pick the wrong one --
+  // fading/noise can make the SILENT tone's own window read louder than the
+  // real, drifted one, and grows more likely the wider afcMaxDeviationHz
+  // lets the two windows get. Sliding a MATCHED PAIR across candidate shifts
+  // instead -- always exactly SHIFT_HZ apart, as mark/space genuinely are --
+  // removes the "which one is it" classification step entirely: whichever of
+  // mark+c/space+c is actually keyed, max(mark+c, space+c) peaks at the true
+  // offset c regardless of which one that turns out to be.
+  //
+  // This does NOT lift the ~SHIFT_HZ/2 ambiguity ceiling, though (confirmed
+  // with the user, same session, before raising afcMaxDeviationHz's cap was
+  // ruled out): a real peak at true offset X always has an equally tall
+  // "ghost" at X±SHIFT_HZ, because the OTHER candidate line lands on that
+  // exact same real energy there (space+(X+SHIFT_HZ) === mark+X). The ghost
+  // only falls outside the scanned range while afcMaxDeviationHz stays under
+  // ~SHIFT_HZ/2 -- no algorithm over frequency content alone can tell the
+  // two apart once both are in range, and a real drift that large also
+  // breaks the decoder's own start/stop framing lock, so nothing would
+  // decode either way regardless of what AFC does.
+  //
+  // Returns null when nothing in range clears AFC_PROMINENCE_DB above the
+  // scan's own median -- callers should treat that the same as "no fresh
+  // data", not force a reset (decoder.squelchOpen going false is still what
+  // springs the target back to 0).
+  function afcFindOffset(values, dev) {
     const span = waterfall.highHz - waterfall.lowHz;
     if (!(span > 0) || !values || values.length < 3) return null;
     const hzPerBin = span / (values.length - 1);
-    const first = Math.max(1, Math.ceil((loHz - waterfall.lowHz) / hzPerBin));
-    const last = Math.min(values.length - 2, Math.floor((hiHz - waterfall.lowHz) / hzPerBin));
-    if (first > last) return null;
-    let best = first;
-    for (let i = first + 1; i <= last; i++) if (values[i] > values[best]) best = i;
-    return {hz: waterfall.lowHz + (best + refinePeakBinOffset(values, best)) * hzPerBin, level: values[best]};
+    const steps = Math.max(4, Math.round(2 * dev / hzPerBin));
+    const [markHz, spaceHz] = expectedMarkSpaceHz();
+    const levels = new Float32Array(steps + 1);
+    for (let i = 0; i <= steps; i++) {
+      const c = -dev + i * (2 * dev / steps);
+      levels[i] = Math.max(valueAtHz(values, markHz + c), valueAtHz(values, spaceHz + c));
+    }
+    let best = 0;
+    for (let i = 1; i < levels.length; i++) if (levels[i] > levels[best]) best = i;
+    const noiseFloor = levels.slice().sort()[levels.length >> 1];   // median
+    if (levels[best] - noiseFloor < AFC_PROMINENCE_DB) return null;
+    const stepHz = (2 * dev) / steps;
+    return -dev + (best + refinePeakBinOffset(levels, best)) * stepHz;
   }
 
   // Called every animation frame from drawLiveSpectrum() -- the continuous
@@ -837,14 +878,8 @@
     if (values && values !== afcLastLiveValues) {
       afcLastLiveValues = values;
       if (decoder.squelchOpen) {
-        const dev = settings.afcMaxDeviationHz;
-        const [markHz, spaceHz] = expectedMarkSpaceHz();
-        const markPeak = peakHzInRange(values, markHz - dev, markHz + dev);
-        const spacePeak = peakHzInRange(values, spaceHz - dev, spaceHz + dev);
-        let best = null;
-        if (markPeak && (!spacePeak || markPeak.level >= spacePeak.level)) best = {hz: markPeak.hz, expected: markHz};
-        else if (spacePeak) best = {hz: spacePeak.hz, expected: spaceHz};
-        if (best) afcTargetHz = Math.max(-dev, Math.min(dev, best.hz - best.expected));
+        const found = afcFindOffset(values, settings.afcMaxDeviationHz);
+        if (found !== null) afcTargetHz = found;
       }
     }
     if (!decoder.squelchOpen) afcTargetHz = 0;   // no signal right now -- spring back to centre
