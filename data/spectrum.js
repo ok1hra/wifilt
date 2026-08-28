@@ -56,6 +56,15 @@
     reset() {
       this.ring.fill(0);
       this.ringPos = 0; this.hop = 0; this.fill = 0;
+      this.resetAgc();
+    }
+
+    // Just the AGC statistics, not the ring buffer -- split out (code-review)
+    // for setRange() below: a zoomed-in sub-band genuinely has a different
+    // noise floor worth re-learning, but the raw samples already sitting in
+    // the ring are still perfectly valid FFT input regardless of which bins
+    // get extracted from them afterward.
+    resetAgc() {
       this.agcLow = -85; this.agcHigh = -35; this.agcReady = false;
     }
 
@@ -74,6 +83,21 @@
 
     hzToX(hz, width = this.overlay ? this.overlay.width : this.canvas.width) {
       return (hz - this.lowHz) / (this.highHz - this.lowHz) * width;
+    }
+
+    // Re-point the FFT bin extraction at a different Hz window (RTTY-ICOM's
+    // zoom pills). Restarts the AGC only (code-review: a full reset() also
+    // zeroes the ring buffer/fill counters, discarding up to 0.512s of
+    // already-buffered, still-perfectly-valid audio and stalling the display
+    // until it refills -- purely because the bins being extracted from it
+    // changed, not because the incoming audio did). Old rows keep scrolling
+    // down under the new overlay and age out on their own, exactly as they
+    // already do after a band change today (which does still call the full
+    // reset(), via data.js's own resetSpectrumAnalyzer()).
+    setRange(lowHz, highHz) {
+      this.lowHz = lowHz; this.highHz = highHz;
+      this.resetAgc();
+      this.paintOverlay();
     }
 
     ingest(samples) {

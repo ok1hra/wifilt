@@ -139,6 +139,18 @@ License: GNU GPL version 3.
 Protocol description this implementation was written from: docs/wspr.md
 Upstream: https://sourceforge.net/projects/wsjt/
 
+horusdemodlib (technique credit, no code)
+------------------------------------------
+The RTTY-ICOM page's Baudot/ITA2 demodulator (data/rtty-codec.js) is an original,
+from-scratch implementation, not a derivative of any single project -- but its FSK
+demodulation TECHNIQUE (Goertzel tone detection, a bit-sync state machine, a
+continuous-phase TX tone) follows the same approach horus-gui/horusdemodlib uses for
+its own (unrelated) balloon-telemetry modem. No code, protocol or framing is shared or
+ported: horusdemodlib decodes Horus Binary telemetry sentences, not ham Baudot RTTY
+QSO traffic. Credited here as inspiration, not as a licensed dependency -- there is
+nothing of theirs actually distributed in this project to license.
+Project: https://github.com/projecthorus/horus-gui
+
 Mercury / HERMES modem (Rhizomatica)
 ------------------------------------
 The Mercury page's file-transfer engine (arq_fsm.c, arq_protocol.c, arq_timing.c, arith.c,

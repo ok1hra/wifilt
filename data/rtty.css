@@ -4,9 +4,10 @@
    this file carries only what is genuinely RTTY's, same split as
    wspr.css/mercury.css. */
 
-/* ---- radio-bar status pills (kap.9: Normal/Reverse, TX method, squelch,
-   live SNR) -- interactive ones (Reverse, TX method) look like a switch;
-   read-only ones (squelch, SNR) look like the existing .pill/.trx-mode. ---- */
+/* ---- radio-bar status pills (kap.9: Normal/Reverse, squelch, live SNR) --
+   Reverse is a switch; squelch/SNR are read-only. TX method used to be a
+   3rd switch here too, until item 11 (grilled 2026-08-27, second session)
+   moved it into SETTINGS as a <select>. ---- */
 .rtty-toggle-pill {
   border: 1px solid var(--line); border-radius: 999px; padding: 5px 9px;
   white-space: nowrap; background: var(--panel2); color: var(--text);
@@ -17,8 +18,11 @@
 .rtty-toggle-pill.active {
   border-color: var(--amber); background: #4a3410; color: var(--amber);
 }
-.rtty-squelch.open { color: var(--green); border-color: var(--green); }
-.rtty-squelch.closed { color: var(--muted); }
+/* Item 16: shows the configured threshold number, highlighted whenever it is
+   not 0 (squelch engaged -- the normal state, default is 4). Replaces the old
+   live open/closed reading, which had no room left once the pill also had to
+   carry a number. */
+.rtty-squelch.active { border-color: var(--amber); color: var(--amber); }
 .rtty-snr { color: var(--muted); }
 
 /* ---- Live spectrum (kap.7): a small bar/line chart above the waterfall,
@@ -28,10 +32,24 @@
    error, just an empty strip, same shape as any other "waiting for data"
    panel here. ---- */
 .rtty-live-spectrum {
-  position: relative; height: 54px; margin-bottom: 2px;
+  /* Item 14: +50% (was 54px) -- a line trace (item 4) reads worse short than
+     the bar chart it replaced. */
+  position: relative; height: 81px; margin-bottom: 2px;
   background: var(--panel2); border: 1px solid var(--line); border-bottom: none;
 }
 .rtty-live-spectrum canvas { display: block; width: 100%; height: 100%; }
+
+/* ---- Waterfall zoom pills (item 15): sit in the <summary> row, to the right
+   of #spectrumSummary (which already claims the row's free space via
+   .summary-status's own margin-left:auto in data.css). ---- */
+.rtty-zoom-group { margin-left: 8px; display: inline-flex; gap: 4px; }
+.rtty-zoom-pill {
+  border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px;
+  background: var(--panel2); color: var(--muted); font: inherit; font-size: 10px;
+  font-weight: 700; letter-spacing: .03em; cursor: pointer;
+}
+.rtty-zoom-pill:hover { border-color: var(--muted); color: var(--text); }
+.rtty-zoom-pill.active { border-color: var(--cyan); background: #123430; color: var(--cyan); }
 
 /* ---- RX log: append-only, click-to-tune-QRPlog tokens (kap.5), same
    "scrolling log" shape as data.html's #binTransferLog. ---- */
@@ -45,6 +63,15 @@
   cursor: pointer; border-radius: 3px; padding: 0 1px;
 }
 .rtty-tok:hover { background: #1f3a34; color: var(--cyan); text-decoration: underline; }
+/* Item 6: this station's own sent text, echoed into the RX log like a monitor.
+   Deliberately not a .rtty-tok -- no click/hover, so an operator's own
+   callsign in "CQ CQ DE OK1HRA" is never mistaken for a station to log
+   (item 6 follow-up, grilled 2026-08-27, second session). */
+.rtty-tx-echo { color: var(--red); }
+/* code-review: a send echoed optimistically (item 6) can still fail afterward
+   (session.prepare()/setMode/sendCw all can throw) -- retracted in place
+   rather than left as a false "sent" record, see rtty.js's markTxEchoFailed(). */
+.rtty-tx-echo-failed { text-decoration: line-through; opacity: .65; }
 
 /* ---- TX composer ---- */
 .rtty-tx-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
@@ -55,20 +82,20 @@
   text-transform: uppercase;
 }
 .rtty-tx-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.rtty-tx-actions button.primary {
-  background: var(--green); border: 1px solid var(--green); color: #04170a;
-  font-weight: 700; border-radius: 6px; padding: 8px 18px; cursor: pointer;
-}
+/* SEND button and the RF-safety checkbox are gone (item 7, grilled 2026-08-27
+   second session -- Enter sends, like js8call); ABORT is the only button left. */
 .rtty-tx-actions button.secondary {
   background: #16211f; border: 1px solid var(--line); border-radius: 6px; padding: 8px 18px;
   color: var(--text); cursor: pointer;
 }
 .rtty-tx-actions button:disabled { opacity: .45; cursor: not-allowed; }
 .rtty-tx-actions .live.tx { color: var(--red); }
-.rtty-safety {
-  display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted);
-}
-.rtty-safety input { accent-color: var(--cyan); }
 
 /* ---- SETTINGS additions beyond the shared .settings/label grid ---- */
+/* Item 12: one item per row -- overrides data.css's shared
+   `repeat(2, minmax(260px,1fr))` for this page only. The RF power row needs
+   the width regardless (its own .power-field forces 130px/1fr internally,
+   same as wspr.css), and the other rows read better with room to breathe
+   than packed two to a line. */
+.rtty-page .settings { grid-template-columns: 1fr; }
 .rtty-page .settings small.rtty-squelch-live { grid-column: 3; color: var(--muted); }

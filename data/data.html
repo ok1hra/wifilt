@@ -33,7 +33,7 @@
          lease, real since 2026-08-22), so it is still a plain link, just not one that
          preserves anything by staying in this tab. -->
     <nav class="subtabs" aria-label="DATA mode">
-      <a class="subtab subtab-active" href="/data">JS8Call-ICOM</a><a class="subtab" href="/wspr.html">WSPR-Beacon</a><a class="subtab" href="/mercury.html">Mercury</a><a class="subtab" href="/rtty.html">RTTY-ICOM</a>
+      <a class="subtab subtab-active" href="/data">JS8Call-ICOM</a><a class="subtab" href="/rtty.html">RTTY-ICOM</a><a class="subtab" href="/wspr.html">WSPR-Beacon</a><a class="subtab" href="/mercury.html">Mercury</a>
     </nav>
   </header>
 
@@ -559,7 +559,7 @@
   <script src="/js8-autoreply.js?v=f91dddcd"></script>
   <script src="/js8-protocol.js?v=f9be082c"></script>
   <script src="/js8-timebase.js?v=9afbcab8"></script>
-  <script src="/spectrum.js?v=a17681d8"></script>
+  <script src="/spectrum.js?v=9600f27e"></script>
   <script src="/js8-aud1.js?v=b5d81c6f"></script>
   <!-- The station's calibration table and the ALC limiter, shared with WSPR. -->
   <script src="/tx-gain-cal.js?v=1f597675"></script>
@@ -588,7 +588,11 @@
   <script src="/tx-gain-plan-ui.js?v=61e40266"></script>
   <script src="/dxcc.js?v=c56ee081"></script>
   <script src="/log-db.js?v=6055416f"></script>
-  <script src="/data.js?v=5b6ff709"></script>
+  <!-- RF-power auto-apply/knob-detection engine, shared with RTTY-ICOM
+       (rtty.html) -- code-review 2026-08-28, see the module's own header for
+       why WSPR/Mercury are not callers. -->
+  <script src="/rf-power-auto.js?v=86d35636"></script>
+  <script src="/data.js?v=e3d460b9"></script>
   <script src="/compression.js?v=83837925"></script>
 </body>
 </html>

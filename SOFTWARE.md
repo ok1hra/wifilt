@@ -198,6 +198,11 @@ built around — real HF, real noise, no assumption of a clean link — and the 
 DATA page ([section 7](#7-data--mercury-file-transfer)) runs its actual ARQ engine, compiled
 to WebAssembly, over the FreeDV data modem (David Rowe and the Codec 2 project) it carries.
 
+RTTY-ICOM's own FSK demodulator (`data/rtty-codec.js`) is original code, but credits
+**[horusdemodlib](https://github.com/projecthorus/horus-gui)** (Project Horus) for the
+Goertzel/bit-sync/continuous-phase technique it follows — no code or protocol is shared;
+horusdemodlib's own balloon-telemetry framing is unrelated to ham Baudot RTTY.
+
 Thanks also to the authors of the smaller pieces this project leans on — the DXCC prefix
 engine, the FFT library, the compression codecs. They are listed with their licences in
 [section 12](#12-component-licences).

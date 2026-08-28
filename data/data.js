@@ -1733,144 +1733,49 @@ function renderTrxPower(connected,mismatch=false) {
 //
 // The other difference is the direction. WSPR's automatic value is always the
 // minimum, so its write goes down; this one can go UP, into whatever load the
-// operator happens to have on the antenna socket. That is why it writes only a
-// level the operator chose themselves, and only once "Enable radio TX" is
-// ticked -- the one place on this page where they said the antenna is fine.
-let rfAppliedPercent=null;   // last percent written AND confirmed by readback
-let rfKnobTouched=false;     // operator moved it; the automation stands down
-let rfAutoArmed=true;        // a write is owed: page load, or the link returned
-let rfAutoBusy=false, rfAutoRetryMs=0, rfLinkWasUp=false, rfLastError="";
-// What the operator has typed but not yet written. null means "not editing",
-// and only then may a render put the stored target back into the box. Without
-// it the number is lost the moment focus leaves the field -- which is exactly
-// what happens on the way to the SET button beside it. Same shape as the
-// txGain draft a few settings further down.
-let rfDraft=null;
-
-// Only for a reply that actually arrived, so it is the radio's link being
-// judged and not the browser's.
-function noteRadioLink(next) {
-  const up=Boolean(next.connected);
-  if(up && !rfLinkWasUp)rfAutoArmed=true;
-  rfLinkWasUp=up;
-}
-
-// Meaningful only when no write is owed: just after the link returns the reading
-// disagrees precisely because the radio may have forgotten, which is the case
-// the automation is for -- not evidence of a hand on the front panel.
-function noteRfKnob() {
-  if(rfAutoArmed || rfAppliedPercent===null)return;
-  if(!state.radio.connected || state.radio.rfPowerSeen!==true)return;
-  if(WsprCore.civPercent(state.radio.rfPower)!==rfAppliedPercent)rfKnobTouched=true;
-}
-
-function rfTargetPercent() {
-  const stored=currentJs8().rfPercent;
-  return Number.isFinite(Number(stored)) && Number(stored)>=1 ? Number(stored) : null;
-}
-
-// Every write goes through here, so SET and the automation cannot drift apart.
-async function writeRfPercent(percent) {
-  const command=WsprCore.civLevelCommand(WsprCore.percentToLevel(percent));
-  const wanted=WsprCore.civPercent(command.level);
-  await fetch(RADIO_CMD_URL,{method:"POST", signal:fetchDeadline(),
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({type:"civ.raw",data:command.data})});
-  // Confirmed in whole percent, never on the raw level: the radio quantises to
-  // its own step, so demanding an exact echo would fail a write that landed
-  // exactly where it was asked to.
-  await new Promise((resolve,reject)=>{
-    const started=Date.now();
-    const timer=setInterval(()=>{
-      if(state.radio.rfPowerSeen===true &&
-         WsprCore.civPercent(state.radio.rfPower)===wanted){clearInterval(timer);resolve();}
-      else if(Date.now()-started>=6000){clearInterval(timer);
-        reject(new Error("the radio did not confirm the power level"));}
-    },100);
-  });
-  rfAppliedPercent=wanted;
-  return wanted;
-}
-
-async function applyAutoRfPower() {
-  if(rfAutoBusy || !rfAutoArmed || rfKnobTouched)return;
-  // A calibration measures the radio as the operator set it up. Writing a target
-  // mid-run would file the result under a power the radio was never on -- and during
-  // a plan the power is the plan's own, changing from cell to cell.
-  if(state.calRunning || state.planRunning)return;
-  if(Date.now()<rfAutoRetryMs)return;
-  const target=rfTargetPercent();
-  // Nothing chosen, nothing to apply. There is no safe value to invent for a
-  // QSO mode, so a page nobody has configured leaves the radio alone.
-  if(target===null){rfAutoArmed=false;return;}
-  // No TX-safety-pledge gate here (2026-08-23, operator request, for
-  // consistency with WSPR's own applyAutoPower() and Mercury's
-  // applyAutoTuningPower()): writing a power level is not transmitting.
-  // WSPR keeps its own 10 W ceiling -- that is WSPR's legal band limit, not
-  // a general safety cap -- JS8 and Mercury deliberately have none.
-  if(!state.radio.connected || state.radio.transceiverType!=="ICOM-LAN")return;
-  // Never mid-transmission: LAN drops on this setup happen under audio load,
-  // which is exactly when something is on the air.
-  if(radioTransmitting())return;
-  if(state.radio.rfPowerSeen===true &&
-     WsprCore.civPercent(state.radio.rfPower)===WsprCore.civPercent(WsprCore.percentToLevel(target))){
-    // Already there. Record it so the knob detector has a baseline without
-    // spending a CI-V round trip to establish one.
-    rfAppliedPercent=WsprCore.civPercent(WsprCore.percentToLevel(target));
-    rfAutoArmed=false; return;
-  }
-  rfAutoBusy=true;
-  try { await writeRfPercent(target); rfAutoArmed=false; }
-  catch (_error) { rfAutoRetryMs=Date.now()+5000; }   // stays armed, backs off
-  finally { rfAutoBusy=false; renderHeader(); renderControls(); }
-}
-
-// The operator's own write. Still the only thing that turns a number in the box
-// into a stored choice -- the automation applies a target, it never decides one.
-async function setRfPowerFromField() {
-  const percent=Math.max(1,Math.min(100,Math.round(Number(rfDraft ?? dom.rfPercent.value)||0)));
-  dom.rfPercent.value=String(percent);
-  dom.rfPercentSet.disabled=true;
-  try {
-    await writeRfPercent(percent);
-    setJs8Setting("rfPercent",percent);
-    // A fresh decision stands the automation back up after a turn of the knob.
-    rfKnobTouched=false; rfAutoArmed=false; rfAutoRetryMs=0; rfLastError="";
-    rfDraft=null;                       // written; the box may follow the target again
-  } catch (error) {
-    rfLastError=error.message;
-  }
-  dom.rfPercentSet.disabled=false;
-  renderHeader(); renderControls();
-}
-
-function renderRfPowerField() {
-  const scale=fullPowerScale();
-  const seen=state.radio.rfPowerSeen===true;
-  const radioPercent=seen ? WsprCore.civPercent(state.radio.rfPower) : null;
-  const target=rfTargetPercent();
-  // Nothing stored yet: show what the radio is on, so SET means "adopt this"
-  // rather than making the operator guess a number to type.
-  if(rfDraft===null && document.activeElement!==dom.rfPercent)
-    dom.rfPercent.value=String(target ?? radioPercent ?? "");
-  const shown=Number(rfDraft ?? dom.rfPercent.value)||0;
-  dom.rfPercentWatts.textContent=scale.watts && shown>=1
-    ? formatWatts(scale.watts*WsprCore.percentToLevel(shown)/255) : "--";
-  const mismatch=Boolean(target!==null && radioPercent!==null && radioPercent!==target);
-  dom.rfPowerField.classList.toggle("mismatch",mismatch);
-  // One line, one source of truth: a failed write outranks everything, then the
-  // disagreement, then nothing. Written as a single assignment so the line can
-  // never keep saying something that stopped being true two renders ago.
-  const message=rfLastError ? rfLastError
-    : !mismatch ? ""
-    : `The radio is on ${radioPercent} %, not the ${target} % set here` +
-      (rfKnobTouched
-        ? " — changed on the radio, so it is not written automatically until you press SET."
-        : " — press SET to write it.");
-  dom.rfPercentState.hidden=!message;
-  dom.rfPercentState.textContent=message;
-  return mismatch;
-}
+// operator happens to have on the antenna socket. No TX-safety-pledge gate on
+// the write itself, though (2026-08-23, operator request, for consistency with
+// WSPR's own applyAutoPower() and Mercury's applyAutoTuningPower()): writing a
+// power level is not transmitting. WSPR keeps its own 10 W ceiling -- that is
+// WSPR's legal band limit, not a general safety cap -- JS8 and Mercury
+// deliberately have none.
+//
+// The engine itself (auto-apply on load/reconnect, knob detection, write+
+// confirm, the empty-field guard) is shared with RTTY-ICOM now
+// (data/rf-power-auto.js, code-review 2026-08-28 -- this used to be a hand-
+// copy independent of RTTY-ICOM's own, see that module's own header for why
+// WSPR/Mercury are not callers of it). This page supplies only what is
+// genuinely page-specific: JS8's own per-mode rfPercent storage, and this
+// page's own radioTransmitting()/state.calRunning/state.planRunning for
+// "don't write right now". data.js had no reusable command()/waitForState()
+// helpers of its own (unlike rtty.js), so the two adapters below reproduce
+// this page's own original fetch/poll shape exactly, just now confined to
+// this one config object instead of spread across the functions this
+// replaces.
+const rfPowerAuto = RfPowerAuto.create({
+  dom: {input: dom.rfPercent, set: dom.rfPercentSet,
+        watts: dom.rfPercentWatts, state: dom.rfPercentState, field: dom.rfPowerField},
+  targetPercent: () => {
+    const stored = currentJs8().rfPercent;
+    return Number.isFinite(Number(stored)) && Number(stored) >= 1 ? Number(stored) : null;
+  },
+  radio: () => state.radio,
+  fullWatts: () => fullPowerScale().watts,
+  formatWatts,
+  blocked: () => state.calRunning || state.planRunning,
+  transmitting: radioTransmitting,
+  command: payload => fetch(RADIO_CMD_URL, {method: "POST", signal: fetchDeadline(),
+    headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)}),
+  waitForState: (predicate, timeoutMs) => new Promise((resolve, reject) => {
+    const started = Date.now();
+    const timer = setInterval(() => {
+      if (predicate(state.radio)) { clearInterval(timer); resolve(); }
+      else if (Date.now() - started >= timeoutMs) { clearInterval(timer); reject(new Error("timed out")); }
+    }, 100);
+  }),
+  onWrite: percent => setJs8Setting("rfPercent", percent),
+  render: () => { renderHeader(); renderControls(); },
+});
 
 function renderHeader() {
   const connected=state.radio.connected && state.radio.transceiverType === "ICOM-LAN";
@@ -1888,7 +1793,7 @@ function renderHeader() {
   dom.trxMode.textContent=state.radio.mode || "---";
   dom.trxMode.classList.toggle("incompatible",connected && !modeCompatible);
   dom.trxMode.title=connected && !modeCompatible ? "JS8Call-ICOM requires USB or USB-D" : "TRX mode";
-  renderTrxPower(connected,renderRfPowerField());
+  renderTrxPower(connected,rfPowerAuto.renderField());
   const incompatible=connected && Boolean(state.radio.mode) && !modeCompatible;
   if(incompatible && !state.help.incompatibleActive)openTrxHelp("mode");
   state.help.incompatibleActive=incompatible;
@@ -7317,7 +7222,6 @@ async function pollRadio() {
     // -- this measures the browser<->backend leg, they measure backend<->radio.
     state.pageRttMs=performance.now()-pollStartMs;
     radioPollFailures=0;
-    noteRadioLink(next);
     state.radio={...state.radio,...next,frequency:Number(next.frequency)||0};
     // The merge above keeps keys the reply no longer carries. For GPS that is a
     // trap: absence IS the answer (radio reconnected, support re-probing), and a
@@ -7330,12 +7234,13 @@ async function pollRadio() {
     if(root_TrxHelp())root_TrxHelp().setReportedModel(liveRadioModel());
     const activityFrequencyChanged=selectActivityFrequency(state.radio.frequency);
     if (state.pendingFrequency && state.radio.frequency===state.pendingFrequency) state.pendingFrequency=null;
-    noteRfKnob(); applyAutoRfPower(); gpsTrackTick();
+    rfPowerAuto.onPollSuccess(); gpsTrackTick();
     ensureAudio(); if(activityFrequencyChanged)renderActivity(); renderHeader(); renderControls();
   } catch (error) {
-    // Deliberately not through noteRadioLink(): a fetch that never arrived says
-    // nothing about the radio, and counting it as a link drop would re-arm the
-    // power write on every WiFi flutter between the browser and the ESP32.
+    // Deliberately not through rfPowerAuto.onPollSuccess(): a fetch that never
+    // arrived says nothing about the radio, and counting it as a link drop
+    // would re-arm the power write on every WiFi flutter between the browser
+    // and the ESP32.
     // Named in the console because this path is otherwise invisible: it leaves
     // no serial-log trace, only the OFFLINE blink whose trigger (timeout vs
     // refused connection vs error status) is exactly what error.name/message say.
@@ -7709,8 +7614,8 @@ function bind() {
   dom.txOffset.addEventListener("change",()=>setJs8Setting("txOffsetHz",Math.max(RX_LOW,Math.min(RX_HIGH,Number(dom.txOffset.value)||1500))));
   // Typing only updates the watts beside the box; nothing reaches the radio
   // until SET, which is what makes the number a stored choice.
-  dom.rfPercent.addEventListener("input",()=>{rfDraft=dom.rfPercent.value;rfLastError="";renderHeader();});
-  dom.rfPercentSet.addEventListener("click",setRfPowerFromField);
+  dom.rfPercent.addEventListener("input",()=>rfPowerAuto.noteDraft());
+  dom.rfPercentSet.addEventListener("click",()=>rfPowerAuto.setFromField());
   dom.txGain.addEventListener("input",()=>{state.settingsDraft.txGain=dom.txGain.value;});
   dom.followSpeed.addEventListener("change",()=>setJs8Setting("followSpeed",dom.followSpeed.checked));
   dom.clockCorrection.addEventListener("change",()=>setJs8Setting("clockCorrectionMs",Number(dom.clockCorrection.value)||0));

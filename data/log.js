@@ -1661,9 +1661,10 @@ const rttyTxChannel = (() => { try { return new BroadcastChannel('wifilt-rtty-tx
 // A Map, not one pending-slot variable (code-review asked): sendRawText()
 // itself has no busy-guard of its own -- nothing here disables the Enter key
 // or a macro button while a previous send is still resolving, unlike
-// rtty.js's own composer (its SEND button IS disabled while audioTx/
-// fskSending). A second rapid call genuinely can start a second probe/send
-// before the first settles, and each needs its own waiter kept apart by id.
+// rtty.js's own composer, which gates on its own txBusy() (audioTx/
+// fskSending) before accepting a new send. A second rapid call genuinely can
+// start a second probe/send before the first settles, and each needs its own
+// waiter kept apart by id.
 const rttyTxWaiters = new Map(); // requestId -> {resolve, reject, timeout}
 
 if (rttyTxChannel) rttyTxChannel.onmessage = event => {
