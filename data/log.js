@@ -145,7 +145,16 @@
     if (m === 'RTTY' || m === 'RTTY-R' || m === 'RTTYR') return 'RTTY';
     if (m === 'FSK') return 'RTTY';
     if (m === 'DV')  return 'DIGITALVOICE';
+    if (m === 'JS8') return 'MFSK';
     return mode;
+  }
+
+  // ADIF has no MODE=JS8 -- the standard encoding is MODE=MFSK with a
+  // SUBMODE naming the actual digital mode (adifModeMap just above already
+  // returns 'MFSK' for it). Everything else this logger writes has no
+  // meaningful submode, so this returns '' and adifField() drops the tag.
+  function adifSubmode(mode) {
+    return (mode || '').toUpperCase() === 'JS8' ? 'JS8' : '';
   }
 
   function qsoToAdif(q, stationCall, myLocator) {
@@ -156,6 +165,7 @@
       adifField('TIME_ON',          (q.timeOnUtc  || '').replace(':','')),
       adifField('CALL',             q.call),
       adifField('MODE',             adifModeMap(q.mode)),
+      adifField('SUBMODE',          adifSubmode(q.mode)),
       adifField('RST_SENT',         q.rstSent),
       adifField('STX',              String(q.qsoNumber).padStart(3,'0')),
       adifField('RST_RCVD',         q.rstReceived),
@@ -699,15 +709,22 @@
 
   // Which keying path a radio mode belongs to. 'NONE' means the interface has no
   // path at all: sendCW() in the firmware keys only in CW/CW-R (CI-V message) and
-  // RTTY/RTTY-R (FSK GPIO), so the data modes the radio reports with a -D suffix
-  // (USB-D, LSB-D), WFM and UNK cannot be transmitted from here. This used to
-  // fall back to 'CW', which built CW text, POSTed it, took the ok:true for an
-  // answer -- and logged a report that never left the box.
+  // RTTY/RTTY-R (FSK GPIO), so WFM and UNK cannot be transmitted from here.
+  // This used to fall back to 'CW', which built CW text, POSTed it, took the
+  // ok:true for an answer -- and logged a report that never left the box.
+  //
+  // 'DATA' (USB-D/LSB-D) is not a keying path of its own -- whether QRPLOG may
+  // key through it at all, and via what, depends on who currently holds the
+  // shared AUD1 session (app.aud1Role, grilled 2026-08-28): RTTY-ICOM holding
+  // it means the existing sendViaRttyIcomPage() hand-off applies; anything
+  // else (including JS8Call, which has no free-text keying path of its own)
+  // refuses exactly like 'NONE'. See sendMacroText()/sendRawText() below.
   function modeGroup(mode) {
     const m = (mode || '').toUpperCase();
     if (['CW','CW-R','CWR'].includes(m))                        return 'CW';
     if (['RTTY','RTTY-R','RTTYR','FSK'].includes(m))            return 'RTTY';
     if (['SSB','LSB','USB','FM','WFM','AM','DV'].includes(m))    return 'PHONE';
+    if (['USB-D','LSB-D'].includes(m))                          return 'DATA';
     return 'NONE';
   }
 
@@ -759,7 +776,12 @@
    * type: 'CQ' | 'TXEXCH' | 'TXEXCHSP' | 'TXEXCHSP2' | 'TU'
    */
   function buildMacro(type, ctx) {
-    const mg     = modeGroup(ctx.mode);
+    let mg = modeGroup(ctx.mode);
+    // A USB-D/LSB-D QSO keyed through the RTTY-ICOM audio hand-off
+    // (sendMacroText in log.js, when app.aud1Role==='rtty') builds exactly
+    // the same text a true RTTY/RTTY-R QSO would -- the message content is
+    // the protocol, not the transport carrying it.
+    if (mg === 'DATA' && ctx._dataAsRtty) mg = 'RTTY';
     const vhf    = isVhfPlus(ctx.freqHz);
     const abbrev = ctx.cwAbbrev !== false;
     const rst    = rstText(ctx, abbrev);   // CW: abbreviated (5nn)
@@ -895,10 +917,13 @@ const app = {
   activeTrx:  1,       // 1 | 2 | 3
   trxLabels:  ['TRX1', 'TRX2', 'TRX3'],
   trxOi3:     [false, false, false],  // OI3 mode per TRX (true when NET_ID != 0)
-  // docs/rtty-implementace.md §8.2/8.3: hand the text to whichever RTTY-ICOM
-  // tab currently holds the AUD1 session instead of the GPIO FSK-backend --
-  // only meaningful on a LAN-connected TRX (!trxOi3[activeTrx]).
-  rttyAudioTx: false,
+  // Who currently holds the shared AUD1 session ('js8'/'rtty'/'wspr'/
+  // 'mercury'/'' -- see /js8/session's own "role" field, js8_session.h).
+  // Grilled 2026-08-28: replaces the old rttyAudioTx checkbox -- USB-D/LSB-D
+  // QSOs get tagged and, for 'rtty', keyed through sendViaRttyIcomPage()
+  // based on this instead of an operator setting. Polled alongside /state,
+  // see pollAud1Role() below.
+  aud1Role: '',
 
   // TRX state from /state polling
   connected:  false,
@@ -1085,6 +1110,23 @@ function pollState() {
       applyDisconnected();
       app._pollTimer = setTimeout(pollState, 1000);
     });
+}
+
+// ── AUD1 session role polling ─────────────────────────────────────────────────
+//
+// Separate from pollState()/mode above -- this is a firmware-authoritative
+// fact (js8_session.h's "role", grilled 2026-08-28), not this TRX's own CI-V
+// state, and readable regardless of which browser/computer JS8Call or
+// RTTY-ICOM happens to be open in. A few seconds is plenty: it only decides
+// what a USB-D/LSB-D QSO gets tagged/keyed as, never anything time-critical.
+// Read-only GET -- QRPLOG never claims the lock itself.
+function pollAud1Role() {
+  clearTimeout(app._aud1RoleTimer);
+  fetch('/js8/session', {cache: 'no-store'})
+    .then(r => r.json())
+    .then(data => { app.aud1Role = data.held ? String(data.role || '') : ''; })
+    .catch(() => { app.aud1Role = ''; })
+    .finally(() => { app._aud1RoleTimer = setTimeout(pollAud1Role, 3000); });
 }
 
 function applyState(data) {
@@ -1612,14 +1654,41 @@ function sendMacroText(macroType) {
     showHint('Phone mode — send manually');
     return;
   }
-  // No keying path for this mode (a data mode, WFM, UNK). Refuse here rather than
+  const trxIdx = app.activeTrx - 1;
+  const isOi3  = app.trxOi3[trxIdx] && trxIdx > 0;
+
+  // USB-D/LSB-D has no keying path of its own -- whether these macros may key
+  // at all, and how, depends on who currently holds the shared AUD1 session
+  // (grilled 2026-08-28). RTTY-ICOM holding it (and only on the LAN-connected
+  // TRX that page actually drives, same restriction sendRawText's own
+  // audio-stream hand-off has always had) means the macro text goes out
+  // exactly like a real RTTY QSO's would, just over sendViaRttyIcomPage()
+  // instead of /cmd sendCw. JS8Call holding it (JS8 has no free-text keying
+  // path of its own) or nobody: refuse, same wording as 'NONE' below.
+  if (mg === 'DATA') {
+    if (app.aud1Role !== 'rtty' || isOi3) {
+      showHint(app.mode + ' cannot be keyed — send manually');
+      return;
+    }
+    if (!app.connected) { showHint('TRX not connected'); return; }
+    const ctx = macroCtx({_dataAsRtty: true});
+    const text = LogMacros.buildMacro(macroType, ctx);
+    if (!text) return;
+    const gen = app.qsoGeneration;
+    sendViaRttyIcomPage(text).then(() => {
+      if (!RST_BEARING_MACROS.includes(macroType)) return;
+      if (gen !== app.qsoGeneration) return;
+      app.rstSentTx = ctx.rstSent;
+    }).catch(error => showHint(String(error.message || error)));
+    return;
+  }
+
+  // No keying path for this mode (WFM, UNK). Refuse here rather than
   // POST into a firmware that would drop it and answer ok:true anyway.
   if (mg === 'NONE') {
     showHint(app.mode + ' cannot be keyed — send manually');
     return;
   }
-  const trxIdx = app.activeTrx - 1;
-  const isOi3  = app.trxOi3[trxIdx] && trxIdx > 0;
   if (!app.connected && !isOi3) {
     showHint('TRX not connected');
     return;
@@ -1729,21 +1798,17 @@ function sendRawText(text) {
   const mg = LogMacros.modeGroup(app.mode);
   if (mg === 'PHONE') { showHint('Phone mode — send manually'); return; }
   if (!app.connected && !isOi3) { showHint('TRX not connected'); return; }
-  // Bypasses ONLY the mg==='NONE' refusal below, not the two checks just
-  // above: audio-stream needs a live AUD1 socket held by the RTTY-ICOM tab,
-  // not a CI-V "can this mode key" answer, and typical audio-stream operation
-  // runs in USB-D/LSB-D, which IS 'NONE' today -- but sending an AFSK tone
-  // burst while the radio is actually in PHONE mode, or while this page
-  // itself has no live TRX connection, is wrong regardless of AUD1 (code-
-  // review: this used to run before both checks, bypassing them too, not
-  // just the NONE one docs/rtty-implementace.md §8.3 documents). OI3 TRX
-  // (external K3NG keyer) ignore this entirely; AUD1 has no relationship to
-  // that keyer.
-  if (app.rttyAudioTx === true && !isOi3) {
+  // USB-D/LSB-D: audio-stream needs a live AUD1 socket, which only exists
+  // while RTTY-ICOM currently holds the shared session (app.aud1Role,
+  // grilled 2026-08-28 -- replaces the old rttyAudioTx checkbox, which fired
+  // regardless of mode and could wrongly reroute a genuine RTTY-mode QSO
+  // through audio too). OI3 TRX (external keyer) ignore this entirely; AUD1
+  // has no relationship to that keyer.
+  if (mg === 'DATA' && app.aud1Role === 'rtty' && !isOi3) {
     sendViaRttyIcomPage(text).catch(error => showHint(String(error.message || error)));
     return;
   }
-  if (mg === 'NONE') { showHint(app.mode + ' cannot be keyed — send manually'); return; }
+  if (mg === 'NONE' || mg === 'DATA') { showHint(app.mode + ' cannot be keyed — send manually'); return; }
   const url  = isOi3 ? '/oi3/send' : '/cmd';
   const body = isOi3 ? { trx: app.activeTrx, text } : { type: 'sendCw', text };
   fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
@@ -2003,6 +2068,20 @@ function logCurrentQsoOnly() {
   logQso(call, exch, { sendPostActions: false, hint: 'QSO logged without TX' });
 }
 
+// What mode gets written into a logged QSO row. USB-D/LSB-D has no meaning of
+// its own for the log -- it's whichever data mode is actually running,
+// identified by who currently holds the shared AUD1 session (grilled
+// 2026-08-28): RTTY-ICOM -> 'RTTY' (same tag a true RTTY/RTTY-R QSO gets),
+// JS8Call -> 'JS8' (JS8 has no keying path here, only correct log tagging).
+// Anything else (WSPR/Mercury/nobody) leaves the raw mode text untouched --
+// there is no better answer to invent for a data QSO nobody's page claims.
+function loggedMode() {
+  if (LogMacros.modeGroup(app.mode) !== 'DATA') return app.mode;
+  if (app.aud1Role === 'rtty') return 'RTTY';
+  if (app.aud1Role === 'js8')  return 'JS8';
+  return app.mode;
+}
+
 function logQso(call, exch, options) {
   const opts = options || {};
   const log = LogManager.getActiveLog();
@@ -2075,7 +2154,7 @@ function logQso(call, exch, options) {
     exchangeReceived: exch,
     frequencyHz:      app.frequency,
     frequencyDisplay: formatFreq(app.frequency),
-    mode:             app.mode,
+    mode:             loggedMode(),
     trx:              app.trxLabels[app.activeTrx - 1],
     dxcc:             dxcc || null,
     locatorReceived:  locatorReceived,
@@ -2282,6 +2361,7 @@ function buildQsoEditModal() {
               <option value="CW">CW</option>
               <option value="CW-R">CW-R</option>
               <option value="RTTY">RTTY</option>
+              <option value="JS8">JS8</option>
               <option value="FM">FM</option>
               <option value="AM">AM</option>
             </select>
@@ -2538,6 +2618,7 @@ function init() {
   resetRstFields();
   startClock();
   pollState();
+  pollAud1Role();
   checkStoragePersistence();
 
   // Device locator fallback for azimuth display (when log has no myLocator set)
@@ -2550,7 +2631,6 @@ function init() {
     if (cfg.trx1Label) app.trxLabels[0] = cfg.trx1Label;
     if (cfg.trx2Label) app.trxLabels[1] = cfg.trx2Label;
     if (cfg.trx3Label) app.trxLabels[2] = cfg.trx3Label;
-    app.rttyAudioTx = cfg.rttyAudioTx === true;
     // A TRX is "remote" (controlled via the ESP, not the local CAT link) when it has
     // Unified radio config explicitly carries active state. Fall back to the
     // legacy peer/address inference for backups from older firmware.

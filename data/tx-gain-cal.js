@@ -484,6 +484,38 @@
       return this.save();
     }
 
+    // Grilled 2026-08-28 (item 1 follow-up): one-time repair for entries filed
+    // under a WSPR modelOverride from before that override was cut out of the
+    // calibration key (wspr.js's own calModel() comment) -- a knee measured
+    // under a pretend model name is invisible to every other DATA page forever,
+    // since they all key off the live-reported name (IcomModels.liveRadioModel()).
+    // Copies each entry under fromModel to the same band/percent under toModel,
+    // but only into an empty slot: an entry already on file under the real name
+    // is trusted over one measured under a guessed name, never overwritten.
+    // Either way the old-keyed entry is dropped -- copied, it is now a
+    // duplicate; not copied, it is filed under a name nothing will ever look up
+    // again -- and both fates beat leaving dead weight against the 6 kB ceiling
+    // (compact()'s own comment). Safe to call on every boot: once nothing is
+    // left under fromModel, it is a read-only no-op.
+    async rekeyModel(fromModel, toModel) {
+      if (!fromModel || !toModel || fromModel === toModel) return false;
+      await this.load();
+      const entries = this.doc.entries || {};
+      const prefix = `${fromModel}|`;
+      let changed = false;
+      for (const key of Object.keys(entries)) {
+        if (!key.startsWith(prefix)) continue;
+        const destKey = `${toModel}|${key.slice(prefix.length)}`;
+        if (!entries[destKey]) entries[destKey] = entries[key];
+        delete entries[key];
+        changed = true;
+      }
+      if (!changed) return false;
+      this.doc.entries = entries;
+      await this.save();
+      return true;
+    }
+
     async clear() {
       // The plan survives: it is what the operator built, not what was measured,
       // and "forget the calibrations" is not "forget which cells I want".

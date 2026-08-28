@@ -53,6 +53,12 @@ struct Js8Session {
   uint16_t takeovers = 0;          // counters feed the diagnostics panel
   uint16_t refusals = 0;
   bool     held = false;           // a token was installed (may have expired)
+  // Which UI is holding the lock -- "js8" / "rtty" / "wspr" / "mercury", empty
+  // if the claimer didn't say (older client, or a role this build doesn't
+  // know about). QRPLOG (log.js) reads this from /js8/session to decide how a
+  // USB-D/LSB-D QSO gets tagged and whether it may key through the holder's
+  // page at all -- it is not itself a party to the lock, just a reader.
+  char     role[8] = {0};
   // Mercury transfer progress (docs/mercury-implementace.md decision 5 + §6.3/§7).
   // Mercury shares this same lock/token -- there is only one AUD1 owner, checked
   // in exactly one place (AudioHandleWsUpgrade) -- so "its own lease" means its
@@ -127,11 +133,22 @@ inline void js8SessionClear(Js8Session &session) {
   session.ownerIpV4 = 0;
   session.held = false;
   session.lastSeenMs = 0;
+  session.role[0] = 0;
   js8SessionClearMercuryProgress(session);
 }
 
+// role defaults to nullptr so every pre-existing caller (the native smoke
+// test, the ping handler below) keeps compiling unchanged -- a claim/renew
+// that doesn't mention a role simply leaves whatever was there.
+inline void js8SessionSetRole(Js8Session &session, const char *role) {
+  if (!role) return;
+  strncpy(session.role, role, sizeof(session.role) - 1);
+  session.role[sizeof(session.role) - 1] = 0;
+}
+
 inline void js8SessionInstall(Js8Session &session, uint32_t nowMs,
-                              const char *token, uint32_t ipV4) {
+                              const char *token, uint32_t ipV4,
+                              const char *role = nullptr) {
   strncpy(session.token, token, JS8_SESSION_TOKEN_MAX);
   session.token[JS8_SESSION_TOKEN_MAX] = 0;
   session.ownerIpV4 = ipV4;
@@ -139,15 +156,19 @@ inline void js8SessionInstall(Js8Session &session, uint32_t nowMs,
   session.lastSeenMs = nowMs;
   // A fresh grant or a takeover is always a new holder that has said nothing
   // about a transfer yet -- carrying the previous holder's filename/percent
-  // forward would show someone else's transfer as this session's.
+  // (or the previous holder's role) forward would misattribute it to this one.
+  session.role[0] = 0;
+  js8SessionSetRole(session, role);
   js8SessionClearMercuryProgress(session);
 }
 
 inline Js8SessionResult js8SessionClaim(Js8Session &session, uint32_t nowMs,
-                                        const char *token, uint32_t ipV4, bool force) {
+                                        const char *token, uint32_t ipV4, bool force,
+                                        const char *role = nullptr) {
   if (!js8SessionTokenValid(token)) return JS8_SESSION_BAD_TOKEN;
   if (js8SessionOwns(session, nowMs, token)) {
     session.lastSeenMs = nowMs;
+    js8SessionSetRole(session, role);
     return JS8_SESSION_RENEWED;
   }
   if (js8SessionLive(session, nowMs) && !force) {
@@ -155,7 +176,7 @@ inline Js8SessionResult js8SessionClaim(Js8Session &session, uint32_t nowMs,
     return JS8_SESSION_BUSY;
   }
   const bool stolen = js8SessionLive(session, nowMs);
-  js8SessionInstall(session, nowMs, token, ipV4);
+  js8SessionInstall(session, nowMs, token, ipV4, role);
   if (stolen) { session.takeovers += 1; return JS8_SESSION_TAKEOVER; }
   return JS8_SESSION_GRANTED;
 }
@@ -166,14 +187,20 @@ inline Js8SessionResult js8SessionClaim(Js8Session &session, uint32_t nowMs,
 // heartbeating into a lock nobody owns, and the next page to open would win the
 // radio out from under a live session.
 inline Js8SessionResult js8SessionHeartbeat(Js8Session &session, uint32_t nowMs,
-                                            const char *token, uint32_t ipV4) {
+                                            const char *token, uint32_t ipV4,
+                                            const char *role = nullptr) {
   if (!js8SessionTokenValid(token)) return JS8_SESSION_BAD_TOKEN;
   if (js8SessionOwns(session, nowMs, token)) {
     session.lastSeenMs = nowMs;
+    js8SessionSetRole(session, role);
     return JS8_SESSION_RENEWED;
   }
   if (js8SessionLive(session, nowMs)) { session.refusals += 1; return JS8_SESSION_BUSY; }
-  js8SessionInstall(session, nowMs, token, ipV4);
+  // A heartbeat that re-claims a freed lock (see comment above) without ever
+  // having sent a role -- today's clients don't -- would otherwise install
+  // with an empty role until the holder's next explicit claim. Passing role
+  // through here closes that gap for clients that do send it on ping.
+  js8SessionInstall(session, nowMs, token, ipV4, role);
   return JS8_SESSION_GRANTED;
 }
 

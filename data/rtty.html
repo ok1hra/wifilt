@@ -9,7 +9,7 @@
      genuinely RTTY's, same split as wspr.css/mercury.css.
      docs/rtty-implementace.md -- grilled 2026-08-27. -->
 <link rel="stylesheet" href="/data.css?v=f5dacdaa">
-<link rel="stylesheet" href="/rtty.css?v=b9721e30">
+<link rel="stylesheet" href="/rtty.css?v=adfc15ac">
 </head>
 <!-- lan-gate.js clears the checking class once it knows whether ICOM-LAN is set
      up, so the page never flashes an interface it is about to replace. -->
@@ -70,7 +70,7 @@
        and it is a per-session choice, not something glanced at every second
        like Reverse/squelch/SNR. -->
   <button id="rttyReverse" class="rtty-toggle-pill" type="button"
-          title="Swap mark/space on RX. TX is unaffected -- it always sends standard polarity; Reverse exists for stations whose TX is inverted.">NORMAL</button>
+          title="Swap mark/space on RX only, for decoding a station whose own TX is inverted. What THIS station transmits is the separate TX polarity setting in SETTINGS.">NORMAL</button>
   <!-- Item 16: shows the configured threshold itself (SETTINGS' own number,
        so the operator does not have to open that section to check it),
        highlighted whenever it is not 0 -- squelch is engaged in that state,
@@ -110,14 +110,25 @@
         <button class="rtty-zoom-pill" type="button" data-zoom="400">400%</button>
       </span>
     </summary>
-    <!-- kap.7: live spectrum above the waterfall, same width, no second FFT --
-         reads spectrum.js's `Waterfall.state().lastValues` (see rtty.css's
+    <!-- kap.7: live spectrum above the waterfall, same width -- its own faster
+         FFT/AGC tap (item 3, grilled 2026-08-28) via spectrum.js's
+         `Waterfall.state().liveValues/liveAgcLow/liveAgcHigh` (see rtty.css's
          own comment). Height +50% (item 14, was 54): a line trace reads worse
-         short than the bar chart it replaced (item 4). -->
-    <div class="rtty-live-spectrum"><canvas id="liveSpectrumCanvas" width="1024" height="81"></canvas></div>
-    <div id="waterfall" class="waterfall" title="Receiver audio. Blank during this station's own TX (same as JS8/WSPR/Mercury), even though the LAN audio path is itself duplex.">
-      <canvas id="waterfallCanvas" width="1024" height="64"></canvas>
-      <canvas id="waterfallOverlay" width="1024" height="64"></canvas>
+         short than the bar chart it replaced (item 4).
+         #rttyScope wraps both blocks; #rttyScopeOverlay sits on top of the
+         whole thing (item 8, grilled 2026-08-28) so the mark/space lines are
+         ONE continuous stroke across the seam between them, instead of the
+         two independent per-canvas draws this replaces (each of which used
+         to break at the border/gap between the two blocks). Also carries the
+         waterfall's own rough frequency ruler and the live red-line
+         frequency readout (item 9, same session) -- see rtty.js's
+         drawScopeOverlay(). -->
+    <div id="rttyScope" class="rtty-scope">
+      <div id="rttyLiveSpectrum" class="rtty-live-spectrum"><canvas id="liveSpectrumCanvas" width="1024" height="81"></canvas></div>
+      <div id="waterfall" class="waterfall" title="Receiver audio. Blank during this station's own TX (same as JS8/WSPR/Mercury), even though the LAN audio path is itself duplex.">
+        <canvas id="waterfallCanvas" width="1024" height="64"></canvas>
+      </div>
+      <canvas id="rttyScopeOverlay" class="rtty-scope-overlay"></canvas>
     </div>
   </details>
 
@@ -129,13 +140,15 @@
     <div id="rttyRxLog" class="rtty-rx-log" aria-live="polite"></div>
   </details>
 
-  <!-- kap.6: two TX methods, chosen in SETTINGS (item 11). Enter sends, like
-       js8call (item 7, grilled 2026-08-27 second session) -- no SEND button,
-       no per-message RF-safety checkbox (that confirmation step is gone
+  <!-- kap.6: two TX methods, picked automatically from the radio's current
+       mode since 2026-08-28 (RTTY/RTTY-R -> FSK-backend, else -> audio-
+       stream) -- no operator choice any more. Enter sends, like js8call
+       (item 7, grilled 2026-08-27 second session) -- no SEND button, no
+       per-message RF-safety checkbox (that confirmation step is gone
        entirely, composer and QRPlog hand-off alike; the operator's explicit
        decision from that grill). FSK-backend still reuses the existing
        QRPlog /cmd sendCw path exactly as-is, at its existing friction level. -->
-  <details class="compact-section" data-section="tx" open>
+  <details class="compact-section" data-section="tx">
     <summary><span>TX</span></summary>
     <div class="rtty-tx-body">
       <label class="rtty-tx-field">Message
@@ -148,7 +161,7 @@
     </div>
   </details>
 
-  <details class="compact-section" data-section="settings">
+  <details class="compact-section" data-section="settings" id="rttySettingsSection">
     <summary><span>SETTINGS</span><span id="settingsSummary" class="summary-status"></span></summary>
     <!-- Item 12: one item per row here (rtty.css overrides the shared 2-column
          .settings grid for this page only) -- the RF power row below in
@@ -156,15 +169,47 @@
          .power-field already forces its own 130px/1fr split regardless of
          which column it lands in. -->
     <div class="settings">
-      <!-- Item 11: moved out of the radio-bar header, converted from the
-           pilulka it was there to a <select> to match every other control in
-           this section. -->
-      <label>TX method
-        <select id="rttyTxMethod">
-          <option value="audio">Audio-stream (AFSK over AUD1)</option>
-          <option value="fsk">FSK-backend (GPIO bit-bang)</option>
+      <!-- Item 11's TX method picker lived here until 2026-08-28 -- now
+           mode-driven (rtty.js decides audio-stream vs FSK-backend straight
+           from state.radio.mode, never an operator choice). -->
+      <!-- Item 3, grilled 2026-08-28 (2nd session): what this station's own
+           AFSK encoder actually transmits (settings.toneHz +/- 85 Hz maps to
+           mark/space either way round). Deliberately NOT the same control as
+           the NORMAL/REVERSE pill above -- that one is RX-only decode
+           compatibility with a station whose TX happens to be inverted, and
+           sharing one switch between "decode this contact" and "what I
+           transmit" meant fixing a backward contact's decode also silently
+           flipped this station's own TX for the rest of the QSO. -->
+      <label>TX polarity
+        <select id="rttyTxPolarity">
+          <option value="normal">Normal</option>
+          <option value="reverse">Reverse</option>
         </select>
+        <small>What this station's AFSK actually transmits. Independent of the RX-only NORMAL/REVERSE pill above.</small>
       </label>
+      <!-- Item 5, grilled 2026-08-28 (2nd session): moved here from the SETUP
+           page's LOG config section -- still the same firmware/EEPROM-backed
+           setting (rtty.js reads/writes it via /log-config and
+           /log-config/fsk, same as QRPLOG and every other computer see), just
+           edited from the page that actually keys FSK. RTTY/RTTY-R keying is
+           always real FSK, decided from the radio's own current mode -- this
+           only chooses WHERE that FSK signal originates. -->
+      <label>FSK output
+        <select id="rttyFskOutputMode">
+          <option value="internal">Internal (this device's own GPIO)</option>
+          <option value="trxnet">External (TrxNet device)</option>
+        </select>
+        <small>Station-wide -- also used by QRPLOG, from any computer.</small>
+      </label>
+      <div id="rttyFskNetIdRow" hidden>
+        <label>FSK device NET_ID
+          <input id="rttyFskNetId" type="text" maxlength="2" placeholder="00" inputmode="text">
+        </label>
+        <div class="trxnet-devices">
+          <div class="trxnet-devices-head">Network devices <span class="trxnet-devices-live">live</span></div>
+          <div id="rttyTrxnetPeersFsk" class="trxnet-peers-body"><span class="trxnet-peers-empty">…</span></div>
+        </div>
+      </div>
       <label>Squelch threshold
         <!-- Static fallback for the instant before rtty.js's boot sequence
              overwrites min/max from RttySettings.SQUELCH_MIN/MAX -- see that
@@ -174,13 +219,34 @@
       </label>
       <label>Default TX/RX tone
         <!-- Static fallback matching RttySettings.TONE_MIN_HZ/MAX_HZ; same note as the squelch input above.
-             Now the SPACE/red tone (item 3 -- click sets the same thing), not the
-             internal centre -- rtty.js converts each way. -->
+             Now the lower physical tone (item 3 -- click sets the same thing; SPACE in
+             Normal TX polarity below, MARK in Reverse), not the internal centre -- rtty.js
+             converts each way. -->
         <input id="rttyToneInput" type="number" min="500" max="2700" step="10">
         <!-- Item 5: the 3rd .settings grid column is sized for a short word (see
              data.html's own "Hz" convention), not a sentence -- the explanation
              that used to be here squeezed to near-zero width. Dropped, not
              relocated to a tooltip (grilled 2026-08-27, second session). -->
+        <small>Hz</small>
+      </label>
+      <!-- AFC (grilled 2026-08-28, 3rd session): tracks the OTHER station's
+           drift by nudging only the decoder's own runtime tone offset --
+           settings.toneHz above (and this station's own TX) never moves, see
+           rtty.js's own syncDecoderTone()/afcTick(). Rate is Hz per Baudot
+           character (165 ms), not Hz/s -- deliberately the operator-facing
+           unit, converted internally. Max deviation is hard-capped at
+           RttyCodec.SHIFT_HZ/2 in rtty-settings.js -- past that the detector
+           can no longer tell a drifted mark from nominal space. -->
+      <label>AFC
+        <input id="rttyAfcEnabled" type="checkbox">
+        <small>Nudges the RX decode frequency to follow drift on short messages (e.g. a lone callsign). This station's own TX tone above never moves.</small>
+      </label>
+      <label>AFC rate
+        <input id="rttyAfcRateInput" type="number" min="5" max="85" step="1" inputmode="numeric">
+        <small>Hz/char</small>
+      </label>
+      <label>AFC max deviation
+        <input id="rttyAfcMaxDeviationInput" type="number" min="10" max="85" step="1" inputmode="numeric">
         <small>Hz</small>
       </label>
       <!-- Item 13: same rfPercent/writeRfPercent/knob-detection shape as
@@ -213,10 +279,10 @@
 
 <script src="/lan-gate.js?v=2f8a12d3"></script>
 <script src="/fw-version.js?v=b29c5317"></script>
-<script src="/rtty-codec.js?v=b4850868"></script>
-<script src="/rtty-presets.js?v=c4f65fbf"></script>
-<script src="/rtty-settings.js?v=d9f94a0c"></script>
-<script src="/spectrum.js?v=9600f27e"></script>
+<script src="/rtty-codec.js?v=5e2d128c"></script>
+<script src="/rtty-presets.js?v=5ec21ec3"></script>
+<script src="/rtty-settings.js?v=8fffaa98"></script>
+<script src="/spectrum.js?v=7fafbbb5"></script>
 <!-- js8-aud1.js: the shared AUD1 RX+TX contract, unchanged, same file
      wspr.html loads directly (no Worker here, unlike Mercury). js8-tx.js is
      loaded ONLY for its packetizeTxPcm48k() (kap.3/6.1, mode-agnostic, reused
@@ -242,11 +308,11 @@
      (data.html) -- code-review 2026-08-28, see the module's own header for
      why WSPR/Mercury are not callers. -->
 <script src="/rf-power-auto.js?v=86d35636"></script>
-<script src="/tx-gain-cal.js?v=1f597675"></script>
+<script src="/tx-gain-cal.js?v=6f6d76e3"></script>
 <script src="/tx-gain-cal-ui.js?v=ba7e0222"></script>
 <script src="/tx-gain-mod-level.js?v=42af6a2a"></script>
 <script src="/tx-gain-plan.js?v=f0e28123"></script>
 <script src="/tx-gain-plan-ui.js?v=61e40266"></script>
-<script src="/rtty.js?v=613c46da"></script>
+<script src="/rtty.js?v=c74b84e4"></script>
 </body>
 </html>

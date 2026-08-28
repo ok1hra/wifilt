@@ -715,11 +715,17 @@ int incomingByte = 0;   // for incoming serial data
   String g_lcTrx2Label = "TRX2";
   String g_lcTrx3Label = "TRX3";
   String g_lcBlockedDxcc = "Russia\nBelarus\nKaliningrad";
-  // docs/rtty-implementace.md §8.2: QRPlog's own free-text send uses this
-  // station's AUD1 audio-stream RTTY encoder instead of POST /cmd sendCw,
-  // only while the active TRX is LAN-connected. Default off -- the existing
-  // FSK-backend path is what QRPlog's RTTY macros already use today.
-  bool g_lcRttyAudioTx = false;
+  // RTTY/RTTY-R keying is always real FSK now (never AUD1 audio -- both
+  // QRPlog's own free-text send and the RTTY-ICOM page's own composer decide
+  // audio vs FSK purely from the radio's current mode, not an operator
+  // setting). What these two fields choose instead is WHERE the FSK signal
+  // itself comes from: this ESP32's own GPIO bit-bang, or forwarded over
+  // TrxNet to an external device -- for a station whose primary radio is
+  // LAN-connected but still has a separate physical FSK keyer box reachable
+  // only via TrxNet (grilled 2026-08-28). fskNetId "00" = unset, same
+  // convention as TRX2_NET_ID/TRX3_NET_ID.
+  String g_lcFskOutputMode = "internal";   // "internal" | "trxnet"
+  String g_lcFskNetId = "00";
 
   // TrxNet peer cache for TRX2 (index 0) and TRX3 (index 1) — written by onHz/onMode callbacks
   static volatile long g_trxFreq[2]    = {0, 0};
@@ -945,6 +951,7 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void handleConfigUpload(void);
   void handleGetLogConfig(void);
   void handlePostLogConfig(void);
+  void handlePostFskOutput(void);
   void handleGetJs8Config(void);
   void handlePostJs8Config(void);
   void handleGetIdentity(void);
@@ -978,6 +985,7 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void gpsPollTick(void);
   void handleGetGps(void);
   void handleOi3State(void);
+  bool trxNetSendCwText(byte peerNetId, const uint8_t* data, size_t len);
   void handleOi3Send(void);
   void handleOi3SetHz(void);
   void TrxNetLoop(void);
@@ -1255,7 +1263,10 @@ void loadLogConfigVars(void){
   v = extractJsonString(j, "trx2Label"); if (v.length() > 0) g_lcTrx2Label = v;
   v = extractJsonString(j, "trx3Label"); if (v.length() > 0) g_lcTrx3Label = v;
   if (j.indexOf("\"blockedDxcc\"") >= 0) g_lcBlockedDxcc = extractJsonString(j, "blockedDxcc");
-  g_lcRttyAudioTx = extractJsonBool(j, "rttyAudioTx", g_lcRttyAudioTx);
+  v = extractJsonString(j, "fskOutputMode");
+  if (v == "internal" || v == "trxnet") g_lcFskOutputMode = v;
+  v = extractJsonString(j, "fskNetId");
+  if (v.length() > 0) g_lcFskNetId = v;
 }
 
 String jsonEscape(const String &value){
@@ -1450,7 +1461,8 @@ static String buildLogConfigJson(
   const String &trx2Label,
   const String &trx3Label,
   const String &blockedDxcc,
-  bool rttyAudioTx
+  const String &fskOutputMode,
+  const String &fskNetId
 ) {
   String json;
   json.reserve(256);
@@ -1459,7 +1471,8 @@ static String buildLogConfigJson(
   json += ",\"trx2Label\":\""; json += jsonEscape(trx2Label); json += "\"";
   json += ",\"trx3Label\":\""; json += jsonEscape(trx3Label); json += "\"";
   json += ",\"blockedDxcc\":\""; json += jsonEscape(blockedDxcc); json += "\"";
-  json += ",\"rttyAudioTx\":"; json += (rttyAudioTx ? "true" : "false");
+  json += ",\"fskOutputMode\":\""; json += jsonEscape(fskOutputMode); json += "\"";
+  json += ",\"fskNetId\":\""; json += jsonEscape(fskNetId); json += "\"";
   json += "}";
   return json;
 }
@@ -1857,13 +1870,12 @@ void handleSetupData(){
   j += ",\"dxccall\":\""; j += configJsonEscape(DxcCallsign); j += "\"";
   j += ",\"dxclocator\":\""; j += configJsonEscape(DxcLocator); j += "\"";
   j += ",\"blockedDxcc\":\""; j += configJsonEscape(g_lcBlockedDxcc); j += "\"";
-  // docs/rtty-implementace.md §8.2 names loadLogConfigVars()/buildLogConfigJson()/
-  // the /setup/save handler for this field, but misses this one -- handleSetupData()
-  // is a SEPARATE serialization of the same g_lc* cache (feeding setup.html's own
-  // /setup-data.json fetch, not /log-config.json), same as cwIpOnConnect just above.
-  // Without this the checkbox would always render unchecked on page load regardless
-  // of what was actually saved.
-  j += ",\"rttyAudioTx\":"; j += g_lcRttyAudioTx ? "true" : "false";
+  // fskOutputMode/fskNetId used to be serialized here too (this is a SEPARATE
+  // g_lc* serialization from /log-config's own, feeding setup.html's
+  // /setup-data.json fetch) -- removed 2026-08-28 when the FSK output picker
+  // moved to the RTTY-ICOM page's own SETTINGS panel (which reads/writes them
+  // via /log-config and /log-config/fsk instead), and Setup stopped rendering
+  // the field at all.
   for (uint8_t i = 0; i < CW_MEMORY_COUNT; i++) {
     j += ",\"cwmem"; j += (i + 1); j += "\":\""; j += configJsonEscape(cwMemoryText[i]); j += "\"";
   }
@@ -2472,7 +2484,17 @@ void handlePostCmd(){
                          CMD_SEND_CW_MSG, 0xFF, STOP_BYTE};
       catWriteFrame(frame, sizeof(frame), true);
     } else if (strcmp(modesSnapshot, "RTTY") == 0) {
-      abortFskTransmission = true;
+      if (g_lcFskOutputMode == "trxnet") {
+        // External FSK has nothing local to interrupt -- the bit-bang loop
+        // that abortFskTransmission stops runs on whichever device holds
+        // fskNetId, not this one. Forward the same stop byte handleOi3AbortCw
+        // already sends for CW-over-TrxNet (identical wire message).
+        byte peerNetId = (byte)strtol(g_lcFskNetId.c_str(), nullptr, 16);
+        uint8_t stopByte = 0xFF;
+        trxNetSendCwText(peerNetId, &stopByte, 1);
+      } else {
+        abortFskTransmission = true;
+      }
     }
     #else
     if (radioLinkUp() && radio_address != 0x00) {
@@ -3465,7 +3487,7 @@ void handleGetLogConfig() {
 // Replace, not merge (docs/trx-http-api.md §2.4, code-review 2026-08-27):
 // whatever the caller posts overwrites the whole file verbatim, so a caller
 // that posts a partial object (e.g. only trx1Label) silently drops every
-// other field already stored there, including blockedDxcc and rttyAudioTx.
+// other field already stored there, including blockedDxcc and fskOutputMode.
 // In-app writes never hit this generic blob-store endpoint -- /setup/save is
 // the merge-by-construction path the frontend actually uses (kap.8.2).
 void handlePostLogConfig() {
@@ -3486,6 +3508,41 @@ void handlePostLogConfig() {
   f.print(body);
   f.close();
   loadLogConfigVars();
+  webServer.send(200, "application/json", "{\"ok\":true}");
+}
+
+// Grilled 2026-08-28 (item 5 follow-up): the RTTY-ICOM page's own settings panel
+// took over editing FSK output mode/NET_ID from SETUP (single place to edit,
+// same firmware/EEPROM-backed setting QRPLOG and every computer still see) --
+// but SETUP's own field lived on the giant /setup/save form, which handleSet()
+// refuses outright unless ssid+pswd are both present (kap.8.2's own comment on
+// collectFormBody() -- "save just the radio" is not something that endpoint
+// offers). RTTY has no WiFi fields to send, so it needs its own narrow write
+// path instead. buildLogConfigJson() always rebuilds the whole document from
+// its full fixed parameter list regardless of what is passed as existingJson
+// (that function's own comment) -- so the three labels and blockedDxcc that
+// this endpoint does NOT own are re-supplied from the in-RAM g_lc* cache
+// rather than dropped.
+void handlePostFskOutput() {
+  webServer.sendHeader("Connection", "close");
+  webServer.client().setNoDelay(true);
+  String fskOutputMode = requestArg("fskOutputMode") == "trxnet" ? "trxnet" : "internal";
+  // Same hex-clamp convention as /setup/save's own fskNetId handling above.
+  long fskNetIdVal = strtol(requestArg("fskNetId").c_str(), nullptr, 16);
+  if (fskNetIdVal < 0 || fskNetIdVal > 255) fskNetIdVal = 0x00;
+  char fskNetIdBuf[3];
+  snprintf(fskNetIdBuf, sizeof(fskNetIdBuf), "%02X", (unsigned)fskNetIdVal);
+  String fskNetId = String(fskNetIdBuf);
+
+  String nextLogConfig = buildLogConfigJson(
+    readLogConfigJson(),
+    g_lcTrx1Label, g_lcTrx2Label, g_lcTrx3Label,
+    g_lcBlockedDxcc, fskOutputMode, fskNetId
+  );
+  if (!saveLogConfigJson(nextLogConfig)) {
+    webServer.send(500, "application/json", "{\"error\":\"write\"}");
+    return;
+  }
   webServer.send(200, "application/json", "{\"ok\":true}");
 }
 
@@ -3784,6 +3841,19 @@ void handleOi3State() {
   webServer.send(200, "application/json", jbuf);
 }
 
+// Shared by CW-over-TrxNet (OI3 remote keyer, handleOi3Send just below) and
+// the external-FSK-output branch in sendCW() -- same wire message ("/s-cw"),
+// same peer-naming convention (OI3.<netId>). What the remote peer does with
+// the bytes -- key CW, bit-bang FSK/Baudot, or anything else -- is entirely
+// its own concern; nothing in this repository receives on this path, so
+// nothing here assumes what kind of device is on the other end.
+bool trxNetSendCwText(byte peerNetId, const uint8_t* data, size_t len) {
+  if (peerNetId == 0x00 || !trxNetEnabled) return false;
+  char peerName[TRXNET_MAX_DEVICE_NAME];
+  snprintf(peerName, sizeof(peerName), "OI3.%02x", peerNetId);
+  return net.publishTo(peerName, "/s-cw", data, len, TRX_CON);
+}
+
 void handleOi3Send() {
   webServer.sendHeader("Connection", "close");
   webServer.client().setNoDelay(true);
@@ -3806,17 +3876,15 @@ void handleOi3Send() {
     webServer.send(503, "application/json", "{\"error\":\"unavailable\"}");
     return;
   }
-  char peerName[TRXNET_MAX_DEVICE_NAME];
-  snprintf(peerName, sizeof(peerName), "OI3.%02x", peerNetId);
   // Legacy abort: old clients sent text='\x03' (ETX); after extractJsonString fix it
   // arrives as a single 0x03 byte — treat it as abort, not CW text.
   if (text.length() == 1 && (uint8_t)text[0] == 0x03) {
     uint8_t stopByte = 0xFF;
-    net.publishTo(peerName, "/s-cw", &stopByte, 1, TRX_CON);
+    trxNetSendCwText(peerNetId, &stopByte, 1);
     webServer.send(200, "application/json", "{\"ok\":true}");
     return;
   }
-  if (!net.publishTo(peerName, "/s-cw", (const uint8_t*)text.c_str(), text.length(), TRX_CON)) {
+  if (!trxNetSendCwText(peerNetId, (const uint8_t*)text.c_str(), text.length())) {
     webServer.send(503, "application/json", "{\"error\":\"peer_unavailable\"}");
     return;
   }
@@ -3840,10 +3908,8 @@ void handleOi3AbortCw() {
     webServer.send(503, "application/json", "{\"error\":\"unavailable\"}");
     return;
   }
-  char peerName[TRXNET_MAX_DEVICE_NAME];
-  snprintf(peerName, sizeof(peerName), "OI3.%02x", peerNetId);
   uint8_t stopByte = 0xFF;
-  if (!net.publishTo(peerName, "/s-cw", &stopByte, 1, TRX_CON)) {
+  if (!trxNetSendCwText(peerNetId, &stopByte, 1)) {
     webServer.send(503, "application/json", "{\"error\":\"peer_unavailable\"}");
     return;
   }
@@ -4470,6 +4536,7 @@ void setupWebServer(void){
   webServer.on("/config/upload",   HTTP_POST, handleConfigUpload);
   webServer.on("/log-config", HTTP_GET,  handleGetLogConfig);
   webServer.on("/log-config", HTTP_POST, handlePostLogConfig);
+  webServer.on("/log-config/fsk", HTTP_POST, handlePostFskOutput);
   webServer.on("/identity",   HTTP_GET,  handleGetIdentity);
   webServer.on("/identity",   HTTP_POST, handlePostIdentity);
   webServer.on("/js8-config.json", HTTP_GET,  handleGetJs8Config);
@@ -7392,7 +7459,23 @@ bool sendCW(){
     catWriteFrame(frame, frameLen, true);
     if (Debug) Serial.println();
     statusFlashKick();
-  }else{ // GPIO FSK keying -----------------
+  }else if (g_lcFskOutputMode == "trxnet") {
+    // External FSK output (grilled 2026-08-28): this station's primary radio
+    // may be LAN-connected, with FSK reaching it only through a separate
+    // physical keyer box on TrxNet -- same wire message CW-over-TrxNet
+    // already uses (trxNetSendCwText/handleOi3Send above), no local GPIO
+    // bit-bang here at all. No fallback to internal GPIO on failure: a
+    // station that chose external and got silence deserves to know, not a
+    // report that quietly went out a different way than it asked for.
+    if (payloadLen <= 0) return false;
+    byte peerNetId = (byte)strtol(g_lcFskNetId.c_str(), nullptr, 16);
+    bool ok = trxNetSendCwText(peerNetId, (const uint8_t*)CwMsg, (size_t)payloadLen);
+    if (Debug) {
+      Serial.print("FSK->TrxNet OI3."); Serial.print(peerNetId, HEX);
+      Serial.print(ok ? " ok " : " FAILED "); Serial.println(CwMsg);
+    }
+    return ok;
+  }else{ // GPIO FSK keying (internal, local) -----------------
     int TheEnd = payloadLen - 1;
     if(TheEnd < 0){
       return false;
@@ -8256,18 +8339,26 @@ void handleSet() {
       String trx3Label = trimMemoryValue(requestArg("trx3label"), 10);
       if (trx3Label.length() == 0) trx3Label = "TRX3";
       String blockedDxcc = requestArg("blockedDxcc");
-      bool rttyAudioTx = requestHasArg("rttyAudioTx");
+      String fskOutputMode = requestArg("fskOutputMode") == "trxnet" ? "trxnet" : "internal";
+      // Same hex-clamp convention as TRX2_NET_ID/TRX3_NET_ID just above --
+      // stored as a normalized 2-digit uppercase string, "00" = unset.
+      long fskNetIdVal = strtol(requestArg("fskNetId").c_str(), nullptr, 16);
+      if (fskNetIdVal < 0 || fskNetIdVal > 255) fskNetIdVal = 0x00;
+      char fskNetIdBuf[3];
+      snprintf(fskNetIdBuf, sizeof(fskNetIdBuf), "%02X", (unsigned)fskNetIdVal);
+      String fskNetId = String(fskNetIdBuf);
 
       g_lcTrx1Label = trx1Label;
       g_lcTrx2Label = trx2Label;
       g_lcTrx3Label = trx3Label;
       g_lcBlockedDxcc = blockedDxcc;
-      g_lcRttyAudioTx = rttyAudioTx;
+      g_lcFskOutputMode = fskOutputMode;
+      g_lcFskNetId = fskNetId;
 
       String nextLogConfig = buildLogConfigJson(
         readLogConfigJson(),
         trx1Label, trx2Label, trx3Label,
-        blockedDxcc, rttyAudioTx
+        blockedDxcc, fskOutputMode, fskNetId
       );
       if (!saveLogConfigJson(nextLogConfig)) {
         ERRdetect = 1;
@@ -8904,6 +8995,11 @@ void js8SessionRespond(Js8SessionResult result, const String& token){
   json += ",\"leaseMs\":" + String((unsigned long)JS8_SESSION_LEASE_MS);
   json += ",\"takeovers\":" + String((unsigned long)js8Session.takeovers);
   json += ",\"refusals\":" + String((unsigned long)js8Session.refusals);
+  // Which UI holds the lock -- see js8_session.h's own comment on this field.
+  // Present only while live, same as owner/ageMs just above: a stale role
+  // from an expired holder would misattribute the tag QRPLOG writes into a
+  // USB-D QSO to whoever held AUD1 last, not whoever holds it now (or nobody).
+  json += ",\"role\":\""; json += live ? jsonEscape(js8Session.role) : String(); json += "\"";
   // Present only while a Mercury transfer is actually running (decision 5 +
   // §6.3): a locked-out page needs this to show "Mercury transfer foto.jpg,
   // 43% done" instead of the generic busy text; JS8LAN/WSPR poll the same
@@ -8954,10 +9050,12 @@ void handleJs8SessionClaim(){
   String body  = webServer.hasArg("plain") ? webServer.arg("plain") : String();
   String token = js8SessionRequestToken();
   bool   force = extractJsonString(body, "force") == "true";
+  String role  = extractJsonString(body, "role");
   IPAddress ip = webServer.client().remoteIP();
   char previous[JS8_SESSION_TOKEN_MAX + 1];
   strncpy(previous, js8Session.token, sizeof(previous));
-  Js8SessionResult result = js8SessionClaim(js8Session, millis(), token.c_str(), uint32_t(ip), force);
+  Js8SessionResult result = js8SessionClaim(js8Session, millis(), token.c_str(), uint32_t(ip), force,
+                                            role.length() ? role.c_str() : nullptr);
   // Every change of owner drops the audio socket. Leaving it open would let the
   // losing page keep streaming into a radio it no longer owns, and it is what
   // lets the rest of the firmware treat an open socket as proof of ownership.
@@ -8974,10 +9072,12 @@ void handleJs8SessionClaim(){
 void handleJs8SessionPing(){
   String body  = webServer.hasArg("plain") ? webServer.arg("plain") : String();
   String token = js8SessionRequestToken();
+  String role  = extractJsonString(body, "role");
   char previous[JS8_SESSION_TOKEN_MAX + 1];
   strncpy(previous, js8Session.token, sizeof(previous));
   Js8SessionResult result = js8SessionHeartbeat(js8Session, millis(), token.c_str(),
-                                                uint32_t(webServer.client().remoteIP()));
+                                                uint32_t(webServer.client().remoteIP()),
+                                                role.length() ? role.c_str() : nullptr);
   if(strcmp(previous, js8Session.token) != 0 && AudioWsClient.connected())
     AudioDisconnectWs();
   js8SessionApplyMercuryProgress(body, token);

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <iostream>
+#include <string>
 
 namespace {
 
@@ -140,6 +141,33 @@ int main() {
                          == JS8_SESSION_BAD_TOKEN,
                      "a malformed claim must be refused") && pass;
         pass = check(!js8SessionLive(session, 1000), "a refused claim must install nothing") && pass;
+    }
+
+    // --- role (grilled 2026-08-28: who QRPLOG sees holding AUD1) ------------
+    {
+        Js8Session session;
+        pass = check(session.role[0] == 0, "a fresh session names no role") && pass;
+
+        pass = check(js8SessionClaim(session, 1000, A, 0x0A000001u, false, "rtty") == JS8_SESSION_GRANTED,
+                     "a claim carrying a role must still grant normally") && pass;
+        pass = check(std::string(session.role) == "rtty", "the claimed role must be recorded") && pass;
+
+        // A claim that doesn't mention a role (older client, or a heartbeat)
+        // must not blank out what was already recorded.
+        pass = check(js8SessionHeartbeat(session, 6000, A, 0x0A000001u) == JS8_SESSION_RENEWED,
+                     "a roleless heartbeat must still renew") && pass;
+        pass = check(std::string(session.role) == "rtty",
+                     "a roleless heartbeat must not clear the recorded role") && pass;
+
+        // A takeover installs a fresh holder with no say yet about what it is
+        // -- carrying the PREVIOUS holder's role forward would misattribute a
+        // USB-D QSO to whoever held AUD1 last, not whoever holds it now.
+        pass = check(js8SessionClaim(session, 7000, B, 0x0A000002u, true, "js8") == JS8_SESSION_TAKEOVER,
+                     "a forced claim with a role must still take over") && pass;
+        pass = check(std::string(session.role) == "js8", "the new holder's role must replace the old one") && pass;
+
+        js8SessionRelease(session, B);
+        pass = check(session.role[0] == 0, "release must clear the role along with everything else") && pass;
     }
 
     // --- millis() wrap ------------------------------------------------------

@@ -26,18 +26,43 @@
 .rtty-snr { color: var(--muted); }
 
 /* ---- Live spectrum (kap.7): a small bar/line chart above the waterfall,
-   sharing the same canvas width and hzToX mapping via spectrum.js's
-   `Waterfall.state().lastValues` (landed; see that file's own comment above
-   draw()'s last line). Blank canvas until the first FFT frame arrives; no
-   error, just an empty strip, same shape as any other "waiting for data"
-   panel here. ---- */
+   sharing the same canvas width and hzToX mapping. Reads its own faster
+   FFT/AGC tap (item 3, grilled 2026-08-28) via spectrum.js's
+   `Waterfall.state().liveValues/liveAgcLow/liveAgcHigh` -- see that file's
+   own comment above liveDraw(). Blank canvas until the first live frame
+   arrives; no error, just an empty strip, same shape as any other
+   "waiting for data" panel here. ---- */
 .rtty-live-spectrum {
   /* Item 14: +50% (was 54px) -- a line trace (item 4) reads worse short than
      the bar chart it replaced. */
   position: relative; height: 81px; margin-bottom: 2px;
   background: var(--panel2); border: 1px solid var(--line); border-bottom: none;
 }
-.rtty-live-spectrum canvas { display: block; width: 100%; height: 100%; }
+/* Item 2, grilled 2026-08-28: click-to-tune now also fires here, not just on
+   the waterfall below -- same crosshair affordance data.css's own
+   `.waterfall canvas` already gives that one. */
+.rtty-live-spectrum canvas { display: block; width: 100%; height: 100%; cursor: crosshair; }
+
+/* ---- Item 8/9, grilled 2026-08-28: one overlay spanning both blocks -----
+   #rttyScope wraps .rtty-live-spectrum + #waterfall; #rttyScopeOverlay sits
+   on top of the whole thing so the mark/space lines paint as a single
+   continuous stroke across the seam between them. pointer-events:none so it
+   never blocks the click-to-tune listener underneath -- same pattern as
+   data.css's own #waterfallOverlay. ---- */
+.rtty-scope { position: relative; }
+.rtty-scope-overlay { display: block; position: absolute; inset: 0; pointer-events: none; }
+/* Item 5 (grilled 2026-08-28, 3rd session): same red as the whole-page TX
+   frame (data.css's body.radio-transmitting, #ff1838) but local to the scope
+   box. The waterfall/live-spectrum freeze during this station's own TX
+   (rtty.js's onSamples() skips ingest while session.ptt is true) -- this
+   veil makes clear the frozen picture underneath is stale, not live, the
+   same moment the page-wide TX frame appears. Generated content, not a real
+   DOM node, so it needs nothing from rtty.js beyond the body class it
+   already toggles for the frame. */
+body.radio-transmitting .rtty-scope::after {
+  content: ""; position: absolute; inset: 0;
+  background: rgba(255, 24, 56, .25); pointer-events: none;
+}
 
 /* ---- Waterfall zoom pills (item 15): sit in the <summary> row, to the right
    of #spectrumSummary (which already claims the row's free space via
@@ -67,10 +92,23 @@
    Deliberately not a .rtty-tok -- no click/hover, so an operator's own
    callsign in "CQ CQ DE OK1HRA" is never mistaken for a station to log
    (item 6 follow-up, grilled 2026-08-27, second session). */
-.rtty-tx-echo { color: var(--red); }
+.rtty-tx-echo { }
+/* Item 1/2 (grilled 2026-08-28, 3rd session): one span per character, grey
+   until rtty.js's echoTxText() timer marks it "lit" at its estimated
+   transmit time (RttyCodec.charStartTimes(), not real playback feedback --
+   external FSK over TrxNet has no observable completion signal anyway). No
+   transition -- a plain step from grey to red, not a fade (grilled: the two
+   states are the whole story, nothing "in progress"). A character with no
+   Baudot mapping at all never gets a timer and so stays grey forever, same
+   as it's silently dropped from what actually goes out. */
+.rtty-tx-char { color: var(--muted); }
+.rtty-tx-char.lit { color: var(--red); }
 /* code-review: a send echoed optimistically (item 6) can still fail afterward
    (session.prepare()/setMode/sendCw all can throw) -- retracted in place
-   rather than left as a false "sent" record, see rtty.js's markTxEchoFailed(). */
+   rather than left as a false "sent" record, see rtty.js's markTxEchoFailed().
+   Characters already lit at that point stay lit; the rest simply never get
+   there because their timers are cleared -- no re-colouring in either
+   direction (grilled). */
 .rtty-tx-echo-failed { text-decoration: line-through; opacity: .65; }
 
 /* ---- TX composer ---- */
@@ -99,3 +137,104 @@
    than packed two to a line. */
 .rtty-page .settings { grid-template-columns: 1fr; }
 .rtty-page .settings small.rtty-squelch-live { grid-column: 3; color: var(--muted); }
+
+/* Frequency menu: the calling segment's own [lowHz,highHz] edges (unlike
+   JS8/WSPR/Mercury's single fixed channel dial, RTTY is worked anywhere
+   inside this range -- data.css's shared .frequency-preset is a 2-column
+   grid, so this 3rd child needs its own full-width row). */
+.frequency-preset-range { grid-column: 1 / -1; }
+
+/* ---- FSK output picker (item 5, grilled 2026-08-28, 2nd session) --------
+   Copied verbatim from setup.css's own ".trxnet-devices"/".trxnet-peer-*"
+   rules (moved here along with the picker itself -- see rtty.js's own
+   comment on mountFskPeerList()) with one substitution: setup.css's
+   `--accent` (its own green, #008800) has no equivalent in data.css, which
+   this page loads instead -- var(--cyan) is this page's own existing
+   "active/highlighted" colour (see .rtty-zoom-pill.active above), so peer
+   rows read consistently with the rest of the page rather than introducing
+   a 2nd, unrelated accent colour. */
+.trxnet-devices {
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0f1312;
+  overflow: hidden;
+}
+.trxnet-devices-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+.trxnet-devices-live {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 6px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+.trxnet-peers-body { padding: 4px 0; }
+.trxnet-peers-empty {
+  display: block;
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.trxnet-peer {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 6px 12px;
+  font-size: 13px;
+  border-left: 3px solid transparent;
+}
+.trxnet-peer + .trxnet-peer { border-top: 1px solid rgba(59, 69, 65, 0.5); }
+.trxnet-peer-name {
+  font-family: monospace;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.trxnet-peer-ip { font-family: monospace; color: var(--muted); }
+.trxnet-peer-age {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 40px;
+  text-align: right;
+}
+.trxnet-peer-prio { border-left-color: var(--cyan); }
+.trxnet-peer-prio .trxnet-peer-name { color: var(--cyan); }
+.trxnet-prio-badge {
+  font-size: 10px;
+  font-family: inherit;
+  letter-spacing: 0.06em;
+  padding: 1px 6px;
+  border-radius: 6px;
+  color: #eaf6ee;
+  background: rgba(0, 136, 0, 0.35);
+  border: 1px solid #507163;
+}
+.trxnet-peer-self {
+  border-left-color: var(--muted);
+  background: rgba(255, 255, 255, 0.03);
+}
+.trxnet-peer-self .trxnet-peer-ip { font-style: italic; }
+.trxnet-peer-pick {
+  width: 100%;
+  border: none;
+  border-left: 3px solid transparent;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.trxnet-peer-pick:hover,
+.trxnet-peer-pick:focus-visible { background: rgba(255, 255, 255, 0.06); }
+.trxnet-peer-pick.trxnet-peer-prio { border-left-color: var(--cyan); }

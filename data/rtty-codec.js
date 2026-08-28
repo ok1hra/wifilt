@@ -118,14 +118,58 @@
     return frames;
   }
 
+  // One Baudot frame (1 start + 5 data + 1.5 stop = 7.5 bit periods) at the
+  // fixed 45.45 Bd, in ms -- the char/frame duration RTTY-ICOM's TX echo
+  // colouring (rtty.js's echoTxText()) and its AFC rate setting (Hz/char)
+  // both key off, so the two features agree on what "one character" costs in
+  // wall time without either duplicating the arithmetic.
+  const CHAR_DURATION_MS = 1000 * 7.5 / BAUD;
+
+  // Per-VISIBLE-character start time (ms from the first frame) for `text`,
+  // matching the exact frame sequence encode() would actually produce --
+  // including a FIGS/LTRS shift frame where the page changes (no visible
+  // character of its own) and skipping characters with no Baudot mapping at
+  // all (silently dropped, same as textToBaudot() -- never transmitted, so
+  // never assigned a time). Grilled 2026-08-28 (3rd session, RTTY TX-echo
+  // colouring): a naive text.length*CHAR_DURATION_MS would drift out of sync
+  // on any message that switches between letters and figures, or that
+  // contains a character outside the Baudot set. Returns one entry per
+  // encodable character, in original string order, {index, startMs} where
+  // index is the position in text.toUpperCase() -- the caller doesn't need
+  // to re-uppercase to line indices up, since textToBaudot() also uppercases
+  // before matching.
+  function charStartTimes(text, startPage = "L") {
+    const upper = String(text).toUpperCase();
+    const out = [];
+    let page = startPage, frame = 0;
+    for (let i = 0; i < upper.length; i++) {
+      const entry = CHAR_TO_CODE.get(upper[i]);
+      if (!entry) continue;
+      if (entry.page && entry.page !== page) { frame++; page = entry.page; }
+      out.push({index: i, startMs: frame * CHAR_DURATION_MS});
+      frame++;
+    }
+    return out;
+  }
+
   class Encoder {
+    // `reverse` (grilled 2026-08-28, 2nd session, item 3) swaps which of the
+    // two physical tones is transmitted for a mark bit vs a space bit --
+    // deliberately its own constructor option, separate from Decoder's
+    // `reverse`/setReverse(). The two are independent settings for a reason:
+    // Decoder's reverse is RX-only decode compatibility with a station whose
+    // TX happens to be inverted, re-toggled per contact; this one is what
+    // THIS station's own encoder actually puts on the air, a station-level
+    // choice that must not flip just because the operator flipped the other
+    // one to read somebody else's backward signal mid-QSO.
     constructor(sampleRate, {toneHz = 1500, shiftHz = SHIFT_HZ, baud = BAUD,
-                 amplitude = 0.5} = {}) {
+                 amplitude = 0.5, reverse = false} = {}) {
       this.sampleRate = sampleRate;
       this.toneHz = toneHz;
       this.shiftHz = shiftHz;
       this.baud = baud;
       this.amplitude = amplitude;
+      this.reverse = reverse;
     }
 
     setToneOffset(hz) { this.toneHz = hz; }
@@ -143,8 +187,10 @@
       if (frames.length === 0) return new Int16Array(0);
 
       const samplesPerBit = this.sampleRate / this.baud;
-      const markHz = this.toneHz + this.shiftHz / 2;
-      const spaceHz = this.toneHz - this.shiftHz / 2;
+      const upperHz = this.toneHz + this.shiftHz / 2;
+      const lowerHz = this.toneHz - this.shiftHz / 2;
+      const markHz = this.reverse ? lowerHz : upperHz;
+      const spaceHz = this.reverse ? upperHz : lowerHz;
 
       const segments = [];
       for (const code of frames) {
@@ -328,6 +374,6 @@
     }
   }
 
-  return {BAUD, SHIFT_HZ, CODE_FIGS, CODE_LTRS, TABLE,
-          textToBaudot, baudotToFrames, Encoder, Decoder};
+  return {BAUD, SHIFT_HZ, CODE_FIGS, CODE_LTRS, TABLE, CHAR_DURATION_MS,
+          textToBaudot, baudotToFrames, charStartTimes, Encoder, Decoder};
 });

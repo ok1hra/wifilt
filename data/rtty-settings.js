@@ -3,8 +3,24 @@
 // template -- js8-settings.js carries modem/groups/heartbeat fields RTTY has
 // no use for; grilled 2026-08-27, docs/rtty-implementace.md §2.3). Holds the
 // kap.1 decisions that must survive a reload: Normal/Reverse (#3), squelch
-// threshold (#4), TX method (#6), and the shared RX/TX tone (kap.5 -- RTTY is
-// a "zero-beat" convention, one click sets both).
+// threshold (#4), and the shared RX/TX tone (kap.5 -- RTTY is a "zero-beat"
+// convention, one click sets both).
+//
+// TX method (#6) lived here until 2026-08-28: audio-stream vs FSK-backend is
+// no longer an operator choice, just what the radio's own current mode is
+// (rtty.js decides straight from state.radio.mode). What replaced it -- FSK
+// output internal GPIO vs external TrxNet device -- is a firmware/EEPROM-
+// backed station setting (fskOutputMode/fskNetId, /log-config and
+// /log-config/fsk), not a per-browser localStorage one here, since it must
+// answer the same way for QRPLOG as for this page, from any computer -- see
+// rtty.js's own loadFskConfig()/saveFskOutput().
+//
+// txPolarity (grilled 2026-08-28, 2nd session, item 3) IS per-browser
+// localStorage, unlike fskOutputMode above: it is the AFSK encoder's own
+// mark/space assignment, which is genuinely a property of how this operator
+// has this page's audio tone set up, not of the station as a whole the way
+// the FSK GPIO wiring is. Deliberately a field of its own rather than reusing
+// `reverse` -- see its own comment below.
 //
 // rfPercent (grilled 2026-08-27, second session, item 13) follows JS8's own
 // rfPercent field verbatim: null means "nothing chosen, leave the radio
@@ -49,11 +65,25 @@
   // -- kept the two in sync, rtty.js's boot sequence now sets the slider's
   // min/max from these constants instead of rtty.html carrying its own copy).
   const SQUELCH_MAX = 500;
-  const TX_METHODS = ["audio", "fsk"];
+
+  // AFC (grilled 2026-08-28, 3rd session). afcMaxDeviationHz is hard-capped
+  // at SHIFT_HZ/2 (85 Hz, duplicated as a literal here for the same
+  // load-order-independence reason CENTER_SHIFT_HZ above is -- this file
+  // never imports rtty-codec.js): the detector classifies a found peak as
+  // "mark" or "space" by whichever expected tone it's nearer to, and once the
+  // drift exceeds half the 170 Hz shift, a drifted mark sits closer to
+  // nominal space than to nominal mark -- genuinely ambiguous, not just an
+  // implementation limit. afcRateHzPerChar is Hz per 165 ms Baudot character
+  // (RttyCodec.CHAR_DURATION_MS), not Hz/s -- the operator-facing unit the
+  // user asked for as "more logical" than a raw per-second rate; rtty.js
+  // converts to Hz/s internally for the actual slew integration.
+  const AFC_RATE_MIN_HZ_PER_CHAR = 5, AFC_RATE_MAX_HZ_PER_CHAR = 85;
+  const AFC_MAX_DEVIATION_MIN_HZ = 10, AFC_MAX_DEVIATION_HARD_CAP_HZ = 85;
 
   function defaults() {
     return {v: SCHEMA_VERSION, toneHz: 1500, reverse: false,
-            squelchThreshold: 4, txMethod: "audio", rfPercent: null};
+            squelchThreshold: 4, rfPercent: null, txPolarity: "normal",
+            afcEnabled: false, afcRateHzPerChar: 60, afcMaxDeviationHz: 60};
   }
 
   function normalize(input) {
@@ -62,6 +92,8 @@
     const toneHz = Math.round(Number(source.toneHz));
     const squelchThreshold = Number(source.squelchThreshold);
     const rfPercent = Number(source.rfPercent);
+    const afcRateHzPerChar = Number(source.afcRateHzPerChar);
+    const afcMaxDeviationHz = Number(source.afcMaxDeviationHz);
     return {
       v: SCHEMA_VERSION,
       toneHz: Number.isFinite(toneHz) && toneHz >= TONE_CENTER_MIN_HZ && toneHz <= TONE_CENTER_MAX_HZ
@@ -70,9 +102,22 @@
       squelchThreshold: Number.isFinite(squelchThreshold) &&
         squelchThreshold >= SQUELCH_MIN && squelchThreshold <= SQUELCH_MAX
         ? squelchThreshold : d.squelchThreshold,
-      txMethod: TX_METHODS.includes(source.txMethod) ? source.txMethod : d.txMethod,
       rfPercent: Number.isFinite(rfPercent) && rfPercent >= 1 && rfPercent <= 100
         ? Math.round(rfPercent) : d.rfPercent,
+      // Grilled 2026-08-28 (2nd session, item 3): what this station's OWN
+      // AFSK encoder actually transmits -- deliberately its own field, not
+      // reused from `reverse` above. `reverse` is RX-only decode
+      // compatibility with a station whose TX happens to be inverted; a
+      // shared switch would mean fixing a backward contact's decode also
+      // flips this station's own TX polarity for the rest of the QSO.
+      txPolarity: source.txPolarity === "reverse" ? "reverse" : d.txPolarity,
+      afcEnabled: source.afcEnabled === true,
+      afcRateHzPerChar: Number.isFinite(afcRateHzPerChar) &&
+        afcRateHzPerChar >= AFC_RATE_MIN_HZ_PER_CHAR && afcRateHzPerChar <= AFC_RATE_MAX_HZ_PER_CHAR
+        ? afcRateHzPerChar : d.afcRateHzPerChar,
+      afcMaxDeviationHz: Number.isFinite(afcMaxDeviationHz) &&
+        afcMaxDeviationHz >= AFC_MAX_DEVIATION_MIN_HZ && afcMaxDeviationHz <= AFC_MAX_DEVIATION_HARD_CAP_HZ
+        ? afcMaxDeviationHz : d.afcMaxDeviationHz,
     };
   }
 
@@ -96,5 +141,8 @@
 
   return {STORAGE_KEY, SCHEMA_VERSION, TONE_MIN_HZ, TONE_MAX_HZ,
           TONE_CENTER_MIN_HZ, TONE_CENTER_MAX_HZ,
-          SQUELCH_MIN, SQUELCH_MAX, TX_METHODS, defaults, normalize, load, save};
+          SQUELCH_MIN, SQUELCH_MAX,
+          AFC_RATE_MIN_HZ_PER_CHAR, AFC_RATE_MAX_HZ_PER_CHAR,
+          AFC_MAX_DEVIATION_MIN_HZ, AFC_MAX_DEVIATION_HARD_CAP_HZ,
+          defaults, normalize, load, save};
 });

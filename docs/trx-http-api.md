@@ -362,7 +362,8 @@ whatever object was last stored, whole; see the warning under 2.4 below):
   "trx2Label": "FT-991",
   "trx3Label": "SDR",
   "blockedDxcc": "Russia\nBelarus\nKaliningrad",
-  "rttyAudioTx": false
+  "fskOutputMode": "internal",
+  "fskNetId": "00"
 }
 ```
 
@@ -385,11 +386,38 @@ Content-Type: application/json
   not carried over. A caller that wants to change one field (say, just
   `trx1Label`) must `GET /log-config` first, edit that field in the object it
   gets back, and `POST` the whole merged object — posting `{"trx1Label":
-  "IC-705"}` alone would silently erase `blockedDxcc`/`rttyAudioTx`/anything
+  "IC-705"}` alone would silently erase `blockedDxcc`/`fskOutputMode`/anything
   else already stored. (In-app writes never hit this endpoint at all: the
   Setup page's own save path merges by construction, since it always POSTs
   every field it owns together — see `/setup/save`, not documented here.)
 - Validation: a non-empty JSON object, 2048 B maximum
+
+---
+
+### 2.6 `POST /log-config/fsk` — set FSK output mode
+
+```
+POST /log-config/fsk HTTP/1.1
+Content-Type: application/x-www-form-urlencoded
+
+fskOutputMode=trxnet&fskNetId=07
+```
+
+**Response:** `{"ok": true}`
+
+Grilled 2026-08-28 (item 5 follow-up): the narrow write path for exactly
+`fskOutputMode`/`fskNetId`, added when the RTTY-ICOM page's SETTINGS panel took
+over editing this from the Setup page. Neither `/log-config` above (replace-
+whole, meant for the config backup/restore round trip) nor `/setup/save`
+(merge-by-construction, but not documented here, and refuses the whole post
+unless `ssid`+`pswd` are both present) fit a page with no WiFi fields to send.
+This endpoint merges just these two fields into the stored document, leaving
+`trx1Label`/`trx2Label`/`trx3Label`/`blockedDxcc` exactly as they were.
+
+- `fskOutputMode`: `"internal"` or `"trxnet"` — anything else is stored as
+  `"internal"`
+- `fskNetId`: 2 hex digits, normalized to uppercase; anything unparsable is
+  stored as `"00"` (unset)
 
 ---
 

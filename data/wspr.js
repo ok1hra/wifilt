@@ -394,14 +394,14 @@
       loseSession({owner: "another tab in this browser"});
       return;
     }
-    const claim = await sessionPost("/js8/session/claim", {force});
+    const claim = await sessionPost("/js8/session/claim", {force, role: "wspr"});
     if (!claim.granted) { loseSession(claim); return; }
     markHeld(true);
   }
 
   setInterval(async () => {
     if (!sessionHeld) return;
-    const ping = await sessionPost("/js8/session/ping", {});
+    const ping = await sessionPost("/js8/session/ping", {role: "wspr"});
     if (!ping.granted) loseSession(ping);
   }, SESSION_PING_MS);
 
@@ -457,7 +457,23 @@
       state.radio.connected = false;
     } finally { statePollInFlight = false; }
     noteKnob();
+    maybeRekeyGainModel();
     render();
+  }
+
+  // Item 1 follow-up: fires the rekeyModel() repair once the live model is
+  // actually known (radioNameSeen catches up after boot/a LAN-slot swap) --
+  // idempotent after that, but the flag skips the store fetch on every
+  // subsequent 1 Hz poll once it has run.
+  let modelRekeyAttempted = false;
+  function maybeRekeyGainModel() {
+    if (modelRekeyAttempted) return;
+    const toModel = liveRadioModel();
+    if (!settings.modelOverride || !toModel) return;
+    modelRekeyAttempted = true;
+    gainStore.rekeyModel(settings.modelOverride, toModel)
+      .then(changed => { if (changed && gainPlan) gainPlan.reload(); })
+      .catch(() => {});
   }
 
   const isLan = () => state.radio.transceiverType === "ICOM-LAN";
@@ -1668,7 +1684,17 @@
   const beaconGuard = new TxAlcGuard.TxAlcGuard();
   let calArmed = false;           // #autogain: also suppresses the automatic power write
 
-  const calModel = () => settings.modelOverride || liveRadioModel() || "";
+  // Grilled 2026-08-28: NOT settings.modelOverride -- that override exists only
+  // to make fullPower() guess a wattage curve when the radio has not reported
+  // (or does not report) a model watts.js recognizes (see that function's own
+  // comment). Calibration identity is a property of the physical hardware --
+  // filing a measured knee under a pretend model would apply it to whatever
+  // radio the override happens to name, and a real radio calibrated under a
+  // wrong name is invisible to RTTY-ICOM/DATA/Mercury, which all key off the
+  // live-reported name (IcomModels.liveRadioModel() -- see its own comment).
+  // Before this fix, a station with an override set had its WSPR-measured
+  // knees permanently unreachable from every other DATA page.
+  const calModel = () => liveRadioModel() || "";
 
   // Declared before the single-shot tool because that tool's adapter asks the plan
   // panel for the radio's MOD level. `const` here would be a temporal dead zone: a

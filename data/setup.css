@@ -1130,6 +1130,26 @@ button.icom-scan-hit:hover {
 .trxnet-peer-self .trxnet-peer-ip {
   font-style: italic;
 }
+/* A clickable peer row (grilled 2026-08-28: click-to-fill a NET_ID field
+   instead of hand-typing only) is a <button>, not the plain <div> every
+   other row is -- reset its button chrome back to matching the row look,
+   then add the affordance a plain row never needed. */
+.trxnet-peer-pick {
+  width: 100%;
+  border: none;
+  border-left: 3px solid transparent;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.trxnet-peer-pick:hover,
+.trxnet-peer-pick:focus-visible {
+  background: rgba(255, 255, 255, 0.06);
+}
+.trxnet-peer-pick.trxnet-peer-prio {
+  border-left-color: var(--accent);
+}
 
 /* Footer and the tagline under the page heading. SETUP is where the full name
    WIFILT - Web interface for Icom LAN Transceivers appears, so it is also where

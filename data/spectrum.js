@@ -32,7 +32,14 @@
     // then scrolls down with the history.
     constructor({canvas, overlay, container, sampleRate = 8000,
                  lowHz = 500, highHz = 2700, fftSize = 4096, hopSize = 2048,
-                 height = 64, minWidth = 320, drawOverlay = null, markRow = null}) {
+                 height = 64, minWidth = 320, drawOverlay = null, markRow = null,
+                 // RTTY-ICOM's own faster, independent tap (item 3, grilled
+                 // 2026-08-28): a 2nd hop cadence + AGC easing for a consumer
+                 // that wants livelier data than the scrolling waterfall's own
+                 // rows/colour ramp should have -- see liveDraw()'s own
+                 // comment. Off by default (0): every existing caller
+                 // (JS8/WSPR/Mercury) never sets these and never pays for it.
+                 liveHopSize = 0, liveAgcEase = 0}) {
       this.canvas = canvas; this.overlay = overlay;
       this.container = container || canvas.parentNode;
       this.context = canvas.getContext("2d");
@@ -41,6 +48,7 @@
       this.fftSize = fftSize; this.hopSize = hopSize;
       this.height = height; this.minWidth = minWidth;
       this.drawOverlay = drawOverlay; this.markRow = markRow;
+      this.liveHopSize = liveHopSize; this.liveAgcEase = liveAgcEase;
 
       this.re = new Float32Array(fftSize);
       this.im = new Float32Array(fftSize);
@@ -55,7 +63,7 @@
     // band change or a transmission has to start it over rather than fade.
     reset() {
       this.ring.fill(0);
-      this.ringPos = 0; this.hop = 0; this.fill = 0;
+      this.ringPos = 0; this.hop = 0; this.liveHop = 0; this.fill = 0;
       this.resetAgc();
     }
 
@@ -63,9 +71,13 @@
     // for setRange() below: a zoomed-in sub-band genuinely has a different
     // noise floor worth re-learning, but the raw samples already sitting in
     // the ring are still perfectly valid FFT input regardless of which bins
-    // get extracted from them afterward.
+    // get extracted from them afterward. Resets the live tap's own AGC too
+    // (item 3) -- unconditionally, since a page that never uses it just
+    // ignores these fields, and a page that does needs them reset on every
+    // zoom/band change exactly like the main pair.
     resetAgc() {
       this.agcLow = -85; this.agcHigh = -35; this.agcReady = false;
+      this.liveAgcLow = -85; this.liveAgcHigh = -35; this.liveAgcReady = false;
     }
 
     state() {
@@ -76,9 +88,14 @@
       // property access path -- the property itself stays too (see its own
       // comment above draw()'s last line) since a per-animation-frame read
       // is the one place going through this array-allocating spread is worth
-      // skipping.
+      // skipping. liveAgcLow/liveAgcHigh/liveValues (item 3) are the 2nd,
+      // faster tap's own numbers -- undefined/stale for any page that never
+      // configures liveHopSize, exactly like lastValues before the first
+      // frame.
       return {agcLow: this.agcLow, agcHigh: this.agcHigh, agcReady: this.agcReady,
-              rows: this.rows, fill: this.fill, lastValues: this.lastValues};
+              rows: this.rows, fill: this.fill, lastValues: this.lastValues,
+              liveAgcLow: this.liveAgcLow, liveAgcHigh: this.liveAgcHigh,
+              liveAgcReady: this.liveAgcReady, liveValues: this.liveValues};
     }
 
     hzToX(hz, width = this.overlay ? this.overlay.width : this.canvas.width) {
@@ -105,10 +122,24 @@
         this.ring[this.ringPos] = value;
         this.ringPos = (this.ringPos + 1) % this.fftSize;
         this.fill = Math.min(this.fftSize, this.fill + 1);
-        if (++this.hop >= this.hopSize) {
-          this.hop = 0;
-          if (this.fill >= this.fftSize) this.draw();
-        }
+        const hopDue = (++this.hop >= this.hopSize);
+        if (hopDue) this.hop = 0;
+        // item 3: the live tap's own, independent hop counter -- runs at its
+        // own (typically shorter) cadence without touching this.hop/draw()
+        // above, so the waterfall's own row rate never changes.
+        const liveDue = this.liveHopSize && (++this.liveHop >= this.liveHopSize);
+        if (liveDue) this.liveHop = 0;
+        if (!hopDue && !liveDue) continue;
+        if (this.fill < this.fftSize) continue;
+        // Whenever liveHopSize evenly divides hopSize (RTTY-ICOM: 1024 into
+        // 2048), every 2nd live tick lands on the exact same ring window a
+        // waterfall row also wants this same iteration -- extractValues() is
+        // a full 4096-point FFT, so doing it twice for byte-identical input
+        // was pure waste (code-review 2026-08-28). One extraction, handed to
+        // whichever of draw()/liveDraw() is actually due.
+        const values = this.extractValues();
+        if (hopDue) this.draw(values);
+        if (liveDue) this.liveDraw(values);
       }
     }
 
@@ -154,8 +185,11 @@
       }
     }
 
-    draw() {
-      const size = this.fftSize, canvas = this.canvas, context = this.context;
+    // FFT the current ring-buffer window and slice out the visible [lowHz,
+    // highHz] bins -- the part draw() and liveDraw() (item 3) both need,
+    // pulled out so the 2nd tap is not a hand-copy of this math.
+    extractValues() {
+      const size = this.fftSize;
       for (let i = 0; i < size; i++) {
         this.re[i] = this.ring[(this.ringPos + i) % size] * this.hann[i];
         this.im[i] = 0;
@@ -167,14 +201,36 @@
       const values = new Float32Array(last - first + 1);
       for (let bin = first; bin <= last; bin++)
         values[bin - first] = 20 * Math.log10(Math.hypot(this.re[bin], this.im[bin]) / size + 1e-9);
+      return values;
+    }
 
-      // Percentile AGC: the 18th percentile is the noise floor, the 98.5th is
-      // the loudest thing worth showing. A minimum span keeps a dead-quiet band
-      // from being stretched into pure noise.
-      const sorted = Array.from(values).sort((a, b) => a - b);
+    // Percentile AGC: the 18th percentile is the noise floor, the 98.5th is
+    // the loudest thing worth showing. A minimum span keeps a dead-quiet band
+    // from being stretched into pure noise. Shared by draw() and liveDraw()
+    // (item 3) -- only the easing factor and which agc*/agcReady fields it
+    // lands in differ between the two.
+    // `values` is already the typed array extractValues() returns --
+    // Float32Array.prototype.sort() with no comparator sorts numerically by
+    // spec (unlike a plain Array's default lexicographic sort), so this reads
+    // the two percentiles without Array.from()'s boxing or a comparator call
+    // per comparison (code-review 2026-08-28) -- .slice() first since sort()
+    // is in place and extractValues()'s array is read again by draw()/
+    // liveDraw() right after this returns.
+    agcTargets(values) {
+      const sorted = values.slice().sort();
       const targetLow = sorted[Math.floor((sorted.length - 1) * .18)] - 3;
       const observedHigh = sorted[Math.floor((sorted.length - 1) * .985)];
       const targetHigh = Math.max(observedHigh, targetLow + 22);
+      return {targetLow, targetHigh, observedHigh};
+    }
+
+    // `values` comes from ingest()'s own single extractValues() call for this
+    // sample (shared with liveDraw() when their hops coincide); draw() itself
+    // no longer extracts.
+    draw(values) {
+      const canvas = this.canvas, context = this.context;
+
+      const {targetLow, targetHigh, observedHigh} = this.agcTargets(values);
       if (observedHigh > -140) {
         if (!this.agcReady) { this.agcLow = targetLow; this.agcHigh = targetHigh; this.agcReady = true; }
         else {
@@ -195,10 +251,31 @@
       context.putImageData(row, 0, 0);
       if (this.markRow) this.markRow(context, canvas.width);
       this.rows++;
-      // RTTY-ICOM's live-spectrum panel (docs/rtty-implementace.md §7) reads
-      // this each animation frame instead of running a second FFT. Backward
-      // compatible: JS8/WSPR/Mercury never read it, so this is otherwise inert.
+      // RTTY-ICOM's live-spectrum panel used to read this each animation frame
+      // instead of running a second FFT; superseded by the dedicated liveDraw()
+      // tap below (item 3, grilled 2026-08-28) so its own, faster cadence no
+      // longer has to piggyback on this row's -- kept here too since it is
+      // still the one true "as of the last waterfall row" reading, and JS8/
+      // WSPR/Mercury still only ever read this pair.
       this.lastValues = values;
+    }
+
+    // The live tap (item 3, grilled 2026-08-28): same window, its own hop
+    // cadence (liveHopSize, set only by RTTY-ICOM) and its own AGC easing
+    // (liveAgcEase, deliberately faster than the waterfall's fixed .10) --
+    // entirely separate state from draw()'s own agcLow/agcHigh/lastValues/
+    // rows, so a livelier live-spectrum readout never speeds up or re-colours
+    // the scrolling waterfall underneath it ("vodopad nechat", grilled).
+    liveDraw(values) {
+      const {targetLow, targetHigh, observedHigh} = this.agcTargets(values);
+      if (observedHigh > -140) {
+        if (!this.liveAgcReady) { this.liveAgcLow = targetLow; this.liveAgcHigh = targetHigh; this.liveAgcReady = true; }
+        else {
+          this.liveAgcLow += (targetLow - this.liveAgcLow) * this.liveAgcEase;
+          this.liveAgcHigh += (targetHigh - this.liveAgcHigh) * this.liveAgcEase;
+        }
+      }
+      this.liveValues = values;
     }
 
     resize() {

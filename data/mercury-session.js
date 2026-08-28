@@ -139,8 +139,8 @@
   async function claim(force = false, progress = null) {
     if (force && channel) channel.postMessage({ type: "evict", id: pageId });
     const body = progress
-      ? { force, mercuryName: progress.name, mercuryPercent: progress.percent, mercuryRemainingMs: progress.remainingMs }
-      : { force };
+      ? { force, role: "mercury", mercuryName: progress.name, mercuryPercent: progress.percent, mercuryRemainingMs: progress.remainingMs }
+      : { force, role: "mercury" };
     const result = await post("/mercury/session/claim", body);
     if (!result.granted) { if (busyCb) busyCb(result); return false; }
     markHeld(force);
@@ -157,8 +157,8 @@
   async function ping(progress = null) {
     if (!held) return;
     const body = progress
-      ? { mercuryName: progress.name, mercuryPercent: progress.percent, mercuryRemainingMs: progress.remainingMs }
-      : {};
+      ? { role: "mercury", mercuryName: progress.name, mercuryPercent: progress.percent, mercuryRemainingMs: progress.remainingMs }
+      : { role: "mercury" };
     const result = await post("/mercury/session/ping", body);
     if (!result.granted) yieldSession({ ...result, lost: true });
   }

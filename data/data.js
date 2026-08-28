@@ -7417,14 +7417,14 @@ async function retrySession() {
   // the firmware would happily grant the claim and the reload would come
   // straight back here.
   if (await probeLocalHolder()) { scheduleSessionRetry(SESSION_RETRY_MS); return; }
-  const claim = await sessionPost("/js8/session/claim", {force:false});
+  const claim = await sessionPost("/js8/session/claim", {force:false, role:"js8"});
   if (claim.granted) location.reload();
   else showSessionBusy(claim);
 }
 
 async function acquireJs8Session(force = false) {
   if (force && sessionChannel) sessionChannel.postMessage({type:"evict", id:pageId});
-  const claim = await sessionPost("/js8/session/claim", {force});
+  const claim = await sessionPost("/js8/session/claim", {force, role:"js8"});
   if (!claim.granted) { showSessionBusy(claim); return false; }
   // A forced takeover is already an explicit operator decision. An ordinary
   // claim remains unconfirmed until the same-browser duplicate probe finishes;
@@ -7446,7 +7446,7 @@ async function acquireJs8Session(force = false) {
 // Losing the lease means another page is now driving the radio.
 async function pingJs8Session() {
   if (!sessionHeld) return;
-  const ping = await sessionPost("/js8/session/ping", {});
+  const ping = await sessionPost("/js8/session/ping", {role:"js8"});
   if (!ping.granted) yieldSession({...ping, lost:true});
 }
 
