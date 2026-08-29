@@ -272,7 +272,12 @@
   }
 
   async function syncFskFromRadio() {
-    const model = liveRadioModel();
+    // liveRadioModel() is the radio's NAME string (see its own definition
+    // below) -- every other reader here (WsprCore.fullPowerWatts(),
+    // gainCal's calModel()) passes that straight into a resolver of its own,
+    // and findModel() is this codebase's own such resolver for the actual
+    // model row (icom-models.js).
+    const model = IcomModels.findModel(liveRadioModel());
     const keyingCmd = model && model.rttyKeyingPolarityCmd;
     const markCmd = model && model.rttyMarkFreqCmd;
     if (keyingCmd) {
