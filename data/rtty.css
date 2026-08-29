@@ -184,24 +184,41 @@ body.radio-transmitting .rtty-scope::after {
    than packed two to a line. */
 .rtty-page .settings { grid-template-columns: 1fr; }
 .rtty-page .settings small.rtty-squelch-live { grid-column: 3; color: var(--muted); }
-/* Every other hint <small> in this section is a full sentence living in the
-   shared label grid's auto-sized 3rd column -- explicit left, not whatever
-   `text-align`'s inherited/initial value resolves to in a given browser, so a
-   multi-line hint always reads as ordinary left-aligned prose. */
-.rtty-page .settings label small { text-align: left; }
+/* Every OTHER hint <small> on this page sat in the shared label grid's 3rd
+   (auto) column (data.css), which starts wherever column 2's own track --
+   `minmax(20px, 1fr)`, flexible -- happens to end. That track claims all the
+   row's spare width regardless of how little the actual control (a 20px
+   checkbox, an 8ch number field) needs, so every hint started far past its
+   own control: a big dead gap, short trailing units ("Hz", "Hz/char") pinned
+   to the row's far right edge, long sentences (the checkboxes below) start
+   the same way too. Read as right-aligned even though the text itself never
+   was (grilled 2026-08-29 -- "popisky za polozkami jsou zarovnane doprava").
+   A sentence-length hint (the checkbox rows) drops to its own full-width row
+   below the label+control instead, flush left where the row itself starts --
+   excludes the narrow-input rows just below, which get the other treatment:
+   their hint is one short unit word, so it stays inline right after its
+   input rather than orphaned on a line by itself. */
+.rtty-page .settings label:not(:has(input.rtty-settings-narrow)) > small:not(.rtty-squelch-live) {
+  grid-column: 1 / -1;
+}
+/* Default TX/RX tone, AFC rate, AFC max deviation: column 2 shrinks to the
+   narrow input's own width instead of staying flexible, so the unit sits
+   immediately after it -- the row's leftover space moves to the end (past
+   the unit, where it was always meant to be spare per item 12's comment
+   above) instead of sitting between the input and its own unit label. */
+.rtty-page .settings label:has(input.rtty-settings-narrow) {
+  grid-template-columns: 130px max-content auto;
+}
 
-/* TX polarity / FSK output: unlike the squelch live-value badge above (one
-   short number, hence grid-column:3 fits it into the shared row), these two
-   <small> hints are full sentences. Left in the shared label grid's 3rd
-   (auto) column, that sentence's own min-content width ate into the row at
-   narrow page widths, squeezing the middle `minmax(20px, 1fr)` track --
-   where the <select> itself lives -- down to a sliver: both selects read as
-   missing entirely ("maji nulovou velikost"). These two rows get their own
-   plain 2-column grid (label text + select) instead, with the hint dropped
-   to a full-width 2nd row below where it can wrap freely without competing
-   with the control for space. */
+/* TX polarity / FSK output specifically: the <select> itself (unlike a
+   checkbox or an 8ch number field) DOES need real width, and at narrow page
+   widths the shared 3-column grid's `minmax(20px, 1fr)` control track could
+   still be squeezed towards its 20px floor by column 3's own auto-sizing
+   even with the hint moved out of it above -- both selects read as missing
+   entirely ("maji nulovou velikost"). These two rows get a plain 2-column
+   grid (label text + select) instead, so the select has nothing left to
+   compete with for space. */
 .rtty-page .settings label:has(select) { grid-template-columns: 130px minmax(0, 1fr); }
-.rtty-page .settings label:has(select) > small { grid-column: 1 / -1; }
 
 /* Grilled 2026-08-29: item 12's full-width row (above) still leaves the
    shared `.settings input{width:100%}` (data.css) stretching each number/text

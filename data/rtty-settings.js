@@ -89,19 +89,17 @@
     return Math.max(1, Math.min(SQUELCH_MAX, Math.round(Math.pow(10, d / 10))));
   }
 
-  // AFC (grilled 2026-08-28, 3rd session). afcMaxDeviationHz is hard-capped
-  // at SHIFT_HZ/2 (85 Hz, duplicated as a literal here for the same
-  // load-order-independence reason CENTER_SHIFT_HZ above is -- this file
-  // never imports rtty-codec.js): the detector classifies a found peak as
-  // "mark" or "space" by whichever expected tone it's nearer to, and once the
-  // drift exceeds half the 170 Hz shift, a drifted mark sits closer to
-  // nominal space than to nominal mark -- genuinely ambiguous, not just an
-  // implementation limit. afcRateHzPerChar is Hz per 165 ms Baudot character
+  // AFC. Wide acquisition now requires the complete mark/space pair rather
+  // than accepting whichever single carrier is louder, so it is no longer
+  // ambiguous at SHIFT_HZ/2. The 180 Hz cap covers a full 170 Hz shift while
+  // keeping both candidate carriers inside the narrowest 400% waterfall
+  // window (550 Hz wide, centred on toneHz, with a little edge margin).
+  // afcRateHzPerChar is Hz per 165 ms Baudot character
   // (RttyCodec.CHAR_DURATION_MS), not Hz/s -- the operator-facing unit the
   // user asked for as "more logical" than a raw per-second rate; rtty.js
   // converts to Hz/s internally for the actual slew integration.
   const AFC_RATE_MIN_HZ_PER_CHAR = 5, AFC_RATE_MAX_HZ_PER_CHAR = 85;
-  const AFC_MAX_DEVIATION_MIN_HZ = 10, AFC_MAX_DEVIATION_HARD_CAP_HZ = 85;
+  const AFC_MAX_DEVIATION_MIN_HZ = 10, AFC_MAX_DEVIATION_HARD_CAP_HZ = 180;
 
   function defaults() {
     return {v: SCHEMA_VERSION, toneHz: 1500, reverse: false,

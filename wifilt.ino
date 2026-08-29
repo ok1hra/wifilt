@@ -7522,6 +7522,57 @@ void handleGetGps() {
 
 //-----------------------------------------------------------------------------------
 
+// Real report, 2026-08-29: FSK output set to Internal (GPIO keys correctly),
+// but a TrxNet peer (TRX2, an external keyer) still beeped and briefly keyed
+// its own PTT during the send, serial log showing nothing but this request's
+// own "LOOP| slow: webServer 2980ms ... / LAN | loop stall 2985ms, health
+// timers forgiven" -- no CW/FSK message was actually sent to it (sendCW()'s
+// internal-vs-trxnet branches below are exclusive, confirmed by code
+// review). The real cause: internal GPIO keying is bare delay() calls with
+// nothing else serviced for the entire message -- PTTlead + ~15 characters +
+// PTTtail blocks handlePostCmd() for several seconds straight, during which
+// TrxNetLoop()/lanClientLoop() never run at all. wifilt's OWN LAN health
+// timers self-compensate for a gap like that (icomLanClient.h's "loop stall
+// ... health timers forgiven" -- that log line firing here is the tell), but
+// a TrxNet peer waiting on its own heartbeat/ack timeout has no such
+// forgiveness: it just sees silence for multiple seconds and reacts on its
+// own clock. Same "service everything else" bundle handleFileFromSPIFFS's
+// own streaming loop already uses during ITS long blocking operation
+// (comment there: "The radio, TrxNet, DX cluster and an already-open audio
+// socket still need their normal ticks") -- duplicated here rather than
+// shared, so this stays a self-contained, easy-to-audit fix for the one
+// caller that needs it. webServer.handleClient() itself is deliberately NOT
+// in this bundle -- calling it reentrantly from inside a request handler is
+// exactly what caused a real SIGSEGV elsewhere in this codebase (CW-IP
+// announce's own history).
+void pumpBackgroundLoops() {
+  lanClientLoop();
+  TrxNetLoop();
+  DxcLoop();
+  AudioHandleWsClient();
+  statusFlashTick();
+  #if defined(WDT)
+    esp_task_wdt_reset();
+  #endif
+}
+
+// A delay() an operator's eye cannot tell apart from the blocking kind --
+// same total wall time -- except it keeps servicing TrxNet/LAN/audio every
+// step instead of freezing them for the whole span. 20 ms keeps comfortably
+// under LOOP_WARN_MS (200) per step regardless of what pumpBackgroundLoops()
+// itself costs, and is far tighter than any TrxNet peer's own heartbeat/ack
+// timeout, so nothing downstream sees the gap this used to leave.
+void delayPumped(uint32_t ms) {
+  const uint32_t step = 20;
+  uint32_t waited = 0;
+  while (waited < ms) {
+    uint32_t chunk = (ms - waited) < step ? (ms - waited) : step;
+    delay(chunk);
+    waited += chunk;
+    pumpBackgroundLoops();
+  }
+}
+
 //-------------------------------------------------------------------------------------------------------
 // Keys CwMsg in the radio's current mode. Returns false when that mode has no
 // keying path here, so a caller can tell a transmission from a silent drop --
@@ -7594,7 +7645,7 @@ bool sendCW(){
     // into a dimmed LED rather than see it blink.
     statusLedLevel(0);
     digitalWrite(PTT, HIGH);          // PTT ON
-    delay(PTTlead);                   // PTT lead delay
+    delayPumped(PTTlead);             // PTT lead delay -- see delayPumped()'s own comment
     // ch = ' '; Serial.print(ch); chTable(); sendFsk();   // Space before sending
     // while (Serial.available()) {
     if (Debug) Serial.print("FSK ");
@@ -7621,11 +7672,16 @@ bool sendCW(){
         chTable();
         sendFsk();
         delay(5);
+        // Once per character (~170 ms here) is plenty -- see
+        // pumpBackgroundLoops()'s own comment above sendCW() for why this
+        // loop needs it at all. sendFsk()'s own per-bit delay()s are left
+        // untouched: they are the actual FSK bit timing, not idle wait.
+        pumpBackgroundLoops();
     }
     if (Debug) Serial.println();
     abortFskTransmission = false;
     // ch = ' '; Serial.print(ch); chTable(); sendFsk();   // Space after sending
-    if (!fskAborted) delay(PTTtail);
+    if (!fskAborted) delayPumped(PTTtail);
     digitalWrite(PTT, LOW);
     if (Debug) Serial.println();
     digitalWrite(FSK_OUT, LOW);
