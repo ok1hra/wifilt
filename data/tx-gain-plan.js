@@ -362,9 +362,18 @@
           // write it means no band could be measured at all; after one it means
           // the verification carrier failed, and the MOD level in the radio is
           // now a value nobody has confirmed.
-          if (this.modCorrections)
+          if (this.modCorrections) {
+            // The phase sentence says WHAT could not be confirmed; retain the
+            // measurement's own reason as well, because that says what the operator
+            // can actually fix (PTT, underrun, ALC, link...). It is the latest failed
+            // survey row: all pre-write rows precede the verification in `results`.
+            const failed = this.results.slice().reverse().find(row =>
+              row && row.survey && row.status === "failed" && row.reason);
             this.fail(`the MOD level was written (${this.modLevel}) but the ` +
-                      "verification measurement failed — check it in the radio's menu");
+                      "verification measurement failed" +
+                      (failed ? `: ${failed.reason}` : "") +
+                      " — check it in the radio's menu");
+          }
           else this.fail("the survey could not measure a single band");
           return this.step;
         }
@@ -604,8 +613,15 @@
           // measurement that never happened. One retry: a second underrun on the same
           // cell is telling us something about the link, and repeating for ever would
           // spend the whole plan on one band.
-          const key = `${cell.band}|${cell.percent}`;
-          if (/underrun/i.test(reason) && !this.retried.has(key)) {
+          // The first survey after a global MOD write is not an ordinary cell: it
+          // is the only evidence that the new station-wide value is usable. One
+          // transient failure must not strand the radio at an unverified MOD and end
+          // the whole plan. Give that verification one retry regardless of its
+          // cell-local reason; station failures arrive as `stationFailed` and never
+          // reach this branch. Ordinary cells retain the narrower underrun-only rule.
+          const verification = Boolean(cell.survey && this.modCorrections);
+          const key = `${verification ? "verification" : "cell"}|${cell.band}|${cell.percent}`;
+          if ((verification || /underrun/i.test(reason)) && !this.retried.has(key)) {
             this.retried.add(key);
             this.retries += 1;
             break;                       // same cell, same index -- measured again

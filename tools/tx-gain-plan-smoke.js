@@ -407,6 +407,63 @@ check("percent columns are whole, sorted, deduplicated and capped at four",
 }
 
 {
+  // Exact field report: a stale 20 m entry measured at MOD 28 makes the survey
+  // at MOD 104 choose the 10 % floor (26). The first verification carrier can
+  // still lose the just-released transmitter/session. That one transient must
+  // not strand the radio at its newly written global MOD value.
+  const plan = Plan.normalizePlan({powers: [100], rows: [
+    {band: "20m", hz: 14095600, cells: [1]},
+  ]});
+  const radio = makeRadio(104);
+  const stored = {knee: 0.632, gain: 0.632, modLevel: 28};
+  const run = new Plan.TxGainPlanRun({plan, modLevel: 104, resolve: () => stored});
+  run.begin();
+  let verificationFailures = 0;
+  const log = drive(run, radio, {
+    kneeOverride: () => radio.modLevel === 104 ? 0.175 : 0.68,
+    measureFail: step => {
+      if (step.survey && radio.modLevel === Plan.MOD_RAW_MIN &&
+          verificationFailures++ === 0)
+        return "TRX PTT is active after the preceding carrier";
+      return false;
+    },
+  });
+  const write = log.find(step => step.type === "writeMod");
+  const verifications = log.slice(log.indexOf(write) + 1)
+    .filter(step => step.type === "measure" && step.survey);
+  check("the 104-to-floor reproduction really writes MOD 26",
+    write && write.value === Plan.MOD_RAW_MIN, write ? String(write.value) : "no write");
+  check("the verification seed is rescaled from MOD 28 to the written MOD 26",
+    verifications.length > 0 && near(verifications[0].seed, 0.632 * 28 / 26, 0.001),
+    verifications.length ? String(verifications[0].seed) : "no verification");
+  check("a transient post-write verification failure is retried once",
+    verificationFailures === 2, `${verificationFailures} verification attempts`);
+  check("and calibration continues at the confirmed MOD instead of ending 0 measured, 1 failed",
+    run.snapshot().state === "done" && run.snapshot().done === 1 &&
+    run.snapshot().failed === 0,
+    `${run.snapshot().state}: ${run.snapshot().done} measured, ${run.snapshot().failed} failed`);
+}
+
+{
+  // If the retry also fails, the generic phase error is not enough: the operator
+  // needs the carrier's own reason to know whether to fix PTT, LAN, ALC or SWR.
+  const plan = Plan.normalizePlan({powers: [100], rows: [
+    {band: "20m", hz: 14095600, cells: [1]},
+  ]});
+  const radio = makeRadio(104);
+  const run = new Plan.TxGainPlanRun({plan, modLevel: 104,
+    resolve: () => ({knee: 0.632, gain: 0.632, modLevel: 28})});
+  run.begin();
+  drive(run, radio, {
+    kneeOverride: () => radio.modLevel === 104 ? 0.175 : 0.68,
+    measureFail: step => step.survey && radio.modLevel === Plan.MOD_RAW_MIN
+      ? "TRX PTT is still active" : false,
+  });
+  check("a repeated verification failure retains the carrier's exact reason",
+    /TRX PTT is still active/.test(run.snapshot().error), run.snapshot().error);
+}
+
+{
   // Compatibility for a transition interrupted before persistent markers
   // existed: stale cells prove the MOD changed, but there is no owner to verify.
   // RUN continues directly with a clean pass at the value the radio reports.
