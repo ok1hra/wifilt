@@ -132,20 +132,25 @@
     return [markHz, 2 * settings.toneHz - markHz];
   }
 
-  // ---- band-aware reverse default (native RTTY/RTTY-R only) ---------------
+  // ---- reverse default (native RTTY/RTTY-R only) ---------------------------
   //
   // USB-D/LSB-D always ride the same fixed audio sideband regardless of band
   // (this file's own dialToMarkHz() convention above), so "normal" decodes
-  // there on every band -- confirmed on air 2026-08-29. Real FSK (RTTY/
-  // RTTY-R, dial==mark, no software sideband choice) has no such band-
-  // independence: its mark/space convention follows the traditional ham RTTY
-  // sideband split -- reverse below 10 MHz (160/80/60/40m), normal at 10 MHz
-  // and up (30m and above) -- confirmed on air 2026-08-29 for 80m specifically.
-  const AUTO_REVERSE_BELOW_HZ = 10000000;
-
-  function autoReverseFor(mode, frequencyHz) {
-    const isRttyMode = mode === "RTTY" || mode === "RTTY-R";
-    return isRttyMode && frequencyHz > 0 && frequencyHz < AUTO_REVERSE_BELOW_HZ;
+  // there on every band -- confirmed on air 2026-08-29 on both 80m and 20m.
+  // Real FSK (RTTY/RTTY-R, dial==mark, no software sideband choice) needs
+  // reverse EVERY time, band-independent -- also confirmed on air the same
+  // session on both 80m and 20m. An earlier version of this function gated
+  // reverse below 10 MHz off a single 80m data point (the traditional ham
+  // RTTY LSB/USB sideband split); 20m needing it too disproved that -- this
+  // is not a band convention at all. What it actually is: this app's own
+  // mark/space convention (markToneHz()'s comment -- mark is the UPPER tone
+  // when not reversed) simply disagrees with what this radio's real FSK
+  // modem does, independent of band and independent of the radio's own
+  // Keying Polarity SET-menu item (forced to Normal by syncFskFromRadio()
+  // below; reverse is still needed regardless -- see that function's own
+  // comment, now confirmed rather than an open question).
+  function autoReverseFor(mode) {
+    return mode === "RTTY" || mode === "RTTY-R";
   }
 
   // Shared by the manual #rttyReverse pill and applyAutoReverseDefault()
@@ -157,21 +162,21 @@
     renderStatusPills();
   }
 
-  // Re-evaluated only when the (mode, band) pair actually changes -- a LAN
-  // reconnect that lands back on the same band+mode must not clobber a
-  // manual override the operator just set for the current contact (this
-  // pill is deliberately "RX-only decode compatibility with a station whose
-  // TX happens to be inverted", per rtty-settings.js's own comment, and that
-  // per-contact choice needs to survive a link blip).
+  // Re-evaluated only on the RTTY/RTTY-R <-> anything-else edge (band plays
+  // no part any more, so a band change while staying in RTTY/RTTY-R must not
+  // re-fire this) -- a LAN reconnect that lands back in the same mode family
+  // must not clobber a manual override the operator just set for the
+  // current contact (this pill is deliberately "RX-only decode compatibility
+  // with a station whose TX happens to be inverted", per rtty-settings.js's
+  // own comment, and that per-contact choice needs to survive a link blip).
   let lastAutoReverseKey = null;
   function applyAutoReverseDefault() {
-    if (!state.radio.connected || !state.radio.frequency) return;
-    const band = TxGainCal.bandOf(state.radio.frequency);
-    if (!band) return;
-    const key = `${state.radio.mode}|${band}`;
+    if (!state.radio.connected) return;
+    const isRttyMode = state.radio.mode === "RTTY" || state.radio.mode === "RTTY-R";
+    const key = isRttyMode ? "rtty" : null;
     if (key === lastAutoReverseKey) return;
     lastAutoReverseKey = key;
-    setReverse(autoReverseFor(state.radio.mode, state.radio.frequency));
+    setReverse(autoReverseFor(state.radio.mode));
   }
 
   // ---- radio-authoritative FSK tone/polarity sync (real RTTY/RTTY-R only) -
@@ -200,11 +205,12 @@
   // Deliberately does NOT touch settings.reverse. Icom parameterises Mark
   // Frequency as the LOWER of each 170 Hz pair, suggesting Normal means
   // "mark is the lower tone" -- but this app's own markToneHz()/Decoder
-  // convention calls mark the UPPER tone when not reversed. Whether those
-  // two "Normal"s actually agree is unconfirmed against a real radio, so
-  // getting it wrong here would silently invert decode -- left to the
-  // existing band-threshold default (applyAutoReverseDefault() above) and
-  // the manual pill until confirmed on air.
+  // convention calls mark the UPPER tone when not reversed. Confirmed on air
+  // 2026-08-29 (both 80m and 20m) that those two "Normal"s do NOT agree:
+  // reverse is still needed every time in RTTY/RTTY-R even with Keying
+  // Polarity forced to Normal here, band-independent -- see
+  // autoReverseFor()'s own comment above, which is what actually sets
+  // settings.reverse now.
   //
   // Every step fails silently: an unverified model (no rttyMarkFreqCmd/
   // rttyKeyingPolarityCmd row), a read that times out, an unrecognised

@@ -120,6 +120,28 @@ const mercuryBands = () => [
   check("a deliberately empty shared plan stays empty",
     files.get(Store.STORE_URL).rows.length === 0 && tonePlan.plan().rows.length === 0);
 
+  // An interrupted global MOD transition is execution state, scoped to the
+  // waveform profile. Tone pages share it; Mercury must neither see nor erase it.
+  files.set(Store.STORE_URL, {v: 1, powers: [10], rows: [
+    {band: "20m", cells: [1], hzByProfile: {
+      [Store.PROFILE_TONE]: 14095600, [Store.PROFILE_MERCURY]: 14105000}},
+  ]});
+  await tonePlan.load();
+  await tonePlan.putPending({from: 28, target: 104, corrections: 1,
+    model: "IC-705", owner: {band: "20m", hz: 14095600, percent: 10}});
+  await mercuryPlan.load();
+  check("pending MOD transitions are profile-specific",
+    tonePlan.pending().target === 104 && mercuryPlan.pending() === null);
+  await mercuryPlan.putPending({from: 40, target: 80, corrections: 1,
+    model: "IC-705", owner: {band: "20m", hz: 14105000, percent: 10}});
+  await tonePlan.load();
+  check("writing another profile preserves the tone transition",
+    tonePlan.pending().target === 104);
+  await tonePlan.putPlan(tonePlan.plan());
+  await mercuryPlan.load();
+  check("editing the shared matrix cancels every profile transition",
+    tonePlan.pending() === null && mercuryPlan.pending() === null);
+
   if (failures) {
     console.error(`${failures}/${checks} checks failed`);
     process.exitCode = 1;

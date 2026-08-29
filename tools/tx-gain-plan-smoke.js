@@ -382,6 +382,48 @@ check("percent columns are whole, sorted, deduplicated and capped at four",
 // ---- the MOD level loop ---------------------------------------------------
 
 {
+  // A browser/radio link can disappear after the global MOD write but before
+  // the clean matrix pass. The next page must verify that written value and
+  // continue the transition; starting a fresh survey loses the exact phase in
+  // which every old entry became stale.
+  const plan = Plan.normalizePlan({powers: [14], rows: [
+    {band: "40m", hz: 7040000, cells: [1]},
+    {band: "20m", hz: 14100000, cells: [1]},
+  ]});
+  const radio = makeRadio(84);
+  const run = new Plan.TxGainPlanRun({plan, modLevel: 84,
+    resumeTransition: {from: 128, target: 84, corrections: 1,
+      owner: {band: "40m", hz: 7040000, percent: 14, knee: 0.46}}});
+  run.begin();
+  const log = drive(run, radio);
+  const surveys = log.filter(step => step.type === "measure" && step.survey);
+  const clean = log.filter(step => step.type === "measure" && !step.survey);
+  check("a resumed MOD transition verifies only its owning band",
+    surveys.length === 1 && surveys[0].band === "40m", JSON.stringify(surveys));
+  check("a resumed MOD transition continues with the complete clean matrix",
+    clean.map(step => step.band).join(",") === "40m,20m", JSON.stringify(clean));
+  check("resume retains the MOD value from before the interrupted transition",
+    run.snapshot().modFrom === 128 && run.snapshot().modLevel === 84);
+}
+
+{
+  // Compatibility for a transition interrupted before persistent markers
+  // existed: stale cells prove the MOD changed, but there is no owner to verify.
+  // RUN continues directly with a clean pass at the value the radio reports.
+  const plan = Plan.normalizePlan({powers: [14], rows: [
+    {band: "20m", hz: 14100000, cells: [1]},
+  ]});
+  const radio = makeRadio(84);
+  const run = new Plan.TxGainPlanRun({plan, modLevel: 84,
+    resumeTransition: {from: 28, target: 84, corrections: 0, owner: null}});
+  run.begin();
+  const log = drive(run, radio);
+  check("a legacy stale transition resumes directly at the matrix",
+    !log.some(step => step.type === "measure" && step.survey) &&
+    log.some(step => step.type === "measure" && !step.survey));
+}
+
+{
   // Already right: no write at all.
   const plan = Plan.normalizePlan({powers: [14], rows: [{band: "40m", hz: 7040000, cells: [1]}]});
   const radio = makeRadio(Math.round(K["40m"] * 14 / 0.7));   // knee is 0.7 exactly

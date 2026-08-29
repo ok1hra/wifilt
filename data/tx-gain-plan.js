@@ -182,10 +182,12 @@
 
   class TxGainPlanRun {
     constructor({plan, modLevel = 0, store = null, resolve = null,
-                 measureAll = false} = {}) {
+                 measureAll = false, resumeTransition = null} = {}) {
       this.plan = normalizePlan(plan);
       this.modLevel = Number(modLevel) || 0;
       this.measureAll = Boolean(measureAll);
+      this.resumeTransition = resumeTransition && typeof resumeTransition === "object"
+        ? resumeTransition : null;
       // resolve(cell) -> {valid, knee, modLevel} | null
       this.resolve = typeof resolve === "function" ? resolve
         : (store && typeof store.entry === "function"
@@ -220,6 +222,31 @@
 
     begin() {
       if (!cellsOf(this.plan).length) return this.fail("the plan has no cells selected");
+      const resume = this.resumeTransition;
+      if (resume && Number(resume.target) === this.modLevel) {
+        this.modFrom = Number(resume.from) || this.modLevel;
+        this.modCorrections = Math.max(0, Math.min(MOD_MAX_CORRECTIONS,
+          Math.round(Number(resume.corrections) || 0)));
+        this.pendingRestore = true;
+        const owner = resume.owner && typeof resume.owner === "object"
+          ? {...resume.owner, survey: true} : null;
+        if (owner && owner.band && Number(owner.hz) > 0 && Number(owner.percent) > 0) {
+          // The write was persisted before it reached the radio. Verify its owning
+          // band first; that reading may request the one remaining correction.
+          this.modOwner = owner;
+          this.queue = [owner];
+          this.index = 0;
+          this.state = "survey";
+          return this.snapshot();
+        }
+        // Compatibility with transitions interrupted before persistent owner
+        // metadata existed: stale entries prove the global MOD changed. Measure
+        // the matrix at what the radio reports now, without another blind write.
+        this.state = "matrix";
+        this.queue = cellsOf(this.plan);
+        this.index = 0;
+        return this.snapshot();
+      }
       this.queue = surveyCells(this.plan);
       this.index = 0;
       this.state = "survey";

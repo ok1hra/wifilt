@@ -1955,6 +1955,16 @@ addEventListener("unhandledrejection", event => {
           $("planButton").classList.contains("uncalibrated") &&
           $("planButtonValue").textContent === "NOT FOR THIS BAND",
           $("planButtonValue").textContent);
+    const liveIdentity = plan0.cal.identity();
+    const liveMod = plan0.modLevel() || 128;
+    plan0.store.doc = {v: 2, plan: plan0.plan, entries: {[liveIdentity.key]:
+      {gain: 0.3, knee: 0.3, modLevel: liveMod === 28 ? 104 : 28}}};
+    plan0.renderButton();
+    check("a calibration on this band with another TRX MOD names the real mismatch",
+          $("planButton").classList.contains("uncalibrated") &&
+          $("planButtonValue").textContent === "TRX MOD DIFFERENT FROM MEASURED" &&
+          $("planButton").title.includes("measured at MOD level"),
+          $("planButtonValue").textContent + " · " + $("planButton").title);
     plan0.store.doc = keptDoc;
     plan0.renderButton();
 

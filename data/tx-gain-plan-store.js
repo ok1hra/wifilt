@@ -24,8 +24,40 @@
   const PROFILE_TONE = "single-tone";
   const PROFILE_MERCURY = "mercury-datac1";
 
-  const emptyDoc = () => ({v: SCHEMA_VERSION, powers: [], rows: []});
+  const emptyDoc = () => ({v: SCHEMA_VERSION, powers: [], rows: [], pendingByProfile: {}});
   const selected = value => value ? 1 : 0;
+
+  function normalizePending(input) {
+    if (!input || typeof input !== "object") return null;
+    const target = Math.round(Number(input.target) || 0);
+    if (target < 1 || target > 255) return null;
+    const from = Math.max(0, Math.min(255, Math.round(Number(input.from) || 0)));
+    const corrections = Math.max(0, Math.min(2,
+      Math.round(Number(input.corrections) || 0)));
+    const sourceOwner = input.owner && typeof input.owner === "object" ? input.owner : null;
+    let owner = null;
+    if (sourceOwner) {
+      const band = String(sourceOwner.band || "");
+      const hz = Math.round(Number(sourceOwner.hz) || 0);
+      const percent = Math.round(Number(sourceOwner.percent) || 0);
+      if (band && hz > 0 && percent >= 1 && percent <= 100)
+        owner = {band, hz, percent,
+          knee: Number(sourceOwner.knee) || 0,
+          reachedCeiling: Boolean(sourceOwner.reachedCeiling)};
+    }
+    return {from, target, corrections, model: String(input.model || ""), owner,
+      at: Math.max(0, Math.round(Number(input.at) || 0))};
+  }
+
+  function normalizePendingByProfile(input) {
+    const out = {};
+    const source = input && typeof input === "object" ? input : {};
+    for (const [profile, value] of Object.entries(source)) {
+      const pending = normalizePending(value);
+      if (profile && pending) out[profile] = pending;
+    }
+    return out;
+  }
 
   function normalizeHzByProfile(row) {
     const out = {};
@@ -56,7 +88,8 @@
       rows.push({band, cells: powers.map((_, index) =>
         selected(Array.isArray(row.cells) && row.cells[index])), hzByProfile});
     }
-    return {v: SCHEMA_VERSION, powers, rows};
+    return {v: SCHEMA_VERSION, powers, rows,
+      pendingByProfile: normalizePendingByProfile(source.pendingByProfile)};
   }
 
   const hasMatrix = doc => Boolean(doc && doc.powers && doc.powers.length &&
@@ -124,6 +157,11 @@
       return {powers: this.doc.powers.slice(), rows};
     }
 
+    pending() {
+      const found = this.doc.pendingByProfile && this.doc.pendingByProfile[this.profile];
+      return found ? JSON.parse(JSON.stringify(found)) : null;
+    }
+
     // Merge the active profile into the canonical shared matrix. Rows outside
     // this page's offered band set are preserved, so Mercury cannot erase
     // 160/60/6/2 m merely because it deliberately does not offer them.
@@ -152,7 +190,23 @@
         rows.push({band: row.band, cells: row.cells.slice(),
           hzByProfile: {[this.profile]: row.hz}});
 
-      this.doc = normalizeDoc({v: SCHEMA_VERSION, powers: active.powers, rows});
+      // The stored transition describes the exact matrix that was active when
+      // MOD moved. Bands, powers and cell selections are shared, so editing them
+      // from either waveform invalidates every profile's resume state. Pending
+      // writes themselves remain profile-specific in putPending().
+      const pendingByProfile = {};
+      this.doc = normalizeDoc({v: SCHEMA_VERSION, powers: active.powers, rows,
+        pendingByProfile});
+      return this.save();
+    }
+
+    async putPending(input) {
+      await this.load();
+      const pendingByProfile = {...this.doc.pendingByProfile};
+      const pending = normalizePending(input);
+      if (pending) pendingByProfile[this.profile] = pending;
+      else delete pendingByProfile[this.profile];
+      this.doc = normalizeDoc({...this.doc, pendingByProfile});
       return this.save();
     }
 
@@ -178,7 +232,8 @@
         if (!hasMatrix(this.doc)) {
           this.doc = normalizeDoc({v: SCHEMA_VERSION, powers: source.plan.powers,
             rows: source.plan.rows.map(row => ({band: row.band, cells: row.cells,
-              hzByProfile: {[source.profile]: row.hz}}))});
+              hzByProfile: {[source.profile]: row.hz}})),
+            pendingByProfile: this.doc.pendingByProfile});
           changed = true;
           continue;
         }
@@ -206,5 +261,5 @@
   }
 
   return {PlanStore, STORE_URL, SCHEMA_VERSION, PROFILE_TONE, PROFILE_MERCURY,
-          emptyDoc, normalizeDoc, remapCells};
+          emptyDoc, normalizeDoc, normalizePending, remapCells};
 });

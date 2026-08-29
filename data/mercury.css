@@ -89,3 +89,18 @@
 }
 .tuning-actions button:disabled { opacity: .45; cursor: not-allowed; }
 #tuningSaveStatus { font-size: 11px; color: var(--muted); }
+
+/* TX red veil over the waterfall, mirroring rtty.css's own
+   `body.radio-transmitting .rtty-scope::after` -- same red as the whole-page
+   TX frame (data.css's body.radio-transmitting, #ff1838), local to the
+   waterfall box. The waterfall freezes during this station's own TX (same as
+   JS8/WSPR: mercury.js/mercury-worker.js stop feeding it while state.radio.tx
+   is true), so the veil makes clear the frozen picture underneath is stale,
+   not live, the same moment the page-wide TX frame appears. `.waterfall`
+   already carries `position: relative` from data.css. Generated content, not
+   a real DOM node -- needs nothing from mercury.js beyond the body class it
+   already toggles for the frame (renderHeader()). */
+body.radio-transmitting .waterfall::after {
+  content: ""; position: absolute; inset: 0;
+  background: rgba(255, 24, 56, .125); pointer-events: none;
+}

@@ -23,7 +23,16 @@
    live open/closed reading, which had no room left once the pill also had to
    carry a number. */
 .rtty-squelch.active { border-color: var(--amber); color: var(--amber); }
-.rtty-snr { color: var(--muted); }
+/* Fixed width, not the .pill default of shrink-to-fit content: this pill sits
+   at the right end of the bar's right-anchored group (NORMAL/REVERSE, SQL,
+   SNR, packed against .spacer), so a digit-count change on every decoded
+   character used to resize *this* pill and shift the other two left/right
+   with it -- distracting on live text. Width covers "SNR -99.9 dB"; anything
+   longer is clipped rather than reopening the wobble. */
+.rtty-snr {
+  color: var(--muted); display: inline-block; width: 13ch;
+  overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums;
+}
 
 /* ---- Live spectrum (kap.7): a small bar/line chart above the waterfall,
    sharing the same canvas width and hzToX mapping. Reads its own faster

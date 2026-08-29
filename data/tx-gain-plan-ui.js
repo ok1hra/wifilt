@@ -413,13 +413,15 @@
       const resolved = this.cal.resolved();
       const empty = !Object.keys((this.store.doc && this.store.doc.entries) || {}).length;
       const uncalibrated = !snapshot && !this.ask && (empty || !resolved.calibrated);
-      if (uncalibrated && !this.ask) text = empty ? "NOT CALIBRATED" : "NOT FOR THIS BAND";
+      if (uncalibrated && !this.ask) text = empty ? "NOT CALIBRATED"
+        : resolved.stale ? "TRX MOD DIFFERENT FROM MEASURED" : "NOT FOR THIS BAND";
       if (value) value.textContent = text;
       this.button.classList.toggle("active", Boolean(snapshot) || Boolean(this.ask));
       this.button.classList.toggle("asking", Boolean(this.ask));
       this.button.classList.toggle("uncalibrated", Boolean(uncalibrated));
       this.button.title = uncalibrated
         ? (empty ? "Nothing has been calibrated yet — transmissions use the manual gain"
+                 : resolved.stale ? String(resolved.why || "TRX MOD differs from the measurement")
                  : `No calibration for ${resolved.band || "this band"} @ ` +
                    `${resolved.percent || "?"} % — this transmission would use the manual gain`)
         : "TX gain calibration plan";
@@ -572,8 +574,18 @@
         return;
       }
 
+      let resumeTransition = null;
+      try {
+        resumeTransition = await this.resumeTransitionFor(modLevel, measureAll);
+      } catch (error) {
+        this.message = "storing the interrupted MOD transition failed: " +
+          String(error.message || error);
+        this.render();
+        return;
+      }
+
       this.run = new TxGainPlan.TxGainPlanRun({
-        plan: this.plan, modLevel, measureAll,
+        plan: this.plan, modLevel, measureAll, resumeTransition,
         resolve: cell => this.store.entry(TxGainCal.entryKey(
           this.page.model(), cell.band, cell.percent)),
       });
@@ -582,6 +594,58 @@
       this.snapshotRadio();
       this.render();
       this.pump();
+    }
+
+    // A global MOD write makes every old entry stale at once. The transition is
+    // persisted before that write, so another page can verify the new level and
+    // continue the clean matrix after a reload, link loss or operator STOP.
+    async persistTransition(value) {
+      this.pendingTransition = value || null;
+      if (this.planStore && typeof this.planStore.putPending === "function")
+        await this.planStore.putPending(value || null);
+    }
+
+    // Older firmware assets could already leave the station in the same state
+    // without a marker. A selected stale entry is enough evidence that the TRX
+    // MOD differs from its measurement; RUN measures the matrix at today's MOD.
+    legacyTransition(modLevel) {
+      const staleLevels = new Set();
+      let owner = null;
+      for (const cell of TxGainPlan.cellsOf(this.plan)) {
+        const key = TxGainCal.entryKey(this.page.model(), cell.band, cell.percent);
+        const entry = this.store.entry(key);
+        if (TxGainCal.entryStatus(entry, modLevel) !== "stale") continue;
+        const measuredAt = Number(entry && entry.modLevel) || 0;
+        if (measuredAt) staleLevels.add(measuredAt);
+        const knee = TxGainCal.seedFrom(entry, modLevel);
+        if (knee > 0 && (!owner || knee > owner.knee))
+          owner = {...cell, knee, reachedCeiling: false};
+      }
+      if (!staleLevels.size) return null;
+      return {from: staleLevels.size === 1 ? [...staleLevels][0] : 0,
+        target: modLevel, corrections: 0, model: String(this.page.model() || ""),
+        owner, at: Date.now()};
+    }
+
+    async resumeTransitionFor(modLevel, measureAll) {
+      const stored = this.planStore && typeof this.planStore.pending === "function"
+        ? this.planStore.pending() : null;
+      // RE-MEASURE ALL explicitly requests a fresh survey and MOD optimisation.
+      if (measureAll) {
+        if (stored) await this.persistTransition(null);
+        return null;
+      }
+      const model = String(this.page.model() || "");
+      if (stored && Number(stored.target) === Number(modLevel) &&
+          (!stored.model || stored.model === model)) {
+        this.pendingTransition = stored;
+        return stored;
+      }
+      if (stored) await this.persistTransition(null);
+      const legacy = this.legacyTransition(modLevel);
+      if (!legacy) return null;
+      await this.persistTransition(legacy);
+      return legacy;
     }
 
     // The operator's own rule, in one sentence: if the level cannot be read or
@@ -682,10 +746,28 @@
           await this.awaitTransmitterFree();
           return this.measure(step);
         case "writeMod": {
+          const pending = {from: Number(this.run.modFrom) || Number(step.from) || 0,
+            target: Number(step.value) || 0,
+            corrections: Number(this.run.modCorrections) + 1,
+            model: String(this.page.model() || ""), at: Date.now(),
+            owner: {band: step.band, hz: step.verifyHz, percent: step.verifyPercent,
+              knee: Number(step.knee) || 0, reachedCeiling: Boolean(step.atCeiling)}};
+          try { await this.persistTransition(pending); }
+          catch (error) {
+            this.run.note({type: "stationFailed", reason:
+              "the MOD transition could not be stored before changing the radio: " +
+              String(error.message || error)});
+            return;
+          }
           const written = await this.mod.writeLevel(step.value);
           if (written === null) {
+            try { await this.persistTransition(null); } catch (_error) {}
             this.run.note({type: "modUnavailable", reason: this.mod.error});
             return;
+          }
+          if (Number(written) !== Number(pending.target)) {
+            pending.target = Number(written);
+            try { await this.persistTransition(pending); } catch (_error) {}
           }
           this.run.note({type: "modWritten", value: written});
           return;
@@ -695,7 +777,24 @@
           this.run.note({type: "restored"});
           return;
         case "done":
+          let resumeClearError = "";
+          if (this.run) {
+            const snapshot = this.run.snapshot();
+            // Keep the marker after STOP/failure (or an incomplete matrix), so
+            // RUN can finish the exact transition. A clean matrix commits it.
+            if (snapshot.state === "done" && !snapshot.failed) {
+              try { await this.persistTransition(null); }
+              catch (error) {
+                resumeClearError = "calibration finished, but clearing its resume state failed: " +
+                  String(error.message || error);
+              }
+            }
+          }
           this.finish();
+          if (resumeClearError) {
+            this.message = (this.message ? this.message + " · " : "") + resumeClearError;
+            this.render();
+          }
           return;
         default:
           return;
@@ -1070,8 +1169,10 @@
           `${this.mod.value} of 255 = ${percent} %${menu} — one value for every band`);
         const mismatch = this.tableModLevels().filter(level => level !== this.mod.value);
         if (mismatch.length)
-          parts.push(`<b>${mismatch.length} stored row(s) were measured at MOD ` +
-            `${mismatch.join(", ")}</b> — those are stale and will not be transmitted from`);
+          parts.push(`<b>TRX MOD different from measured:</b> ` +
+            `${mismatch.length} stored row(s) use MOD ${mismatch.join(", ")}; ` +
+            `the TRX reports ${this.mod.value} — those rows are stale and RUN will ` +
+            `continue by verifying and measuring them at the current TRX MOD`);
       } else {
         parts.push("<b>MOD level:</b> not read yet");
       }

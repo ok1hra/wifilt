@@ -548,6 +548,13 @@
   }
 
   function renderHeader() {
+    // Red frame around the whole viewport while the radio is keyed, plus the
+    // matching veil over the waterfall (mercury.css's own
+    // body.radio-transmitting rule) -- same class, same stylesheet
+    // (data.css), same pattern as RTTY/WSPR's own render(). No local
+    // immediate PTT signal exists here (unlike RTTY/WSPR's session.ptt), so
+    // this rides solely on state.radio.tx via the existing radioTransmitting().
+    document.body.classList.toggle("radio-transmitting", radioTransmitting());
     const connected = state.radio.connected && state.radio.transceiverType === "ICOM-LAN";
     const shownHz = state.pendingFrequency || state.radio.frequency;
     dom.trxFrequencyValue.textContent = formatFrequency(shownHz);
