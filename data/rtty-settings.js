@@ -84,7 +84,7 @@
     return {v: SCHEMA_VERSION, toneHz: 1500, reverse: false,
             squelchThreshold: 4, rfPercent: null, txPolarity: "normal",
             afcEnabled: false, afcRateHzPerChar: 60, afcMaxDeviationHz: 60,
-            squelchNewlineEnabled: true};
+            squelchNewlineEnabled: false};
   }
 
   function normalize(input) {
@@ -119,12 +119,10 @@
       afcMaxDeviationHz: Number.isFinite(afcMaxDeviationHz) &&
         afcMaxDeviationHz >= AFC_MAX_DEVIATION_MIN_HZ && afcMaxDeviationHz <= AFC_MAX_DEVIATION_HARD_CAP_HZ
         ? afcMaxDeviationHz : d.afcMaxDeviationHz,
-      // kap.13.4 (grilled 2026-08-29): default ON, unlike reverse/afcEnabled
-      // above -- so the opposite polarity check from those (`!== false`, not
-      // `=== true`): missing/malformed input (including every settings blob
-      // saved before this field existed) reads as "on", only an explicit
-      // `false` turns it off.
-      squelchNewlineEnabled: source.squelchNewlineEnabled !== false,
+      // kap.13.4 (default flipped to OFF 2026-08-29, operator feedback after
+      // first trying it on) -- same `=== true` gate as reverse/afcEnabled
+      // above: missing/malformed input reads as "off".
+      squelchNewlineEnabled: source.squelchNewlineEnabled === true,
     };
   }
 

@@ -697,20 +697,30 @@
   //
   // Floor/ceiling dB are placeholders -- snrDb here isn't physical SNR (no
   // separate noise-floor measurement), so there's no real-air data yet to
-  // calibrate against (docs/rtty-implementace.md §13.3). Colours themselves
-  // are resolved from the existing --muted/--text custom properties instead
-  // of hardcoded hex, so the gradient tracks the page's own palette rather
-  // than carrying a second copy of it; ceiling deliberately equals --text
-  // exactly, so a fully-confident character looks identical to before this
-  // feature existed -- only weak/uncertain characters change.
+  // calibrate against (docs/rtty-implementace.md §13.3).
+  //
+  // Colour endpoints widened 2026-08-29 (operator feedback: the muted->text
+  // spread read as too subtle to tell weak from strong at a glance). Floor is
+  // no longer plain --muted -- that's a fixed UI token other elements (pills,
+  // labels) also rely on staying legible at ITS OWN brightness, not a knob
+  // for this gradient -- but --muted blended 50% toward the log's own
+  // --panel2 background, so weak/noisy characters recede noticeably further
+  // while still resolving to *something* readable on focus (kap.13 decision
+  // 8: never fully invisible), not a flat, separately-tuned hex. Ceiling is
+  // plain white, brighter than --text on purpose (operator: "silnější klidně
+  // i bílé") -- a deliberate break from kap.13 decision 9's original "ceiling
+  // equals --text exactly", now a two-ended widen instead of a one-sided fade.
   const RX_CHAR_SNR_FLOOR_DB = 0, RX_CHAR_SNR_CEIL_DB = 15;
   function cssVarRgb(name, fallbackHex) {
     const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallbackHex;
     const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(raw);
     return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [255, 255, 255];
   }
-  const RX_CHAR_FLOOR_RGB = cssVarRgb("--muted", "#8ba59d");
-  const RX_CHAR_CEIL_RGB = cssVarRgb("--text", "#e8f3ee");
+  const RX_CHAR_FLOOR_RGB = (() => {
+    const muted = cssVarRgb("--muted", "#8ba59d"), panel2 = cssVarRgb("--panel2", "#132724");
+    return muted.map((c, i) => Math.round(c + (panel2[i] - c) * 0.5));
+  })();
+  const RX_CHAR_CEIL_RGB = [255, 255, 255];
   function rxCharColorForSnr(snrDb) {
     if (!Number.isFinite(snrDb)) return null;
     const t = Math.max(0, Math.min(1,
