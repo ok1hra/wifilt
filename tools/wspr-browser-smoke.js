@@ -1968,6 +1968,56 @@ addEventListener("unhandledrejection", event => {
     plan0.store.doc = keptDoc;
     plan0.renderButton();
 
+    // The mismatch is actionable, not only descriptive. This is the exact state
+    // left after a MOD change interrupted an older run: selected entries exist,
+    // but all were measured at another global MOD level. Both start buttons must
+    // visibly enter a run from it. Stop at the antenna question so this regression
+    // costs no calibration carriers of its own.
+    const keptMismatchDoc = plan.store.doc;
+    const mismatchMod = plan.modLevel() || 128;
+    const measuredMod = mismatchMod === 28 ? 104 : 28;
+    plan.plan = {powers: [100], rows: [
+      {band: "20m", hz: 14095600, cells: [1]},
+    ]};
+    await plan.savePlan();
+    plan.store.doc = {v: 2, entries: {"IC-705|20m|100":
+      {gain: 0.63, knee: 0.63, modLevel: measuredMod, hz: 14095600}}};
+    plan.render();
+    check("the stale-MOD RUN button is enabled",
+          $("planField").querySelector('[data-plan="run"]').disabled === false);
+    $("planField").querySelector('[data-plan="run"]').click();
+    check("RUN immediately shows that stale-MOD preparation is in progress",
+          $("planField").querySelector('[data-plan="run"]').disabled === true &&
+          $("planField").querySelector('[data-plan="runall"]').disabled === true &&
+          /prepar|reading|starting/i.test(
+            $("planField").querySelector('[data-plan="todo"]').textContent),
+          $("planField").querySelector('[data-plan="todo"]').textContent);
+    const staleRunAsked = await wait(
+      () => !$("planField").querySelector('[data-plan="ask"]').hidden, 10000);
+    check("RUN reacts to a TRX MOD mismatch and starts its verification",
+          staleRunAsked, plan.message || $("planField").querySelector('[data-plan="todo"]').textContent);
+    if (plan.running) plan.stop("stale-MOD RUN regression test");
+    await wait(() => plan.run === null, 10000);
+
+    plan.render();
+    check("the stale-MOD RE-MEASURE ALL button is enabled",
+          $("planField").querySelector('[data-plan="runall"]').disabled === false);
+    $("planField").querySelector('[data-plan="runall"]').click();
+    check("RE-MEASURE ALL immediately shows that fresh preparation is in progress",
+          $("planField").querySelector('[data-plan="run"]').disabled === true &&
+          $("planField").querySelector('[data-plan="runall"]').disabled === true &&
+          /prepar|reading|starting/i.test(
+            $("planField").querySelector('[data-plan="todo"]').textContent),
+          $("planField").querySelector('[data-plan="todo"]').textContent);
+    const staleRunAllAsked = await wait(
+      () => !$("planField").querySelector('[data-plan="ask"]').hidden, 10000);
+    check("RE-MEASURE ALL reacts to a TRX MOD mismatch and starts a fresh survey",
+          staleRunAllAsked,
+          plan.message || $("planField").querySelector('[data-plan="todo"]').textContent);
+    if (plan.running) plan.stop("stale-MOD RE-MEASURE ALL regression test");
+    await wait(() => plan.run === null, 10000);
+    plan.store.doc = keptMismatchDoc;
+
     // RUN always answers. A disabled button with nothing beside it is
     // indistinguishable from a broken one -- which is how it was reported.
     plan.plan = {powers: [], rows: []};

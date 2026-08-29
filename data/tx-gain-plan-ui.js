@@ -206,6 +206,14 @@
       this.summary = "";
       this.busyCell = null;
       this.acting = false;
+      // `begin()` has several awaited preflight steps before `run` exists. Without
+      // a separate state both RUN buttons stayed live and the panel went back to
+      // saying "press RUN" while it was actually reading CI-V / saving a resume
+      // marker. A second click then started a competing preflight against the same
+      // one-slot CI-V reply mailbox.
+      this.starting = false;
+      this.busyNote = "";
+      this.modReadPromise = null;
       // The model is passed as a GETTER, not as a value: this panel is built when the
       // page loads and the radio has not answered its capabilities packet yet, so a
       // number read here would be null for the rest of the session.
@@ -354,13 +362,25 @@
     // plan afterwards. That was every calibration started from the settings panel
     // without opening this window first.
     refreshModLevel() {
-      if (this.modReading || this.running) return Promise.resolve(this.mod.value);
+      if (this.running) return Promise.resolve(this.mod.value);
+      // Opening the panel starts this read. If RUN is pressed before it finishes,
+      // hand the same promise to begin() instead of arming a second CI-V read for
+      // the same global reply slot.
+      if (this.modReading)
+        return this.modReadPromise || Promise.resolve(this.mod.value);
       if (!this.mod.capability.readable) { this.render(); return Promise.resolve(0); }
       this.modReading = true;
       this.render();
-      return this.mod.readLevel()
+      const pending = this.mod.readLevel()
         .catch(() => null)
-        .then(value => { this.modReading = false; this.render(); return value; });
+        .then(value => {
+          this.modReading = false;
+          this.modReadPromise = null;
+          this.render();
+          return value;
+        });
+      this.modReadPromise = pending;
+      return pending;
     }
 
     // Cannot be dismissed while it is asking. Not while merely running: a long run
@@ -522,78 +542,93 @@
     // ---- the run -----------------------------------------------------------
 
     async begin(measureAll) {
-      if (this.running) return;
+      if (this.running || this.starting) return;
+      this.starting = true;
       this.message = "";
       this.summary = "";
+      this.busyNote = "preparing the calibration run…";
       // Never inherited from the last run: the operator confirmed the antennas
       // that were connected then.
       this.askAll = false;
       this.autoAnswer = false;
-      const problem = this.blockingReason();
-      if (problem) { this.message = problem; this.render(); return; }
-
-      // The MOD level, before anything transmits. Read first: an address the radio
-      // has not confirmed is an address this never writes to, and where that fails
-      // the operator's own rule applies -- stop and say what to set by hand.
-      //
-      // It takes up to 2.5 s of polling, and a button that goes quiet for two and a
-      // half seconds and then possibly still refuses reads as a button that does
-      // nothing. So say what is happening while it happens.
-      this.busyNote = "reading the radio's MOD level…";
       this.render();
-      let modLevel = 0;
+      let started = false;
       try {
+        const problem = this.blockingReason();
+        if (problem) { this.message = problem; return; }
+
+        // The MOD level, before anything transmits. Read first: an address the radio
+        // has not confirmed is an address this never writes to, and where that fails
+        // the operator's own rule applies -- stop and say what to set by hand.
+        //
+        // It takes up to 2.5 s of polling, and a button that goes quiet for two and a
+        // half seconds and then possibly still refuses reads as a button that does
+        // nothing. So say what is happening while it happens.
+        this.busyNote = "reading the radio's MOD level…";
+        this.render();
+        let modLevel = 0;
         if (!this.mod.capability.readable) {
           this.message = this.modInstruction(this.mod.capability.reason);
           return;
         }
-        modLevel = await this.mod.readLevel();
+        modLevel = this.modReading && this.modReadPromise
+          ? await this.modReadPromise : await this.mod.readLevel();
         if (modLevel === null) {
           this.message = this.modInstruction(this.mod.error);
           return;
         }
+
+        // And is the modulator even listening to the network input? This used to be
+        // one of three guesses printed after a failed search; on a model whose DATA
+        // MOD subaddress is known it is now a fact.
+        this.busyNote = "reading the radio's data-mode MOD input…";
+        this.render();
+        const input = await this.mod.readInput();
+        if (input.known && !input.isNet) {
+          this.message = `the radio's data-mode MOD input is set to ${input.raw}, not ` +
+            `${this.mod.capability.inputNet} (${this.mod.capability.model.net}) — LAN audio ` +
+            "does not reach the modulator, so nothing here can be measured";
+          return;
+        }
+
+        this.busyNote = measureAll
+          ? "preparing a fresh measurement of every selected cell…"
+          : "preparing the stored MOD transition for verification…";
+        this.render();
+        let resumeTransition = null;
+        try {
+          resumeTransition = await this.resumeTransitionFor(modLevel, measureAll);
+        } catch (error) {
+          this.message = "storing the interrupted MOD transition failed: " +
+            String(error.message || error);
+          return;
+        }
+
+        this.run = new TxGainPlan.TxGainPlanRun({
+          plan: this.plan, modLevel, measureAll, resumeTransition,
+          resolve: cell => this.store.entry(TxGainCal.entryKey(
+            this.page.model(), cell.band, cell.percent)),
+        });
+        this.run.begin();
+        this.page.onPlanChange(true);
+        this.snapshotRadio();
+        started = true;
       } catch (error) {
-        // An exception here used to leave the panel silent, which is the one outcome
-        // that cannot be told apart from a dead button.
-        this.message = "reading the MOD level failed: " + String(error.message || error);
-        return;
+        // Every preflight exception is visible. In particular, readInput() and a
+        // host-page hook used to reject the event promise without putting anything
+        // into the panel, which was indistinguishable from a dead button.
+        this.message = "starting the calibration plan failed: " +
+          String(error.message || error);
+        if (this.run && !started) {
+          this.run = null;
+          try { this.page.onPlanChange(false); } catch (_error) {}
+        }
       } finally {
+        this.starting = false;
         this.busyNote = "";
         this.render();
       }
-
-      // And is the modulator even listening to the network input? This used to be
-      // one of three guesses printed after a failed search; on a model whose DATA
-      // MOD subaddress is known it is now a fact.
-      const input = await this.mod.readInput();
-      if (input.known && !input.isNet) {
-        this.message = `the radio's data-mode MOD input is set to ${input.raw}, not ` +
-          `${this.mod.capability.inputNet} (${this.mod.capability.model.net}) — LAN audio ` +
-          "does not reach the modulator, so nothing here can be measured";
-        this.render();
-        return;
-      }
-
-      let resumeTransition = null;
-      try {
-        resumeTransition = await this.resumeTransitionFor(modLevel, measureAll);
-      } catch (error) {
-        this.message = "storing the interrupted MOD transition failed: " +
-          String(error.message || error);
-        this.render();
-        return;
-      }
-
-      this.run = new TxGainPlan.TxGainPlanRun({
-        plan: this.plan, modLevel, measureAll, resumeTransition,
-        resolve: cell => this.store.entry(TxGainCal.entryKey(
-          this.page.model(), cell.band, cell.percent)),
-      });
-      this.run.begin();
-      this.page.onPlanChange(true);
-      this.snapshotRadio();
-      this.render();
-      this.pump();
+      if (started) this.pump();
     }
 
     // A global MOD write makes every old entry stale at once. The transition is
@@ -1050,19 +1085,20 @@
       // response at all". Pressing it while blocked now prints the reason.
       this.dom.radio.innerHTML = this.radioLine();
 
-      const problem = this.running ? "" : this.blockingReason();
+      const locked = this.running || this.starting;
+      const problem = locked ? "" : this.blockingReason();
       // While a run is going, the only controls that mean anything are STOP and, when
       // it is asking, CONTINUE and SKIP. Everything else -- starting again, adding a
       // band, adding a power, editing the grid -- can only produce a failure, so it is
       // disabled rather than left to be discovered by pressing it.
-      this.dom.run.disabled = this.running;
-      this.dom.runall.disabled = this.running;
-      this.dom.add.disabled = this.running;
-      this.dom.addpower.disabled = this.running;
-      this.dom.addband.disabled = this.running;
-      this.dom.newpower.disabled = this.running;
+      this.dom.run.disabled = locked;
+      this.dom.runall.disabled = locked;
+      this.dom.add.disabled = locked;
+      this.dom.addpower.disabled = locked;
+      this.dom.addband.disabled = locked;
+      this.dom.newpower.disabled = locked;
       this.dom.stop.hidden = !this.running;
-      this.dom.grid.classList.toggle("locked", this.running);
+      this.dom.grid.classList.toggle("locked", locked);
       this.dom.blocked.hidden = !problem;
       this.dom.blocked.textContent = problem ? `RUN will refuse: ${problem}` : "";
 
@@ -1122,6 +1158,11 @@
         todo.className = "plan-todo";
         todo.textContent = `Your turn: confirm the antenna for ${this.ask.band} below — ` +
           "nothing is transmitted until you answer.";
+        return;
+      }
+      if (this.starting) {
+        todo.className = "plan-todo working";
+        todo.textContent = `Nothing to do — ${this.busyNote || "preparing the calibration run…"}`;
         return;
       }
       if (snapshot) {
