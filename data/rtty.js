@@ -132,6 +132,174 @@
     return [markHz, 2 * settings.toneHz - markHz];
   }
 
+  // ---- band-aware reverse default (native RTTY/RTTY-R only) ---------------
+  //
+  // USB-D/LSB-D always ride the same fixed audio sideband regardless of band
+  // (this file's own dialToMarkHz() convention above), so "normal" decodes
+  // there on every band -- confirmed on air 2026-08-29. Real FSK (RTTY/
+  // RTTY-R, dial==mark, no software sideband choice) has no such band-
+  // independence: its mark/space convention follows the traditional ham RTTY
+  // sideband split -- reverse below 10 MHz (160/80/60/40m), normal at 10 MHz
+  // and up (30m and above) -- confirmed on air 2026-08-29 for 80m specifically.
+  const AUTO_REVERSE_BELOW_HZ = 10000000;
+
+  function autoReverseFor(mode, frequencyHz) {
+    const isRttyMode = mode === "RTTY" || mode === "RTTY-R";
+    return isRttyMode && frequencyHz > 0 && frequencyHz < AUTO_REVERSE_BELOW_HZ;
+  }
+
+  // Shared by the manual #rttyReverse pill and applyAutoReverseDefault()
+  // below, so both go through the same decoder/persist/render sequence.
+  function setReverse(value) {
+    settings.reverse = value;
+    saveSettings();
+    decoder.setReverse(settings.reverse);
+    renderStatusPills();
+  }
+
+  // Re-evaluated only when the (mode, band) pair actually changes -- a LAN
+  // reconnect that lands back on the same band+mode must not clobber a
+  // manual override the operator just set for the current contact (this
+  // pill is deliberately "RX-only decode compatibility with a station whose
+  // TX happens to be inverted", per rtty-settings.js's own comment, and that
+  // per-contact choice needs to survive a link blip).
+  let lastAutoReverseKey = null;
+  function applyAutoReverseDefault() {
+    if (!state.radio.connected || !state.radio.frequency) return;
+    const band = TxGainCal.bandOf(state.radio.frequency);
+    if (!band) return;
+    const key = `${state.radio.mode}|${band}`;
+    if (key === lastAutoReverseKey) return;
+    lastAutoReverseKey = key;
+    setReverse(autoReverseFor(state.radio.mode, state.radio.frequency));
+  }
+
+  // ---- radio-authoritative FSK tone/polarity sync (real RTTY/RTTY-R only) -
+  //
+  // Grilled 2026-08-29. Icom's "RTTY Keying Polarity" (00=Normal/01=Reverse)
+  // and "RTTY Mark Frequency" (00=1275/01=1615/02=2125 Hz) are the radio's
+  // OWN SET-menu items (1A 05, model-specific subaddresses -- icom-models.js)
+  // -- wholly independent of the CI-V mode byte that picks RTTY vs RTTY-R.
+  // On entering either real-FSK mode this reads both once and:
+  //  - forces Keying Polarity to Normal if the radio answers Reverse. A
+  //    one-way fix, no undo -- unlike the network MOD level (tx-gain-mod-
+  //    level.js), this menu item has no legitimate reason to sit on Reverse;
+  //    the operator-facing #rttyReverse pill above already covers "this one
+  //    contact's TX happens to be inverted" at the decode layer.
+  //  - retunes settings.toneHz to the radio's actual Mark Frequency, IN
+  //    MEMORY ONLY (never saveSettings()'d), reverted the moment the radio
+  //    leaves RTTY/RTTY-R -- so it can never bleed into the operator's own
+  //    USB-D/LSB-D tone preference, which is what settings.toneHz otherwise
+  //    persists (rtty-settings.js kap.1 decision 5: one shared RX/TX tone).
+  //    Shift Width (also readable, 00=170/01=200/02=425 Hz) is deliberately
+  //    NOT read: RttyCodec.SHIFT_HZ is a hardcoded 170 Hz this decoder could
+  //    not follow to a different value anyway, so reading it would only let
+  //    the centre be computed more precisely for a signal this app cannot
+  //    decode regardless.
+  //
+  // Deliberately does NOT touch settings.reverse. Icom parameterises Mark
+  // Frequency as the LOWER of each 170 Hz pair, suggesting Normal means
+  // "mark is the lower tone" -- but this app's own markToneHz()/Decoder
+  // convention calls mark the UPPER tone when not reversed. Whether those
+  // two "Normal"s actually agree is unconfirmed against a real radio, so
+  // getting it wrong here would silently invert decode -- left to the
+  // existing band-threshold default (applyAutoReverseDefault() above) and
+  // the manual pill until confirmed on air.
+  //
+  // Every step fails silently: an unverified model (no rttyMarkFreqCmd/
+  // rttyKeyingPolarityCmd row), a read that times out, an unrecognised
+  // reply -- this sync is just skipped, exactly like the band-threshold
+  // default's own missing-band case. No UI surfaces the failure; the
+  // existing pills remain the fallback.
+  const CIV_READ_URL = "/civread";
+  const RTTY_MARK_FREQ_HZ = {"00": 1275, "01": 1615, "02": 2125};
+
+  async function civRead(hexCommand, timeoutMs = 2500) {
+    let armed;
+    try { armed = await commandJson({type: "civ.read", data: hexCommand}); }
+    catch (_error) { return null; }
+    const wanted = hexCommand.toUpperCase();
+    let baseline = Number.isFinite(Number(armed && armed.seq)) ? Number(armed.seq) : null;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() <= deadline) {
+      await new Promise(resolve => setTimeout(resolve, 250));
+      let json;
+      try {
+        const response = await fetch(CIV_READ_URL, {cache: "no-store", signal: fetchDeadline()});
+        if (!response.ok) continue;
+        json = await response.json();
+      } catch (_error) { continue; }
+      const seq = Number(json.seq) || 0;
+      if (baseline === null) baseline = seq;
+      if (seq === baseline) continue;
+      const reply = String(json.reply || "").toUpperCase();
+      if (String(json.cmd || "").toUpperCase() !== wanted || !reply.startsWith(wanted)) continue;
+      return reply.slice(wanted.length) || null;
+    }
+    return null;
+  }
+
+  async function civWriteByte(hexCommand, byteHex) {
+    try { await command({type: "civ.raw", data: hexCommand + byteHex}); }
+    catch (_error) { /* silent -- see this section's own comment */ }
+  }
+
+  // settings.toneHz as it was before syncFskFromRadio() last overrode it, so
+  // restoreToneHzIfOverridden() (called the moment RTTY/RTTY-R is left) has
+  // the operator's own persisted value to put back -- null means "not
+  // currently overridden".
+  let toneHzBeforeFskSync = null;
+
+  function applyTransientToneHz(centreHz) {
+    if (toneHzBeforeFskSync === null) toneHzBeforeFskSync = settings.toneHz;
+    settings.toneHz = centreHz;
+    // Mirrors setToneFromSpaceHz()'s own reset -- an AFC offset accumulated
+    // around the OLD centre is nonsense applied to this one.
+    afcOffsetHz = 0; afcTargetHz = 0;
+    syncDecoderTone();
+    drawScopeOverlay();
+    dom.rttyToneInput.value = String(Math.round(centreHz - RttyCodec.SHIFT_HZ / 2));
+  }
+
+  function restoreToneHzIfOverridden() {
+    if (toneHzBeforeFskSync === null) return;
+    settings.toneHz = toneHzBeforeFskSync;
+    toneHzBeforeFskSync = null;
+    afcOffsetHz = 0; afcTargetHz = 0;
+    syncDecoderTone();
+    drawScopeOverlay();
+    dom.rttyToneInput.value = String(Math.round(settings.toneHz - RttyCodec.SHIFT_HZ / 2));
+  }
+
+  async function syncFskFromRadio() {
+    const model = liveRadioModel();
+    const keyingCmd = model && model.rttyKeyingPolarityCmd;
+    const markCmd = model && model.rttyMarkFreqCmd;
+    if (keyingCmd) {
+      const polarity = await civRead(keyingCmd);
+      if (polarity === "01") await civWriteByte(keyingCmd, "00");
+    }
+    if (markCmd) {
+      const mark = await civRead(markCmd);
+      const markHz = mark && RTTY_MARK_FREQ_HZ[mark];
+      if (markHz) applyTransientToneHz(markHz + RttyCodec.SHIFT_HZ / 2);
+    }
+  }
+
+  // Re-evaluated only on the RTTY/RTTY-R <-> anything-else edge (unlike
+  // applyAutoReverseDefault() above, Keying Polarity/Mark Frequency have
+  // nothing to do with band, so a band change while staying in RTTY/RTTY-R
+  // must not re-fire this or re-arm an already-settled CI-V read).
+  let fskRadioSyncKey = null;
+  function applyFskRadioSync() {
+    const isRttyMode = state.radio.mode === "RTTY" || state.radio.mode === "RTTY-R";
+    const key = state.radio.connected && isRttyMode ? "rtty" : null;
+    if (key === fskRadioSyncKey) return;
+    fskRadioSyncKey = key;
+    if (isRttyMode) syncFskFromRadio();
+    else restoreToneHzIfOverridden();
+  }
+
   // ---- session lease (shared with JS8/WSPR, kap.1 decision 9) --------------
   //
   // Verbatim pattern from wspr.js's own claimSession()/loseSession() -- see
@@ -272,6 +440,8 @@
       // radio's link being judged, not the browser's. rfPowerAuto itself
       // tracks the up/down transition (data/rf-power-auto.js).
       rfPowerAuto.onPollSuccess();
+      applyAutoReverseDefault();
+      applyFskRadioSync();
     } catch (_error) {
       state.radio.connected = false;
     } finally { statePollInFlight = false; }
@@ -1759,12 +1929,7 @@
     // canvas/overlay pair) -- resized alongside it so both stay in sync.
     window.addEventListener("resize", () => { waterfall.resize(); resizeScopeOverlay(); });
 
-    dom.rttyReverse.addEventListener("click", () => {
-      settings.reverse = !settings.reverse;
-      saveSettings();
-      decoder.setReverse(settings.reverse);
-      renderStatusPills();
-    });
+    dom.rttyReverse.addEventListener("click", () => setReverse(!settings.reverse));
     // Item 7: Enter sends, like js8call -- no SEND button, no RF-safety
     // checkbox left to gate on. preventDefault so Enter never inserts a
     // literal newline (the field is single-line; RTTY traffic is one line).

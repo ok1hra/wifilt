@@ -62,6 +62,12 @@
       // is BCD, the same encoding 14 0A uses for power.
       modLevelCmd: "1A050117", modInputCmd: "1A050119", modInputNet: 3,
       modMenu: "MENU → SET → Connectors → MOD Input → WLAN MOD Level",
+      // Same PDF, "SET > Function": 0050 = RTTY Mark Frequency
+      // (00=1275/01=1615/02=2125 Hz), 0052 = RTTY Keying Polarity
+      // (00=Normal/01=Reverse) -- one raw byte each, not BCD. Grilled
+      // 2026-08-29: data/rtty.js reads both on entering RTTY/RTTY-R and
+      // forces Keying Polarity to Normal if it answers Reverse.
+      rttyMarkFreqCmd: "1A050050", rttyKeyingPolarityCmd: "1A050052",
     },
     {
       number: 7300, label: "IC-7300MK2", watts: 100, civAddr: "B6",
@@ -85,6 +91,10 @@
       // exactly like IC-7300/IC-9700/IC-7760 today, rather than guessing.
       modLevelCmd: "1A050090",
       modMenu: "MENU → SET → Connectors → MOD Input → LAN MOD Level",
+      // Read in docs/IC-7610_ENG_CI-V_4.pdf's own command table ("Function"
+      // group): 00 41 = RTTY Mark Frequency, 00 43 = RTTY Keying Polarity --
+      // same encoding and same use as the IC-705's 0050/0052 above.
+      rttyMarkFreqCmd: "1A050041", rttyKeyingPolarityCmd: "1A050043",
     },
     {
       number: 9700, label: "IC-9700", watts: 100, civAddr: "A2",
