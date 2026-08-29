@@ -8445,14 +8445,32 @@ void handleSet() {
       String trx3Label = trimMemoryValue(requestArg("trx3label"), 10);
       if (trx3Label.length() == 0) trx3Label = "TRX3";
       String blockedDxcc = requestArg("blockedDxcc");
-      String fskOutputMode = requestArg("fskOutputMode") == "trxnet" ? "trxnet" : "internal";
-      // Same hex-clamp convention as TRX2_NET_ID/TRX3_NET_ID just above --
-      // stored as a normalized 2-digit uppercase string, "00" = unset.
-      long fskNetIdVal = strtol(requestArg("fskNetId").c_str(), nullptr, 16);
-      if (fskNetIdVal < 0 || fskNetIdVal > 255) fskNetIdVal = 0x00;
-      char fskNetIdBuf[3];
-      snprintf(fskNetIdBuf, sizeof(fskNetIdBuf), "%02X", (unsigned)fskNetIdVal);
-      String fskNetId = String(fskNetIdBuf);
+      // fskOutputMode/fskNetId no longer have fields on THIS form (moved to the
+      // RTTY-ICOM page's own SETTINGS panel, /log-config/fsk, grilled
+      // 2026-08-28) -- requestArg() for either is always empty now, which used
+      // to fall through the ?: below and silently rewrite both to
+      // "internal"/"00" on every unrelated Setup save (a TRX2/TRX3 radio
+      // change, a memory edit, anything on this form), stomping whatever the
+      // operator had actually chosen on RTTY-ICOM. requestHasArg() keeps this
+      // save from touching either field at all when the request doesn't carry
+      // it -- same "only overwrite when actually present" guard cwmem1/
+      // trxnetprio already use above -- so FSK output stays exactly the
+      // independent, RTTY-page-owned setting kap.1's own comment on
+      // handlePostFskOutput() says it is.
+      String fskOutputMode = g_lcFskOutputMode;
+      String fskNetId = g_lcFskNetId;
+      if (requestHasArg("fskOutputMode")) {
+        fskOutputMode = requestArg("fskOutputMode") == "trxnet" ? "trxnet" : "internal";
+      }
+      if (requestHasArg("fskNetId")) {
+        // Same hex-clamp convention as TRX2_NET_ID/TRX3_NET_ID just above --
+        // stored as a normalized 2-digit uppercase string, "00" = unset.
+        long fskNetIdVal = strtol(requestArg("fskNetId").c_str(), nullptr, 16);
+        if (fskNetIdVal < 0 || fskNetIdVal > 255) fskNetIdVal = 0x00;
+        char fskNetIdBuf[3];
+        snprintf(fskNetIdBuf, sizeof(fskNetIdBuf), "%02X", (unsigned)fskNetIdVal);
+        fskNetId = String(fskNetIdBuf);
+      }
 
       g_lcTrx1Label = trx1Label;
       g_lcTrx2Label = trx2Label;

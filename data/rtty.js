@@ -56,7 +56,7 @@
     "rttyReverse", "rttySquelch", "rttySnr",
     "waterfall", "waterfallCanvas", "spectrumSummary",
     "rttyScope", "rttyLiveSpectrum", "rttyScopeOverlay", "liveSpectrumCanvas",
-    "rttyRxLog", "rxSummary",
+    "rttyRxLog", "rxSummary", "rttyRxClear",
     "rttyTxText", "rttyTxAbort", "rttyTxState",
     "rttySquelchInput", "rttySquelchLive", "rttySquelchNewlineEnabled", "rttyToneInput", "settingsSummary",
     // AFC (grilled 2026-08-28, 3rd session): see rtty.js's own afcTick()/
@@ -83,6 +83,30 @@
 
   const settings = RttySettings.load(window.localStorage);
   function saveSettings() { RttySettings.save(window.localStorage, settings); }
+
+  // Squelch on/off (grilled 2026-08-29): settings.squelchThreshold=0 already
+  // meant "never gates" before this (renderStatusPills' own .active check),
+  // so turning it off needs no new field -- but restoring the LEVEL an
+  // operator had dialled in before they hit the header pill's OFF does. This
+  // is session-only (not persisted): a page loaded with squelch already off
+  // has nothing on-disk to remember a level from, so it starts back at the
+  // schema default like any other fresh load. Seeded from the loaded
+  // threshold when it is already a real level, otherwise the schema default.
+  let squelchOnMagnitude = settings.squelchThreshold > 0
+    ? settings.squelchThreshold : RttySettings.defaults().squelchThreshold;
+  function formatSquelchDb(db) { return `${Math.round(db)} dB`; }
+  // Single place both the header pill and the SETTINGS row call to flip
+  // squelch off (threshold 0, decoder never gates) or back on (whatever
+  // level the slider was last parked at) -- keeps the two controls, and the
+  // decoder itself, from ever disagreeing about which state they are in.
+  function setSquelchEnabled(enabled) {
+    settings.squelchThreshold = enabled ? squelchOnMagnitude : 0;
+    saveSettings();
+    decoder.setSquelchThreshold(settings.squelchThreshold);
+    dom.rttySquelchInput.value = String(Math.round(RttySettings.squelchMagnitudeToDb(squelchOnMagnitude)));
+    dom.rttySquelchLive.textContent = formatSquelchDb(RttySettings.squelchMagnitudeToDb(squelchOnMagnitude));
+    renderStatusPills();
+  }
 
   // ---- dial <-> mark compensation (AFSK sideband vs true-FSK dial) --------
   //
@@ -947,6 +971,22 @@
       dom.rttyRxLog.removeChild(dom.rttyRxLog.firstChild);
   }
 
+  // CLEAR pill (RX summary row): wipes the log itself, not the decoder state --
+  // squelch/AFC/tone tracking all live in the decoder/settings and must keep
+  // running exactly as before. rxOpenWordSpan is reset the same way
+  // echoTxText() already does before appending, so the next decoded character
+  // starts a fresh .rtty-tok instead of resuming one whose DOM node just got
+  // removed. lastTxEcho is left alone -- markTxEchoFailed() only ever touches
+  // it through echo.container.isConnected, which is already false once this
+  // clears the log, so a send still in flight fails silently-safe rather than
+  // throwing.
+  function clearRxLog() {
+    dom.rttyRxLog.textContent = "";
+    rxOpenWordSpan = null;
+    state.rxChars = 0;
+    renderStatusPills();
+  }
+
   // kap.13.4 (grilled 2026-08-29): on every squelch close->open transition,
   // insert a line break into the RX log -- reuses rtty-codec.js's Decoder's
   // existing onEvent() hook (until now unwired), no codec change needed.
@@ -1616,10 +1656,14 @@
   function renderStatusPills() {
     dom.rttyReverse.textContent = settings.reverse ? "REVERSE" : "NORMAL";
     dom.rttyReverse.classList.toggle("active", settings.reverse);
-    // Item 16: the configured threshold itself (SETTINGS' own number),
+    // Item 16: the configured level itself (SETTINGS' own dB number),
     // highlighted while squelch is engaged (threshold above 0 -- the normal
-    // state, default is 4). Replaces the old live open/closed reading.
-    dom.rttySquelch.textContent = "SQL " + settings.squelchThreshold;
+    // state). Replaces the old live open/closed reading. Grilled 2026-08-29:
+    // the pill is now also the on/off button (click handler below) --
+    // OFF reads as plain text, ON as the dB level, same .active highlight as
+    // before either way.
+    dom.rttySquelch.textContent = settings.squelchThreshold === 0
+      ? "SQL OFF" : "SQL " + formatSquelchDb(RttySettings.squelchMagnitudeToDb(settings.squelchThreshold));
     dom.rttySquelch.classList.toggle("active", settings.squelchThreshold !== 0);
     dom.rttySnr.textContent = "SNR " +
       (Number.isFinite(state.lastSnrDb) ? `${state.lastSnrDb.toFixed(1)} dB` : "—");
@@ -1966,13 +2010,29 @@
       });
     });
 
+    // Same stopPropagation reasoning as the zoom pills above -- this button
+    // lives in the RX <summary> too.
+    dom.rttyRxClear.addEventListener("click", event => {
+      event.stopPropagation();
+      clearRxLog();
+    });
+
+    // Grilled 2026-08-29: this slider moves on the dB scale now and only ever
+    // sets the LEVEL (never 0 -- squelchDbToMagnitude() floors at magnitude
+    // 1) -- dragging it always leaves squelch on, same as turning a physical
+    // squelch knob up from its detented-off position always does.
     dom.rttySquelchInput.addEventListener("input", () => {
-      settings.squelchThreshold = Number(dom.rttySquelchInput.value);
+      squelchOnMagnitude = RttySettings.squelchDbToMagnitude(Number(dom.rttySquelchInput.value));
+      settings.squelchThreshold = squelchOnMagnitude;
       saveSettings();
       decoder.setSquelchThreshold(settings.squelchThreshold);
-      dom.rttySquelchLive.textContent = String(settings.squelchThreshold);
+      dom.rttySquelchLive.textContent = formatSquelchDb(RttySettings.squelchMagnitudeToDb(squelchOnMagnitude));
       renderStatusPills();   // item 16: the SQL pill mirrors this live
     });
+    // Header SQL pill (grilled 2026-08-29): now the on/off control, not just a
+    // readout -- stopPropagation is not needed here, it is not inside a
+    // <summary>.
+    dom.rttySquelch.addEventListener("click", () => setSquelchEnabled(settings.squelchThreshold === 0));
     dom.rttyToneInput.addEventListener("change", () => {
       const hz = Math.round(Number(dom.rttyToneInput.value));
       if (!Number.isFinite(hz)) return;
@@ -2040,10 +2100,12 @@
   LanGate.gate().then(ready => {
     if (!ready) return;
 
-    dom.rttySquelchInput.min = String(RttySettings.SQUELCH_MIN);
-    dom.rttySquelchInput.max = String(RttySettings.SQUELCH_MAX);
-    dom.rttySquelchInput.value = String(settings.squelchThreshold);
-    dom.rttySquelchLive.textContent = String(settings.squelchThreshold);
+    dom.rttySquelchInput.min = String(RttySettings.SQUELCH_DB_MIN);
+    dom.rttySquelchInput.max = String(RttySettings.SQUELCH_DB_MAX);
+    // The slider always shows the LEVEL (squelchOnMagnitude), on or off --
+    // on/off itself is the header pill's job (renderStatusPills() below).
+    dom.rttySquelchInput.value = String(Math.round(RttySettings.squelchMagnitudeToDb(squelchOnMagnitude)));
+    dom.rttySquelchLive.textContent = formatSquelchDb(RttySettings.squelchMagnitudeToDb(squelchOnMagnitude));
     // rtty.html's <input min/max> is a static fallback for the instant before
     // this runs; RttySettings is authoritative from here on (code-review).
     dom.rttyToneInput.min = String(RttySettings.TONE_MIN_HZ);

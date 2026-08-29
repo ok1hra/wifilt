@@ -66,6 +66,29 @@
   // min/max from these constants instead of rtty.html carrying its own copy).
   const SQUELCH_MAX = 500;
 
+  // Squelch dB scale (grilled 2026-08-29): the raw magnitude above is what the
+  // decoder actually compares against, but it means nothing to an operator --
+  // "347" gives no sense of how tight the gate is, and the default of 4 sits
+  // in the first 1% of the 0-500 slider, where a LINEAR slider has almost no
+  // usable resolution. 10*log10(magnitude) reads as an ordinary ham-radio dB
+  // figure AND spreads that same useful low end across most of the slider's
+  // travel instead of compressing it into a sliver. magnitude=0 ("squelch
+  // never gates" -- rtty.js's own header-pill on/off toggle, not a point on
+  // this scale) has no dB equivalent and is handled separately by that pill;
+  // the dB slider itself only ever sets a magnitude of 1 or more.
+  const SQUELCH_DB_MIN = 0;                                    // magnitude 1
+  const SQUELCH_DB_MAX = Math.round(10 * Math.log10(SQUELCH_MAX)); // ~27 dB at 500
+  function squelchMagnitudeToDb(magnitude) {
+    const m = Number(magnitude);
+    if (!Number.isFinite(m) || m < 1) return SQUELCH_DB_MIN;
+    return Math.max(SQUELCH_DB_MIN, Math.min(SQUELCH_DB_MAX, 10 * Math.log10(m)));
+  }
+  function squelchDbToMagnitude(db) {
+    const d = Number(db);
+    if (!Number.isFinite(d)) return 1;
+    return Math.max(1, Math.min(SQUELCH_MAX, Math.round(Math.pow(10, d / 10))));
+  }
+
   // AFC (grilled 2026-08-28, 3rd session). afcMaxDeviationHz is hard-capped
   // at SHIFT_HZ/2 (85 Hz, duplicated as a literal here for the same
   // load-order-independence reason CENTER_SHIFT_HZ above is -- this file
@@ -146,7 +169,8 @@
 
   return {STORAGE_KEY, SCHEMA_VERSION, TONE_MIN_HZ, TONE_MAX_HZ,
           TONE_CENTER_MIN_HZ, TONE_CENTER_MAX_HZ,
-          SQUELCH_MIN, SQUELCH_MAX,
+          SQUELCH_MIN, SQUELCH_MAX, SQUELCH_DB_MIN, SQUELCH_DB_MAX,
+          squelchMagnitudeToDb, squelchDbToMagnitude,
           AFC_RATE_MIN_HZ_PER_CHAR, AFC_RATE_MAX_HZ_PER_CHAR,
           AFC_MAX_DEVIATION_MIN_HZ, AFC_MAX_DEVIATION_HARD_CAP_HZ,
           defaults, normalize, load, save};

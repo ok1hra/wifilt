@@ -9,7 +9,7 @@
      genuinely RTTY's, same split as wspr.css/mercury.css.
      docs/rtty-implementace.md -- grilled 2026-08-27. -->
 <link rel="stylesheet" href="/data.css?v=f5dacdaa">
-<link rel="stylesheet" href="/rtty.css?v=88c42ab5">
+<link rel="stylesheet" href="/rtty.css?v=d078b99c">
 </head>
 <!-- lan-gate.js clears the checking class once it knows whether ICOM-LAN is set
      up, so the page never flashes an interface it is about to replace. -->
@@ -77,8 +77,12 @@
        which is the normal/expected one (default is 4). The live open/closed
        "signal above threshold right now" reading that used to live here is
        gone; nothing else on this bar needs a second, competing meaning for
-       the same pill. -->
-  <span id="rttySquelch" class="pill rtty-squelch" title="Configured squelch threshold (SETTINGS). Highlighted while squelch is engaged (threshold above 0).">SQL —</span>
+       the same pill.
+       Grilled 2026-08-29: now a <button>, not a read-only <span> -- one click
+       toggles squelch off (threshold 0, no gating at all) and back on
+       (restores whatever level SETTINGS' own slider was last set to), no
+       trip to SETTINGS needed just to silence it for a moment. -->
+  <button id="rttySquelch" class="pill rtty-squelch" type="button" title="Configured squelch level (SETTINGS). Click to turn squelch off/on.">SQL —</button>
   <span id="rttySnr" class="pill rtty-snr" title="Goertzel mark/space magnitude ratio at the last successfully decoded character">SNR —</span>
 </header>
 
@@ -136,7 +140,13 @@
        (BroadcastChannel('wifilt-dxc-action'), same channel dxc.html already
        uses -- zero change in log.js's own listener). -->
   <details class="compact-section" data-section="rx" open>
-    <summary><span>RX</span><span id="rxSummary" class="summary-status"></span></summary>
+    <summary><span>RX</span><span id="rxSummary" class="summary-status"></span>
+      <!-- Same pill look as the waterfall's zoom group (rtty.css's own
+           .rtty-zoom-pill) -- stopPropagation in rtty.js keeps the click from
+           also toggling this <details>, same pattern as those. -->
+      <button id="rttyRxClear" class="rtty-clear-pill" type="button"
+              title="Clear the RX log">CLEAR</button>
+    </summary>
     <div id="rttyRxLog" class="rtty-rx-log" aria-live="polite"></div>
   </details>
 
@@ -187,12 +197,18 @@
         </select>
         <small>What this station's AFSK actually transmits. Independent of the RX-only NORMAL/REVERSE pill above.</small>
       </label>
-      <label>Squelch threshold
-        <!-- Static fallback for the instant before rtty.js's boot sequence
-             overwrites min/max from RttySettings.SQUELCH_MIN/MAX -- see that
-             file's own comment for where 500 comes from. -->
-        <input id="rttySquelchInput" type="range" min="0" max="500" step="1">
-        <small class="rtty-squelch-live" id="rttySquelchLive">4</small>
+      <label>Squelch level
+        <!-- Grilled 2026-08-29: the slider itself moves on a dB scale now
+             (10*log10 of the decoder's actual raw Goertzel-magnitude
+             threshold), not the raw 0-500 magnitude -- see rtty-settings.js's
+             own comment on squelchMagnitudeToDb()/squelchDbToMagnitude() for
+             why. On/off lives on the header SQL pill (a button now) instead
+             of at the bottom of this range -- this slider only ever sets a
+             level for when squelch IS on. Static fallback for the instant
+             before rtty.js's boot sequence overwrites min/max from
+             RttySettings.SQUELCH_DB_MIN/MAX. -->
+        <input id="rttySquelchInput" type="range" min="0" max="27" step="1">
+        <small class="rtty-squelch-live" id="rttySquelchLive">6 dB</small>
       </label>
       <!-- kap.13.4, grilled 2026-08-29: reuses rtty-codec.js's Decoder's
            existing (until now unwired) onEvent() squelch open/close hook --
@@ -292,7 +308,7 @@
 <script src="/fw-version.js?v=b29c5317"></script>
 <script src="/rtty-codec.js?v=5e2d128c"></script>
 <script src="/rtty-presets.js?v=5ec21ec3"></script>
-<script src="/rtty-settings.js?v=de07d828"></script>
+<script src="/rtty-settings.js?v=d771d20c"></script>
 <script src="/spectrum.js?v=7fafbbb5"></script>
 <!-- js8-aud1.js: the shared AUD1 RX+TX contract, unchanged, same file
      wspr.html loads directly (no Worker here, unlike Mercury). js8-tx.js is
@@ -325,6 +341,6 @@
 <script src="/tx-gain-plan.js?v=d0eb2106"></script>
 <script src="/tx-gain-plan-store.js?v=6d5a572b"></script>
 <script src="/tx-gain-plan-ui.js?v=89d28d8c"></script>
-<script src="/rtty.js?v=31baf101"></script>
+<script src="/rtty.js?v=6f20b812"></script>
 </body>
 </html>
