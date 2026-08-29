@@ -857,7 +857,15 @@
     let best = 0;
     for (let i = 1; i < levels.length; i++) if (levels[i] > levels[best]) best = i;
     const noiseFloor = levels.slice().sort()[levels.length >> 1];   // median
-    if (levels[best] - noiseFloor < AFC_PROMINENCE_DB) return null;
+    // Bug found live on the radio (4th session): when the WHOLE scanned range
+    // falls outside the currently visible liveValues span (e.g. right after a
+    // zoom change), every entry is -Infinity, levels[best]-noiseFloor is
+    // -Infinity-(-Infinity) = NaN, and `NaN < AFC_PROMINENCE_DB` is false --
+    // so the rejection silently failed OPEN instead of returning null,
+    // feeding syncDecoderTone() a bogus value pegged at -dev and detuning
+    // the decoder even on a properly zero-beat signal. Explicit finite check
+    // closes that instead of relying on the comparison alone.
+    if (!Number.isFinite(levels[best]) || levels[best] - noiseFloor < AFC_PROMINENCE_DB) return null;
     const stepHz = (2 * dev) / steps;
     return -dev + (best + refinePeakBinOffset(levels, best)) * stepHz;
   }
