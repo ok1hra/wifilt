@@ -115,6 +115,10 @@ button { color: inherit; cursor: pointer; }
 .operator { white-space: nowrap; }
 .pill { border: 1px solid var(--line); border-radius: 999px; padding: 5px 9px; white-space: nowrap; }
 .trx-control { position: relative; align-self: stretch; display: flex; align-items: center; }
+/* display:flex above outranks the UA rule for [hidden], same gotcha as
+   .msgbox-alert's own comment -- RTTY-ICOM hides #ttControl outright while
+   the radio is in FSK mode (rtty.js's own render()). */
+.tt-control[hidden] { display: none; }
 .trx-frequency {
   height: 42px; display: flex; align-items: center; gap: 7px; padding: 3px 9px;
   border: 1px solid #3d675e; border-radius: 5px; background: #081310;

@@ -1,8 +1,32 @@
 /* RTTY-ICOM page (docs/rtty-implementace.md). Shares .compact-section/
-   .gate-card/.radio-bar/.pill/.trx-*/.settings with data.css so the four DATA
+   .gate-card/.radio-bar/.pill/.trx- (prefixed)/.settings with data.css so the four DATA
    pages read as one family (JS8Call-ICOM, WSPR-Beacon, Mercury, RTTY-ICOM);
    this file carries only what is genuinely RTTY's, same split as
    wspr.css/mercury.css. */
+
+/* Grilled 2026-08-29: QRPLOG's RTTY button opens this page as a small named
+   pop-up (?popup=1, same window.open('...', 'RTTY-ICOM', ...) convention
+   dxc.html already uses) -- inside it, the main DATA menu and the RTTY-ICOM/
+   JS8Call-ICOM/WSPR-Beacon/Mercury submenu have nothing to navigate to (the
+   window IS RTTY-ICOM), so the whole .site-topbar goes away, leaving the
+   radio-bar and page content untouched. The class is set by a synchronous
+   inline script in <head> (rtty.html), not rtty.js, so the bar never flashes
+   before disappearing. */
+html.popup-mode .site-topbar { display: none; }
+
+/* Grilled 2026-08-29 (operator feedback on the QRPLOG pop-up, 425px wide):
+   data.css's shared ".radio-bar .pill, .live { display:none; }" at this same
+   breakpoint hides SQL/SNR (both .pill) to fit narrow windows, but NORMAL/
+   REVERSE survives untouched -- it's .rtty-toggle-pill, not .pill, a page-
+   local class the shared rule never knew about. The operator would rather
+   see the configured squelch level than the RX-only Reverse toggle in that
+   little space, so SQL comes back (restoring its native <button> display)
+   and Reverse gives up the room instead. SNR/AUD1/link state stay hidden,
+   unchanged -- only asked about SQL vs Reverse. */
+@media (max-width: 560px) {
+  #rttySquelch { display: inline-block; }
+  #rttyReverse { display: none; }
+}
 
 /* ---- radio-bar status pills (kap.9: Normal/Reverse, squelch, live SNR) --
    Reverse is a switch; squelch/SNR are read-only. TX method used to be a

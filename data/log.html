@@ -236,6 +236,18 @@
       </div>
       <div class="log-btn-spacer" style="max-width:24px"></div>
       <div class="log-btn-group">
+        <!-- Grilled 2026-08-29: opens RTTY-ICOM (/rtty.html) as a small named
+             pop-up, same window.open('...', 'RTTY-ICOM', ...) convention the
+             DXC tab already uses -- a repeat click refocuses the same window
+             instead of spawning a duplicate. Shown only for the mode groups
+             LogMacros.modeGroup() already treats as RTTY-ICOM's own keying
+             territory (RTTY/RTTY-R = 'RTTY', USB-D/LSB-D = 'DATA'; see
+             renderStatusBar()'s own visibility toggle in log.js) -- exactly
+             the modes docs/rtty-implementace.md §8.3 documents as needing a
+             live RTTY-ICOM tab open for the audio-stream TX hand-off to work
+             at all ("open /rtty.html in another tab first"). -->
+        <button id="btnRttyPopup" class="btn-trx" type="button" hidden
+                title="Open RTTY-ICOM in a small window">RTTY</button>
         <button class="btn-trx btn-trx-active" data-trx="1" id="btnTrx1" type="button">TRX1</button>
         <button class="btn-trx" data-trx="2" id="btnTrx2" type="button">TRX2</button>
         <button class="btn-trx" data-trx="3" id="btnTrx3" type="button">TRX3</button>
@@ -282,6 +294,6 @@
   <script src="/dxcc.js?v=c56ee081"></script>
   <script src="/log-db.js?v=6055416f"></script>
   <script src="/station-identity.js?v=a1a20249"></script>
-  <script src="/log.js?v=77fb334c"></script>
+  <script src="/log.js?v=b445ce1a"></script>
 </body>
 </html>

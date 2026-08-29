@@ -51,7 +51,7 @@
   for (const id of [
     "trxFrequencyValue", "trxMode", "radioModel", "linkState", "trxFrequency",
     "frequencyMenu", "trxSlotLabel", "trxReconnect", "trxPower", "trxPowerWatts",
-    "aud1State", "planField", "planButton", "planButtonValue", "calField",
+    "aud1State", "ttControl", "planField", "planButton", "planButtonValue", "calField",
     "sessionBusy", "sessionBusyWhere", "sessionTakeover",
     "rttyReverse", "rttySquelch", "rttySnr",
     "waterfall", "waterfallCanvas", "spectrumSummary",
@@ -683,8 +683,12 @@
       ctx.font = "10px ui-monospace, Menlo, Consolas, monospace";
       ctx.fillStyle = "rgba(200,200,200,.9)";
       ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(`${sign}${Math.round(Math.abs(afcOffsetHz))} Hz`, (afcMarkX + afcSpaceX) / 2, canvas.height / 2);
+      // Grilled 2026-08-29: pinned to the top edge (was vertically centred,
+      // which sat in the middle of the waterfall/live-spectrum content) --
+      // still horizontally centred over its own dashed AFC lines, just out
+      // of the way of what those lines are drawn over.
+      ctx.textBaseline = "top";
+      ctx.fillText(`${sign}${Math.round(Math.abs(afcOffsetHz))} Hz`, (afcMarkX + afcSpaceX) / 2, 10);
       ctx.textBaseline = "alphabetic";
     }
 
@@ -1411,6 +1415,19 @@
 
   if (rttyTxChannel) rttyTxChannel.onmessage = event => {
     const msg = event.data || {};
+    // Grilled 2026-08-30: QRPLOG's FSK-backend sends (true RTTY/RTTY-R mode)
+    // key the radio straight from the firmware's own GPIO (wifilt.ino's
+    // sendCW()) -- no AUD1 session, no hand-off, nothing that needs this tab
+    // to be the session holder or even idle (unlike rtty-tx-send below).
+    // This is purely a display mirror, sent whether or not any RTTY-ICOM tab
+    // exists to show it, so it renders unconditionally with the same
+    // echoTxText() the local composer/FSK-backend path already uses --
+    // same per-character "lit" tempo, no separate success/failure tracking
+    // since QRPlog has none to relay either.
+    if (msg.type === "rtty-tx-fsk-echo") {
+      echoTxText(String(msg.text || ""));
+      return;
+    }
     if (msg.type === "rtty-tx-probe") {
       if (isSessionHolder() && !audioTx && !audioTxStarting)
         rttyTxChannel.postMessage({type: "rtty-tx-probe-ack", requestId: msg.requestId});
@@ -1568,6 +1585,13 @@
     if (offDial) titleParts.push("Outside every RTTY calling segment — choose a band from the menu");
     dom.trxFrequency.title = titleParts.join(" — ");
     dom.trxMode.textContent = state.radio.mode || "---";
+    // Grilled 2026-08-29: CAL PLAN's calibration carrier is an audio tone
+    // over AUD1 (see the CAL PLAN section's own header comment below) --
+    // true RTTY/RTTY-R (FSK) mode keys the shift modulator via the GPIO
+    // line instead, so there is nothing for that tone to measure. Hidden
+    // outright, not just disabled -- reappears immediately in every other
+    // mode, including USB-D/LSB-D, where the audio path is real.
+    dom.ttControl.hidden = state.radio.mode === "RTTY" || state.radio.mode === "RTTY-R";
     dom.radioModel.textContent = liveRadioModel() || "--";
     dom.aud1State.textContent = "AUD1 " + (session && session.hello ? "ready" : "—");
     dom.linkState.textContent = state.radio.connected ? "● ONLINE" : "● OFFLINE";

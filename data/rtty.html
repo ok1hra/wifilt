@@ -8,8 +8,14 @@
      gate-card) so the four cannot drift apart; rtty.css carries only what is
      genuinely RTTY's, same split as wspr.css/mercury.css.
      docs/rtty-implementace.md -- grilled 2026-08-27. -->
-<link rel="stylesheet" href="/data.css?v=f5dacdaa">
-<link rel="stylesheet" href="/rtty.css?v=84ba01b2">
+<link rel="stylesheet" href="/data.css?v=14329f65">
+<link rel="stylesheet" href="/rtty.css?v=f5c079bb">
+<!-- Grilled 2026-08-29: QRPLOG's RTTY button opens this same page as
+     /rtty.html?popup=1 in a small named pop-up. Synchronous and inline so
+     the class lands on <html> before .site-topbar is even parsed, below --
+     no flash of the full menu before rtty.css's own html.popup-mode rule
+     hides it (a deferred/external script would run too late for that). -->
+<script>if (/(?:^|[?&])popup=1(?:&|$)/.test(location.search)) document.documentElement.classList.add("popup-mode");</script>
 </head>
 <!-- lan-gate.js clears the checking class once it knows whether ICOM-LAN is set
      up, so the page never flashes an interface it is about to replace. -->
@@ -47,7 +53,13 @@
     </button>
     <section id="frequencyMenu" class="frequency-menu" hidden aria-label="RTTY dial frequencies"></section>
   </div>
-  <div class="trx-control tt-control">
+  <!-- Grilled 2026-08-29: hidden outright (not just disabled) whenever the
+       radio is in true RTTY/RTTY-R (FSK) mode -- CAL PLAN's carrier is an
+       audio tone sent over AUD1 (see the CAL PLAN section's own header
+       comment in rtty.js), but FSK mode keys the radio's shift modulator
+       via the GPIO line, not audio, so there is nothing for that tone to
+       measure. See render()'s own dom.ttControl.hidden assignment. -->
+  <div id="ttControl" class="trx-control tt-control">
     <button id="planButton" class="freq-timetable" type="button" aria-expanded="false"
             aria-controls="planField" title="TX gain calibration plan">
       <span><small>CAL PLAN</small><b id="planButtonValue">--</b></span><span class="chevron">▾</span>
@@ -342,6 +354,6 @@
 <script src="/tx-gain-plan.js?v=d0eb2106"></script>
 <script src="/tx-gain-plan-store.js?v=6d5a572b"></script>
 <script src="/tx-gain-plan-ui.js?v=89d28d8c"></script>
-<script src="/rtty.js?v=bc8b0727"></script>
+<script src="/rtty.js?v=c3f7ec95"></script>
 </body>
 </html>

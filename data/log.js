@@ -989,6 +989,7 @@ const trxButtons  = [
 const sbTime      = document.getElementById('sbTime');
 const sbFreq      = document.getElementById('sbFreq');
 const sbMode      = document.getElementById('sbMode');
+const btnRttyPopup = document.getElementById('btnRttyPopup');
 const macroPreview = document.getElementById('macroPreview');
 const sbContinent = document.getElementById('sbContinent');
 const sbCountry   = document.getElementById('sbCountry');
@@ -1182,6 +1183,13 @@ function renderStatusBar() {
     sbFreqModeGroup.style.display = 'none';
     sbManualGroup.style.display   = '';
   }
+  // Grilled 2026-08-29: shown for exactly the mode groups RTTY-ICOM's own
+  // audio-stream TX hand-off (sendViaRttyIcomPage(), docs/rtty-implementace.md
+  // §8.3) applies to -- 'RTTY' (RTTY/RTTY-R, the FSK-backend keying path) and
+  // 'DATA' (USB-D/LSB-D, the audio-stream path) -- reusing LogMacros.modeGroup()
+  // rather than a second, drifting copy of that mode list.
+  const rttyPopupMg = app.connected ? LogMacros.modeGroup(app.mode) : 'NONE';
+  btnRttyPopup.hidden = rttyPopupMg !== 'RTTY' && rttyPopupMg !== 'DATA';
   // Preserve DXCC while call field has content; clear only when empty
   if (inpCall.value.trim()) {
     updateDxccFromCall();
@@ -1421,6 +1429,19 @@ function closeHelpModal() {
 }
 
 document.getElementById('btnHelp').addEventListener('click', openHelpModal);
+
+// ── RTTY-ICOM pop-up (grilled 2026-08-29) ──────────────────────────────────
+// Same window.open(href, name, features) convention as the DXC tab above --
+// a fixed window name means a repeat click refocuses the one pop-up instead
+// of spawning a duplicate (and a duplicate RTTY-ICOM tab would just hit its
+// own existing session-takeover gate, not corrupt anything). Sized as small
+// as the operator asked for; the page itself reflows, it has no hard
+// minimum -- see the RTTY-ICOM page's own render() for what stays visible
+// (everything below .radio-bar) once ?popup=1 hides the DATA menu/submenu.
+btnRttyPopup.addEventListener('click', () => {
+  window.open('/rtty.html?popup=1', 'RTTY-ICOM',
+    'width=425,height=530,left=0,top=0,menubar=no,location=no,status=no');
+});
 document.getElementById('helpModalClose').addEventListener('click', closeHelpModal);
 document.getElementById('helpModal').addEventListener('click', e => {
   if (e.target === e.currentTarget) closeHelpModal();
@@ -1811,6 +1832,20 @@ function sendRawText(text) {
   if (mg === 'NONE' || mg === 'DATA') { showHint(app.mode + ' cannot be keyed — send manually'); return; }
   const url  = isOi3 ? '/oi3/send' : '/cmd';
   const body = isOi3 ? { trx: app.activeTrx, text } : { type: 'sendCw', text };
+  // Grilled 2026-08-30 (operator asked why FSK sends don't show up in
+  // RTTY-ICOM's RX window like USB-D ones do): this POST bit-bangs FSK
+  // straight from the firmware's own GPIO (wifilt.ino's sendCW()), entirely
+  // independent of any browser tab -- unlike the DATA/audio-stream hand-off
+  // above, which runs THROUGH an open RTTY-ICOM tab's own sendAudioStream()
+  // (and so echoes there for free via that page's own echoTxText()), nothing
+  // here ever touches rtty.js. Mirror it in over the same channel, purely
+  // for display -- fire-and-forget, no probe/ack: the actual TX already
+  // succeeds or fails on the firmware side whether or not any RTTY-ICOM tab
+  // is open to show it. Not for isOi3 (external K3NG keyer, a different
+  // physical device rtty.js has no display for).
+  if (mg === 'RTTY' && !isOi3 && rttyTxChannel) {
+    try { rttyTxChannel.postMessage({type: 'rtty-tx-fsk-echo', text}); } catch (_error) {}
+  }
   fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     .catch(() => {});
 }
