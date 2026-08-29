@@ -79,9 +79,9 @@ for (const key of emitted) {
 check("every key the backup writes is read back by the restore",
   orphans.length === 0, orphans.join(", "));
 
-// The three blobs are the ones that carry the operator's real work, so they get
+// These blobs carry the operator's real work, so they get
 // named individually rather than trusted to the sweep above.
-for (const blob of ["radioConfig", "logConfig", "txGain"]) {
+for (const blob of ["radioConfig", "logConfig", "txGain", "txGainPlan", "mercuryTxGain"]) {
   check("the backup carries " + blob, mentions(download, blob));
   check("the restore writes " + blob + " back", mentions(upload, blob));
 }
@@ -90,13 +90,17 @@ for (const blob of ["radioConfig", "logConfig", "txGain"]) {
 // The failure this file exists for: a section present but too large used to be
 // skipped, and the restore still answered ok.
 check("an oversized section refuses the restore instead of skipping it",
-  /rejectOversize\("logConfig"/.test(upload) && /rejectOversize\("txGain"/.test(upload));
+  /rejectOversize\("logConfig"/.test(upload) && /rejectOversize\("txGain"/.test(upload)
+  && /rejectOversize\("txGainPlan"/.test(upload)
+  && /rejectOversize\("mercuryTxGain"/.test(upload));
 check("the refusal names the section and both sizes",
   /\\"section\\":\\"/.test(upload) && /\\"bytes\\":/.test(upload) && /\\"limit\\":/.test(upload));
 check("the refusal returns early rather than carrying on",
   /rejectOversize\("logConfig"[\s\S]{0,80}return;/.test(upload));
 check("a failed write of the calibrations is reported, not swallowed",
-  /\\"error\\":\\"storage\\",\\"section\\":\\"txGain\\"/.test(upload));
+  /\\"error\\":\\"storage\\",\\"section\\":\\"txGain\\"/.test(upload)
+  && /\\"error\\":\\"storage\\",\\"section\\":\\"txGainPlan\\"/.test(upload)
+  && /\\"error\\":\\"storage\\",\\"section\\":\\"mercuryTxGain\\"/.test(upload));
 // A bare 2048 in three places was how the cap and the check drifted apart.
 check("the log-config cap is a named constant",
   /LOG_CONFIG_MAX_BYTES/.test(sketch) && !/length\(\) > 2048/.test(sketch));
@@ -113,6 +117,16 @@ const capMatch = sketch.match(/TXGAIN_MAX_BYTES\s*=\s*(\d+)/);
 const cap = capMatch ? Number(capMatch[1]) : 0;
 check("a full calibration matrix fits the stored table",
   tableBytes < cap, tableBytes + " B vs cap " + cap + " B");
+
+const fullPlan = {v: 1, powers: [1, 10, 50, 100], rows: []};
+for (const band of ["160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "2m"])
+  fullPlan.rows.push({band, cells: [1, 1, 1, 1],
+    hzByProfile: {"single-tone": 14100000, "mercury-datac1": 14105000}});
+const planBytes = JSON.stringify(fullPlan).length;
+const planCapMatch = sketch.match(/TXGAIN_PLAN_MAX_BYTES\s*=\s*(\d+)/);
+const planCap = planCapMatch ? Number(planCapMatch[1]) : 0;
+check("a full two-profile calibration plan fits its store",
+  planBytes < planCap, planBytes + " B vs cap " + planCap + " B");
 
 // And the record really is compacted -- the key already says model, band and
 // power, so a record repeating them is what made the matrix not fit.

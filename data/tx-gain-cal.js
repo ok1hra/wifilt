@@ -451,12 +451,11 @@
 
     status(key, modLevel) { return entryStatus(this.entry(key), modLevel); }
 
-    // ---- the plan --------------------------------------------------------
+    // ---- legacy embedded plan -------------------------------------------
     //
-    // Stored beside the entries and not in localStorage, for the same reason the
-    // entries are: the operator builds the plan at the desk and runs it from
-    // whatever is next to the antenna switch, because every retune asks a
-    // question. It also lands in the config backup for free.
+    // Kept readable for migration to /txgain-plan.json. New code stores the
+    // station-wide matrix through TxGainPlanStore; result files retain this API
+    // so an upgrade can import a plan written by older web assets.
     plan() {
       const found = this.doc && this.doc.plan;
       return found && typeof found === "object" ? found : {powers: [], rows: []};

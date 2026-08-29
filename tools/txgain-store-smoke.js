@@ -56,6 +56,20 @@ check("POST writes the file whole",
   /cfgFS\.open\(TXGAIN_CONFIG_PATH, "w"\)/.test(postBody),
   "and on cfgFS, not the asset filesystem: the assets are replaced by every flash");
 
+check("the shared plan has its own path constant",
+  /TXGAIN_PLAN_CONFIG_PATH\s*=\s*"\/txgain-plan\.json"/.test(sketch));
+check("the shared plan GET and POST are routed",
+  /webServer\.on\("\/txgain-plan\.json",\s*HTTP_GET,\s*handleGetTxGainPlan\)/.test(sketch) &&
+  /webServer\.on\("\/txgain-plan\.json",\s*HTTP_POST,\s*handlePostTxGainPlan\)/.test(sketch));
+const planGetBody = between(sketch, "void handleGetTxGainPlan()");
+const planPostBody = between(sketch, "void handlePostTxGainPlan()");
+check("the shared plan missing file is an empty document", /json = "\{\}"/.test(planGetBody));
+check("the shared plan POST is bounded and opaque",
+  /TXGAIN_PLAN_MAX_BYTES/.test(planPostBody) &&
+  !/extractJson(String|Bool|Int|Object)/.test(planPostBody));
+check("the shared plan is stored on cfgFS",
+  /cfgFS\.open\(TXGAIN_PLAN_CONFIG_PATH, "w"\)/.test(planPostBody));
+
 // The point of the design: no opinion about the contents.
 for (const parser of ["extractJsonString", "extractJsonBool", "extractJsonInt",
                       "extractJsonObject", "aud1JsonU64"]) {
@@ -125,6 +139,9 @@ if (downloadKey && restoreKey) {
 }
 check("the restore bounds what it writes",
   /TXGAIN_MAX_BYTES/.test(uploadBody));
+check("backup and restore carry the shared plan and Mercury results",
+  /txGainPlan/.test(downloadBody) && /txGainPlan/.test(uploadBody) &&
+  /mercuryTxGain/.test(downloadBody) && /mercuryTxGain/.test(uploadBody));
 
 // The backup is only worth having if it survives the flash that motivates it --
 // and since 2026-08-08 the table does not need the backup to survive one at all:

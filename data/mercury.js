@@ -809,8 +809,20 @@
   // it. Its `cal` is data/mercury-gain-cal.js, not their tx-gain-cal-ui.js --
   // see that file's own header for why (a single-tone carrier cannot
   // calibrate a ~7.5 dB-PAPR Mercury burst).
+  const mercuryCalBands = () => MercuryTrxPresets.PRESETS.map(preset =>
+    ({band: TxGainCal.bandOf(preset.frequencyHz), hz: preset.frequencyHz}));
   const gainStore = new TxGainCal.TxGainStore({
     url: "/mercury-txgain.json",
+    fetchImpl: (url, options = {}) => fetch(url, {signal: fetchDeadline(FETCH_FLASH_TIMEOUT_MS), ...options}),
+  });
+  // Read only for one-time migration of the old shared tone plan. Mercury's
+  // measured entries never touch this store.
+  const legacyToneGainStore = new TxGainCal.TxGainStore({
+    fetchImpl: (url, options = {}) => fetch(url, {signal: fetchDeadline(FETCH_FLASH_TIMEOUT_MS), ...options}),
+  });
+  const gainPlanStore = new TxGainPlanStore.PlanStore({
+    profile: TxGainPlanStore.PROFILE_MERCURY,
+    bands: mercuryCalBands,
     fetchImpl: (url, options = {}) => fetch(url, {signal: fetchDeadline(FETCH_FLASH_TIMEOUT_MS), ...options}),
   });
 
@@ -888,8 +900,10 @@
     gainPlan = TxGainPlanUi.create({
       mount: dom.planField,
       button: dom.planButton,
-      store: gainStore,
+      resultStore: gainStore,
+      planStore: gainPlanStore,
       cal: mercuryGainCal,
+      calibrationProfileLabel: "Mercury DATAC1",
       model: () => liveRadioModel(),
       modelNumber: () => IcomModels.modelNumber(liveRadioModel()),
       radio: () => state.radio,
@@ -909,8 +923,7 @@
       // 2026-08-23 by an operator actually trying to calibrate 20 m).
       // data.js's own bands() hook never hits this: it feeds WsprCore.PRESETS,
       // whose own band strings happen to already be the no-space form.
-      bands: () => MercuryTrxPresets.PRESETS.map(preset =>
-        ({band: TxGainCal.bandOf(preset.frequencyHz), hz: preset.frequencyHz})),
+      bands: mercuryCalBands,
       // So the plan can warn about JS8/WSPR's own windows too (registerBusyWindows),
       // the same courtesy those two pages already extend to each other.
       wsprPresets: typeof WsprCore !== "undefined" ? WsprCore.PRESETS : [],
@@ -1315,11 +1328,13 @@
     loadTuning();
 
     createGainPlan();
-    // The constructor's plan is the empty default (TxGainStore starts
-    // in-memory only) -- data.js/wspr.js's own startup does the identical
-    // load-then-reload so the panel adopts whatever this station already had
-    // saved in /mercury-txgain.json.
-    gainStore.load().then(() => { if (gainPlan) gainPlan.reload(); });
+    // Adopt the shared matrix and import plans left in either legacy result
+    // document. Tone is first so an existing JS8/WSPR/RTTY matrix remains the
+    // authority; Mercury contributes only its DATAC1 calibration frequencies.
+    gainPlanStore.loadAndMigrate([
+      {profile: TxGainPlanStore.PROFILE_TONE, store: legacyToneGainStore},
+      {profile: TxGainPlanStore.PROFILE_MERCURY, store: gainStore},
+    ]).then(() => { if (gainPlan) gainPlan.reload(); });
     renderTimetableButton();
     renderHeader();
     if (waterfall) waterfall.resize();

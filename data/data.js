@@ -582,6 +582,10 @@ function currentJs8() { return settings.modems.js8call; }
 // deliberately measures the radio as it stands -- so calibrating for JS8 means
 // setting this page's band and power first, then calibrating there.
 const gainStore = new TxGainCal.TxGainStore();
+const gainPlanStore = new TxGainPlanStore.PlanStore({
+  profile: TxGainPlanStore.PROFILE_TONE,
+  bands: () => WsprCore.PRESETS.map(preset => ({band:preset.band, hz:preset.hz})),
+});
 // One JS8 message is several frames, each keyed separately and each with its
 // level already baked in by the modulator -- so the limiter gets one reduction
 // per frame and re-reads the ALC at every frame boundary. See the flag's comment
@@ -670,7 +674,8 @@ function createGainPlan() {
   gainPlan = TxGainPlanUi.create({
     mount:dom.planField,
     button:dom.planButton,
-    store:gainStore,
+    resultStore:gainStore,
+    planStore:gainPlanStore,
     cal:gainCal,
     model:() => liveRadioModel(),
     modelNumber:() => IcomModels.modelNumber(liveRadioModel()),
@@ -745,8 +750,9 @@ function createGainPlan() {
     // if the tab dies mid-run.
     planBlockingReason:() => (currentJs8().auto
       ? "turn unattended operation off first — the plan keys on other bands" : ""),
-    // The plan UI's own requests inherit the deadline too; /txgain.json lands on
-    // flash, so it gets the longer one. A caller-supplied signal still wins.
+    // The plan UI's own requests inherit the deadline too; both result and plan
+    // documents land on flash, so they get the longer one. A caller-supplied
+    // signal still wins.
     fetchImpl:(url, options = {}) =>
       fetch(url, {signal:fetchDeadline(FETCH_FLASH_TIMEOUT_MS), ...options}),
     setModeFilter:(mode, filter) => fetch(RADIO_CMD_URL,{method:"POST", signal:fetchDeadline(),
@@ -7986,10 +7992,11 @@ async function init() {
   // write; a stale copy costs at most an older level or a false "not
   // calibrated", never a level in the wrong direction.
   createGainCal();
-  // The plan lives in the same file as the table, so it arrives with it. reload()
-  // adopts whatever the station stored -- or seeds a usable first plan, because an
-  // empty grid has nothing to tick and RUN can then only refuse.
-  gainStore.load().then(()=>{renderResolvedGain(); if(gainPlan)gainPlan.reload();});
+  // Load the station-wide plan, importing a legacy plan still embedded in the
+  // single-tone result table when this is the first run after an upgrade.
+  gainPlanStore.loadAndMigrate([
+    {profile:TxGainPlanStore.PROFILE_TONE, store:gainStore},
+  ]).then(()=>{renderResolvedGain(); if(gainPlan)gainPlan.reload();});
   // The calibration carrier has its own pacing driver, so it needs its own pump
   // and its own meter feed. Both are no-ops unless it is keying.
   scheduler.every("gainCal",500,()=>{

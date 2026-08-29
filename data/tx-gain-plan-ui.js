@@ -176,6 +176,8 @@
   class TxGainPlanPanel {
     // `adapter` is the page, plus what the batch needs beyond a single run:
     //   cal              the TxGainCalRun this page already mounts
+    //   resultStore      profile-specific measured gains (legacy name: store)
+    //   planStore        station-wide shared band x power plan
     //   setFrequency(hz) -> Promise, confirmed against /state
     //   setPercent(pc)   -> Promise, confirmed in whole percent
     //   send(payload)    -> Promise, POST /cmd (used for civ.read and the MOD write)
@@ -184,9 +186,10 @@
     //   bands()          -> [{band, hz}] offered in the ADD BAND menu
     constructor(adapter) {
       this.page = adapter;
-      this.store = adapter.store;
+      this.store = adapter.resultStore || adapter.store;
+      this.planStore = adapter.planStore || this.store;
       this.cal = adapter.cal;
-      this.plan = TxGainPlan.normalizePlan(this.store.plan());
+      this.plan = TxGainPlan.normalizePlan(this.planStore.plan());
       this.run = null;
       this.ask = null;               // the pending antenna question
       this.askAtMs = 0;
@@ -219,6 +222,10 @@
         this.dom = {};
         for (const node of adapter.mount.querySelectorAll("[data-plan]"))
           this.dom[node.dataset.plan] = node;
+        if (adapter.calibrationProfileLabel) {
+          const subtitle = adapter.mount.querySelector("header small");
+          if (subtitle) subtitle.textContent += ` · ${adapter.calibrationProfileLabel} results`;
+        }
         this.dom.add.addEventListener("click", () => this.addBand());
         this.dom.addpower.addEventListener("click", () => this.addPower());
         this.dom.newpower.addEventListener("keydown", event => {
@@ -274,7 +281,7 @@
     // the empty default; without this, a plan built on another device stayed invisible
     // until something else happened to redraw.
     reload() {
-      const stored = TxGainPlan.normalizePlan(this.store.plan());
+      const stored = TxGainPlan.normalizePlan(this.planStore.plan());
       if (stored.rows.length || stored.powers.length) this.plan = stored;
       else this.trySeed();
       this.render();
@@ -422,7 +429,7 @@
 
     async savePlan() {
       this.plan = TxGainPlan.normalizePlan(this.plan);
-      try { await this.store.putPlan(this.plan); }
+      try { await this.planStore.putPlan(this.plan); }
       catch (error) { this.message = String(error.message || error); }
       this.render();
     }

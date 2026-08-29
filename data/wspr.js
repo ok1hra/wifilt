@@ -1681,6 +1681,10 @@
   // reference goes -- plus the one thing that is genuinely WSPR's: the beacon's
   // own runtime limiter.
   const gainStore = new TxGainCal.TxGainStore();
+  const gainPlanStore = new TxGainPlanStore.PlanStore({
+    profile: TxGainPlanStore.PROFILE_TONE,
+    bands: () => WsprCore.PRESETS.map(preset => ({band: preset.band, hz: preset.hz})),
+  });
   const beaconGuard = new TxAlcGuard.TxAlcGuard();
   let calArmed = false;           // #autogain: also suppresses the automatic power write
 
@@ -1758,7 +1762,8 @@
   gainPlan = TxGainPlanUi.create({
     mount: dom.planField,
     button: dom.planButton,
-    store: gainStore,
+    resultStore: gainStore,
+    planStore: gainPlanStore,
     cal: gainCal,
     model: calModel,
     modelNumber: () => IcomModels.modelNumber(calModel()),
@@ -2561,9 +2566,11 @@
     };
     readCalHash();
     window.addEventListener("hashchange", () => { readCalHash(); render(); });
-    // The plan is the station's, so it arrives with the table rather than with the
-    // page. reload() adopts it -- or seeds a usable first one when there is none.
-    gainStore.load().then(() => { if (gainPlan) gainPlan.reload(); render(); });
+    // The plan is station-wide in its own document. Import the legacy copy from
+    // the single-tone result table, then adopt it or seed a usable first plan.
+    gainPlanStore.loadAndMigrate([
+      {profile: TxGainPlanStore.PROFILE_TONE, store: gainStore},
+    ]).then(() => { if (gainPlan) gainPlan.reload(); render(); });
 
     pollState();
     setInterval(pollState, STATE_POLL_MS);

@@ -214,6 +214,11 @@ const server = http.createServer((request, response) => {
       response.writeHead(200, {"Content-Type": "application/json", "Cache-Control": "no-store"});
       return response.end(txgainDoc);
     }
+    if (url.pathname === "/txgain-plan.json") {
+      if (request.method === "POST") { txgainPlanDoc = text; return json({ok: true}); }
+      response.writeHead(200, {"Content-Type": "application/json", "Cache-Control": "no-store"});
+      return response.end(txgainPlanDoc);
+    }
 
     if (url.pathname === "/result" && request.method === "POST") {
       response.writeHead(204).end();
@@ -375,6 +380,7 @@ const encodeCivBcd = value => {
 
 const ULAW_BYTES_PER_PACKET = 160;      // 960 samples at 48 kHz, decimated 6:1
 let txgainDoc = '{}';
+let txgainPlanDoc = '{}';
 
 function packetPeak(payload) {
   let peak = 0;
@@ -1976,7 +1982,7 @@ addEventListener("unhandledrejection", event => {
                                       {band: "30m", hz: 10140000, cells: [1]}]};
     await plan.savePlan();
     check("the plan is stored on the station, not in this browser",
-          Boolean((await (await fetch("/txgain.json", {cache: "no-store"})).json()).plan.rows.length),
+          Boolean((await (await fetch("/txgain-plan.json", {cache: "no-store"})).json()).rows.length),
           "a plan built at the desk has to be runnable from the tablet at the switch");
     check("the estimate says what the run will cost, in carriers and questions",
           /carriers/.test($("planField").textContent) &&

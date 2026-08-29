@@ -1633,6 +1633,11 @@
   // comment for why this is not a new RTTY-specific carrier).
 
   const gainStore = new TxGainCal.TxGainStore();
+  const gainPlanStore = new TxGainPlanStore.PlanStore({
+    profile: TxGainPlanStore.PROFILE_TONE,
+    bands: () => RttyPresets.PRESETS.map(preset =>
+      ({band: TxGainCal.bandOf(preset.frequencyHz), hz: preset.frequencyHz})),
+  });
   const calModel = () => liveRadioModel() || "";
   let gainPlan = null;
 
@@ -1686,7 +1691,8 @@
   gainPlan = TxGainPlanUi.create({
     mount: dom.planField,
     button: dom.planButton,
-    store: gainStore,
+    resultStore: gainStore,
+    planStore: gainPlanStore,
     cal: gainCal,
     model: calModel,
     modelNumber: () => IcomModels.modelNumber(calModel()),
@@ -2065,16 +2071,18 @@
     loadFskConfig();
     mountFskPeerList();
 
-    // The plan (and every calibrated knee) is the station's, shared over
-    // /txgain.json with JS8Call-ICOM/WSPR-Beacon -- it arrives with the table
-    // rather than with the page. reload() adopts whatever is already there,
+    // The station-wide plan is shared with JS8Call-ICOM/WSPR-Beacon through
+    // /txgain-plan.json; their single-tone knees remain in /txgain.json.
+    // reload() adopts whatever is already there,
     // or seeds a usable first one when there is none (code-review 2026-08-28:
     // this call was missing here entirely, unlike data.js/wspr.js, which both
     // load the shared store on boot -- so RTTY-ICOM never saw a calibration
     // measured on another page, never picked up the shared plan, and its own
     // gainCal.resolved() could never report calibrated:true no matter what
     // was actually on file).
-    gainStore.load().then(() => { if (gainPlan) gainPlan.reload(); render(); });
+    gainPlanStore.loadAndMigrate([
+      {profile: TxGainPlanStore.PROFILE_TONE, store: gainStore},
+    ]).then(() => { if (gainPlan) gainPlan.reload(); render(); });
 
     pollState();
     setInterval(pollState, STATE_POLL_MS);

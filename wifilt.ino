@@ -683,7 +683,14 @@ int incomingByte = 0;   // for incoming serial data
   // unattended beacon started from a phone must not transmit at a level that was
   // only ever calibrated on the shack PC.
   static const char* TXGAIN_CONFIG_PATH = "/txgain.json";
-  static const size_t TXGAIN_MAX_BYTES = 6144;   // ~40 entries; a full band plan
+  static const size_t TXGAIN_MAX_BYTES = 6144;   // ~40 measured entries
+  // One station-wide CAL PLAN matrix for every DATA modem. Results remain in
+  // the two waveform-specific tables around it; exact frequencies in this
+  // document are keyed by calibration profile (single-tone/Mercury DATAC1).
+  // Separating the small, frequently edited plan also prevents a plan edit and
+  // a calibration result from replacing each other in a whole-file write.
+  static const char* TXGAIN_PLAN_CONFIG_PATH = "/txgain-plan.json";
+  static const size_t TXGAIN_PLAN_MAX_BYTES = 4096;
   // Mercury's OWN gain table, deliberately a separate file from JS8/WSPR's
   // (docs/mercury-implementace.md ch.8): the same audio "gain" scalar means a
   // different real drive level depending on the waveform's PAPR -- a tone
@@ -958,6 +965,8 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void handlePostIdentity(void);
   void handleGetTxGain(void);
   void handlePostTxGain(void);
+  void handleGetTxGainPlan(void);
+  void handlePostTxGainPlan(void);
   void handleGetMercuryTxGain(void);
   void handlePostMercuryTxGain(void);
   void handleGetMercuryTuning(void);
@@ -3155,6 +3164,30 @@ void handleConfigDownload() {
       }
     }
   }
+  if (cfgFS.exists(TXGAIN_PLAN_CONFIG_PATH)) {
+    File planFile = cfgFS.open(TXGAIN_PLAN_CONFIG_PATH, "r");
+    if (planFile) {
+      String planJson = planFile.readString();
+      planFile.close();
+      planJson.trim();
+      if (planJson.startsWith("{")) {
+        j += ",\"txGainPlan\":";
+        j += planJson;
+      }
+    }
+  }
+  if (cfgFS.exists(MERCURY_TXGAIN_CONFIG_PATH)) {
+    File mercuryGainFile = cfgFS.open(MERCURY_TXGAIN_CONFIG_PATH, "r");
+    if (mercuryGainFile) {
+      String mercuryGainJson = mercuryGainFile.readString();
+      mercuryGainFile.close();
+      mercuryGainJson.trim();
+      if (mercuryGainJson.startsWith("{")) {
+        j += ",\"mercuryTxGain\":";
+        j += mercuryGainJson;
+      }
+    }
+  }
   // The operating profile travels with the rest. It moved out of the browser in
   // 2026-08-08 precisely so it would stop being the one thing a backup could not
   // carry, and the restore below has to know the same key.
@@ -3249,7 +3282,6 @@ void handleConfigUpload() {
       }
     }
   }
-
 
   // Integers to EEPROM
   auto parseField = [&](const char *key, int minVal, int maxVal) -> int {
@@ -3352,6 +3384,42 @@ void handleConfigUpload() {
         if (f) f.close();
         webServer.send(500, "application/json",
           "{\"ok\":false,\"error\":\"storage\",\"section\":\"txGain\"}");
+        return;
+      }
+      f.close();
+    }
+  }
+
+  {
+    String planCfg = extractJsonObject(body, "txGainPlan");
+    if (planCfg.length() > TXGAIN_PLAN_MAX_BYTES) {
+      rejectOversize("txGainPlan", planCfg.length(), TXGAIN_PLAN_MAX_BYTES);
+      return;
+    }
+    if (planCfg.length() > 0) {
+      File f = cfgFS.open(TXGAIN_PLAN_CONFIG_PATH, "w");
+      if (!f || f.print(planCfg) != planCfg.length()) {
+        if (f) f.close();
+        webServer.send(500, "application/json",
+          "{\"ok\":false,\"error\":\"storage\",\"section\":\"txGainPlan\"}");
+        return;
+      }
+      f.close();
+    }
+  }
+
+  {
+    String mercuryGainCfg = extractJsonObject(body, "mercuryTxGain");
+    if (mercuryGainCfg.length() > MERCURY_TXGAIN_MAX_BYTES) {
+      rejectOversize("mercuryTxGain", mercuryGainCfg.length(), MERCURY_TXGAIN_MAX_BYTES);
+      return;
+    }
+    if (mercuryGainCfg.length() > 0) {
+      File f = cfgFS.open(MERCURY_TXGAIN_CONFIG_PATH, "w");
+      if (!f || f.print(mercuryGainCfg) != mercuryGainCfg.length()) {
+        if (f) f.close();
+        webServer.send(500, "application/json",
+          "{\"ok\":false,\"error\":\"storage\",\"section\":\"mercuryTxGain\"}");
         return;
       }
       f.close();
@@ -3713,6 +3781,42 @@ void handlePostTxGain() {
     return;
   }
   File f = cfgFS.open(TXGAIN_CONFIG_PATH, "w");
+  if (!f) { webServer.send(500, "application/json", "{\"error\":\"write\"}"); return; }
+  f.print(body);
+  f.close();
+  webServer.send(200, "application/json", "{\"ok\":true}");
+}
+
+// Shared CAL PLAN document. The firmware owns only its size and location; the
+// browser owns the matrix/profile schema and its migration from the legacy
+// `plan` keys still present in the two result documents.
+void handleGetTxGainPlan() {
+  webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  webServer.sendHeader("Connection", "close");
+  webServer.client().setNoDelay(true);
+  String json;
+  if (cfgFS.exists(TXGAIN_PLAN_CONFIG_PATH)) {
+    File f = cfgFS.open(TXGAIN_PLAN_CONFIG_PATH, "r");
+    if (f) { json = f.readString(); f.close(); json.trim(); }
+  }
+  if (json.length() < 2 || json[0] != '{') json = "{}";
+  webServer.send(200, "application/json", json);
+}
+
+void handlePostTxGainPlan() {
+  webServer.sendHeader("Connection", "close");
+  webServer.client().setNoDelay(true);
+  String body = webServer.arg("plain");
+  body.trim();
+  if (body.length() == 0 || body.length() > TXGAIN_PLAN_MAX_BYTES) {
+    webServer.send(400, "application/json", "{\"error\":\"bad_request\"}");
+    return;
+  }
+  if (body[0] != '{' || body[body.length()-1] != '}') {
+    webServer.send(400, "application/json", "{\"error\":\"not_json\"}");
+    return;
+  }
+  File f = cfgFS.open(TXGAIN_PLAN_CONFIG_PATH, "w");
   if (!f) { webServer.send(500, "application/json", "{\"error\":\"write\"}"); return; }
   f.print(body);
   f.close();
@@ -4543,6 +4647,8 @@ void setupWebServer(void){
   webServer.on("/js8-config.json", HTTP_POST, handlePostJs8Config);
   webServer.on("/txgain.json", HTTP_GET,  handleGetTxGain);
   webServer.on("/txgain.json", HTTP_POST, handlePostTxGain);
+  webServer.on("/txgain-plan.json", HTTP_GET,  handleGetTxGainPlan);
+  webServer.on("/txgain-plan.json", HTTP_POST, handlePostTxGainPlan);
   webServer.on("/mercury-txgain.json", HTTP_GET,  handleGetMercuryTxGain);
   webServer.on("/mercury-txgain.json", HTTP_POST, handlePostMercuryTxGain);
   webServer.on("/mercury-tuning.json", HTTP_GET,  handleGetMercuryTuning);

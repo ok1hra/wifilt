@@ -36,6 +36,7 @@ const identity={call:"OK1HRA",grid:"JO70"};
 // The station calibration table, as the firmware stores it: a blob it never
 // looks inside.
 let txgainDoc='{"v":1,"entries":{}}';
+let txgainPlanDoc='{}';
 // Decoded exactly as the radio decodes 14 0A: two BCD bytes, 0..255 (02 55).
 // The page confirms its writes by reading this back, so getting it wrong here
 // would make every power test pass on a number the page itself invented.
@@ -134,6 +135,9 @@ const server=http.createServer((req,res)=>{
   if(url.pathname==="/txgain.json"){
     if(req.method==="POST"){let body="";req.on("data",c=>body+=c);req.on("end",()=>{txgainDoc=body;res.setHeader("Content-Type","application/json");res.end('{"ok":true}');});return;}
     res.setHeader("Content-Type","application/json");res.setHeader("Cache-Control","no-store");res.end(txgainDoc);return;}
+  if(url.pathname==="/txgain-plan.json"){
+    if(req.method==="POST"){let body="";req.on("data",c=>body+=c);req.on("end",()=>{txgainPlanDoc=body;res.setHeader("Content-Type","application/json");res.end('{"ok":true}');});return;}
+    res.setHeader("Content-Type","application/json");res.setHeader("Cache-Control","no-store");res.end(txgainPlanDoc);return;}
   // altM 459.9 is the real IC-705 reading (bytes 00 45 99 00) that caught the
   // firmware decoding altitude ten times too high; keep it as the fixture value.
   if(url.pathname==="/gps"){res.setHeader("Content-Type","application/json");res.end(JSON.stringify({grid:"JO60WC28",sel:1,fixAgeMs:1200,lat:50.104167,lon:12.891667,altM:459.9,courseDeg:123,speedKmh:45.6,utc:"2026-08-12 19:04:33"}));return;}

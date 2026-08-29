@@ -76,9 +76,9 @@
 
   // ---- the plan document -----------------------------------------------------
   //
-  // Stored in /txgain.json under `plan`, so it is the station's and not the
-  // browser's: the operator builds it at the desk and runs it from a tablet next
-  // to the antenna switch, because every retune asks a question.
+  // Stored station-wide in /txgain-plan.json, not in browser storage. The
+  // shared matrix is independent of waveform-specific measurement results;
+  // TxGainPlanStore presents this legacy {band,hz,cells} view per profile.
 
   function emptyPlan() { return {powers: [], rows: []}; }
 

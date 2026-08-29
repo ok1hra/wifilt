@@ -67,6 +67,10 @@ const fakeRadio = {
 };
 const cmdLog = [];
 let txgainDoc = { v: 2, entries: {}, plan: { powers: [], rows: [] } };
+let toneTxgainDoc = {v: 2, entries: {}, plan: {powers: [10], rows: [
+  {band: "20m", hz: 14095600, cells: [1]},
+]}};
+let txgainPlanDoc = {};
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, "http://fixture");
@@ -122,6 +126,28 @@ const server = http.createServer((req, res) => {
       });
       return;
     }
+  }
+
+  if (url.pathname === "/txgain.json") {
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify(toneTxgainDoc));
+    return;
+  }
+
+  if (url.pathname === "/txgain-plan.json") {
+    if (req.method === "GET") {
+      res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(JSON.stringify(txgainPlanDoc));
+      return;
+    }
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => {
+      try { txgainPlanDoc = JSON.parse(Buffer.concat(chunks).toString()); } catch (_e) {}
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    return;
   }
 
   let file = url.pathname === "/" ? "/mercury.html" : url.pathname;
@@ -218,6 +244,11 @@ const PAGE_SCRIPT = `
     planField?.hidden === false);
   check("the plan grid renders (tx-gain-plan-ui.js's own markup, unmodified)",
     Boolean(planField?.querySelector(".plan-grid, .plan-tools, .plan-field")));
+  check("Mercury migrated and displays the station-wide shared plan",
+    Boolean(planField?.querySelector('[data-hz="0"]')) &&
+    planField.querySelector('[data-hz="0"]')?.value === "14105.0");
+  check("the panel names its profile-specific result layer",
+    planField?.querySelector("header small")?.textContent.includes("Mercury DATAC1 results"));
 
   // Regression, found live 2026-08-23 by an operator, not by this suite (it
   // never actually pressed RUN before): bands() fed row.band the DISPLAY
