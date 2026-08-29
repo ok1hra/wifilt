@@ -58,7 +58,7 @@
     "rttyScope", "rttyLiveSpectrum", "rttyScopeOverlay", "liveSpectrumCanvas",
     "rttyRxLog", "rxSummary",
     "rttyTxText", "rttyTxAbort", "rttyTxState",
-    "rttySquelchInput", "rttySquelchLive", "rttyToneInput", "settingsSummary",
+    "rttySquelchInput", "rttySquelchLive", "rttySquelchNewlineEnabled", "rttyToneInput", "settingsSummary",
     // AFC (grilled 2026-08-28, 3rd session): see rtty.js's own afcTick()/
     // syncDecoderTone() for what these drive.
     "rttyAfcEnabled", "rttyAfcRateInput", "rttyAfcMaxDeviationInput",
@@ -395,10 +395,21 @@
   // transients. The scrolling waterfall's own row rate/colour ramp
   // (this.hop/agcLow/agcHigh/lastValues) is untouched by either setting
   // ("vodopad nechat", grilled).
+  //
+  // Pushed once more 2026-08-29 (grilled): drawLiveSpectrum() only ever reads
+  // this tap once per requestAnimationFrame (~16.7 ms @ 60 Hz), so at the old
+  // 64 ms cadence roughly 3 out of every 4 paints redrew the exact same
+  // values -- visible as a small "stepping" motion rather than a continuous
+  // one. 128 samples (=16 ms, still evenly divides the 2048-sample hop, so
+  // the shared-extraction optimization still applies -- just every 16th live
+  // tick instead of every 4th) lines the tap's own cadence up with the
+  // display's, which is genuinely the ceiling: anything faster still cannot
+  // be painted any sooner than the next animation frame, so it would only
+  // burn extra FFTs nobody ever sees.
   const waterfall = new Spectrum.Waterfall({
     canvas: dom.waterfallCanvas, container: dom.waterfall,
     sampleRate: RX_AUDIO_RATE, lowHz: BASE_LOW_HZ, highHz: BASE_HIGH_HZ,
-    liveHopSize: 512, liveAgcEase: .6,
+    liveHopSize: 128, liveAgcEase: .6,
   });
 
   // "Nice" round tick values (d3.ticks()-style): pick a step from {1,2,5}x10^n
@@ -479,6 +490,25 @@
       ctx.lineWidth = 2;   // item 5: thinned by 1/3 (was 3)
       ctx.beginPath(); ctx.moveTo(Math.round(x) + .5, 0);
       ctx.lineTo(Math.round(x) + .5, bottomY); ctx.stroke();
+    }
+
+    // Hover preview (grilled inline 2026-08-29): a thin, solid grey pair
+    // showing where the solid green/red lines above would land if the
+    // operator clicked at the current mouse position -- markSpaceForLowHz()
+    // mirrors setToneFromSpaceHz()/markToneHz()'s own math exactly, just
+    // without touching settings/the decoder. Solid (not dashed), so it
+    // never gets mistaken for the AFC pair above even when both show at
+    // once -- AFC's dashed lines mean "current drift compensation", these
+    // mean "hypothetical click target", different questions.
+    if (hoverPreviewLowHz !== null) {
+      const [previewMarkHz, previewSpaceHz] = markSpaceForLowHz(hoverPreviewLowHz);
+      ctx.strokeStyle = "rgba(190,190,190,.65)";
+      ctx.lineWidth = 1;
+      for (const hz of [previewMarkHz, previewSpaceHz]) {
+        const x = waterfall.hzToX(hz, width);
+        ctx.beginPath(); ctx.moveTo(Math.round(x) + .5, 0);
+        ctx.lineTo(Math.round(x) + .5, bottomY); ctx.stroke();
+      }
     }
 
     // Item 9: the waterfall's own rough frequency ruler, bottom edge.
@@ -633,9 +663,11 @@
       }
 
       // Item 4: light grey (was rgba(120,220,200,.9), a teal too close to the
-      // MARK line's own green #5ad18a to tell apart at a glance).
+      // MARK line's own green #5ad18a to tell apart at a glance). Halved
+      // again 2026-08-29 (grilled): 1.5 read as too heavy a stroke for a
+      // trace that is meant to read as a thin live line, not a filled band.
       ctx.strokeStyle = "rgba(200,200,200,.9)";
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = .75;
       ctx.beginPath();
       const stepX = canvas.width / (points.length - 1 || 1);
       points.forEach((y, i) => (i === 0 ? ctx.moveTo(0, y) : ctx.lineTo(i * stepX, y)));
@@ -653,6 +685,42 @@
   const decoder = new RttyCodec.Decoder(RX_AUDIO_RATE,
     {toneHz: settings.toneHz, reverse: settings.reverse, squelchThreshold: settings.squelchThreshold});
 
+  // kap.13 (grilled 2026-08-29): colour each decoded RX character by its own
+  // meta.snrDb (10*log10(markMag/spaceMag) from a single Goertzel window
+  // sampled at that character's last/stop bit -- rtty-codec.js's
+  // _emitCode()). The SIGN of that ratio just reflects which of the two
+  // tones the window happened to catch (varies per character with the actual
+  // bit pattern), NOT confidence -- pure noise gives roughly equal mark/space
+  // energy (ratio near 0 dB either way), clean FSK gives one tone strongly
+  // dominant (|ratio| large either way). So the mapping below keys off
+  // Math.abs(snrDb), the distance from 0 dB, not the raw signed value.
+  //
+  // Floor/ceiling dB are placeholders -- snrDb here isn't physical SNR (no
+  // separate noise-floor measurement), so there's no real-air data yet to
+  // calibrate against (docs/rtty-implementace.md §13.3). Colours themselves
+  // are resolved from the existing --muted/--text custom properties instead
+  // of hardcoded hex, so the gradient tracks the page's own palette rather
+  // than carrying a second copy of it; ceiling deliberately equals --text
+  // exactly, so a fully-confident character looks identical to before this
+  // feature existed -- only weak/uncertain characters change.
+  const RX_CHAR_SNR_FLOOR_DB = 0, RX_CHAR_SNR_CEIL_DB = 15;
+  function cssVarRgb(name, fallbackHex) {
+    const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallbackHex;
+    const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(raw);
+    return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [255, 255, 255];
+  }
+  const RX_CHAR_FLOOR_RGB = cssVarRgb("--muted", "#8ba59d");
+  const RX_CHAR_CEIL_RGB = cssVarRgb("--text", "#e8f3ee");
+  function rxCharColorForSnr(snrDb) {
+    if (!Number.isFinite(snrDb)) return null;
+    const t = Math.max(0, Math.min(1,
+      (Math.abs(snrDb) - RX_CHAR_SNR_FLOOR_DB) / (RX_CHAR_SNR_CEIL_DB - RX_CHAR_SNR_FLOOR_DB)));
+    const r = Math.round(RX_CHAR_FLOOR_RGB[0] + (RX_CHAR_CEIL_RGB[0] - RX_CHAR_FLOOR_RGB[0]) * t);
+    const g = Math.round(RX_CHAR_FLOOR_RGB[1] + (RX_CHAR_CEIL_RGB[1] - RX_CHAR_FLOOR_RGB[1]) * t);
+    const b = Math.round(RX_CHAR_FLOOR_RGB[2] + (RX_CHAR_CEIL_RGB[2] - RX_CHAR_FLOOR_RGB[2]) * t);
+    return `rgb(${r},${g},${b})`;
+  }
+
   let rxOpenWordSpan = null;
   decoder.onChar((ch, meta) => {
     state.rxChars++;
@@ -667,7 +735,17 @@
         rxOpenWordSpan.className = "rtty-tok";
         dom.rttyRxLog.appendChild(rxOpenWordSpan);
       }
-      rxOpenWordSpan.textContent += ch;
+      // kap.13: one span per character (same shape as the TX echo below,
+      // rtty.css:96-105 -- just coloured by signal strength instead of
+      // elapsed send time) so each can carry its own SNR-derived colour.
+      // .rtty-tok's own click/hover (below) still targets the whole word via
+      // closest()/textContent -- unaffected by this nesting.
+      const charSpan = document.createElement("span");
+      charSpan.className = "rtty-rx-char";
+      charSpan.textContent = ch;
+      const color = rxCharColorForSnr(meta.snrDb);
+      if (color) charSpan.style.setProperty("--rtty-rx-char-color", color);
+      rxOpenWordSpan.appendChild(charSpan);
     }
     trimRxLog();
     dom.rttyRxLog.scrollTop = dom.rttyRxLog.scrollHeight;
@@ -677,6 +755,39 @@
     while (dom.rttyRxLog.textContent.length > RX_LOG_MAX_CHARS && dom.rttyRxLog.firstChild)
       dom.rttyRxLog.removeChild(dom.rttyRxLog.firstChild);
   }
+
+  // kap.13.4 (grilled 2026-08-29): on every squelch close->open transition,
+  // insert a line break into the RX log -- reuses rtty-codec.js's Decoder's
+  // existing onEvent() hook (until now unwired), no codec change needed.
+  // Throttled to at most one insert per SQUELCH_NEWLINE_THROTTLE_MS, measured
+  // from the last break actually INSERTED (not from the last squelch-open
+  // event), so a signal fluttering in and out near the squelch threshold
+  // can't spam the log -- the events in between are just silently dropped,
+  // no delayed catch-up insert. Skipped entirely while the log is still
+  // empty (nothing received yet, "Waiting for signal..." placeholder still
+  // showing, rtty.css:88) -- a break only makes sense as a separator BETWEEN
+  // receptions, not as a lone blank leading line, and that skip does NOT
+  // consume the throttle window (lastSquelchNewlineAt stays untouched), so
+  // the first real reception still gets its own break without an artificial
+  // wait.
+  const SQUELCH_NEWLINE_THROTTLE_MS = 2000;
+  let lastSquelchNewlineAt = 0;
+  decoder.onEvent(evt => {
+    if (evt.type !== "squelch" || !evt.open || !settings.squelchNewlineEnabled) return;
+    if (dom.rttyRxLog.childNodes.length === 0) return;
+    const now = Date.now();
+    if (now - lastSquelchNewlineAt < SQUELCH_NEWLINE_THROTTLE_MS) return;
+    lastSquelchNewlineAt = now;
+    // A squelch close mid-word (the tail of a transmission cut off before a
+    // natural word-break character) leaves rxOpenWordSpan pointing at that
+    // unfinished span -- without this, the NEXT reception's characters would
+    // keep appending to it, landing (in DOM order) before the break we're
+    // about to insert instead of after it.
+    rxOpenWordSpan = null;
+    dom.rttyRxLog.appendChild(document.createTextNode("\n"));
+    trimRxLog();
+    dom.rttyRxLog.scrollTop = dom.rttyRxLog.scrollHeight;
+  });
 
   // Item 6 (grilled 2026-08-27, second session): this station's own sent text,
   // echoed into the RX log like a monitor -- not a .rtty-tok (no click/hover:
@@ -925,20 +1036,51 @@
     dom.rttyToneInput.value = String(clamped);
   }
 
+  // Proportional within the CURRENTLY VISIBLE window (item 15) -- reads
+  // waterfall.lowHz/highHz directly (the Waterfall instance's own public
+  // fields) rather than a 2nd tracked copy, so a position always lands
+  // inside whatever window setRange() last established, zoomed or not.
+  // Shared by the click handler and the hover-preview mousemove handler
+  // below -- same geometry, two different uses of the resulting Hz.
+  function scopeClientXToHz(clientX) {
+    const rect = dom.rttyScope.getBoundingClientRect();
+    return Math.round(waterfall.lowHz +
+      (clientX - rect.left) / rect.width * (waterfall.highHz - waterfall.lowHz));
+  }
+
+  // [markHz, spaceHz] a click at this lower-tone frequency would produce --
+  // mirrors setToneFromSpaceHz()'s `centre = lowHz + SHIFT_HZ/2` followed by
+  // markToneHz()'s own txPolarity branch, without writing to settings or
+  // touching the decoder. Used by both the hover preview (drawScopeOverlay()
+  // above) and, implicitly, by what setToneFromSpaceHz() itself commits on
+  // an actual click.
+  function markSpaceForLowHz(lowHz) {
+    return settings.txPolarity === "reverse"
+      ? [lowHz, lowHz + RttyCodec.SHIFT_HZ]
+      : [lowHz + RttyCodec.SHIFT_HZ, lowHz];
+  }
+
   // Item 2, grilled 2026-08-28: one listener on #rttyScope (the wrapper
   // around BOTH the live-spectrum panel and the waterfall, item 8) instead of
   // a 2nd, separate one on the live-spectrum canvas -- the two blocks share
   // the same Hz window and width, so a single rect/handler already covers
   // "click anywhere in the spectrum retunes", not just the waterfall.
   dom.rttyScope.addEventListener("click", event => {
-    const rect = dom.rttyScope.getBoundingClientRect();
-    // Proportional within the CURRENTLY VISIBLE window (item 15) -- reads
-    // waterfall.lowHz/highHz directly (the Waterfall instance's own public
-    // fields) rather than a 2nd tracked copy, so a click always lands inside
-    // whatever window setRange() last established, zoomed or not.
-    const clickedHz = Math.round(waterfall.lowHz +
-      (event.clientX - rect.left) / rect.width * (waterfall.highHz - waterfall.lowHz));
-    setToneFromSpaceHz(clickedHz);
+    setToneFromSpaceHz(scopeClientXToHz(event.clientX));
+  });
+
+  // Hover preview (grilled inline 2026-08-29): hovering anywhere over the
+  // spectrogram or waterfall previews, in thin grey, where the solid
+  // green/red mark/space lines would move to on a click there -- same
+  // #rttyScope wrapper/geometry as the click handler above.
+  let hoverPreviewLowHz = null;
+  dom.rttyScope.addEventListener("mousemove", event => {
+    hoverPreviewLowHz = scopeClientXToHz(event.clientX);
+    drawScopeOverlay();
+  });
+  dom.rttyScope.addEventListener("mouseleave", () => {
+    hoverPreviewLowHz = null;
+    drawScopeOverlay();
   });
 
   // ---- TX: audio-stream method (kap.6.1) ----------------------------------
@@ -1653,6 +1795,12 @@
       drawScopeOverlay();
     });
 
+    // kap.13.4 (grilled 2026-08-29): see decoder.onEvent() above for what this drives.
+    dom.rttySquelchNewlineEnabled.addEventListener("change", () => {
+      settings.squelchNewlineEnabled = dom.rttySquelchNewlineEnabled.checked;
+      saveSettings();
+    });
+
     // AFC (grilled 2026-08-28, 3rd session). Turning it off resets the
     // detector immediately, same reasoning as setToneFromSpaceHz()'s own
     // reset -- a stale offset left applied after the operator turned AFC
@@ -1713,6 +1861,7 @@
     // setToneFromSpaceHz() uses on the way back in.
     dom.rttyToneInput.value = String(settings.toneHz - RttyCodec.SHIFT_HZ / 2);
     dom.rttyTxPolarity.value = settings.txPolarity;
+    dom.rttySquelchNewlineEnabled.checked = settings.squelchNewlineEnabled;
 
     dom.rttyAfcEnabled.checked = settings.afcEnabled;
     dom.rttyAfcRateInput.min = String(RttySettings.AFC_RATE_MIN_HZ_PER_CHAR);
