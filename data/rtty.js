@@ -1096,8 +1096,10 @@
 
   // Click a decoded token -> hand it to QRPlog, same BroadcastChannel dxc.html
   // already uses (kap.5/8.1). Unlike a DXC spot, this isn't "go work this
-  // station" -- source:"rtty" tells log.js's listener to leave RUN/S&P alone
-  // (grilled 2026-08-30) and just drop the callsign into the Call field.
+  // station" -- source:"rtty" tells log.js's listener to leave RUN/S&P alone,
+  // and (grilled again 2026-08-30) to drop the word into whichever of
+  // Call/Exch the operator is actually focused in there, not always Call --
+  // a clicked token is any decoded word, not necessarily a callsign.
   const dxcChannel = (() => { try { return new BroadcastChannel("wifilt-dxc-action"); } catch (_error) { return null; } })();
   dom.rttyRxLog.addEventListener("click", event => {
     const token = event.target.closest(".rtty-tok");

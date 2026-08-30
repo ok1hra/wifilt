@@ -3104,24 +3104,48 @@ function init() {
 
 init();
 
+// Grilled 2026-08-30: which field a word landing from elsewhere goes into
+// when nothing in THIS document is presently focused (this tab need not be
+// the one on screen -- document.activeElement still reports the last field
+// focused here regardless). Same rule the rest of the app already uses for
+// Enter/macro-preview (formStateOf()): follow the workflow, don't guess.
+function focusedLogField() {
+  if (document.activeElement === inpCall) return inpCall;
+  if (document.activeElement === inpExch) return inpExch;
+  return formStateOf() === 'CALL_ENTERED' ? inpExch : inpCall;
+}
+
 // ── DXC tune broadcast ────────────────────────────────────────────────────────
 try {
   const dxcActionCh = new BroadcastChannel('wifilt-dxc-action');
   dxcActionCh.addEventListener('message', e => {
     const msg = e.data;
     if (!msg || msg.type !== 'dxc-tune') return;
+    // Captured BEFORE selectTrx(): clicking a TRX button focuses Call as one
+    // of its own side effects (trxButtons' own click handler, below), which
+    // would otherwise always beat focusedLogField() to the punch and make
+    // every RTTY word land in Call regardless of where the operator actually
+    // was -- found by an on-air-style test catching the exact race, not by
+    // inspection.
+    const rttyTarget = msg.source === 'rtty' ? focusedLogField() : null;
     selectTrx(msg.trx);
     // DXC hands over a spot to work -- switching to S&P is the point. A click
     // in RTTY-ICOM's own RX log (msg.source === 'rtty') is just "insert this
-    // callsign", not "start a new QSO in a particular mode" -- whatever RUN/
-    // S&P the operator was already in stays as it is.
+    // word", not "start a new QSO in a particular mode" -- whatever RUN/S&P
+    // the operator was already in stays as it is.
     if (msg.source !== 'rtty') setRunMode('SP');
     if (msg.callsign) {
-      inpCall.value = msg.callsign;
-      inpCall.dispatchEvent(new Event('input'));
+      // A DXC spot is always a whole callsign, always Call (unchanged). A
+      // word clicked in RTTY-ICOM's own RX log isn't necessarily a callsign
+      // at all -- it's whatever token was clicked, which could just as well
+      // be a piece of the exchange -- so it goes wherever the operator was
+      // actually working right now, not always Call.
+      const target = rttyTarget || inpCall;
+      target.value = msg.callsign;
+      target.dispatchEvent(new Event('input'));
+      target.focus();
     }
     checkDupe(inpCall.value.trim());
-    inpCall.focus();
   });
 } catch (_) {}
 
