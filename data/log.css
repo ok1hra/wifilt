@@ -1009,6 +1009,45 @@ body {
   margin-left: auto;
 }
 
+/* ── Macro editor modal (MACROS button) ─────────────────────────────────── */
+
+.mx-box { width: min(720px, calc(100vw - 24px)); }
+
+.mx-help {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 12px;
+  color: var(--dark-muted);
+  line-height: 1.5;
+}
+.mx-help-item b { color: var(--btn-on-tx); font-weight: bold; }
+
+.mx-row span { min-width: 150px; font-size: 14px; }
+.mx-row .mx-default-btn { flex-shrink: 0; }
+
+.mx-preview {
+  margin: -2px 0 8px 160px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--btn-on-tx);
+  letter-spacing: 0.03em;
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-height: 1.2em;
+}
+
+.mx-actions {
+  align-items: center;
+  gap: 10px;
+}
+
+.mx-status {
+  margin-right: auto;
+  font-size: 13px;
+  color: var(--dark-muted);
+}
+
 /* ── Help button ── */
 
 .btn-help {

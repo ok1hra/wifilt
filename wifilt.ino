@@ -135,7 +135,7 @@ volatile bool cwIpSendPending = false;
 #ifndef LOOP_WARN_MS
   #define LOOP_WARN_MS 200
 #endif
-#define REV 20260829
+#define REV 20260830
 #define WIFI
 #define FSK_KEYING  // RTTY by keying the FSK + PTT outputs (was UDP_TO_FSK, from when a UDP port fed it)
 #define WDT         // watchdog timer
@@ -717,6 +717,14 @@ int incomingByte = 0;   // for incoming serial data
   static const char* JS8_CONFIG_PATH = "/js8-config.json";
   static const size_t JS8_CONFIG_MAX_BYTES = 4096;   // measured: 2041 B with a full 48-slot schedule
 
+  // QRPlog CW/RTTY macro templates (CQ/TXEXCH/TXEXCHSP/TXEXCHSP2/TU/CALLTU,
+  // x2 for CW vs RTTY -- 12 short strings). Same blob-store convention as the
+  // JS8 profile above: the browser (data/log.js) owns the placeholder syntax
+  // and the defaults, this file just stores whatever it was handed so every
+  // browser pointed at this station sees the same wording.
+  static const char* LOG_MACROS_PATH = "/log-macros.json";
+  static const size_t LOG_MACROS_MAX_BYTES = 4096;
+
   // In-memory cache of log-config.json fields, served by /log-config.
   String g_lcTrx1Label = "TRX1";   // replaced by the radio's own model once known
   String g_lcTrx2Label = "TRX2";
@@ -961,6 +969,8 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void handlePostFskOutput(void);
   void handleGetJs8Config(void);
   void handlePostJs8Config(void);
+  void handleGetLogMacros(void);
+  void handlePostLogMacros(void);
   void handleGetIdentity(void);
   void handlePostIdentity(void);
   void handleGetTxGain(void);
@@ -3661,6 +3671,54 @@ void handlePostJs8Config() {
   webServer.send(200, "application/json", "{\"ok\":true}");
 }
 
+// ---- QRPlog CW/RTTY macro templates ------------------------------------------
+//
+// A blob store, exactly like the JS8 profile above: the browser owns the
+// placeholder syntax and the default wording, this file just holds whatever
+// JSON it was handed so any browser pointed at this station picks up the
+// same macros -- edit in one tab, the next reload elsewhere sees it too.
+void handleGetLogMacros() {
+  webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  webServer.sendHeader("Connection", "close");
+  webServer.client().setNoDelay(true);
+  if (!cfgFS.exists(LOG_MACROS_PATH)) {
+    // Empty, not 404: "nothing customized yet" is a state the browser falls
+    // back to its own hardcoded defaults for, not an error.
+    webServer.send(200, "application/json", "{}");
+    return;
+  }
+  File f = cfgFS.open(LOG_MACROS_PATH, FILE_READ);
+  if (!f) { webServer.send(500, "application/json", "{}"); return; }
+  webServer.streamFile(f, "application/json");
+  f.close();
+}
+
+void handlePostLogMacros() {
+  webServer.sendHeader("Connection", "close");
+  webServer.client().setNoDelay(true);
+  String body = webServer.arg("plain");
+  body.trim();
+  if (body.length() == 0 || body.length() > LOG_MACROS_MAX_BYTES) {
+    String j = "{\"ok\":false,\"error\":\"too_big\",\"bytes\":";
+    j += (unsigned)body.length();
+    j += ",\"limit\":"; j += (unsigned)LOG_MACROS_MAX_BYTES; j += "}";
+    webServer.send(body.length() == 0 ? 400 : 409, "application/json", j);
+    return;
+  }
+  if (body[0] != '{' || body[body.length()-1] != '}') {
+    webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"not_an_object\"}");
+    return;
+  }
+  File f = cfgFS.open(LOG_MACROS_PATH, "w");
+  if (!f || f.print(body) != body.length()) {
+    if (f) f.close();
+    webServer.send(500, "application/json", "{\"ok\":false,\"error\":\"storage\"}");
+    return;
+  }
+  f.close();
+  webServer.send(200, "application/json", "{\"ok\":true}");
+}
+
 // ---- TX gain calibration table ----------------------------------------------
 //
 // A blob store, not a config endpoint. See TXGAIN_CONFIG_PATH.
@@ -4645,6 +4703,8 @@ void setupWebServer(void){
   webServer.on("/identity",   HTTP_POST, handlePostIdentity);
   webServer.on("/js8-config.json", HTTP_GET,  handleGetJs8Config);
   webServer.on("/js8-config.json", HTTP_POST, handlePostJs8Config);
+  webServer.on("/log-macros.json", HTTP_GET,  handleGetLogMacros);
+  webServer.on("/log-macros.json", HTTP_POST, handlePostLogMacros);
   webServer.on("/txgain.json", HTTP_GET,  handleGetTxGain);
   webServer.on("/txgain.json", HTTP_POST, handlePostTxGain);
   webServer.on("/txgain-plan.json", HTTP_GET,  handleGetTxGainPlan);

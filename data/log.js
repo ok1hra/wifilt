@@ -699,8 +699,18 @@
 /**
  * log-macros.js — contest macro generator
  *
- * Macros: CQ, TXEXCH, TXEXCHSP, TXEXCHSP2, TU
+ * Macros: CQ, TXEXCH, TXEXCHSP, TXEXCHSP2, TU, CALLTU
  * Transport: HTTP POST /cmd {type:"sendCw", text} — firmware routes CW vs FSK/RTTY by current TRX mode.
+ *
+ * Macro TEXT is a user-editable template per (macro type × CW/RTTY), stored
+ * server-side at /log-macros.json (grilled 2026-08-30) so every browser
+ * pointed at this station sees the same wording — see the MACROS editor in
+ * log.js. Templates hold {PLACEHOLDER} tokens; the surrounding words/order
+ * are the operator's to change, but WHEN a placeholder is empty (e.g. {LOC}
+ * on a non-VHF NR exchange, or {TU} outside the cases that confirm-with-tu
+ * today) stays governed by computeMacroVars() below, unchanged from the old
+ * hardcoded logic — editing a template cannot make LOC appear where it
+ * never did.
  */
 
 (function (global) {
@@ -764,6 +774,166 @@
     return abbrev ? rst.replace(/0/g, 't').replace(/9/g, 'n') : rst;
   }
 
+  // ── Placeholder catalogue (shown in the MACROS editor's help) ─────────────
+
+  const MACRO_VAR_HELP = [
+    { tok: 'MYCALL', desc: 'Your own callsign' },
+    { tok: 'DXCALL', desc: 'The station you are working' },
+    { tok: 'RSTS',   desc: 'Sent report (5NN-style on CW, plain digits on RTTY)' },
+    { tok: 'NR',     desc: 'Your own serial number' },
+    { tok: 'PREVNR', desc: 'Previous serial number (TXEXCHSP2 "give it again")' },
+    { tok: 'LOC',    desc: 'Your own locator' },
+    { tok: 'UTC',    desc: 'Current UTC time, HHMM' },
+    { tok: 'EXCH',   desc: 'The full exchange payload for the log’s exchange type (NR / NR-UTC / NR+LOC / free text) — on RTTY this already includes the report' },
+    { tok: 'TU',     desc: '"tu" where today’s logic would add a confirmation word, otherwise empty' },
+  ];
+
+  // ── Default templates ──────────────────────────────────────────────────────
+  // Rendering these through renderTemplate()/computeMacroVars() reproduces the
+  // old hardcoded switch's output byte-for-byte (checked by hand across every
+  // exchangeType × VHF combination) modulo one harmless normalization: a run
+  // of blank placeholders no longer leaves doubled/trailing spaces (e.g. the
+  // out-of-the-box "no exchange configured yet" TXEXCH case used to trail one
+  // space after the report; it doesn't now). Immaterial to what goes on the air.
+
+  const MacroDefaults = {
+    cw: {
+      CQ:        '{MYCALL} {MYCALL} TEST',
+      TXEXCH:    '{DXCALL} {RSTS} {EXCH}',
+      TXEXCHSP:  '{RSTS} {EXCH} {TU}',
+      TXEXCHSP2: '{RSTS} {EXCH} {TU}',
+      TU:        'tu {MYCALL}',
+      CALLTU:    '{DXCALL} tu',
+    },
+    rtty: {
+      CQ:        '\r\n {MYCALL} {MYCALL} {MYCALL} TEST',
+      TXEXCH:    '\r\n {DXCALL} {DXCALL} {EXCH} {EXCH}',
+      TXEXCHSP:  '\r\n {DXCALL} {DXCALL} {EXCH} {EXCH}',
+      TXEXCHSP2: '\r\n {DXCALL} {DXCALL} {EXCH} {EXCH}',
+      TU:        '{DXCALL} tu {MYCALL}',
+      CALLTU:    '{DXCALL} tu {MYCALL}',
+    },
+  };
+
+  // ── Live, possibly-customized templates (defaults until /log-macros.json loads) ─
+
+  let macroStore = {
+    cw:   Object.assign({}, MacroDefaults.cw),
+    rtty: Object.assign({}, MacroDefaults.rtty),
+  };
+
+  function loadMacroStore() {
+    return fetch('/log-macros.json', { cache: 'no-store' })
+      .then(r => r.ok ? r.json() : {})
+      .then(saved => {
+        macroStore = {
+          cw:   Object.assign({}, MacroDefaults.cw,   (saved && saved.cw)   || {}),
+          rtty: Object.assign({}, MacroDefaults.rtty, (saved && saved.rtty) || {}),
+        };
+      })
+      .catch(() => {});  // stay on defaults — RUN/S&P must never be blocked by this
+  }
+
+  // Whole-store save from the MACROS editor. Persists all 12 fields (whatever
+  // the form currently holds, edited or still default) and, once the write is
+  // confirmed, switches this tab's own macroStore over immediately — no reload
+  // needed to see your own edit take effect.
+  function saveMacroStore(newStore) {
+    const body = JSON.stringify({
+      cw:   (newStore && newStore.cw)   || {},
+      rtty: (newStore && newStore.rtty) || {},
+    });
+    return fetch('/log-macros.json', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    }).then(r => r.ok).then(ok => {
+      if (ok) {
+        macroStore = {
+          cw:   Object.assign({}, MacroDefaults.cw,   newStore.cw   || {}),
+          rtty: Object.assign({}, MacroDefaults.rtty, newStore.rtty || {}),
+        };
+      }
+      return ok;
+    }).catch(() => false);
+  }
+
+  // ── Template rendering ─────────────────────────────────────────────────────
+  // Plain {TOKEN} substitution; a token not in vars passes through untouched
+  // (a typo in a custom template is harmless, not a hard error). Runs of 2+
+  // literal spaces left behind by an empty substitution collapse to one, and
+  // trailing spaces/tabs are dropped — both only ever byte-identical no-ops
+  // except for the one documented case above. The RTTY templates' leading
+  // "\r\n " is untouched (trim only strips trailing whitespace).
+  function renderTemplate(str, vars) {
+    let out = String(str || '').replace(/\{([A-Z0-9]+)\}/g, (m, key) =>
+      Object.prototype.hasOwnProperty.call(vars, key) ? vars[key] : m);
+    out = out.replace(/ {2,}/g, ' ');
+    out = out.replace(/[ \t]+$/, '');
+    return out;
+  }
+
+  // ── Placeholder values for one macro build ─────────────────────────────────
+  // Ports the old per-(type, exchangeType, VHF) branching from buildMacro's
+  // switch into data instead of literal concatenation, so EXCH/TU still
+  // resolve exactly as the hardcoded version did.
+  function computeMacroVars(type, mg, ctx) {
+    const vhf      = isVhfPlus(ctx.freqHz);
+    const abbrev   = ctx.cwAbbrev !== false;
+    const rstCw    = rstText(ctx, abbrev);  // CW: abbreviated (5nn)
+    const rstPlain = rstText(ctx, false);   // RTTY: always digits
+    const nr       = cwNumber(ctx.qsoNumber || 1, abbrev);
+    const prevN    = ctx.prevQsoNumber || Math.max(1, (ctx.qsoNumber || 1) - 1);
+    const prevNr   = cwNumber(prevN, abbrev);
+    const loc      = ctx.myLocator || '';
+    const myCall   = ctx.stationCall || 'MYCALL';
+    const dxCall   = ctx.call || '';
+    const utc      = mg === 'RTTY' ? utcHHMM() : utcHHMMcw(abbrev);
+
+    let EXCH = '';
+    let TU   = '';
+
+    if (type === 'TXEXCH' || type === 'TXEXCHSP' || type === 'TXEXCHSP2') {
+      const usePrev = type === 'TXEXCHSP2';
+      const nStr    = usePrev ? String(prevN).padStart(3, '0') : String(ctx.qsoNumber || 1).padStart(3, '0');
+      const nCw     = usePrev ? prevNr : nr;
+
+      if (mg === 'RTTY') {
+        // Same shape for all three types (only which serial number differs);
+        // RTTY never adds a separate "tu" — the doubled group is itself the
+        // confirmation.
+        EXCH = ctx.exchangeType === 'NRUTC' ? (rstPlain + '-' + nStr + '-' + utcHHMM())
+             : ctx.exchangeType === 'NRLOC' ? (rstPlain + '-' + nStr + '-' + loc)
+             : ctx.exchangeType === 'NR'    ? rstPlain + '-' + nStr
+             : (ctx.exchange ? rstPlain + '-' + ctx.exchange : rstPlain);
+      } else {
+        // CW
+        if (ctx.exchangeType === 'NR' || ctx.exchangeType === 'NRUTC') {
+          const nPart = ctx.exchangeType === 'NRUTC' ? nCw + '-' + utcHHMMcw(abbrev) : nCw;
+          EXCH = vhf ? nPart + ' ' + loc : nPart;
+          if (type === 'TXEXCHSP') TU = vhf ? 'tu' : '';
+          // TXEXCH never adds tu; TXEXCHSP2/NR never adds tu either.
+        } else if (ctx.exchangeType === 'NRLOC') {
+          EXCH = nCw + ' ' + loc;
+          if (type === 'TXEXCHSP') TU = 'tu';
+          // TXEXCH and TXEXCHSP2 leave NRLOC's tu out, same as today.
+        } else {
+          // Free-text exchange configured on the log
+          EXCH = ctx.exchange || '';
+          if ((type === 'TXEXCHSP' || type === 'TXEXCHSP2') && !ctx.exchange) {
+            EXCH = '';
+            TU   = 'tu';
+          }
+        }
+      }
+    }
+
+    return {
+      MYCALL: myCall, DXCALL: dxCall, RSTS: mg === 'RTTY' ? rstPlain : rstCw,
+      NR: nr, PREVNR: prevNr, LOC: loc, UTC: utc, EXCH: EXCH, TU: TU,
+    };
+  }
+
   // ── Build macro text ───────────────────────────────────────────────────────
 
   /**
@@ -773,7 +943,7 @@
    *   mode, freqHz, stationCall, call, exchangeType,
    *   exchange, qsoNumber, prevQsoNumber, myLocator, cwAbbrev, rstSent
    * }
-   * type: 'CQ' | 'TXEXCH' | 'TXEXCHSP' | 'TXEXCHSP2' | 'TU'
+   * type: 'CQ' | 'TXEXCH' | 'TXEXCHSP' | 'TXEXCHSP2' | 'TU' | 'CALLTU'
    */
   function buildMacro(type, ctx) {
     let mg = modeGroup(ctx.mode);
@@ -782,99 +952,12 @@
     // the same text a true RTTY/RTTY-R QSO would -- the message content is
     // the protocol, not the transport carrying it.
     if (mg === 'DATA' && ctx._dataAsRtty) mg = 'RTTY';
-    const vhf    = isVhfPlus(ctx.freqHz);
-    const abbrev = ctx.cwAbbrev !== false;
-    const rst    = rstText(ctx, abbrev);   // CW: abbreviated (5nn)
-    const rstPlain = rstText(ctx, false);      // RTTY: always digits
-    const nr     = cwNumber(ctx.qsoNumber  || 1, abbrev);
-    const prevNr = cwNumber(ctx.prevQsoNumber || Math.max(1, (ctx.qsoNumber || 1) - 1), abbrev);
-    const loc    = ctx.myLocator || '';
-    const myCall = ctx.stationCall || 'MYCALL';
-    const dxCall = ctx.call        || '';
+    if (mg !== 'CW' && mg !== 'RTTY') return '';  // PHONE/NONE — manual
 
-    switch (type) {
-
-      case 'CQ':
-        if (mg === 'RTTY') return '\r\n ' + myCall + ' ' + myCall + ' ' + myCall + ' TEST';
-        if (mg === 'CW')   return myCall + ' ' + myCall + ' TEST';
-        return '';  // PHONE — manual
-
-      case 'TXEXCH': {
-        if (mg === 'RTTY') {
-          const nrStr  = String(ctx.qsoNumber || 1).padStart(3, '0');
-          const excStr = ctx.exchangeType === 'NRUTC' ? (rstPlain + '-' + nrStr + '-' + utcHHMM())
-                       : ctx.exchangeType === 'NRLOC' ? (rstPlain + '-' + nrStr + '-' + loc)
-                       : ctx.exchangeType === 'NR'    ? rstPlain + '-' + nrStr
-                       : (ctx.exchange ? rstPlain + '-' + ctx.exchange : rstPlain);
-          return '\r\n ' + dxCall + ' ' + dxCall + ' ' + excStr + ' ' + excStr;
-        }
-        if (mg === 'CW') {
-          if (ctx.exchangeType === 'NR' || ctx.exchangeType === 'NRUTC') {
-            const nrPart = ctx.exchangeType === 'NRUTC' ? nr + '-' + utcHHMMcw(abbrev) : nr;
-            return vhf ? dxCall + ' ' + rst + ' ' + nrPart + ' ' + loc
-                       : dxCall + ' ' + rst + ' ' + nrPart;
-          }
-          if (ctx.exchangeType === 'NRLOC') return dxCall + ' ' + rst + ' ' + nr + ' ' + loc;
-          return dxCall + ' ' + rst + ' ' + ctx.exchange;
-        }
-        return '';
-      }
-
-      case 'TXEXCHSP': {
-        if (mg === 'RTTY') {
-          const nrStr  = String(ctx.qsoNumber || 1).padStart(3, '0');
-          const excStr = ctx.exchangeType === 'NRUTC' ? (rstPlain + '-' + nrStr + '-' + utcHHMM())
-                       : ctx.exchangeType === 'NRLOC' ? (rstPlain + '-' + nrStr + '-' + loc)
-                       : ctx.exchangeType === 'NR'    ? rstPlain + '-' + nrStr
-                       : (ctx.exchange ? rstPlain + '-' + ctx.exchange : rstPlain);
-          return '\r\n ' + dxCall + ' ' + dxCall + ' ' + excStr + ' ' + excStr;
-        }
-        if (mg === 'CW') {
-          if (ctx.exchangeType === 'NR' || ctx.exchangeType === 'NRUTC') {
-            const nrPart = ctx.exchangeType === 'NRUTC' ? nr + '-' + utcHHMMcw(abbrev) : nr;
-            return vhf ? rst + ' ' + nrPart + ' ' + loc + ' tu' : rst + ' ' + nrPart;
-          }
-          if (ctx.exchangeType === 'NRLOC') return rst + ' ' + nr + ' ' + loc + ' tu';
-          return ctx.exchange ? rst + ' ' + ctx.exchange : rst + ' tu';
-        }
-        return '';
-      }
-
-      case 'TXEXCHSP2': {
-        const pn    = ctx.prevQsoNumber || Math.max(1, (ctx.qsoNumber || 1) - 1);
-        const pnCw  = cwNumber(pn, abbrev);
-        const pnStr = String(pn).padStart(3, '0');
-        if (mg === 'RTTY') {
-          const excStr = ctx.exchangeType === 'NRUTC' ? (rstPlain + '-' + pnStr + '-' + utcHHMM())
-                       : ctx.exchangeType === 'NRLOC' ? (rstPlain + '-' + pnStr + '-' + loc)
-                       : ctx.exchangeType === 'NR'    ? rstPlain + '-' + pnStr
-                       : (ctx.exchange ? rstPlain + '-' + ctx.exchange : rstPlain);
-          return '\r\n ' + dxCall + ' ' + dxCall + ' ' + excStr + ' ' + excStr;
-        }
-        if (mg === 'CW') {
-          if (ctx.exchangeType === 'NR' || ctx.exchangeType === 'NRUTC') {
-            const pnPart = ctx.exchangeType === 'NRUTC' ? pnCw + '-' + utcHHMMcw(abbrev) : pnCw;
-            return vhf ? rst + ' ' + pnPart + ' ' + loc : rst + ' ' + pnPart;
-          }
-          if (ctx.exchangeType === 'NRLOC') return rst + ' ' + pnCw + ' ' + loc;
-          return ctx.exchange ? rst + ' ' + ctx.exchange : rst + ' tu';
-        }
-        return '';
-      }
-
-      case 'TU':
-        if (mg === 'RTTY') return dxCall + ' tu ' + myCall;
-        if (mg === 'CW')   return 'tu ' + myCall;
-        return '';
-
-      case 'CALLTU':
-        if (mg === 'RTTY') return dxCall + ' tu ' + myCall;
-        if (mg === 'CW')   return dxCall + ' tu';
-        return '';
-
-      default:
-        return '';
-    }
+    const group = macroStore[mg.toLowerCase()] || MacroDefaults[mg.toLowerCase()];
+    const tpl = (group && group[type]) || '';
+    if (!tpl) return '';
+    return renderTemplate(tpl, computeMacroVars(type, mg, ctx));
   }
 
   // ── Send a macro via HTTP POST /cmd ───────────────────────────────────────
@@ -896,13 +979,21 @@
     }).then(r => r.ok).catch(() => false);
   }
 
-  // ── Init (no-op, kept for API compatibility) ───────────────────────────────
+  // ── Init: kick off the async load of any customized templates ─────────────
 
-  function init() {}
+  function init() { loadMacroStore(); }
 
   // ── Export ─────────────────────────────────────────────────────────────────
 
-  global.LogMacros = { buildMacro, sendMacro, modeGroup, init };
+  global.LogMacros = {
+    buildMacro, sendMacro, modeGroup, init,
+    // Used by the MACROS editor (log.js, below):
+    computeMacroVars, renderTemplate,
+    defaults: () => MacroDefaults,
+    helpVars: MACRO_VAR_HELP,
+    getStore: () => macroStore,
+    save: saveMacroStore,
+  };
 
 }(window));
 
@@ -2592,6 +2683,193 @@ function onActiveLogChanged(log) {
 }
 
 LogManager.onLogChanged(onActiveLogChanged);
+
+// ── Macro editor (MACROS button) ──────────────────────────────────────────────
+//
+// Grilled 2026-08-30: editable CW/RTTY macro templates, stored server-side at
+// /log-macros.json (LogMacros.save/getStore/defaults, log.js:696+) so every
+// browser pointed at this station sees the same wording. This modal just
+// edits the 12 template strings (6 macro types × CW/RTTY) as plain text with
+// {PLACEHOLDER} tokens — the "smart" part (when {LOC}/{UTC}/{TU} resolve to
+// something vs. empty) stays in LogMacros.computeMacroVars(), unaffected by
+// what the operator types here.
+
+const MACRO_EDITOR_TYPES = [
+  { key: 'CQ',        label: 'CQ' },
+  { key: 'TXEXCH',    label: 'Exchange — RUN' },
+  { key: 'TXEXCHSP',  label: 'Exchange — S&P' },
+  { key: 'TXEXCHSP2', label: 'Prev exchange — S&P' },
+  { key: 'TU',        label: 'TU (after log)' },
+  { key: 'CALLTU',    label: 'Call + TU' },
+];
+
+// Fixed sample values so the preview means something even with no QSO in
+// progress — mirrors updateMacroPreview()'s use of buildMacro() but never
+// touches the real form or app state.
+function macroEditorSampleCtx(mg) {
+  return {
+    mode:          mg === 'RTTY' ? 'RTTY' : 'CW',
+    freqHz:        14_000_000,
+    stationCall:   'OK1ABC',
+    call:          'W1AW',
+    exchangeType:  'NR',
+    exchange:      '059',
+    rstSent:       '599',
+    qsoNumber:     42,
+    prevQsoNumber: 41,
+    myLocator:     'JO70FD',
+    cwAbbrev:      true,
+  };
+}
+
+function macroEditorFieldId(mode, type) { return 'mx_' + mode + '_' + type; }
+
+function _mxEsc(s) {
+  return String(s || '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// <input type="text"> silently strips real CR/LF characters from its value
+// (the HTML "value sanitization algorithm" for single-line text controls) —
+// four of the six RTTY defaults legitimately start with one ('\r\n ', see
+// MacroDefaults.rtty in LogMacros). So the field never holds a raw control
+// character: it shows/accepts the literal two-character escapes \r and \n,
+// unescaped only right before the text is rendered or saved. A CW template
+// never contains one, so this is a no-op there.
+function _mxEscapeCtrl(s)   { return String(s || '').replace(/\r/g, '\\r').replace(/\n/g, '\\n'); }
+function _mxUnescapeCtrl(s) { return String(s || '').replace(/\\r/g, '\r').replace(/\\n/g, '\n'); }
+
+function buildMacroEditorModal() {
+  const el = document.createElement('div');
+  el.id = 'macroEditorModal';
+  el.className = 'lm-modal lm-hidden';
+
+  const help = (window.LogMacros && LogMacros.helpVars) || [];
+  const helpHtml = help.map(h =>
+    '<div class="mx-help-item"><b>{' + h.tok + '}</b> — ' + _mxEsc(h.desc) + '</div>').join('');
+
+  const rowsHtml = mode => MACRO_EDITOR_TYPES.map(t => {
+    const id = macroEditorFieldId(mode, t.key);
+    return `
+      <div class="lm-row mx-row">
+        <span>${t.label}</span>
+        <input type="text" class="mx-input" id="${id}" data-mode="${mode}" data-type="${t.key}" spellcheck="false" autocomplete="off">
+        <button type="button" class="lm-btn lm-btn-sm mx-default-btn" data-mode="${mode}" data-type="${t.key}">Default</button>
+      </div>
+      <div class="mx-preview" id="${id}_prev"></div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="lm-box mx-box">
+      <div class="lm-header">
+        <span class="lm-title">CW / RTTY macros</span>
+        <button class="lm-close" id="mxClose" type="button">✕</button>
+      </div>
+      <div class="lm-body">
+        <section class="lm-section">
+          <div class="lm-section-title">Placeholders</div>
+          <div class="mx-help">${helpHtml}</div>
+        </section>
+        <section class="lm-section">
+          <div class="lm-section-title">CW</div>
+          <div class="lm-form">${rowsHtml('cw')}</div>
+        </section>
+        <section class="lm-section">
+          <div class="lm-section-title">RTTY</div>
+          <div class="lm-form">${rowsHtml('rtty')}</div>
+        </section>
+        <div class="lm-actions mx-actions">
+          <span id="mxStatus" class="mx-status"></span>
+          <button type="button" class="lm-btn" id="mxCancel">Cancel</button>
+          <button type="button" class="lm-btn lm-btn-primary" id="mxSave">Save</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(el);
+
+  el.addEventListener('click', e => { if (e.target === el) closeMacroEditor(); });
+  document.getElementById('mxClose').addEventListener('click', closeMacroEditor);
+  document.getElementById('mxCancel').addEventListener('click', closeMacroEditor);
+  document.getElementById('mxSave').addEventListener('click', onMacroEditorSave);
+
+  el.querySelectorAll('.mx-input').forEach(inp => {
+    inp.addEventListener('input', () => _macroEditorUpdatePreview(inp.dataset.mode, inp.dataset.type));
+  });
+  el.querySelectorAll('.mx-default-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const mode = btn.dataset.mode, type = btn.dataset.type;
+      const defaults = (window.LogMacros && LogMacros.defaults()) || {};
+      const inp = document.getElementById(macroEditorFieldId(mode, type));
+      if (inp) {
+        inp.value = _mxEscapeCtrl(((defaults[mode] || {})[type]) || '');
+        _macroEditorUpdatePreview(mode, type);
+      }
+    });
+  });
+
+  return el;
+}
+
+function _macroEditorUpdatePreview(mode, type) {
+  const inp  = document.getElementById(macroEditorFieldId(mode, type));
+  const prev = document.getElementById(macroEditorFieldId(mode, type) + '_prev');
+  if (!inp || !prev || !window.LogMacros) return;
+  const vars = LogMacros.computeMacroVars(type, mode.toUpperCase(), macroEditorSampleCtx(mode));
+  prev.textContent = LogMacros.renderTemplate(_mxUnescapeCtrl(inp.value), vars);
+}
+
+function _macroEditorPopulate() {
+  if (!window.LogMacros) return;
+  const store = LogMacros.getStore();
+  ['cw', 'rtty'].forEach(mode => {
+    MACRO_EDITOR_TYPES.forEach(t => {
+      const inp = document.getElementById(macroEditorFieldId(mode, t.key));
+      if (!inp) return;
+      inp.value = _mxEscapeCtrl((store[mode] || {})[t.key] || '');
+      _macroEditorUpdatePreview(mode, t.key);
+    });
+  });
+  const status = document.getElementById('mxStatus');
+  if (status) status.textContent = '';
+}
+
+function openMacroEditor() {
+  let modal = document.getElementById('macroEditorModal');
+  if (!modal) modal = buildMacroEditorModal();
+  _macroEditorPopulate();  // always reload from the live store — discards any unsaved edit from a prior open
+  modal.classList.remove('lm-hidden');
+}
+
+function closeMacroEditor() {
+  const modal = document.getElementById('macroEditorModal');
+  if (modal) modal.classList.add('lm-hidden');
+}
+
+function onMacroEditorSave() {
+  if (!window.LogMacros) return;
+  const newStore = { cw: {}, rtty: {} };
+  ['cw', 'rtty'].forEach(mode => {
+    MACRO_EDITOR_TYPES.forEach(t => {
+      const inp = document.getElementById(macroEditorFieldId(mode, t.key));
+      newStore[mode][t.key] = inp ? _mxUnescapeCtrl(inp.value) : '';
+    });
+  });
+  const status = document.getElementById('mxStatus');
+  if (status) status.textContent = 'Saving…';
+  LogMacros.save(newStore).then(ok => {
+    if (!status) return;
+    if (ok) {
+      status.textContent = 'Saved';
+      setTimeout(closeMacroEditor, 600);
+    } else {
+      status.textContent = 'Save failed — try again';
+    }
+  });
+}
+
+const btnMacros = document.getElementById('btnMacros');
+if (btnMacros) btnMacros.addEventListener('click', openMacroEditor);
 
 // ── Load journal from IndexedDB ───────────────────────────────────────────────
 
