@@ -699,7 +699,7 @@
 /**
  * log-macros.js — contest macro generator
  *
- * Macros: CQ, TXEXCH, TXEXCHSP, TXEXCHSP2, TU, CALLTU
+ * Macros: CQ, TXEXCH, TXEXCHSP, TXEXCHSP2, TU, CALLTU, SPCALL, NRQ
  * Transport: HTTP POST /cmd {type:"sendCw", text} — firmware routes CW vs FSK/RTTY by current TRX mode.
  *
  * Macro TEXT is a user-editable template per (macro type × CW/RTTY), stored
@@ -804,6 +804,12 @@
       TXEXCHSP2: '{RSTS} {EXCH} {TU}',
       TU:        'tu {MYCALL}',
       CALLTU:    '{DXCALL} tu',
+      // Grilled 2026-08-30: promoted out of sendRawText()'s hardcoded raw
+      // strings (handleCallEnter/handleExchEnter's S&P branch, btnNrQ) so
+      // both are finally editable here too -- defaults preserve today's
+      // exact byte-for-byte output.
+      SPCALL:    '{MYCALL}',
+      NRQ:       'nr?',
     },
     rtty: {
       CQ:        '\r\n {MYCALL} {MYCALL} {MYCALL} TEST',
@@ -812,6 +818,8 @@
       TXEXCHSP2: '\r\n {DXCALL} {DXCALL} {EXCH} {EXCH}',
       TU:        '{DXCALL} tu {MYCALL}',
       CALLTU:    '{DXCALL} tu {MYCALL}',
+      SPCALL:    '{MYCALL}',
+      NRQ:       'nr?',
     },
   };
 
@@ -834,7 +842,7 @@
       .catch(() => {});  // stay on defaults — RUN/S&P must never be blocked by this
   }
 
-  // Whole-store save from the MACROS editor. Persists all 12 fields (whatever
+  // Whole-store save from the MACROS editor. Persists all 16 fields (whatever
   // the form currently holds, edited or still default) and, once the write is
   // confirmed, switches this tab's own macroStore over immediately — no reload
   // needed to see your own edit take effect.
@@ -943,7 +951,7 @@
    *   mode, freqHz, stationCall, call, exchangeType,
    *   exchange, qsoNumber, prevQsoNumber, myLocator, cwAbbrev, rstSent
    * }
-   * type: 'CQ' | 'TXEXCH' | 'TXEXCHSP' | 'TXEXCHSP2' | 'TU' | 'CALLTU'
+   * type: 'CQ' | 'TXEXCH' | 'TXEXCHSP' | 'TXEXCHSP2' | 'TU' | 'CALLTU' | 'SPCALL' | 'NRQ'
    */
   function buildMacro(type, ctx) {
     let mg = modeGroup(ctx.mode);
@@ -1807,6 +1815,18 @@ function sendMacroText(macroType) {
   }
   const ctx = macroCtx();
   const gen = app.qsoGeneration;
+  // Same gap sendRawText() already closed (grilled 2026-08-30): the true-FSK
+  // send below bit-bangs straight from the firmware's own GPIO, independent
+  // of any browser tab, so nothing here ever reaches rtty.js on its own.
+  // Mirror the built text into RTTY-ICOM's RX window for display -- same
+  // fire-and-forget style, same message shape, not for isOi3 (external
+  // keyer, no display for it in rtty.js).
+  if (mg === 'RTTY' && !isOi3 && rttyTxChannel) {
+    const echoText = LogMacros.buildMacro(macroType, ctx);
+    if (echoText) {
+      try { rttyTxChannel.postMessage({ type: 'rtty-tx-fsk-echo', text: echoText }); } catch (_error) {}
+    }
+  }
   LogMacros.sendMacro(macroType, ctx).then(ok => {
     if (!ok) { showHint('Send failed'); return; }
     // Only these three carry the report; CQ and TU do not. A failed POST is not
@@ -2002,7 +2022,10 @@ function handleCallEnter(e) {
     if (app.runMode === 'RUN') {
       sendMacroText('TXEXCH');
     } else {
-      sendRawText((LogManager.getActiveLog() || {}).stationCall || '');
+      // Grilled 2026-08-30: was sendRawText(stationCall) directly, a
+      // hardcoded raw string with no macro behind it at all — unreachable
+      // from the MACROS editor. SPCALL's default reproduces that exact text.
+      sendMacroText('SPCALL');
     }
     inpExch.focus();
     return;
@@ -2159,7 +2182,9 @@ function handleExchEnter(e) {
       app.prevCallSent = call;
       sendMacroText('TXEXCH');
     } else {
-      sendRawText((LogManager.getActiveLog() || {}).stationCall || '');
+      // Grilled 2026-08-30: same SPCALL swap as handleCallEnter's own S&P
+      // branch above — was a hardcoded sendRawText(stationCall).
+      sendMacroText('SPCALL');
     }
     showHint('Enter exchange');
     return;
@@ -2645,7 +2670,9 @@ btnCallQ.addEventListener('click', () => {
 });
 
 btnNrQ.addEventListener('click', () => {
-  sendRawText('nr?');
+  // Grilled 2026-08-30: was sendRawText('nr?') — a hardcoded literal, same
+  // gap as SPCALL, closed the same way.
+  sendMacroText('NRQ');
   inpExch.focus();
 });
 
@@ -2689,7 +2716,7 @@ LogManager.onLogChanged(onActiveLogChanged);
 // Grilled 2026-08-30: editable CW/RTTY macro templates, stored server-side at
 // /log-macros.json (LogMacros.save/getStore/defaults, log.js:696+) so every
 // browser pointed at this station sees the same wording. This modal just
-// edits the 12 template strings (6 macro types × CW/RTTY) as plain text with
+// edits the 16 template strings (8 macro types × CW/RTTY) as plain text with
 // {PLACEHOLDER} tokens — the "smart" part (when {LOC}/{UTC}/{TU} resolve to
 // something vs. empty) stays in LogMacros.computeMacroVars(), unaffected by
 // what the operator types here.
@@ -2701,6 +2728,10 @@ const MACRO_EDITOR_TYPES = [
   { key: 'TXEXCHSP2', label: 'Prev exchange — S&P' },
   { key: 'TU',        label: 'TU (after log)' },
   { key: 'CALLTU',    label: 'Call + TU' },
+  // Grilled 2026-08-30: previously sendRawText()'s own hardcoded raw
+  // strings, unreachable from here at all.
+  { key: 'SPCALL',    label: 'My call (S&P)' },
+  { key: 'NRQ',       label: 'NR? (repeat number)' },
 ];
 
 // Fixed sample values so the preview means something even with no QSO in
@@ -3080,7 +3111,11 @@ try {
     const msg = e.data;
     if (!msg || msg.type !== 'dxc-tune') return;
     selectTrx(msg.trx);
-    setRunMode('SP');
+    // DXC hands over a spot to work -- switching to S&P is the point. A click
+    // in RTTY-ICOM's own RX log (msg.source === 'rtty') is just "insert this
+    // callsign", not "start a new QSO in a particular mode" -- whatever RUN/
+    // S&P the operator was already in stays as it is.
+    if (msg.source !== 'rtty') setRunMode('SP');
     if (msg.callsign) {
       inpCall.value = msg.callsign;
       inpCall.dispatchEvent(new Event('input'));

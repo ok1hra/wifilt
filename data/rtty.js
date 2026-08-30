@@ -1095,14 +1095,16 @@
   }
 
   // Click a decoded token -> hand it to QRPlog, same BroadcastChannel dxc.html
-  // already uses (kap.5/8.1) -- zero change in log.js's own listener.
+  // already uses (kap.5/8.1). Unlike a DXC spot, this isn't "go work this
+  // station" -- source:"rtty" tells log.js's listener to leave RUN/S&P alone
+  // (grilled 2026-08-30) and just drop the callsign into the Call field.
   const dxcChannel = (() => { try { return new BroadcastChannel("wifilt-dxc-action"); } catch (_error) { return null; } })();
   dom.rttyRxLog.addEventListener("click", event => {
     const token = event.target.closest(".rtty-tok");
     if (!token || !dxcChannel) return;
     const callsign = token.textContent.trim();
     if (!callsign) return;
-    dxcChannel.postMessage({type: "dxc-tune", callsign, trx: LanGate.slot ? LanGate.slot() : 0});
+    dxcChannel.postMessage({type: "dxc-tune", callsign, trx: LanGate.slot ? LanGate.slot() : 0, source: "rtty"});
   });
 
   // ---- AFC (grilled 2026-08-28, 3rd/4th sessions) --------------------------
@@ -1222,13 +1224,46 @@
   // [markHz, spaceHz] a click at this lower-tone frequency would produce --
   // mirrors setToneFromSpaceHz()'s `centre = lowHz + SHIFT_HZ/2` followed by
   // markToneHz()'s own txPolarity branch, without writing to settings or
-  // touching the decoder. Used by both the hover preview (drawScopeOverlay()
-  // above) and, implicitly, by what setToneFromSpaceHz() itself commits on
-  // an actual click.
+  // touching the decoder. Used by the hover preview (drawScopeOverlay()
+  // above, kept as a ruler regardless of what a click then does with it --
+  // grilled 2026-08-30) and, for USB-D/LSB-D, by what setToneFromSpaceHz()
+  // itself commits on an actual click.
   function markSpaceForLowHz(lowHz) {
     return settings.txPolarity === "reverse"
       ? [lowHz, lowHz + RttyCodec.SHIFT_HZ]
       : [lowHz + RttyCodec.SHIFT_HZ, lowHz];
+  }
+
+  // Click-to-tune-the-RADIO, real FSK only (RTTY/RTTY-R -- grilled 2026-08-30,
+  // replaces setToneFromSpaceHz() for exactly these two modes; USB-D/LSB-D
+  // keep the original "click sets the audio tone" behaviour below unchanged).
+  //
+  // Real FSK has no audio stage on TX (dial==mark, markToDialHz()'s own
+  // comment), so retuning the dial is the ONLY way to bring a station onto
+  // this operator's fixed passband -- settings.toneHz itself never moves
+  // here, unlike setToneFromSpaceHz().
+  //
+  // dialToMarkHz()/markToDialHz() do not apply: those are absolute-RF-Hz
+  // functions for the frequency-menu presets (an RF target in, an RF target
+  // or dial out), TX-side by definition -- they say nothing about how an
+  // already-INCOMING signal's RX audio position moves with the dial. That
+  // relationship was confirmed on air (operator, 2026-08-30): the dial and
+  // the received audio tone move the SAME direction, 1:1 -- turn the dial
+  // down, a signal's audio pitch moves down too, and back up the same way.
+  // So: however far off (in audio Hz) the clicked signal sits from the fixed
+  // reference tone, the dial needs exactly that same signed shift.
+  function retuneRadioForLowHz(clickedLowHz) {
+    const referenceLowHz = settings.toneHz - RttyCodec.SHIFT_HZ / 2;
+    const deltaHz = referenceLowHz - clickedLowHz;
+    const newDialHz = Math.round((state.radio.frequency || 0) + deltaHz);
+    if (newDialHz <= 0) return;   // no radio frequency known yet -- nothing sane to compute
+    // Mirrors requestFrequency()'s own silent catch: pollState already shows
+    // whatever the radio actually did, on success or refusal alike.
+    command({type: "setFrequency", frequency: String(newDialHz)}).catch(() => {});
+    // Same reasoning as setToneFromSpaceHz()'s own reset: an AFC offset
+    // tracking drift around the OLD signal position is meaningless once the
+    // dial has just jumped to a different one.
+    afcOffsetHz = 0; afcTargetHz = 0;
   }
 
   // Item 2, grilled 2026-08-28: one listener on #rttyScope (the wrapper
@@ -1237,7 +1272,10 @@
   // the same Hz window and width, so a single rect/handler already covers
   // "click anywhere in the spectrum retunes", not just the waterfall.
   dom.rttyScope.addEventListener("click", event => {
-    setToneFromSpaceHz(scopeClientXToHz(event.clientX));
+    const lowHz = scopeClientXToHz(event.clientX);
+    const isRealFsk = state.radio.mode === "RTTY" || state.radio.mode === "RTTY-R";
+    if (isRealFsk) retuneRadioForLowHz(lowHz);
+    else setToneFromSpaceHz(lowHz);
   });
 
   // Hover preview (grilled inline 2026-08-29): hovering anywhere over the
