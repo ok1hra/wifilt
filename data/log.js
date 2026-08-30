@@ -2739,6 +2739,15 @@ function _mxEsc(s) {
 function _mxEscapeCtrl(s)   { return String(s || '').replace(/\r/g, '\\r').replace(/\n/g, '\\n'); }
 function _mxUnescapeCtrl(s) { return String(s || '').replace(/\\r/g, '\r').replace(/\\n/g, '\n'); }
 
+// Grilled 2026-08-30: CW and RTTY each get their own tab below the help
+// section (12 rows in one flat list was too tall) and a Default button turns
+// amber whenever that field no longer matches its stock default -- a
+// standing "this one isn't stock" marker, not a transient unsaved-edit flag,
+// so it stays lit across re-opens of the editor until Default is clicked (or
+// the operator retypes the exact default text by hand). The tab itself gets
+// a matching dot when any of its 6 macros is non-default, so a customization
+// on the tab you're not looking at is still visible.
+
 function buildMacroEditorModal() {
   const el = document.createElement('div');
   el.id = 'macroEditorModal';
@@ -2770,12 +2779,14 @@ function buildMacroEditorModal() {
           <div class="lm-section-title">Placeholders</div>
           <div class="mx-help">${helpHtml}</div>
         </section>
-        <section class="lm-section">
-          <div class="lm-section-title">CW</div>
+        <div class="mx-tabs" role="tablist">
+          <button type="button" class="lm-btn mx-tab" id="mxTabCw" data-mode="cw" role="tab">CW<span class="mx-tab-dot" hidden></span></button>
+          <button type="button" class="lm-btn mx-tab" id="mxTabRtty" data-mode="rtty" role="tab">RTTY<span class="mx-tab-dot" hidden></span></button>
+        </div>
+        <section class="lm-section mx-panel" id="mxPanelCw" data-mode="cw">
           <div class="lm-form">${rowsHtml('cw')}</div>
         </section>
-        <section class="lm-section">
-          <div class="lm-section-title">RTTY</div>
+        <section class="lm-section mx-panel" id="mxPanelRtty" data-mode="rtty">
           <div class="lm-form">${rowsHtml('rtty')}</div>
         </section>
         <div class="lm-actions mx-actions">
@@ -2793,8 +2804,12 @@ function buildMacroEditorModal() {
   document.getElementById('mxCancel').addEventListener('click', closeMacroEditor);
   document.getElementById('mxSave').addEventListener('click', onMacroEditorSave);
 
+  el.querySelectorAll('.mx-tab').forEach(tab => {
+    tab.addEventListener('click', () => _macroEditorShowTab(tab.dataset.mode));
+  });
+
   el.querySelectorAll('.mx-input').forEach(inp => {
-    inp.addEventListener('input', () => _macroEditorUpdatePreview(inp.dataset.mode, inp.dataset.type));
+    inp.addEventListener('input', () => _macroEditorOnFieldChange(inp.dataset.mode, inp.dataset.type));
   });
   el.querySelectorAll('.mx-default-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -2803,12 +2818,29 @@ function buildMacroEditorModal() {
       const inp = document.getElementById(macroEditorFieldId(mode, type));
       if (inp) {
         inp.value = _mxEscapeCtrl(((defaults[mode] || {})[type]) || '');
-        _macroEditorUpdatePreview(mode, type);
+        _macroEditorOnFieldChange(mode, type);
       }
     });
   });
 
   return el;
+}
+
+function _macroEditorShowTab(mode) {
+  const modal = document.getElementById('macroEditorModal');
+  if (!modal) return;
+  ['cw', 'rtty'].forEach(m => {
+    document.getElementById(m === 'cw' ? 'mxPanelCw' : 'mxPanelRtty').classList.toggle('lm-hidden', m !== mode);
+    document.getElementById(m === 'cw' ? 'mxTabCw' : 'mxTabRtty').classList.toggle('lm-btn-primary', m === mode);
+  });
+}
+
+// Preview + "differs from default" both depend on the field's current text,
+// so every place that can change a field (typing, Default) runs both here
+// instead of remembering to call two separate updaters.
+function _macroEditorOnFieldChange(mode, type) {
+  _macroEditorUpdatePreview(mode, type);
+  _macroEditorUpdateDirty(mode, type);
 }
 
 function _macroEditorUpdatePreview(mode, type) {
@@ -2819,6 +2851,31 @@ function _macroEditorUpdatePreview(mode, type) {
   prev.textContent = LogMacros.renderTemplate(_mxUnescapeCtrl(inp.value), vars);
 }
 
+// Amber Default button = this field's current text isn't the stock default,
+// full stop -- not "unsaved". A macro customized weeks ago and saved stays
+// amber every time the editor is reopened, which is the point: at a glance,
+// which of the 12 memories are not what the firmware ships with.
+function _macroEditorUpdateDirty(mode, type) {
+  const inp = document.getElementById(macroEditorFieldId(mode, type));
+  const btn = document.querySelector('.mx-default-btn[data-mode="' + mode + '"][data-type="' + type + '"]');
+  if (!inp || !btn || !window.LogMacros) return;
+  const defaults = LogMacros.defaults();
+  const differs = _mxUnescapeCtrl(inp.value) !== (((defaults[mode] || {})[type]) || '');
+  btn.classList.toggle('mx-differs', differs);
+  _macroEditorUpdateTabDot(mode);
+}
+
+function _macroEditorUpdateTabDot(mode) {
+  const tab = document.getElementById(mode === 'cw' ? 'mxTabCw' : 'mxTabRtty');
+  if (!tab) return;
+  const anyDiffers = MACRO_EDITOR_TYPES.some(t => {
+    const btn = document.querySelector('.mx-default-btn[data-mode="' + mode + '"][data-type="' + t.key + '"]');
+    return btn && btn.classList.contains('mx-differs');
+  });
+  const dot = tab.querySelector('.mx-tab-dot');
+  if (dot) dot.hidden = !anyDiffers;
+}
+
 function _macroEditorPopulate() {
   if (!window.LogMacros) return;
   const store = LogMacros.getStore();
@@ -2827,17 +2884,27 @@ function _macroEditorPopulate() {
       const inp = document.getElementById(macroEditorFieldId(mode, t.key));
       if (!inp) return;
       inp.value = _mxEscapeCtrl((store[mode] || {})[t.key] || '');
-      _macroEditorUpdatePreview(mode, t.key);
+      _macroEditorOnFieldChange(mode, t.key);
     });
   });
   const status = document.getElementById('mxStatus');
   if (status) status.textContent = '';
 }
 
+// Same DATA→RTTY resolution buildMacro() itself applies (log.js, LogMacros
+// IIFE) -- the editor opens on whichever tab actually fires right now.
+function _macroEditorStartMode() {
+  if (!window.LogMacros) return 'cw';
+  let mg = LogMacros.modeGroup(app.mode);
+  if (mg === 'DATA' && app.aud1Role === 'rtty') mg = 'RTTY';
+  return mg === 'RTTY' ? 'rtty' : 'cw';
+}
+
 function openMacroEditor() {
   let modal = document.getElementById('macroEditorModal');
   if (!modal) modal = buildMacroEditorModal();
   _macroEditorPopulate();  // always reload from the live store — discards any unsaved edit from a prior open
+  _macroEditorShowTab(_macroEditorStartMode());
   modal.classList.remove('lm-hidden');
 }
 

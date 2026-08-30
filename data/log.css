@@ -132,6 +132,7 @@
   /* ── Status indicators ── */
   --conn-ok:          #008800;
   --conn-fail:        #dd3300;
+  --amber:            #ffbf69;  /* same token/value as data.css — "differs from stock", project-wide */
 
   /* ── Tabs ── */
   --tab-active-tx:    #ffffff;
@@ -1025,6 +1026,34 @@ body {
 
 .mx-row span { min-width: 150px; font-size: 14px; }
 .mx-row .mx-default-btn { flex-shrink: 0; }
+
+/* Amber = this macro's text no longer matches its stock default — a standing
+   marker (persists across re-opens), not an unsaved-edit flag. Same token
+   the rest of the project uses for "differs from stock/target" (data.css,
+   wspr.css, rtty.css). */
+.mx-default-btn.mx-differs {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+.mx-tabs {
+  display: flex;
+  gap: 6px;
+  margin: 2px 0 12px;
+}
+.mx-tab { display: inline-flex; align-items: center; gap: 6px; }
+.mx-tab-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--amber);
+  display: inline-block;
+}
+/* An author rule setting `display` beats the UA's own `[hidden]{display:none}`
+   at equal specificity regardless of source order (author always outranks UA
+   in the cascade) -- without this the dot ignored `.hidden` entirely and
+   showed permanently. More specific than either rule above so it wins. */
+.mx-tab-dot[hidden] { display: none; }
 
 .mx-preview {
   margin: -2px 0 8px 160px;
