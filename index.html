@@ -241,7 +241,7 @@
     <div class="card">
       <h1>WIFILT<span class="tagline">Web interface for Icom LAN Transceivers</span></h1>
       <p class="subtitle">
-        Firmware installer &mdash; version <code>20260830</code> &nbsp;&bull;&nbsp;
+        Firmware installer &mdash; version <code>20260901</code> &nbsp;&bull;&nbsp;
         <a href="https://github.com/ok1hra/wifilt" target="_blank">GitHub</a>
       </p>
 
@@ -279,7 +279,7 @@
           <strong>A radio already on your network</strong> &mdash; an IC-705, IC-7610 or
           IC-7300&nbsp;MK2 with <strong>Network&nbsp;Control</strong> switched on &mdash; needs no
           hardware at all. The program on your computer reaches it over IP, and it is the same
-          software as the firmware, version <code>20260830</code>.
+          software as the firmware, version <code>20260901</code>.
         </p>
         <p>
           <strong>The interface board adds what a computer cannot do</strong>: the CI-V serial
@@ -388,7 +388,7 @@
         </ul>
 
         <div class="cta gate" id="flashGate-esp32" data-locked="1">
-          <esp-web-install-button manifest="manifest.json?v=20260830" baudrate="9600"></esp-web-install-button>
+          <esp-web-install-button manifest="manifest.json?v=20260901" baudrate="9600"></esp-web-install-button>
         </div>
         <p class="gate-note" id="gateNote-esp32">Answer the question above to continue.</p>
 
@@ -439,7 +439,7 @@
           lets your settings survive an update.
         </p>
         <p class="muted">
-          For manual flashing there is <code>wifilt-20260830-full.bin</code> at offset <code>0x0</code>
+          For manual flashing there is <code>wifilt-20260901-full.bin</code> at offset <code>0x0</code>
           with <code>esptool.py</code>. <strong>That one erases everything</strong> &mdash; it is a whole-chip
           image, so it overwrites the WiFi credentials in NVS and the configuration partition
           as well. Use it to recover a board that will not boot, not to update a working one.
@@ -550,7 +550,7 @@
         </ul>
 
         <div class="cta gate" id="flashGate-m5atom" data-locked="1">
-          <esp-web-install-button manifest="manifest-m5atom.json?v=20260830" baudrate="9600"></esp-web-install-button>
+          <esp-web-install-button manifest="manifest-m5atom.json?v=20260901" baudrate="9600"></esp-web-install-button>
         </div>
         <p class="gate-note" id="gateNote-m5atom">Answer the question above to continue.</p>
 
@@ -597,7 +597,7 @@
           lets your settings survive an update.
         </p>
         <p class="muted">
-          For manual flashing there is <code>wifilt-20260830-m5atom-full.bin</code> at offset <code>0x0</code>
+          For manual flashing there is <code>wifilt-20260901-m5atom-full.bin</code> at offset <code>0x0</code>
           with <code>esptool.py</code>. <strong>That one erases everything</strong> &mdash; it is a whole-chip
           image, so it overwrites the WiFi credentials in NVS and the configuration partition
           as well. Use it to recover a board that will not boot, not to update a working one.
@@ -608,15 +608,15 @@
       <details class="platform" id="linux">
         <summary>
           <span class="platform-name">Linux PC</span>
-          <span class="platform-sub">radio on the network &bull; no hardware &bull; tar.gz, 2.2 MB</span>
+          <span class="platform-sub">radio on the network &bull; no hardware &bull; tar.gz, 3.3 MB</span>
         </summary>
         <div class="platform-body">
           <p class="dl-line">
-            <a href="wifilt-20260830-linux-x86_64.tar.gz"><strong>wifilt-20260830-linux-x86_64.tar.gz</strong></a>
-            &nbsp;&bull;&nbsp; Linux x86-64, 2.2 MB
+            <a href="wifilt-20260901-linux-x86_64.tar.gz"><strong>wifilt-20260901-linux-x86_64.tar.gz</strong></a>
+            &nbsp;&bull;&nbsp; Linux x86-64, 3.3 MB
             &nbsp;&bull;&nbsp; <a href="SHA256SUMS">SHA256SUMS</a>
           </p>
-          <pre><code>tar xzf wifilt-20260830-linux-x86_64.tar.gz
+          <pre><code>tar xzf wifilt-20260901-linux-x86_64.tar.gz
 cd wifilt-linux-x86_64
 sudo ./install.sh</code></pre>
           <p class="muted">
@@ -632,19 +632,19 @@ sudo ./install.sh</code></pre>
       <details class="platform" id="raspberrypi">
         <summary>
           <span class="platform-name">Raspberry Pi (64-bit)</span>
-          <span class="platform-sub">radio on the network &bull; no hardware &bull; tar.gz, 2.2 MB</span>
+          <span class="platform-sub">radio on the network &bull; no hardware &bull; tar.gz, 7.6 MB</span>
         </summary>
         <div class="platform-body">
           <p class="dl-line">
-            <a href="wifilt-20260830-linux-arm64.tar.gz"><strong>wifilt-20260830-linux-arm64.tar.gz</strong></a>
-            &nbsp;&bull;&nbsp; Linux ARM64 (aarch64), 2.2 MB
+            <a href="wifilt-20260901-linux-arm64.tar.gz"><strong>wifilt-20260901-linux-arm64.tar.gz</strong></a>
+            &nbsp;&bull;&nbsp; Linux ARM64 (aarch64), 7.6 MB
             &nbsp;&bull;&nbsp; <a href="SHA256SUMS">SHA256SUMS</a>
           </p>
           <p class="muted">
             Needs a <strong>64-bit</strong> Raspberry Pi OS (aarch64) &mdash; Pi&nbsp;3, 4, 5 or
             newer. The 32-bit (armhf) Raspberry Pi OS cannot run this build.
           </p>
-          <pre><code>tar xzf wifilt-20260830-linux-arm64.tar.gz
+          <pre><code>tar xzf wifilt-20260901-linux-arm64.tar.gz
 cd wifilt-linux-arm64
 sudo ./install.sh</code></pre>
           <p class="muted">
@@ -660,12 +660,12 @@ sudo ./install.sh</code></pre>
       <details class="platform" id="windows">
         <summary>
           <span class="platform-name">Windows PC</span>
-          <span class="platform-sub">radio on the network &bull; no hardware &bull; zip, 2.4 MB</span>
+          <span class="platform-sub">radio on the network &bull; no hardware &bull; zip, 8.4 MB</span>
         </summary>
         <div class="platform-body">
           <p class="dl-line">
-            <a href="wifilt-20260830-windows-x64.zip"><strong>wifilt-20260830-windows-x64.zip</strong></a>
-            &nbsp;&bull;&nbsp; Windows x64, 2.4 MB
+            <a href="wifilt-20260901-windows-x64.zip"><strong>wifilt-20260901-windows-x64.zip</strong></a>
+            &nbsp;&bull;&nbsp; Windows x64, 8.4 MB
             &nbsp;&bull;&nbsp; <a href="SHA256SUMS">SHA256SUMS</a>
           </p>
           <p>
