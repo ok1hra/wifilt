@@ -1,0 +1,560 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>local-trx setup</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.3em; }
+  fieldset { margin-bottom: 1.5em; border: 1px solid #ccc; border-radius: 6px; }
+  legend { font-weight: bold; padding: 0 0.4em; }
+  label { display: block; margin: 0.6em 0 0.2em; font-size: 0.9em; }
+  input, select { width: 100%; box-sizing: border-box; padding: 0.35em; font-size: 1em; }
+  .row { display: flex; gap: 1em; }
+  .row > div { flex: 1; }
+  .note { font-size: 0.85em; color: #666; }
+  .note.err { color: #b00; }
+  .note.ok-inline { color: #1a7a1a; }
+  #status { font-weight: bold; }
+  #status.ok { color: #1a7a1a; }
+  #status.err { color: #b00; }
+  .test-btn { width: auto; margin-top: 0.4em; margin-right: 0.5em; padding: 0.4em 0.9em;
+              cursor: pointer; border: 1px solid #999; border-radius: 4px; background: #eee; }
+  .test-btn.on { background: #c62828; color: #fff; border-color: #a00; font-weight: bold; }
+  .meter { height: 10px; background: #eee; border: 1px solid #ccc; border-radius: 4px;
+           margin-top: 0.5em; overflow: hidden; }
+  .meter-bar { height: 100%; width: 0%; background: #2e7d32; transition: width 0.1s linear; }
+  #modeFieldset { border-color: #999; }
+  .mode-toggle { display: flex; gap: 0.6em; margin: 0.4em 0 0.8em; }
+  .mode-toggle input { width: auto; }
+  .mode-option { display: flex; align-items: center; gap: 0.5em; padding: 0.5em 1.1em;
+                 border: 1px solid #999; border-radius: 4px; cursor: pointer; font-weight: bold;
+                 margin: 0; }
+  .mode-option.selected { background: #2e7d32; color: #fff; border-color: #1a5c1f; }
+  fieldset:disabled { opacity: 0.5; }
+  label.checkbox { display: flex; align-items: center; gap: 0.6em; font-size: 1em;
+                   font-weight: bold; margin: 0.3em 0; }
+  label.checkbox input[type="checkbox"] { width: auto; }
+</style>
+</head>
+<body>
+<h1>local-trx setup</h1>
+<p class="note">Config is only applied at startup, never live -- Save restarts local-trx itself, no manual step needed, but every field below is frozen at whatever the last restart actually used until that happens.</p>
+
+<fieldset id="modeFieldset">
+  <legend>Mode</legend>
+  <div class="mode-toggle">
+    <label class="mode-option" id="modeConfigureLabel"><input type="radio" name="mode" id="modeConfigure"> Configure</label>
+    <label class="mode-option" id="modeRunLabel"><input type="radio" name="mode" id="modeRun"> Run</label>
+  </div>
+  <p class="note"><strong>Configure</strong>: local-trx does not talk to wifilt at all -- no
+    CAT/keying/audio/ICOM-LAN hardware is opened, so every field and Test button on this page is
+    free to use. Default for an install nobody has set up yet.
+    <strong>Run</strong>: the real, currently-serving state. Pick it, then Save -- local-trx
+    restarts into it, opens the real hardware, and locks the rest of this page below so what you
+    see always matches what is actually running, never a half-edited guess. Switch back to
+    Configure (then Save) to unlock everything again for editing/testing.</p>
+</fieldset>
+
+<fieldset id="startupFieldset">
+  <legend>Startup</legend>
+  <label class="checkbox"><input type="checkbox" id="openBrowserOnStart"> Open wifilt + this wizard
+    in the browser every time local-trx starts</label>
+  <label>wifilt's URL (best guess -- local-trx cannot know this on its own)</label>
+  <input id="wifiltUrl">
+  <p class="note">Only takes effect when local-trx is started on its own, directly -- not when
+    started via the shared start-wifilt.sh/.bat launcher next to the installed binaries, which
+    opens both tabs itself and turns this off for that run so the wizard tab does not open twice.
+    Off by default either way (a headless/CI run must not spawn a browser), and a Save-triggered
+    restart never reopens tabs regardless -- only a genuinely fresh, standalone start does.</p>
+</fieldset>
+
+<fieldset id="identityFieldset">
+  <legend>Identity &amp; listen IP</legend>
+  <p class="note">local-trx pretends to be an ICOM LAN-networked radio (the way an IC-705 or IC-7300
+    looks over the network), so that wifilt connects to it exactly as it would to a real ICOM
+    transceiver. Behind that fake front, local-trx drives whatever real rig you configure in
+    Steps 1-3 below over CAT (hamlib) and a DTR/RTS serial adapter -- wifilt never knows the
+    difference.</p>
+  <label>Radio name (the model name wifilt sees at LAN login)</label>
+  <input id="radioName">
+  <div class="row">
+    <div>
+      <label>CI-V address (hex)</label>
+      <input id="civAddress">
+    </div>
+    <div>
+      <label>Listen IP</label>
+      <input id="listenIp">
+      <p class="note">What you type into wifilt's Setup &rarr; ICOM-LAN field to point it at this fake radio.</p>
+    </div>
+  </div>
+  <p class="note">These are the values wifilt's Setup &rarr; LOCAL-TRX checkbox prefills by default (CI-V A6, IP 127.0.0.1). Change them here only if you also update them in wifilt.</p>
+</fieldset>
+
+<fieldset id="audioFieldset">
+  <legend>Step 1: Audio</legend>
+  <button id="refreshAudioBtn" type="button" class="test-btn">Refresh devices</button>
+  <div class="row">
+    <div>
+      <label>Capture device (RX audio, radio&rarr;wifilt)</label>
+      <select id="audioInput"><option value="">(disabled)</option></select>
+      <button id="testCaptureBtn" type="button" class="test-btn">Test mic/RX: OFF</button>
+      <div class="meter"><div class="meter-bar" id="captureMeterBar"></div></div>
+    </div>
+    <div>
+      <label>Playback device (TX audio, wifilt&rarr;radio)</label>
+      <select id="audioOutput"><option value="">(disabled)</option></select>
+      <button id="testPlaybackBtn" type="button" class="test-btn">Play test tone</button>
+    </div>
+  </div>
+  <p class="note">"default" uses the system's default device (works across locales). The meter
+    shows real captured audio level while the mic/RX test is on -- speak, or key up the radio's
+    RX, to see it move.</p>
+  <p class="note err" id="audioTestNote" hidden></p>
+</fieldset>
+
+<fieldset id="catFieldset">
+  <legend>Step 2: CAT (rig control)</legend>
+  <button id="refreshCatBtn" type="button" class="test-btn">Refresh devices</button>
+  <label>Serial port</label>
+  <select id="catPort"><option value="">(none)</option></select>
+  <div class="row">
+    <div>
+      <label>Baud rate</label>
+      <input id="catBaud" type="number">
+    </div>
+    <div>
+      <label>Rig model</label>
+      <select id="rigModel"></select>
+    </div>
+  </div>
+  <button id="testCatBtn" type="button" class="test-btn">Test read freq</button>
+  <span class="note" id="catTestResult"></span>
+</fieldset>
+
+<fieldset id="keyingFieldset">
+  <legend>Step 3: Keying (CW/FSK + PTT)</legend>
+  <p class="note">A second, independent serial adapter from the CAT port above (bod 6/7) -- one line keys CW/FSK, the other is PTT.</p>
+  <button id="refreshKeyBtn" type="button" class="test-btn">Refresh devices</button>
+  <label>Serial port</label>
+  <select id="keyPort"><option value="">(none, log key/PTT to console instead)</option></select>
+  <div class="row">
+    <div>
+      <label>Baud rate</label>
+      <input id="keyBaud" type="number">
+    </div>
+    <div>
+      <label>CW speed (WPM)</label>
+      <input id="cwWpm" type="number">
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <label>Key line</label>
+      <select id="keyLine"><option value="dtr">DTR</option><option value="rts">RTS</option></select>
+      <button id="testKeyBtn" type="button" class="test-btn">Test KEY: OFF</button>
+    </div>
+    <div>
+      <label>PTT line</label>
+      <select id="pttLine"><option value="rts">RTS</option><option value="dtr">DTR</option></select>
+      <button id="testPttBtn" type="button" class="test-btn">Test PTT: OFF</button>
+    </div>
+    <div>
+      <label>FSK TrxNet ID (hex)</label>
+      <input id="fskNetId">
+    </div>
+  </div>
+  <p class="note err" id="testLineNote" hidden></p>
+</fieldset>
+
+<span id="status"></span>
+
+<script>
+function el(id) { return document.getElementById(id); }
+function fillSelect(select, values, keepFirst) {
+  const start = keepFirst ? 1 : 0;
+  while (select.options.length > start) select.remove(start);
+  for (const v of values) {
+    const opt = document.createElement("option");
+    opt.value = v;
+    opt.textContent = v;
+    select.appendChild(opt);
+  }
+}
+function setSelectValue(select, value) {
+  if (![...select.options].some(o => o.value === value) && value) {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = value + " (not currently listed)";
+    select.appendChild(opt);
+  }
+  select.value = value;
+}
+
+// Everything below is only ever safe to edit/test while local-trx is NOT
+// actually serving wifilt -- see modeFieldset's own note. These fieldsets get
+// locked (native <fieldset disabled>, which cascades to every input/select/
+// button inside, no per-field bookkeeping needed) purely from the config this
+// page most recently fetched from the server, never from clicking the mode
+// radios themselves -- so what the operator sees always matches what is
+// actually running, not a pending, not-yet-saved intention (the exact
+// confusion this Configure/Run split replaced a plain "Enable" checkbox for).
+const LOCKABLE_FIELDSETS = ["startupFieldset", "identityFieldset", "audioFieldset", "catFieldset", "keyingFieldset"];
+function setFormLocked(locked) {
+  for (const id of LOCKABLE_FIELDSETS) el(id).disabled = locked;
+}
+function updateModeButtons() {
+  el("modeConfigureLabel").classList.toggle("selected", el("modeConfigure").checked);
+  el("modeRunLabel").classList.toggle("selected", el("modeRun").checked);
+}
+// Picking a Mode radio IS the "apply this" action, in either direction --
+// same saveConfig() the Save button below calls, no separate confirmation
+// click. Only fires on a genuine user-driven flip: setting `.checked` from
+// JS (loadAll(), reflecting whatever the last restart actually used) does
+// not raise "change", only a real click/keyboard selection does.
+function onModeChanged() {
+  updateModeButtons();
+  saveConfig();
+}
+el("modeConfigure").addEventListener("change", onModeChanged);
+el("modeRun").addEventListener("change", onModeChanged);
+
+// listAudioDevices()/listSerialPorts() on the backend genuinely re-scan
+// hardware on every call (USB hotplug shows up immediately) -- only
+// rigModels is a cached, compiled-in list. These three apply*() helpers
+// re-render each step's selects from a fresh /api/devices response while
+// preserving whatever the operator currently has picked (falling back to
+// setSelectValue's "(not currently listed)" entry if a port/device vanished),
+// so both the initial load and the per-step Refresh buttons below share one
+// code path.
+function applyAudioDevices(devices) {
+  const inCur = el("audioInput").value, outCur = el("audioOutput").value;
+  fillSelect(el("audioInput"), ["default", ...devices.audioCapture], true);
+  fillSelect(el("audioOutput"), ["default", ...devices.audioPlayback], true);
+  setSelectValue(el("audioInput"), inCur);
+  setSelectValue(el("audioOutput"), outCur);
+}
+function applySerialPorts(select, devices) {
+  const cur = select.value;
+  fillSelect(select, devices.serialPorts, true);
+  setSelectValue(select, cur);
+}
+function applyRigModels(devices) {
+  const cur = el("rigModel").value;
+  el("rigModel").innerHTML = "";
+  for (const m of devices.rigModels) {
+    const opt = document.createElement("option");
+    opt.value = m.id;
+    opt.textContent = m.mfg + " " + m.model;
+    el("rigModel").appendChild(opt);
+  }
+  setSelectValue(el("rigModel"), cur);
+}
+
+async function loadAll() {
+  const [devices, config] = await Promise.all([
+    fetch("/api/devices").then(r => r.json()),
+    fetch("/api/config").then(r => r.json()),
+  ]);
+
+  applyAudioDevices(devices);
+  applySerialPorts(el("catPort"), devices);
+  applySerialPorts(el("keyPort"), devices);
+  applyRigModels(devices);
+
+  el("modeRun").checked = config.enabled;
+  el("modeConfigure").checked = !config.enabled;
+  updateModeButtons();
+  setFormLocked(config.enabled);
+  el("openBrowserOnStart").checked = config.openBrowserOnStart;
+  el("wifiltUrl").value = config.wifiltUrl;
+  el("radioName").value = config.identity.radioName;
+  el("civAddress").value = config.identity.civAddress;
+  el("listenIp").value = config.listenIp;
+  setSelectValue(el("audioInput"), config.audio.inputDevice);
+  setSelectValue(el("audioOutput"), config.audio.outputDevice);
+  setSelectValue(el("catPort"), config.cat.port);
+  el("catBaud").value = config.cat.baud;
+  setSelectValue(el("rigModel"), String(config.cat.rigModel));
+  setSelectValue(el("keyPort"), config.keying.port);
+  el("keyBaud").value = config.keying.baud;
+  el("cwWpm").value = config.keying.cwWpm;
+  el("keyLine").value = config.keying.keyLine;
+  el("pttLine").value = config.keying.pttLine;
+  el("fskNetId").value = config.keying.fskNetId.toString(16).toUpperCase();
+
+  if (config._loadError) {
+    el("status").className = "err";
+    el("status").textContent = "existing config.json could not be read: " + config._loadError;
+  }
+}
+
+// Save now restarts local-trx itself (webui_server.cpp's own
+// restartRequested()) -- this page waits for it to actually come back
+// (re-exec + rebind is fast, but not instant) and then reloads itself, so
+// the operator sees the fresh config/state without pressing F5 by hand.
+async function waitForRestartThenReload() {
+  for (let i = 0; i < 20; i++) {
+    await new Promise(r => setTimeout(r, 300));
+    try {
+      const resp = await fetch("/api/config");
+      if (resp.ok) { location.reload(); return; }
+    } catch (e) {
+      // not back up yet -- keep polling
+    }
+  }
+  // Gave up waiting -- still likely fine (a slow machine, or the restart
+  // failed and main.cpp exited, in which case reloading just shows the
+  // browser's own "can't connect", which is at least honest).
+  location.reload();
+}
+
+// The one and only path to config.json + a restart: picking a Mode radio.
+// There used to also be a standalone Save button here, dropped as confusing
+// (operator feedback, 2026-09-02) once the Mode switch itself started saving
+// -- a second, separate way to reach the exact same POST /api/config just
+// invited "which one do I click" with no actual difference in outcome.
+// Nothing "just restarts" without saving first -- a restart only ever
+// replays whatever is in config.json, so switching back to Configure without
+// writing enabled:false first would bring the very same live state right
+// back (the exact confusion a plain "Enable" checkbox used to invite, see
+// modeFieldset's own note).
+async function saveConfig() {
+  const payload = {
+    enabled: el("modeRun").checked,
+    openBrowserOnStart: el("openBrowserOnStart").checked,
+    wifiltUrl: el("wifiltUrl").value,
+    listenIp: el("listenIp").value,
+    audio: { inputDevice: el("audioInput").value, outputDevice: el("audioOutput").value },
+    cat: { port: el("catPort").value, baud: Number(el("catBaud").value), rigModel: Number(el("rigModel").value) },
+    keying: {
+      port: el("keyPort").value, baud: Number(el("keyBaud").value),
+      keyLine: el("keyLine").value, pttLine: el("pttLine").value,
+      cwWpm: Number(el("cwWpm").value), fskNetId: parseInt(el("fskNetId").value, 16) || 0,
+    },
+    identity: { radioName: el("radioName").value, civAddress: el("civAddress").value },
+  };
+  const status = el("status");
+  try {
+    const resp = await fetch("/api/config", { method: "POST", body: JSON.stringify(payload) });
+    const result = await resp.json();
+    status.className = result.ok ? "ok" : "err";
+    status.textContent = result.ok ? result.note : result.error;
+    if (result.ok) waitForRestartThenReload();
+  } catch (e) {
+    status.className = "err";
+    status.textContent = "save failed: " + e;
+  }
+}
+
+loadAll().catch(e => {
+  el("status").className = "err";
+  el("status").textContent = "failed to load: " + e;
+});
+
+// Step 1/2/3 "Refresh devices" buttons -- re-scan hardware (e.g. a USB
+// audio/serial adapter plugged in after this page was loaded) without
+// touching the rest of the form or restarting local-trx.
+function wireRefreshButton(btn, apply) {
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    try {
+      const devices = await fetch("/api/devices").then(r => r.json());
+      apply(devices);
+    } catch (e) {
+      el("status").className = "err";
+      el("status").textContent = "refresh failed: " + e;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+wireRefreshButton(el("refreshAudioBtn"), applyAudioDevices);
+wireRefreshButton(el("refreshCatBtn"), devices => applySerialPorts(el("catPort"), devices));
+wireRefreshButton(el("refreshKeyBtn"), devices => applySerialPorts(el("keyPort"), devices));
+
+// ---- Step 3: live DTR/RTS test -------------------------------------------
+// Toggles the ACTUAL line on the port/lines currently typed into the form
+// above -- not the saved config.json -- so an operator can confirm PTT/CW
+// wiring by eye/ear on the radio itself before committing to Save. Each
+// button is a real ON/OFF toggle, not a momentary pulse: it stays keyed
+// until clicked again, same as flipping a physical switch, precisely so a
+// slow relay click or a CW decoder has time to react.
+const testLineState = { key: false, ptt: false };
+
+function currentKeyingForm() {
+  return {
+    port: el("keyPort").value,
+    baud: Number(el("keyBaud").value),
+    keyLine: el("keyLine").value,
+    pttLine: el("pttLine").value,
+  };
+}
+
+async function setTestLine(which, on) {
+  const note = el("testLineNote");
+  const form = currentKeyingForm();
+  if (!form.port) {
+    note.hidden = false;
+    note.textContent = "pick a serial port above first";
+    return false;
+  }
+  try {
+    const resp = await fetch("/api/test-line", {
+      method: "POST",
+      body: JSON.stringify({ ...form, which, on }),
+    });
+    const result = await resp.json();
+    if (!result.ok) {
+      note.hidden = false;
+      note.textContent = "test line: " + result.error;
+      return false;
+    }
+    note.hidden = true;
+    return true;
+  } catch (e) {
+    note.hidden = false;
+    note.textContent = "test line failed: " + e;
+    return false;
+  }
+}
+
+function wireTestButton(which, btn) {
+  btn.addEventListener("click", async () => {
+    const next = !testLineState[which];
+    if (!(await setTestLine(which, next))) return;
+    testLineState[which] = next;
+    btn.textContent = `Test ${which.toUpperCase()}: ${next ? "ON" : "OFF"}`;
+    btn.classList.toggle("on", next);
+  });
+}
+wireTestButton("key", el("testKeyBtn"));
+wireTestButton("ptt", el("testPttBtn"));
+
+// ---- Step 1: live audio test ----------------------------------------------
+// Same "test the form, not the saved config" philosophy as the keying test
+// above. Capture is a toggle driving a live level meter (polled while it is
+// on); playback is a single "play it now" click, not a toggle, since a
+// 1-second tone finishes on its own -- there is nothing to turn back off.
+let captureTestOn = false;
+let captureMeterTimer = null;
+
+function currentAudioDevices() {
+  return { capture: el("audioInput").value, playback: el("audioOutput").value };
+}
+
+async function postTestAudio(role, device, on) {
+  const note = el("audioTestNote");
+  try {
+    const resp = await fetch("/api/test-audio", {
+      method: "POST",
+      body: JSON.stringify({ role, device, on }),
+    });
+    const result = await resp.json();
+    if (!result.ok) {
+      note.hidden = false;
+      note.textContent = "audio test: " + result.error;
+      return false;
+    }
+    note.hidden = true;
+    return true;
+  } catch (e) {
+    note.hidden = false;
+    note.textContent = "audio test failed: " + e;
+    return false;
+  }
+}
+
+async function pollCaptureLevel() {
+  try {
+    const resp = await fetch("/api/audio-level");
+    const result = await resp.json();
+    el("captureMeterBar").style.width = (result.active ? result.level : 0) + "%";
+  } catch (e) {
+    // one missed poll is not worth surfacing -- the next tick retries
+  }
+}
+
+el("testCaptureBtn").addEventListener("click", async () => {
+  const next = !captureTestOn;
+  const device = currentAudioDevices().capture;
+  if (next && !device) {
+    el("audioTestNote").hidden = false;
+    el("audioTestNote").textContent = "pick a capture device above first";
+    return;
+  }
+  if (!(await postTestAudio("capture", device, next))) return;
+  captureTestOn = next;
+  el("testCaptureBtn").textContent = "Test mic/RX: " + (next ? "ON" : "OFF");
+  el("testCaptureBtn").classList.toggle("on", next);
+  if (next) {
+    captureMeterTimer = setInterval(pollCaptureLevel, 150);
+  } else {
+    clearInterval(captureMeterTimer);
+    captureMeterTimer = null;
+    el("captureMeterBar").style.width = "0%";
+  }
+});
+
+el("testPlaybackBtn").addEventListener("click", () => {
+  const device = currentAudioDevices().playback;
+  if (!device) {
+    el("audioTestNote").hidden = false;
+    el("audioTestNote").textContent = "pick a playback device above first";
+    return;
+  }
+  postTestAudio("playback", device, true);
+});
+
+// ---- Step 2: live CAT test -------------------------------------------------
+el("testCatBtn").addEventListener("click", async () => {
+  const result = el("catTestResult");
+  const port = el("catPort").value;
+  if (!port) {
+    result.className = "note err";
+    result.textContent = "pick a serial port above first";
+    return;
+  }
+  result.className = "note";
+  result.textContent = "reading...";
+  try {
+    const resp = await fetch("/api/test-cat", {
+      method: "POST",
+      body: JSON.stringify({ port, baud: Number(el("catBaud").value), rigModel: Number(el("rigModel").value) }),
+    });
+    const data = await resp.json();
+    if (!data.ok) {
+      result.className = "note err";
+      result.textContent = "CAT test failed: " + data.error;
+      return;
+    }
+    result.className = "note ok-inline";
+    result.textContent = `CAT OK -- frequency: ${(data.freqHz / 1e6).toFixed(6)} MHz`;
+  } catch (e) {
+    result.className = "note err";
+    result.textContent = "CAT test failed: " + e;
+  }
+});
+
+// Never leave the radio keyed, or an audio device held open, because a tab
+// got closed mid-test. sendBeacon (not fetch: it must survive the page
+// already unloading) only does POST, which is exactly what both endpoints
+// expect anyway.
+window.addEventListener("beforeunload", () => {
+  const keyingForm = currentKeyingForm();
+  if (keyingForm.port) {
+    for (const which of ["key", "ptt"]) {
+      if (testLineState[which]) {
+        navigator.sendBeacon("/api/test-line", JSON.stringify({ ...keyingForm, which, on: false }));
+      }
+    }
+  }
+  const audio = currentAudioDevices();
+  if (captureTestOn && audio.capture) {
+    navigator.sendBeacon("/api/test-audio", JSON.stringify({ role: "capture", device: audio.capture, on: false }));
+  }
+});
+</script>
+</body>
+</html>

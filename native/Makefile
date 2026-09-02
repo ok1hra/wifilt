@@ -176,6 +176,7 @@ dist-linux: all dist-assets
 	@rm -rf $(DIST)/wifilt-linux-x86_64 && mkdir -p $(DIST)/wifilt-linux-x86_64
 	cp $(BUILD_DIR)/$(TARGET) $(DIST)/wifilt-linux-x86_64/wifilt
 	cp install.sh             $(DIST)/wifilt-linux-x86_64/
+	cp start-wifilt.sh        $(DIST)/wifilt-linux-x86_64/
 	cp -r $(ASSETS)           $(DIST)/wifilt-linux-x86_64/data
 	@cd $(DIST) && tar czf wifilt-$(VERSION)-linux-x86_64.tar.gz wifilt-linux-x86_64
 	@rm -rf $(DIST)/wifilt-linux-x86_64
@@ -183,6 +184,7 @@ dist-linux: all dist-assets
 dist-windows: win dist-assets
 	@rm -rf $(DIST)/wifilt-windows-x64 && mkdir -p $(DIST)/wifilt-windows-x64
 	cp build-win/wifilt.exe $(DIST)/wifilt-windows-x64/
+	cp start-wifilt.bat     $(DIST)/wifilt-windows-x64/
 	cp -r $(ASSETS)         $(DIST)/wifilt-windows-x64/data
 	@cd $(DIST) && zip -qr wifilt-$(VERSION)-windows-x64.zip wifilt-windows-x64
 	@rm -rf $(DIST)/wifilt-windows-x64
@@ -191,6 +193,7 @@ dist-arm64: arm64 dist-assets
 	@rm -rf $(DIST)/wifilt-linux-arm64 && mkdir -p $(DIST)/wifilt-linux-arm64
 	cp build-arm64/wifilt $(DIST)/wifilt-linux-arm64/wifilt
 	cp install.sh          $(DIST)/wifilt-linux-arm64/
+	cp start-wifilt.sh     $(DIST)/wifilt-linux-arm64/
 	cp -r $(ASSETS)        $(DIST)/wifilt-linux-arm64/data
 	@cd $(DIST) && tar czf wifilt-$(VERSION)-linux-arm64.tar.gz wifilt-linux-arm64
 	@rm -rf $(DIST)/wifilt-linux-arm64

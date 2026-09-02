@@ -199,6 +199,54 @@ Kazuhiko Arase.
 License: MIT, under the same terms printed in the Brotli section above.
 Upstream: https://github.com/davidshimjs/qrcodejs
 
+hamlib (LOCAL-TRX)
+------------------
+LOCAL-TRX (local-trx/), the optional PC-side program that lets the native
+build drive any hamlib-supported radio instead of a real Icom transceiver
+(see BUILD.md § 5), links libhamlib for CAT control.
+Copyright 2000-2012 Stephane Fillod, the Hamlib Group and its many
+contributors -- see https://github.com/Hamlib/Hamlib/blob/master/COPYING
+for the complete list.
+License: GNU Lesser General Public License version 2.1 or later (the
+library itself; some optional backends/frontends not used here are GPL).
+Upstream: https://github.com/Hamlib/Hamlib
+Cross-compiled version pin (Windows/ARM64 builds only; the Linux build
+links the host's own libhamlib-dev): 4.5.5.
+
+libserialport (LOCAL-TRX)
+--------------------------
+LOCAL-TRX also links libserialport, for the DTR/RTS lines it bit-bangs to
+key CW/FSK/PTT on the radio's own serial keying interface.
+Copyright 2010-2015 Martin Ling, Bert Vermeulen, Uwe Hermann and other
+sigrok project contributors.
+License: GNU Lesser General Public License version 3.0 or later.
+Upstream: https://sigrok.org/wiki/Libserialport
+Cross-compiled version pin (Windows/ARM64 builds only; the Linux build
+links the host's own libserialport-dev): 0.1.2.
+
+miniaudio (LOCAL-TRX)
+----------------------
+LOCAL-TRX vendors miniaudio, a single-header library, for its audio
+capture and playback (the PC sound card standing in for the radio's own
+microphone/speaker audio over ICOM LAN).
+Copyright 2026 David Reid.
+License: public domain (Unlicense) or MIT No Attribution, at the licensee's
+choice -- NOT the same text as this file's other MIT entries (Brotli,
+NoSleep.js, qrcode.min.js): MIT-0 drops the standard MIT's requirement to
+preserve the copyright/permission notice in copies. Both full texts are
+printed verbatim at the end of the vendored header itself.
+Source: local-trx/third_party/miniaudio/miniaudio.h
+Upstream: https://github.com/mackron/miniaudio
+
+nlohmann/json (LOCAL-TRX)
+---------------------------
+LOCAL-TRX vendors nlohmann/json, a single-header library, to read and write
+its own config.json (a separate file from wifilt's own /radio-config.json).
+Copyright 2013-2023 Niels Lohmann.
+License: MIT, under the same terms printed in the Brotli section above.
+Source: local-trx/third_party/json/
+Upstream: https://github.com/nlohmann/json
+
 Vendored ESP32 Arduino core files (native build)
 --------------------------------------------------
 The native (Linux/Windows/Raspberry Pi) build reuses several Arduino/ESP32

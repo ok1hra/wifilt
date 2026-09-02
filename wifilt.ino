@@ -135,7 +135,7 @@ volatile bool cwIpSendPending = false;
 #ifndef LOOP_WARN_MS
   #define LOOP_WARN_MS 200
 #endif
-#define REV 20260830
+#define REV 20260901
 #define WIFI
 #define FSK_KEYING  // RTTY by keying the FSK + PTT outputs (was UDP_TO_FSK, from when a UDP port fed it)
 #define WDT         // watchdog timer
@@ -517,6 +517,13 @@ struct RadioSlotConfig {
   String lanIp;
   String lanUser;
   String lanPass;
+  // Set only by the SETUP page's LOCAL-TRX checkbox. Purely cosmetic -- it
+  // never changes how this slot connects (still plain RADIO_LAN, same client
+  // code as any other Icom-LAN radio) -- it just remembers which prefill the
+  // operator picked, so the checkbox and the local-trx web UI link come back
+  // checked/shown on the next visit instead of silently reverting to plain
+  // ICOM-LAN once the fields already hold real values.
+  bool localTrx = false;
   // Model the radio reported in its capabilities packet, remembered across
   // reboots. Not operator-editable -- it is an observation, not a setting.
   // WSPR needs it to know whether 100 % of the CI-V power scale means 10 W or
@@ -1873,6 +1880,8 @@ void handleSetupData(){
     j += configJsonEscape(radioSlots[slot].lanPass); j += "\"";
     j += ",\""; j += prefix; j += "model\":\"";
     j += configJsonEscape(radioSlots[slot].model); j += "\"";
+    j += ",\""; j += prefix; j += "localtrx\":";
+    j += radioSlots[slot].localTrx ? "true" : "false";
   }
   // Compatibility aliases used by the current JS8 readiness check and older
   // setup backups while the unified per-slot keys become authoritative.
@@ -2803,6 +2812,7 @@ bool loadRadioConfig(void) {
       radioSlots[slot].lanPass = trimMemoryValue(extractJsonString(obj, "lanpass"), 16);
     if (obj.indexOf("\"model\"") >= 0)
       radioSlots[slot].model = trimMemoryValue(extractJsonString(obj, "model"), 15);
+    radioSlots[slot].localTrx = extractJsonBool(obj, "localtrx", radioSlots[slot].localTrx);
   }
 
   syncLegacyRadioGlobals();
@@ -2831,6 +2841,7 @@ bool saveRadioConfig(void) {
     json += ",\"lanuser\":\""; json += configJsonEscape(radioSlots[slot].lanUser); json += "\"";
     json += ",\"lanpass\":\""; json += configJsonEscape(radioSlots[slot].lanPass); json += "\"";
     json += ",\"model\":\"";   json += configJsonEscape(radioSlots[slot].model);   json += "\"";
+    json += ",\"localtrx\":";  json += radioSlots[slot].localTrx ? "true" : "false";
     json += "}";
   }
   json += "}";
@@ -2907,7 +2918,7 @@ bool beginRadioLanClient(uint8_t slot) {
   }
   IcomLanClient* client = radioLanClient(slot);
   if (!client) return false;
-  uint16_t localControlPort = radioLanLocalControlPort(slot);
+  uint16_t localControlPort = radioLanLocalControlPort(slot, radioIp[0] == 127);
   // Audio goes to the slot that owns the LAN radio, not to slot 0: the JS8 page
   // drives whichever TRX the operator put LAN on.
   bool withAudio = slot == lanRadioSlotIndex();
@@ -5815,7 +5826,8 @@ void lanClientLoop(){
     IPAddress rip;
     if (rip.fromString(lanRadioIp) && lanUser.length() > 0 && lanPass.length() > 0) {
       Serial.println("LAN | manual reconnect requested");
-      lanClient.begin(rip, 50001, lanUser.c_str(), lanPass.c_str(), configuredCivAddress);
+      lanClient.begin(rip, 50001, lanUser.c_str(), lanPass.c_str(), configuredCivAddress,
+                      0, radioLanLocalControlPort(0, rip[0] == 127), true);
     } else {
       Serial.println("LAN | manual reconnect skipped, configuration incomplete");
     }
@@ -5874,7 +5886,8 @@ void lanClientLoop(){
       lanRetryAt = 0;
       IPAddress rip;
       if (rip.fromString(lanRadioIp))
-        lanClient.begin(rip, 50001, lanUser.c_str(), lanPass.c_str(), configuredCivAddress);
+        lanClient.begin(rip, 50001, lanUser.c_str(), lanPass.c_str(), configuredCivAddress,
+                        0, radioLanLocalControlPort(0, rip[0] == 127), true);
     }
   }
 }
@@ -6141,7 +6154,8 @@ void icomScanTick() {
       // enableAudio=false keeps openAudioChannel() a no-op, so no audio task is
       // ever spawned and the instance can be deleted the moment we are done.
       icomTestClient->begin(icomTestIp, 50001, icomTestUser.c_str(), icomTestPass.c_str(),
-                            icomTestCivAddr, 0, 50001, false);
+                            icomTestCivAddr, 0,
+                            radioLanLocalControlPort(0, icomTestIp[0] == 127), false);
       icomTestDeadline = millis() + 15000;
       icomScanPhase = ISCAN_TEST_RUN;
       return;
@@ -8075,7 +8089,7 @@ void runLanCivTest(){
     }
     Serial.println("LAN | testing without changing the stored connection...");
     lanClient.begin(rip, 50001, user.c_str(), pass.c_str(),
-                    radioSlots[0].civAddr, 0, radioLanLocalControlPort(0), true);
+                    radioSlots[0].civAddr, 0, radioLanLocalControlPort(0, rip[0] == 127), true);
     unsigned long t0 = millis();
     while (millis() - t0 < 20000) {
       lanClient.loop();
@@ -8479,6 +8493,7 @@ void handleSet() {
           trimMemoryValue(requestArg((prefix + "lanuser").c_str()), 16);
         String password = trimMemoryValue(requestArg((prefix + "lanpass").c_str()), 16);
         if (password.length()) nextSlots[slot].lanPass = password; // blank keeps stored secret
+        nextSlots[slot].localTrx = requestHasArg((prefix + "localtrx").c_str());
       }
 
       if (!nextSlots[slot].enabled) continue;

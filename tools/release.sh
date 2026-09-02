@@ -59,7 +59,7 @@ capitalised default.
 
   1  REV -> today's date                     (y/N)
   2  Export compiled binary (headless)       (Y/n)
-  3  make -C native dist                     (Y/n)
+  3  make -C native dist (+ bundle local-trx) (Y/n, Y/n)
   4  tools/native-integration-test.sh        (y/N)
   5  run ./native/build/wifilt --data-dir data   (y/N)
   6  install this build on this computer     (Y/n)
@@ -200,6 +200,80 @@ ensure_setcap() {   # ensure_setcap WHAT-BREAKS-WITHOUT-IT
   return 1
 }
 
+# local-trx bundling (fáze 3, docs/local-trx-implementace.md bod 1/12: local-trx/
+# Makefile zůstává mimo native/Makefile's all/dist cíle, takže tohle žije tady,
+# ne tam -- smazání local-trx/ nechá `make -C native dist` beze změny).
+#
+# Cross-kompilovaný hamlib+libserialport (Windows/ARM64) je jednorázová, řádově
+# minutová práce, jejíž výsledek third_party/build-cross-libs.sh sám ukládá pro
+# příště -- proto se ptá, ne mlčky staví, ale i mlčky nepřeskakuje.
+ensure_local_trx_cross_libs() {   # ensure_local_trx_cross_libs win|arm64
+  local target="$1"
+  local hamlib_lib="${ROOT_DIR}/local-trx/third_party/cross/hamlib-${target}/lib/libhamlib.a"
+  local serial_lib="${ROOT_DIR}/local-trx/third_party/cross/libserialport-${target}/lib/libserialport.a"
+  [[ -f "$hamlib_lib" && -f "$serial_lib" ]] && return 0
+  warn "  local-trx's cross-zkompilovaný hamlib/libserialport pro $target chybí."
+  if ask "  Zkompilovat teď (řádově minuty, jednorázově -- příště se přeskočí)?" Y; then
+    "${ROOT_DIR}/local-trx/third_party/build-cross-libs.sh" "$target" && return 0
+    warn "  build-cross-libs.sh $target selhal"
+  fi
+  return 1
+}
+
+# bundle_local_trx_into ARCHIVE STAGING_DIR_NAME LOCAL_TRX_BIN KIND(tar|zip)
+#
+# native/Makefile's own dist-* targets create+tar+delete their staging
+# directory in one atomic `make` step, so there is no window to inject an
+# extra file into that same archive from here -- this instead unpacks the
+# already-finished archive, adds local-trx (+ its webui/, sibling to the
+# binary so main.cpp's own "webui/ next to the executable" default just
+# works with no extra flag needed), and re-packs in place.
+bundle_local_trx_into() {
+  local archive="$1" staging_name="$2" ltx_bin="$3" kind="$4"
+  [[ -f "$archive" ]] || { warn "  $(basename "$archive") neexistuje"; return 1; }
+  [[ -f "$ltx_bin"  ]] || { warn "  $(basename "$ltx_bin") neexistuje -- build selhal?"; return 1; }
+
+  local work; work="$(mktemp -d)"
+  if [[ "$kind" == "tar" ]]; then
+    tar xzf "$archive" -C "$work" || { warn "  rozbalení $(basename "$archive") selhalo"; rm -rf "$work"; return 1; }
+  else
+    ( cd "$work" && unzip -q "$archive" ) || { warn "  rozbalení $(basename "$archive") selhalo"; rm -rf "$work"; return 1; }
+  fi
+
+  local dest="${work}/${staging_name}"
+  if [[ ! -d "$dest" ]]; then
+    warn "  $staging_name nenalezen uvnitř $(basename "$archive")"
+    rm -rf "$work"
+    return 1
+  fi
+  cp "$ltx_bin" "$dest/" || { rm -rf "$work"; return 1; }
+  cp -r "${ROOT_DIR}/local-trx/webui" "${dest}/webui" || { rm -rf "$work"; return 1; }
+
+  # Re-pack to a NEW path and only replace the original once that succeeded --
+  # the previous version deleted the original archive first and never checked
+  # the repack's own exit status, so a failed tar/zip (disk full, permission)
+  # left NO archive at all while still reporting success (found by code
+  # review). A real release archive is worth more than the disk space this
+  # briefly doubles.
+  local rebuilt="${archive}.new"
+  local pack_status
+  if [[ "$kind" == "tar" ]]; then
+    ( cd "$work" && tar czf "$rebuilt" "$staging_name" )
+    pack_status=$?
+  else
+    ( cd "$work" && zip -qr "$rebuilt" "$staging_name" )
+    pack_status=$?
+  fi
+  rm -rf "$work"
+  if [[ $pack_status -ne 0 || ! -s "$rebuilt" ]]; then
+    warn "  přebalení $(basename "$archive") s local-trx selhalo -- původní archiv beze změny"
+    rm -f "$rebuilt"
+    return 1
+  fi
+  mv -f "$rebuilt" "$archive"
+  return 0
+}
+
 # ---------------------------------------------------------------- phase 0 ----
 # Preflight. A missing tool disables ONE phase, never the run: flashing a board
 # on a machine without mingw-w64 is a perfectly reasonable thing to want.
@@ -250,6 +324,26 @@ have x86_64-w64-mingw32-g++ && report_tool "mingw-w64" 1 "$(command -v x86_64-w6
   || { report_tool "mingw-w64" 0 "chybí -- bez Windows archivu"; DEGRADED_WINDOWS="mingw-w64 chybí"; }
 have aarch64-linux-gnu-g++ && report_tool "aarch64 cross g++" 1 "$(command -v aarch64-linux-gnu-g++)" \
   || { report_tool "aarch64 cross g++" 0 "chybí -- bez Raspberry Pi archivu"; DEGRADED_ARM64="aarch64-linux-gnu-g++ chybí"; }
+
+# local-trx bundling (fáze 3, volitelné, default Y) -- Linux x86_64 potřebuje
+# jen systémové -dev balíčky (stejně jako `make -C local-trx test`); Windows/
+# ARM64 potřebují navíc local-trx/third_party/build-cross-libs.sh's vlastní
+# cross-zkompilovaný hamlib+libserialport, což se řeší (nabídkou postavit)
+# přímo ve fázi 3, ne tady -- tady se jen zjišťuje, jestli local-trx pro
+# Linux x86_64 vůbec jde postavit, a jestli je čím rozbalit/zabalit .zip.
+LOCAL_TRX_UNAVAILABLE=""
+if [[ ! -d "${ROOT_DIR}/local-trx" ]]; then
+  LOCAL_TRX_UNAVAILABLE="local-trx/ neexistuje"
+elif ! pkg-config --exists hamlib libserialport 2>/dev/null; then
+  LOCAL_TRX_UNAVAILABLE="libhamlib-dev/libserialport-dev chybí"
+fi
+if [[ -z "$LOCAL_TRX_UNAVAILABLE" ]]; then
+  report_tool "local-trx deps" 1 "hamlib + libserialport (pkg-config)"
+else
+  report_tool "local-trx deps" 0 "$LOCAL_TRX_UNAVAILABLE -- balíčky budou bez local-trx"
+fi
+have unzip && report_tool "unzip" 1 "$(command -v unzip)" \
+  || { report_tool "unzip" 0 "chybí -- Windows balíček nepůjde local-trx přidat"; }
 if [[ -n "$ARDUINO15_DIR" ]]; then
   report_tool "esp32 core tools" 1 "$ARDUINO15_DIR"
 else
@@ -312,6 +406,14 @@ else
   fi
 fi
 
+# REV is final after phase 1 (it only ever changes there) -- defined here,
+# once, so every later phase that names the Linux archive (3's local-trx
+# bundling, 6's install, 9's publish gate) shares one path instead of each
+# phase re-deriving it or -- as phase 3's local-trx bundling briefly did --
+# using it before it was ever set at all (found by code review: a bare
+# reference under `set -u` aborted the whole script mid-phase-3).
+LINUX_ARCHIVE="${DIST_DIR}/wifilt-${REV}-linux-x86_64.tar.gz"
+
 # ---------------------------------------------------------------- phase 2 ----
 phase_banner 2 "export compiled binary"
 if ! skip_if_blocked 2; then
@@ -369,8 +471,72 @@ if ! skip_if_blocked 3; then
     make -C "${ROOT_DIR}/native" "${dist_targets[@]}"
     dist_status=$?
     if [[ $dist_status -eq 0 ]]; then
-      ( cd "$DIST_DIR" && sha256sum ./*.tar.gz ./*.zip >SHA256SUMS 2>/dev/null || true )
       rm -rf "${DIST_DIR}/assets"
+
+      # local-trx bundling: same three archives, default Y -- see the helper
+      # functions' own comments for why this lives here rather than in
+      # native/Makefile. Off entirely when phase 0 found no hamlib/
+      # libserialport -dev packages; degrades one PLATFORM at a time
+      # otherwise (a Windows/ARM64 cross-lib build the operator declines
+      # just means that one archive ships without local-trx, same spirit as
+      # DEGRADED_WINDOWS/DEGRADED_ARM64 above).
+      if [[ -n "$LOCAL_TRX_UNAVAILABLE" ]]; then
+        info "  local-trx: $LOCAL_TRX_UNAVAILABLE -- balíčky bez něj."
+      elif ask "Zahrnout do balíků i local-trx (PC bridge pro libovolný rig, ve výchozím stavu vypnutý)?" Y; then
+        LOCAL_TRX_BUNDLED=()
+        info "  make -C local-trx (Linux x86_64)"
+        if make -C "${ROOT_DIR}/local-trx" >/dev/null 2>&1; then
+          if bundle_local_trx_into "$LINUX_ARCHIVE" "wifilt-linux-x86_64" \
+              "${ROOT_DIR}/local-trx/build/local-trx" tar; then
+            LOCAL_TRX_BUNDLED+=("linux-x86_64")
+          fi
+        else
+          warn "  make -C local-trx selhalo -- linuxový balíček bez local-trx"
+        fi
+
+        # Windows and ARM64 are the same shape end to end (gate on
+        # dist_targets, cross-compile the libs, cross-build local-trx itself,
+        # bundle into that platform's archive) -- unlike the Linux x86_64
+        # case just above, which needs neither a dist_targets gate nor
+        # ensure_local_trx_cross_libs at all (host build, not cross). One
+        # data-driven loop over the two instead of two copy-pasted if blocks
+        # differing only in these five values (found by code review).
+        # Fields: make-target | dist_targets gate | archive path | staging
+        # dir name | built binary path | tar/zip kind | display name for the
+        # warn() message.
+        # NOT `local` -- this whole phase runs at the script's top level, not
+        # inside a function (same as dist_targets/LOCAL_TRX_BUNDLED right
+        # above), so `local` here would be a bash runtime error ("can only be
+        # used in a function"), not a scoping nicety.
+        local_trx_cross_targets=(
+          "win|dist-windows|${DIST_DIR}/wifilt-${REV}-windows-x64.zip|wifilt-windows-x64|${ROOT_DIR}/local-trx/build-win/local-trx.exe|zip|Windows"
+          "arm64|dist-arm64|${DIST_DIR}/wifilt-${REV}-linux-arm64.tar.gz|wifilt-linux-arm64|${ROOT_DIR}/local-trx/build-arm64/local-trx|tar|ARM64"
+        )
+        for entry in "${local_trx_cross_targets[@]}"; do
+          IFS='|' read -r target gate archive staging bin kind label <<< "$entry"
+          [[ " ${dist_targets[*]} " == *" $gate "* ]] || continue
+          if ensure_local_trx_cross_libs "$target" && make -C "${ROOT_DIR}/local-trx" "$target" >/dev/null 2>&1; then
+            # staging dir name is always "wifilt-<bundled label>" (e.g.
+            # wifilt-windows-x64 -> windows-x64) -- one source of truth
+            # instead of a separate, driftable eighth field.
+            if bundle_local_trx_into "$archive" "$staging" "$bin" "$kind"; then
+              LOCAL_TRX_BUNDLED+=("${staging#wifilt-}")
+            fi
+          else
+            warn "  local-trx pro $label se nepodařilo přidat"
+          fi
+        done
+
+        if [[ ${#LOCAL_TRX_BUNDLED[@]} -gt 0 ]]; then
+          ok "  local-trx přibalen do: ${LOCAL_TRX_BUNDLED[*]}"
+        else
+          warn "  local-trx se nepodařilo přibalit do žádného balíku"
+        fi
+      fi
+
+      # Po případném přibalení local-trx výše -- součty musí sedět na to, co
+      # se skutečně publikuje, ne na mezistav před bundlováním.
+      ( cd "$DIST_DIR" && sha256sum ./*.tar.gz ./*.zip >SHA256SUMS 2>/dev/null || true )
     fi
     if [[ $dist_status -eq 0 ]]; then
       mark 3 "hotovo"
@@ -457,39 +623,56 @@ fi
 
 # ---------------------------------------------------------------- phase 6 ----
 phase_banner 6 "instalace na tento počítač"
-LINUX_ARCHIVE="${DIST_DIR}/wifilt-${REV}-linux-x86_64.tar.gz"
 if [[ ! -f "$LINUX_ARCHIVE" ]]; then
   info "  chybí $(basename "$LINUX_ARCHIVE") -- fáze 3 neproběhla."
   mark 6 "nedostupné"
 else
-  info "  /opt/wifilt + systemd jednotka (neaktivovaná); ~/.config/wifilt zůstává"
-  if ask "Nainstalovat wifilt-${REV} na tento počítač (sudo)?" Y; then
-    # install(1) cannot write over a binary that is currently being executed, so
-    # a running service has to go down first -- otherwise the install fails with
-    # "Text file busy" halfway through, having already replaced data/.
-    stopped_service=false
-    if systemctl is-active --quiet wifilt 2>/dev/null; then
-      warn "  Služba wifilt běží, instalace by přepisovala běžící binárku."
-      if ask "Zastavit ji na dobu instalace?" Y; then
-        sudo systemctl stop wifilt && stopped_service=true
-      fi
-    fi
-    ( cd "$DIST_DIR" \
-      && tar xzf "$(basename "$LINUX_ARCHIVE")" \
-      && cd wifilt-linux-x86_64 \
-      && sudo ./install.sh )
-    install_status=$?
-    if [[ $install_status -eq 0 ]]; then
-      # The extracted tree is a by-product of installing, not of building; make
-      # removes its own copy at the end of `dist` and this removes ours.
-      rm -rf "${DIST_DIR}/wifilt-linux-x86_64"
-      mark 6 "hotovo"
-      $stopped_service && warn "  Službu jsi zastavil: sudo systemctl start wifilt"
-    else
-      mark 6 "selhalo"; abort "Instalace selhala." 6
-    fi
-  else
+  # $LINUX_ARCHIVE existuje jen podle JMÉNA (wifilt-$REV-...) -- to samo o
+  # sobě neznamená, že ho TENHLE běh skriptu doopravdy přebudoval. Fáze 3
+  # přeskočená ("Sestavit PC balíky?" -> N) nechá ležet archiv ze STARŠÍHO
+  # běhu se stejným REV beze změny, a tahle fáze by ho tiše nainstalovala,
+  # i kdyby mezitím zdroj (třeba start-wifilt.sh) doznal opravu, co do něj
+  # ještě nestihla. Nalezeno živě: operátor spustil release.sh, fáze 3
+  # odmítnuta (archiv "už přece existuje"), instalace pak potichu nasadila
+  # hodiny starý archiv bez čerstvé opravy.
+  install_ok_to_proceed=1
+  if [[ "${RESULT[3]:-}" != "hotovo" ]]; then
+    warn "  $(basename "$LINUX_ARCHIVE") NEBYL přebudován v tomhle běhu (fáze 3: ${RESULT[3]:-neproběhla}) --"
+    warn "  může být starší, než aktuální zdrojový strom."
+    ask "Přesto nainstalovat tenhle existující archiv?" N || install_ok_to_proceed=0
+  fi
+  if [[ $install_ok_to_proceed -eq 0 ]]; then
     mark 6 "přeskočeno"
+  else
+    info "  /opt/wifilt + systemd jednotka (neaktivovaná); ~/.config/wifilt zůstává"
+    if ask "Nainstalovat wifilt-${REV} na tento počítač (sudo)?" Y; then
+      # install(1) cannot write over a binary that is currently being executed, so
+      # a running service has to go down first -- otherwise the install fails with
+      # "Text file busy" halfway through, having already replaced data/.
+      stopped_service=false
+      if systemctl is-active --quiet wifilt 2>/dev/null; then
+        warn "  Služba wifilt běží, instalace by přepisovala běžící binárku."
+        if ask "Zastavit ji na dobu instalace?" Y; then
+          sudo systemctl stop wifilt && stopped_service=true
+        fi
+      fi
+      ( cd "$DIST_DIR" \
+        && tar xzf "$(basename "$LINUX_ARCHIVE")" \
+        && cd wifilt-linux-x86_64 \
+        && sudo ./install.sh )
+      install_status=$?
+      if [[ $install_status -eq 0 ]]; then
+        # The extracted tree is a by-product of installing, not of building; make
+        # removes its own copy at the end of `dist` and this removes ours.
+        rm -rf "${DIST_DIR}/wifilt-linux-x86_64"
+        mark 6 "hotovo"
+        $stopped_service && warn "  Službu jsi zastavil: sudo systemctl start wifilt"
+      else
+        mark 6 "selhalo"; abort "Instalace selhala." 6
+      fi
+    else
+      mark 6 "přeskočeno"
+    fi
   fi
 fi
 
@@ -508,7 +691,7 @@ if ! skip_if_blocked 7; then
   if [[ ${#PORTS[@]} -eq 0 ]]; then
     info "  Není připojený žádný sériový port -- fáze se přeskakuje."
     mark 7 "přeskočeno"
-  elif ask "Nahrát do zařízení?" N; then
+  elif ask "Nahrát do zařízení?" Y; then
     say ""
     for i in "${!PORTS[@]}"; do
       dev="${PORTS[$i]}"

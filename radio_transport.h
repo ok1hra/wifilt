@@ -64,7 +64,19 @@ static inline RadioTransport radioTransportFromName(const char* value,
 // stays 0/default there and this is byte-identical to the original literal).
 extern uint16_t g_lanLocalPortBaseOverride;
 
-static inline uint16_t radioLanLocalControlPort(uint8_t slot) {
-  const uint16_t base = g_lanLocalPortBaseOverride ? g_lanLocalPortBaseOverride : 50001u;
+// loopbackTarget: the radio IP this slot is dialing is 127.x -- i.e. a
+// same-host peer such as local-trx, not a real radio on another box. Linux
+// hands any packet addressed to 127.0.0.1:<port> to the MOST SPECIFIC socket
+// bound to it, never to a same-port wildcard bind -- so if our own client
+// used that exact port number as its local port too, a reply the loopback
+// peer sends back to "127.0.0.1:<our port>" is delivered to the peer's OWN
+// listening socket instead of ours (confirmed with a minimal two-socket
+// repro: the wildcard side never sees it, the specific-bind side gets its
+// own packet back). A real radio never triggers this -- it is a different
+// host, so no bind on that box can ever collide with ours. +100 clears
+// local-trx's fixed 50001-50003 regardless of slot.
+static inline uint16_t radioLanLocalControlPort(uint8_t slot, bool loopbackTarget = false) {
+  uint16_t base = g_lanLocalPortBaseOverride ? g_lanLocalPortBaseOverride : 50001u;
+  if (loopbackTarget) base += 100u;
   return (uint16_t)(base + (uint16_t)slot * 10u);
 }

@@ -65,6 +65,154 @@ jobs:
           name: wifilt-linux-x86_64
           path: native/build/wifilt
 
+  local-trx:
+    name: local-trx build + integration
+    # Linux x86_64: system -dev packages via pkg-config, no cross-compiling
+    # (Dávka 1). See local-trx-arm64/local-trx-windows below for the other
+    # two targets (Dávka 3, bod 13).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # System -dev packages on Linux x86_64 (bod 13): no vendoring/cross-
+      # compile needed here, unlike the ARM64/Windows batch still to come.
+      - name: Install hamlib + libserialport dev packages
+        run: sudo apt-get update && sudo apt-get install -y libhamlib-dev libserialport-dev
+
+      # local-trx-integration-test.sh builds and runs the real native wifilt
+      # binary against local-trx, so it needs the same sibling checkout the
+      # `linux` job above uses.
+      - name: Fetch TrxNet
+        run: |
+          mkdir -p "$HOME/Arduino/libraries"
+          git clone --depth 1 https://github.com/ok1hra/TrxNet.git \
+            "$HOME/Arduino/libraries/TrxNet"
+
+      # doctest unit tests (bod: keyer timing/mode-tables/config parsing, see
+      # docs/local-trx-implementace.md's "Testy" section) -- transport-free,
+      # no hamlib Dummy backend or socket involved.
+      - name: Unit tests
+        run: make -C local-trx test
+
+      # Drives the UNCHANGED native wifilt binary against local-trx (hamlib
+      # Dummy backend, no hardware): RS-BA1 handshake, CI-V frequency into
+      # /state, synthetic identity -- see docs/local-trx-implementace.md's
+      # phase-0 goal and bod 3.
+      - name: Integration test (local-trx as the radio)
+        run: tools/local-trx-integration-test.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: local-trx-linux-x86_64
+          path: local-trx/build/local-trx
+
+  local-trx-arm64:
+    name: local-trx ARM64 build + integration
+    # A real ARM64 machine, same reasoning as linux-arm64 below: native
+    # system -dev packages, no cross-compiling needed here at all (unlike
+    # local-trx-windows below, which has no equivalent free-hosted-runner
+    # option and must cross-compile hamlib+libserialport itself, bod 13).
+    # third_party/build-cross-libs.sh + `make arm64` exist for a developer
+    # cross-building a release FROM x86_64 (mirroring tools/release.sh's own
+    # native/ split) -- this job proves the SOURCE is correct on real ARM64,
+    # it does not exercise that cross-compiled path.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install hamlib + libserialport dev packages
+        run: sudo apt-get update && sudo apt-get install -y libhamlib-dev libserialport-dev
+
+      - name: Fetch TrxNet
+        run: |
+          mkdir -p "$HOME/Arduino/libraries"
+          git clone --depth 1 https://github.com/ok1hra/TrxNet.git \
+            "$HOME/Arduino/libraries/TrxNet"
+
+      - name: Unit tests
+        run: make -C local-trx test
+
+      - name: Integration test (local-trx as the radio)
+        run: tools/local-trx-integration-test.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: local-trx-linux-arm64
+          path: local-trx/build/local-trx
+
+  local-trx-windows:
+    name: local-trx Windows cross-build
+    # Cross-compiles hamlib+libserialport too (bod 13) -- there is no
+    # hosted-Windows-runner equivalent to local-trx-arm64's "real hardware,
+    # system packages" shortcut, since apt has no Windows target at all.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mingw-w64
+        run: sudo apt-get update && sudo apt-get install -y mingw-w64
+
+      - name: Fetch TrxNet
+        run: |
+          mkdir -p "$HOME/Arduino/libraries"
+          git clone --depth 1 https://github.com/ok1hra/TrxNet.git \
+            "$HOME/Arduino/libraries/TrxNet"
+
+      - name: Cross-compile hamlib + libserialport for Windows
+        run: local-trx/third_party/build-cross-libs.sh win
+
+      - name: Build
+        run: make -C local-trx win
+
+      - name: Check it has no DLL dependencies beyond the system ones
+        run: |
+          x86_64-w64-mingw32-objdump -p local-trx/build-win/local-trx.exe \
+            | grep 'DLL Name' | sort -u
+          ! x86_64-w64-mingw32-objdump -p local-trx/build-win/local-trx.exe \
+            | grep -qi 'libstdc++\|libgcc\|libwinpthread'
+
+      # Runs the cross-compiled .exe for real under Wine and drives it with
+      # the SAME direct-client checks (each its own ephemeral-port UDP/HTTP
+      # client, bypassing wifilt) the Linux jobs use standalone tools for --
+      # proving the actual Windows binary's CI-V/audio/wizard logic works,
+      # not just that it links. Deliberately NOT the full wifilt<->local-trx
+      # tools/local-trx-integration-test.sh: verified live 2026-09-01 that
+      # Wine's WinSock only binds loopback aliases OTHER than 127.0.0.1
+      # correctly some of the time (falls back to a wildcard bind otherwise,
+      # confirmed via `ss`), and forcing 127.0.0.1 on both sides instead then
+      # collides with wifilt's own LAN client binding ITS local port to the
+      # same fixed 50001 (a real, protocol-level ICOM-LAN convention) --
+      # local-trx.exe's reply loops back to its own socket rather than
+      # reaching wifilt. That is a same-machine loopback-plumbing artifact of
+      # this specific test topology (two processes, one loopback interface),
+      # not a code defect: a real deployment always has local-trx and wifilt
+      # on genuinely distinct hosts/interfaces (bod: docs/
+      # local-trx-implementace.md's own Dávka 3 section has the full story).
+      - name: Direct-client checks under Wine (CI-V, PTT, wizard)
+        run: |
+          sudo apt-get install -y wine
+          mkdir -p /tmp/ltx-win-cfg
+          cat > /tmp/ltx-win-cfg/config.json <<'EOF'
+          {"enabled":true,"listenIp":"127.0.0.1","audio":{"inputDevice":"","outputDevice":""},
+           "cat":{"port":"","baud":19200,"rigModel":1},
+           "keying":{"port":"","baud":1200,"keyLine":"dtr","pttLine":"rts","cwWpm":20,"fskNetId":16},
+           "identity":{"radioName":"LOCAL-TRX","civAddress":"A6"}}
+          EOF
+          wine local-trx/build-win/local-trx.exe --config-dir /tmp/ltx-win-cfg \
+            --web-port 8766 --web-root local-trx/webui -v > /tmp/ltx-win.log 2>&1 &
+          sleep 3
+          python3 tools/local-trx-ptt-check.py --ip 127.0.0.1 --port 50002 --civaddr A6
+          python3 tools/local-trx-civ-extras-check.py --ip 127.0.0.1 --port 50002 --civaddr A6
+          python3 tools/local-trx-wizard-check.py --port 8766
+          pkill -9 -f local-trx.exe || true
+          wineserver -k || true
+          cat /tmp/ltx-win.log
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: local-trx-windows-x64
+          path: local-trx/build-win/local-trx.exe
+
   linux-arm64:
     name: Linux ARM64 build + integration
     # A real ARM64 machine, not emulation -- GitHub's hosted Linux ARM64 runners

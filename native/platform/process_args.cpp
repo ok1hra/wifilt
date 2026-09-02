@@ -1,5 +1,20 @@
 #include "process_args.h"
 
+#include <stdlib.h>
+#include <string.h>
+
+#ifdef _WIN32
+  #ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+  #endif
+  #include <windows.h>
+  #include <process.h>
+  #include <string>
+#else
+  #include <fcntl.h>
+  #include <unistd.h>
+#endif
+
 namespace {
 char **savedArgv = nullptr;
 }
@@ -7,3 +22,83 @@ char **savedArgv = nullptr;
 void nativeProcessArgvSet(int, char **argv) { savedArgv = argv; }
 
 char **nativeProcessArgv(void) { return savedArgv; }
+
+#ifdef _WIN32
+namespace {
+
+// Command-line quoting per the MSVCRT parsing rules, so an argument with
+// spaces (e.g. --data-dir "C:\Program Files\...") survives the round trip
+// through CreateProcess.
+void appendQuoted(std::string &commandLine, const char *argument) {
+  if (*argument && !strpbrk(argument, " \t\"")) {
+    commandLine += argument;
+    return;
+  }
+  commandLine += '"';
+  size_t backslashes = 0;
+  for (const char *p = argument; *p; ++p) {
+    if (*p == '\\') { ++backslashes; continue; }
+    if (*p == '"') {
+      commandLine.append(backslashes * 2 + 1, '\\');
+      backslashes = 0;
+      commandLine += '"';
+      continue;
+    }
+    commandLine.append(backslashes, '\\');
+    backslashes = 0;
+    commandLine += *p;
+  }
+  commandLine.append(backslashes * 2, '\\');
+  commandLine += '"';
+}
+
+}  // namespace
+#endif
+
+bool nativeReexecSelf(void) {
+  char **argv = savedArgv;
+  if (!argv || !argv[0]) return false;
+
+#ifdef _WIN32
+  // _execv passes inheritable handles into the child, and Winsock sockets
+  // are inheritable by default -- the restarted process then finds its own
+  // ports still held by its own inherited copies, every bind fails, and
+  // whatever it serves waits for a device/session that never comes back.
+  // CreateProcess with bInheritHandles=FALSE hands over nothing.
+  std::string commandLine;
+  for (int i = 0; argv[i]; ++i) {
+    if (i) commandLine += ' ';
+    appendQuoted(commandLine, argv[i]);
+  }
+  STARTUPINFOA startup;
+  memset(&startup, 0, sizeof(startup));
+  startup.cb = sizeof(startup);
+  PROCESS_INFORMATION process;
+  if (CreateProcessA(nullptr, &commandLine[0], nullptr, nullptr,
+                     FALSE /* bInheritHandles */, 0, nullptr, nullptr,
+                     &startup, &process)) {
+    CloseHandle(process.hProcess);
+    CloseHandle(process.hThread);
+    exit(0);
+  }
+  _execv(argv[0], argv);
+#else
+  // Descriptors survive execv unless marked close-on-exec; the re-exec'd
+  // image would otherwise find its own listeners/serial ports/audio devices
+  // still bound by its own leaked handles and either fail to open them or
+  // silently share them with a process that is about to vanish. Sweep every
+  // descriptor above stdio rather than each creation site, so this covers
+  // whatever the caller happened to have open without needing to know what
+  // that was (wifilt's raw audio socket, local-trx's UDP channels/serial
+  // ports/miniaudio devices alike).
+  long maxFd = sysconf(_SC_OPEN_MAX);
+  if (maxFd <= 0 || maxFd > 4096) maxFd = 4096;
+  for (int fd = 3; fd < (int)maxFd; ++fd) {
+    int flags = fcntl(fd, F_GETFD, 0);
+    if (flags >= 0) fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+  }
+  execv(argv[0], argv);
+#endif
+
+  return false;   // only reached if the re-exec call itself failed
+}

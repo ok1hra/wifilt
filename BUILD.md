@@ -16,10 +16,11 @@ the sketch does not require touching `native/`.
 2. [Web assets](#2-web-assets)
 3. [Flashing what you built](#3-flashing-what-you-built)
 4. [Native build: Linux, Windows and Raspberry Pi (ARM64)](#4-native-build-linux-windows-and-raspberry-pi-arm64)
-5. [The web installer page](#5-the-web-installer-page)
-6. [JS8 modem (WebAssembly)](#6-js8-modem-webassembly)
-7. [Tests](#7-tests)
-8. [Documentation in `docs/`](#8-documentation-in-docs)
+5. [LOCAL-TRX: a hamlib bridge for non-ICOM radios](#5-local-trx-a-hamlib-bridge-for-non-icom-radios)
+6. [The web installer page](#6-the-web-installer-page)
+7. [JS8 modem (WebAssembly)](#7-js8-modem-webassembly)
+8. [Tests](#8-tests)
+9. [Documentation in `docs/`](#9-documentation-in-docs)
 
 ---
 
@@ -296,10 +297,25 @@ Installing what `dist` produces:
 | Privilege | `install.sh` grants `cap_net_bind_service`; redone on every upgrade | same as Linux | none — first run, allow it through the Windows Firewall prompt |
 | Autostart | a `systemd` unit is written but **not enabled** — starting a transmitter's control interface at boot is a decision, not a side effect of installing | same as Linux | — |
 | Configuration | `~/.config/wifilt`; reinstalling never touches it, same guarantee as the box's `cfg` partition surviving a firmware update | same as Linux | next to the `.exe` |
+| One-click start | `start-wifilt.sh` → `/opt/wifilt/start-wifilt.sh` | same as Linux | double-click `start-wifilt.bat` |
 
 Not code-signed, so Windows SmartScreen may warn on first run (*More info* → *Run anyway*);
 neither archive is signed, so `SHA256SUMS` beside them is the way to check a download rather
 than take it on trust.
+
+Every archive also carries `start-wifilt.sh`/`start-wifilt.bat`, a launcher that (re)starts
+`wifilt` and, when §5's bundling put one next to it, `local-trx` too, then opens a browser
+tab for each — the single thing an operator who does not know or care that there are two
+separate programs needs to run. Running it again while a copy it can identify as its own is
+already up stops that copy first (SIGTERM, then SIGKILL if it has not exited a few seconds
+later) rather than leaving a stale instance running or refusing to start a second one; a port
+already held by some *other*, unidentifiable process (e.g. a root-owned `wifilt.service`) is
+left alone with a warning instead of being guessed at. `start-wifilt.sh stop`/`start-wifilt.bat
+stop` stops both without starting anything. `install.sh` installs the launcher to
+`/opt/wifilt` alongside everything else; on Windows it is already sitting in the extracted
+`.zip`. `wifilt.ino`/`native/` themselves know nothing about this or about `local-trx` — the
+launcher is a third, independent file that knows about both, exactly the boundary §5 already
+draws.
 
 `tools/native-integration-test.sh` runs the whole chain against a fake radio — RS-BA1
 handshake, CI-V reaching `/state`, and the `AUD1` audio WebSocket when the binary can bind
@@ -311,7 +327,70 @@ machine — see the glibc caveat above).
 
 ---
 
-## 5. The web installer page
+## 5. LOCAL-TRX: a hamlib bridge for non-ICOM radios
+
+`local-trx/` is a second, separate PC program, built and run independently of the `wifilt`
+binary above. It implements the ICOM LAN (RS-BA1) protocol from the *server* side —
+impersonating a radio rather than talking to one — so that an unmodified native `wifilt`
+build (§4) can be pointed at it over the existing SETUP ICOM-LAN field and, from the
+browser's point of view, believe it is talking to a real Icom transceiver. What actually sits
+behind it is any radio hamlib can drive over a serial CAT connection, keyed by a PC's own
+serial DTR/RTS lines (CW/FSK/PTT — never through hamlib, which has no keying primitive) and
+carrying audio over the PC's own sound card. `wifilt.ino`, `data/` and the ESP32 firmware
+itself are completely untouched by this — the operator only ever changes one IP address in a
+field that already exists.
+
+```bash
+make -C local-trx            # Linux binary: local-trx/build/local-trx
+make -C local-trx test       # doctest unit suite
+make -C local-trx win        # Windows .exe, cross-compiled: local-trx/build-win/local-trx.exe
+make -C local-trx arm64      # 64-bit Raspberry Pi OS, cross-compiled: local-trx/build-arm64/local-trx
+```
+
+The Linux target links `hamlib` and `libserialport` from the system's `-dev` packages
+(`libhamlib-dev`, `libserialport-dev`). The `win`/`arm64` cross-builds need both vendored and
+cross-compiled first, once:
+
+```bash
+local-trx/third_party/build-cross-libs.sh win     # or: arm64, or: all
+```
+
+This fetches the upstream release tarballs (hamlib 4.5.5, libserialport 0.1.2 — not
+distribution-patched sources) into `local-trx/third_party/cross/` (gitignored, rebuilt on
+demand) and cross-compiles static libraries with the same `x86_64-w64-mingw32-*`/
+`aarch64-linux-gnu-*` toolchains §4 already uses for `wifilt` itself.
+
+A single `config.json` master switch, `enabled` (default `false`), keeps a freshly built or
+freshly installed `local-trx` from opening any hardware, port or audio device at all until an
+operator has walked through its own built-in setup wizard (a small HTTP server on port 8765
+by default — `--web-port 0` disables it) and explicitly turned it on. Saving the wizard's
+configuration restarts the `local-trx` process itself; nothing here is hot-reloaded.
+
+`tools/release.sh` offers to bundle a `local-trx` build into each of `wifilt`'s own release
+archives (§4's `make -C native dist`) as an additional, optional step — the same
+`local-trx.exe`/`local-trx` binary this section builds, plus its `webui/` wizard assets,
+dropped in next to `wifilt`/`wifilt.exe`. Declining leaves the `wifilt` archive exactly as §4
+produces it. On Linux, §4's `install.sh` copies `local-trx`/`webui/` into `/opt/wifilt`
+alongside `wifilt` whenever it finds them sitting next to itself in the extracted archive —
+with no systemd unit and nothing started, matching `local-trx`'s own `enabled: false`
+default. An archive without `local-trx` bundled installs exactly as before. §4's
+`start-wifilt.sh`/`.bat` launcher starts it alongside `wifilt` and opens its wizard's tab
+too when it finds it installed; running `/opt/wifilt/local-trx` (or `local-trx.exe`)
+directly, on its own, works exactly the same, just without that second tab appearing
+automatically.
+
+Two more third-party dependencies come in with `local-trx`, vendored as single-header
+libraries under `local-trx/third_party/` rather than linked:
+[nlohmann/json](https://github.com/nlohmann/json) (MIT) for `config.json`, and
+[mackron/miniaudio](https://github.com/mackron/miniaudio) (public domain / MIT-0) for audio
+capture and playback. Together with `hamlib` (LGPL 2.1 or later) and `libserialport` (LGPL
+3.0 or later) linked above, the full license text for all four is in
+[data/THIRD-PARTY-NOTICES.txt](data/THIRD-PARTY-NOTICES.txt) — the same notice `wifilt`
+itself serves and links from its own SETUP page.
+
+---
+
+## 6. The web installer page
 
 `tools/gh-pages.sh` builds the esp-web-tools installer published at
 <https://ok1hra.github.io/wifilt/>. It reads the partition geometry from `partitions.csv`
@@ -331,7 +410,7 @@ neither `cfg` nor NVS; ticked erases the whole chip.
 
 ---
 
-## 6. JS8 modem (WebAssembly)
+## 7. JS8 modem (WebAssembly)
 
 Only needed when the JS8 DSP sources or the pinned upstream change. The built artifacts are
 committed in `data/`, so a normal contributor never runs this.
@@ -354,7 +433,7 @@ Pinned versions: Emscripten 3.1.6, CMake 3.25.1, Node 18.20.4 (local checks acce
 
 ---
 
-## 7. Tests
+## 8. Tests
 
 The regression harnesses need no radio and no hardware. They are plain Node scripts; the
 browser ones start headless Chrome themselves.
@@ -386,7 +465,7 @@ python3 tools/icom-lan-login-test.py --ask
 
 ---
 
-## 8. Documentation in `docs/`
+## 9. Documentation in `docs/`
 
 `docs/` holds the maintainer's working notes, and most of them are **not** published: the
 `.gitignore` treats `docs/*.md` as an allowlist, so a new note stays private until it is

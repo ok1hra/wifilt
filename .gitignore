@@ -9,6 +9,24 @@
 /native/dist/
 /native/_run/
 
+# local-trx build output -- same reasoning as /native/build/ above.
+/local-trx/build/
+/local-trx/build-win/
+/local-trx/build-arm64/
+/local-trx/build-test/
+/local-trx/dist/
+
+# local-trx's cross-compiled hamlib/libserialport (bod 13, Dávka 3) --
+# rebuilt on demand by third_party/build-cross-libs.sh, never vendored as
+# binaries (25-40MB per target). .cross-build-work/ is the script's own
+# scratch dir (fetched tarballs + extracted sources).
+/local-trx/third_party/cross/
+/local-trx/third_party/.cross-build-work/
+
+# Scratch directory from the first real-hardware test session (2026-09-01) --
+# machine-specific device paths/audio names and multi-MB logs, not source.
+/local-trx/real-hw-test/
+
 # PlatformIO firmware build output and its local cache (the fetched TrxNet
 # library lives here too). All reproducible from source.
 /.pio/

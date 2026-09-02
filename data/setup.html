@@ -263,6 +263,12 @@
                       </select>
                     </label>
                     <div class="setup-radio-context" data-radio-context="trx1" data-connections="lan">
+                      <label class="checkbox-row">
+                        <input type="checkbox" name="trx1localtrx" data-localtrx="trx1">
+                        LOCAL-TRX
+                        <span class="help-tip" data-tip="Virtual Icom radio for connecting a non-Icom transceiver, or an Icom radio without LAN, via the local-trx bridge. Since wifilt runs on separate hardware here, enter the LAN IP of the PC running local-trx below — CI-V and login fields are prefilled.">?</span>
+                      </label>
+                      <p class="setup-note" data-localtrx-link="trx1" hidden>local-trx detected — <a href="#" target="_blank" rel="noopener">open its settings</a></p>
                       <label>Radio IP address
                         <div class="input-with-tip">
                           <input type="text" name="trx1lanip" maxlength="15" placeholder="192.168.1.60" value="">
@@ -316,6 +322,12 @@
                       </select>
                     </label>
                     <div class="setup-radio-context" data-radio-context="trx2" data-connections="lan">
+                      <label class="checkbox-row">
+                        <input type="checkbox" name="trx2localtrx" data-localtrx="trx2">
+                        LOCAL-TRX
+                        <span class="help-tip" data-tip="Virtual Icom radio for connecting a non-Icom transceiver, or an Icom radio without LAN, via the local-trx bridge. Since wifilt runs on separate hardware here, enter the LAN IP of the PC running local-trx below — CI-V and login fields are prefilled.">?</span>
+                      </label>
+                      <p class="setup-note" data-localtrx-link="trx2" hidden>local-trx detected — <a href="#" target="_blank" rel="noopener">open its settings</a></p>
                       <label>Radio IP address
                         <div class="input-with-tip">
                           <input type="text" name="trx2lanip" maxlength="15" placeholder="192.168.1.61" value="">
@@ -363,6 +375,12 @@
                       </select>
                     </label>
                     <div class="setup-radio-context" data-radio-context="trx3" data-connections="lan">
+                      <label class="checkbox-row">
+                        <input type="checkbox" name="trx3localtrx" data-localtrx="trx3">
+                        LOCAL-TRX
+                        <span class="help-tip" data-tip="Virtual Icom radio for connecting a non-Icom transceiver, or an Icom radio without LAN, via the local-trx bridge. Since wifilt runs on separate hardware here, enter the LAN IP of the PC running local-trx below — CI-V and login fields are prefilled.">?</span>
+                      </label>
+                      <p class="setup-note" data-localtrx-link="trx3" hidden>local-trx detected — <a href="#" target="_blank" rel="noopener">open its settings</a></p>
                       <label>Radio IP address
                         <div class="input-with-tip">
                           <input type="text" name="trx3lanip" maxlength="15" placeholder="192.168.1.62" value="">
@@ -578,6 +596,16 @@
       // everything is present" -- which is right, because the only build that
       // predates the field is the hardware box, which has everything.
       var platformCaps = {};
+      // Whether LOCAL-TRX can prefill the loopback address: only true when
+      // wifilt itself is the native PC build sitting next to local-trx on the
+      // same machine. On real ESP32 hardware 127.0.0.1 would point at the box
+      // itself, so the default there is the conservative "not native".
+      var localTrxIsNative = false;
+      var LOCAL_TRX_HELP_ESP32 = "Virtual Icom radio for connecting a non-Icom transceiver, or an Icom radio without LAN, via the local-trx bridge. Since wifilt runs on separate hardware here, enter the LAN IP of the PC running local-trx below — CI-V and login fields are prefilled.";
+      var LOCAL_TRX_HELP_NATIVE = "Virtual Icom radio for connecting a non-Icom transceiver, or an Icom radio without LAN, via the local-trx bridge running on this PC. Prefills IP/CI-V for a typical local-trx setup — fields stay editable.";
+      // local-trx's own default web UI port (main.cpp's --web-port default) --
+      // duplicated here rather than shared, since the two apps ship separately.
+      var LOCAL_TRX_WEBUI_PORT = 8765;
 
       function setValue(name, value) {
         var el = document.querySelector('[name="' + name + '"]');
@@ -594,6 +622,11 @@
         // field, so a missing value must read as "yes, it has it" -- the box is
         // the case that predates the flag.
         platformCaps = data.caps || {};
+        localTrxIsNative = data.platform !== 'esp32';
+        document.querySelectorAll('[data-localtrx]').forEach(function (checkbox) {
+          var tip = checkbox.parentElement && checkbox.parentElement.querySelector('.help-tip');
+          if (tip) tip.dataset.tip = localTrxIsNative ? LOCAL_TRX_HELP_NATIVE : LOCAL_TRX_HELP_ESP32;
+        });
         // The WiFi handoff and the "last known address" hint both need to know
         // whether this page is being served from the AP or from the real LAN.
         window.setupDeviceInfo = {
@@ -648,7 +681,7 @@
           'dxccall', 'dxclocator', 'blockedDxcc'
         ];
         ['trx1', 'trx2', 'trx3'].forEach(function (prefix) {
-          ['label', 'transport', 'civaddr', 'netid', 'lanip', 'lanuser', 'lanpass'].forEach(function (suffix) {
+          ['label', 'transport', 'civaddr', 'netid', 'lanip', 'lanuser', 'lanpass', 'localtrx'].forEach(function (suffix) {
             setupNames.push(prefix + suffix);
           });
         });
@@ -823,6 +856,63 @@
           ['trx1', 'trx2', 'trx3'].forEach(refreshRadio);
           validateRadios();
         }
+        // Checking LOCAL-TRX prefills the fields a bare local-trx install
+        // needs -- CI-V A6 and dummy credentials it ignores outright, plus the
+        // loopback address, but only where that address is actually reachable
+        // (see localTrxIsNative above). The IP field stays untouched on ESP32:
+        // it would point at the box itself there, so the operator has to type
+        // the PC's real LAN address instead.
+        function localTrxFillDefaults(prefix) {
+          var civInput = document.querySelector('[name="' + prefix + 'civaddr"]');
+          var userInput = document.querySelector('[name="' + prefix + 'lanuser"]');
+          var passInput = document.querySelector('[name="' + prefix + 'lanpass"]');
+          var ipInput = document.querySelector('[name="' + prefix + 'lanip"]');
+          if (civInput) civInput.value = 'A6';
+          if (userInput) userInput.value = 'not-use';
+          if (passInput) passInput.value = 'not-use';
+          if (ipInput && localTrxIsNative) ipInput.value = '127.0.0.1';
+          refreshLocalTrxLink(prefix);
+        }
+        // The Scan button cannot ever find local-trx (it sweeps this device's
+        // own /24 and explicitly skips its own address, so loopback is never a
+        // candidate), so the only way to confirm it is actually there is a
+        // direct probe of its web UI once an IP is known. no-cors is enough --
+        // it resolves for ANY response and only rejects on a real connection
+        // failure, so nothing needs local-trx's server to send CORS headers.
+        var localTrxProbeToken = {};
+        function refreshLocalTrxLink(prefix) {
+          var checkbox = document.querySelector('[data-localtrx="' + prefix + '"]');
+          var note = document.querySelector('[data-localtrx-link="' + prefix + '"]');
+          if (!checkbox || !note) return;
+          // Typing in the IP field fires this on every keystroke, so a slow
+          // reply to an earlier (now-stale) address must not overwrite what a
+          // later probe already decided.
+          var token = (localTrxProbeToken[prefix] = (localTrxProbeToken[prefix] || 0) + 1);
+          var ipInput = document.querySelector('[name="' + prefix + 'lanip"]');
+          var ip = (checkbox.checked && ipInput) ? ipInput.value.trim() : '';
+          if (!ip) { note.hidden = true; return; }
+          var url = 'http://' + ip + ':' + LOCAL_TRX_WEBUI_PORT + '/';
+          fetch(url + 'api/config', { mode: 'no-cors', signal: AbortSignal.timeout(800) })
+            .then(function () {
+              if (localTrxProbeToken[prefix] !== token) return;
+              var link = note.querySelector('a');
+              if (link) link.href = url;
+              note.hidden = false;
+            })
+            .catch(function () {
+              if (localTrxProbeToken[prefix] !== token) return;
+              note.hidden = true;
+            });
+        }
+        document.querySelectorAll('[data-localtrx]').forEach(function (checkbox) {
+          var prefix = checkbox.dataset.localtrx;
+          checkbox.addEventListener('change', function () {
+            if (checkbox.checked) localTrxFillDefaults(prefix);
+            else refreshLocalTrxLink(prefix);
+          });
+          var ipInput = document.querySelector('[name="' + prefix + 'lanip"]');
+          if (ipInput) ipInput.addEventListener('input', function () { refreshLocalTrxLink(prefix); });
+        });
         document.querySelectorAll('[data-radio-select]').forEach(function (button) {
           button.addEventListener('click', function () { selectRadio(button.dataset.radioSelect); });
         });
@@ -865,6 +955,10 @@
         updatePeerName('trx1netid', 'trx1PeerName');
         updatePeerName('trx2netid', 'trx2PeerName');
         updatePeerName('trx3netid', 'trx3PeerName');
+        // A LOCAL-TRX checkbox restored already-checked (saved from a previous
+        // visit) needs its link probed again -- the change event that would
+        // normally trigger it never fires on a value set by setValue() above.
+        ['trx1', 'trx2', 'trx3'].forEach(refreshLocalTrxLink);
         refreshAllRadios();
       }
 
