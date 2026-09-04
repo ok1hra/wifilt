@@ -1043,6 +1043,22 @@ button.icom-scan-hit:hover {
   color: var(--muted);
 }
 
+/* ---- Per-slot saved configurations (presets) ---- */
+.setup-preset-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+}
+.setup-preset-row .setup-preset-select,
+.setup-preset-row .setup-preset-name {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.setup-preset-row .use-ip-btn {
+  flex: 0 0 auto;
+}
+
 /* ---- TrxNet live device list ---- */
 .trxnet-devices {
   margin-top: 10px;

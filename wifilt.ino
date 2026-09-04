@@ -36,6 +36,8 @@
 
 
   ./tools/release.sh
+  /opt/wifilt/start-wifilt.sh
+  /opt/wifilt/wifilt
 
   1. Increase REV value in this .ino
   2. Arduino IDE 1.8.19 menu: Sketch/Export compiled Binary
@@ -732,6 +734,15 @@ int incomingByte = 0;   // for incoming serial data
   static const char* LOG_MACROS_PATH = "/log-macros.json";
   static const size_t LOG_MACROS_MAX_BYTES = 4096;
 
+  // Per-slot named radio configurations ("presets") -- SETUP/Radio lets the
+  // operator save the current TRX1/2/3 fields under a name and reload them
+  // later without retyping IP/user/pass/civaddr each time a physical radio
+  // changes hands on that slot. Same blob-store convention as the two above:
+  // the browser owns the shape (one array per trx1/2/3 key) and does all the
+  // add/overwrite/remove logic; this file is never parsed field-by-field.
+  static const char* RADIO_PRESETS_PATH = "/radio-presets.json";
+  static const size_t RADIO_PRESETS_MAX_BYTES = 8192;
+
   // In-memory cache of log-config.json fields, served by /log-config.
   String g_lcTrx1Label = "TRX1";   // replaced by the radio's own model once known
   String g_lcTrx2Label = "TRX2";
@@ -978,6 +989,8 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void handlePostJs8Config(void);
   void handleGetLogMacros(void);
   void handlePostLogMacros(void);
+  void handleGetRadioPresets(void);
+  void handlePostRadioPresets(void);
   void handleGetIdentity(void);
   void handlePostIdentity(void);
   void handleGetTxGain(void);
@@ -3164,6 +3177,22 @@ void handleConfigDownload() {
       }
     }
   }
+  // Per-slot named configurations travel with the rest of the persisted
+  // state -- same rationale as txGain below: a first flash wipes the
+  // filesystem, and without this the operator would silently lose every
+  // saved radio profile on reflash, not just the live one.
+  if (cfgFS.exists(RADIO_PRESETS_PATH)) {
+    File presetsFile = cfgFS.open(RADIO_PRESETS_PATH, "r");
+    if (presetsFile) {
+      String presetsJson = presetsFile.readString();
+      presetsFile.close();
+      presetsJson.trim();
+      if (presetsJson.startsWith("{")) {
+        j += ",\"radioPresets\":";
+        j += presetsJson;
+      }
+    }
+  }
   String lc = readLogConfigJson();
   if (lc.startsWith("{")) {
     j += ",\"logConfig\":";
@@ -3465,6 +3494,26 @@ void handleConfigUpload() {
     }
   }
 
+  {
+    // Same key the download writes -- see the radioConfig block below for
+    // the section this travels alongside.
+    String presetsCfg = extractJsonObject(body, "radioPresets");
+    if (presetsCfg.length() > RADIO_PRESETS_MAX_BYTES) {
+      rejectOversize("radioPresets", presetsCfg.length(), RADIO_PRESETS_MAX_BYTES);
+      return;
+    }
+    if (presetsCfg.length() > 0) {
+      File f = cfgFS.open(RADIO_PRESETS_PATH, "w");
+      if (!f || f.print(presetsCfg) != presetsCfg.length()) {
+        if (f) f.close();
+        webServer.send(500, "application/json",
+          "{\"ok\":false,\"error\":\"storage\",\"section\":\"radioPresets\"}");
+        return;
+      }
+      f.close();
+    }
+  }
+
   if (bdEnabled) {
     int bdIdx = body.indexOf("\"bd\":{");
     if (bdIdx >= 0) {
@@ -3721,6 +3770,55 @@ void handlePostLogMacros() {
     return;
   }
   File f = cfgFS.open(LOG_MACROS_PATH, "w");
+  if (!f || f.print(body) != body.length()) {
+    if (f) f.close();
+    webServer.send(500, "application/json", "{\"ok\":false,\"error\":\"storage\"}");
+    return;
+  }
+  f.close();
+  webServer.send(200, "application/json", "{\"ok\":true}");
+}
+
+// ---- Per-slot radio presets ---------------------------------------------------
+//
+// Same blob-store convention as the macros above: one JSON object keyed
+// "trx1"/"trx2"/"trx3", each value an array of named configurations. The
+// browser (data/setup.html) owns adding/overwriting/removing entries and
+// always POSTs the whole rewritten object back -- this handler never looks
+// inside it beyond the object-wrapper and size checks below.
+void handleGetRadioPresets() {
+  webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  webServer.sendHeader("Connection", "close");
+  webServer.client().setNoDelay(true);
+  if (!cfgFS.exists(RADIO_PRESETS_PATH)) {
+    // Empty, not 404: "no presets saved yet" is a state the browser falls
+    // back to an empty dropdown for, not an error.
+    webServer.send(200, "application/json", "{}");
+    return;
+  }
+  File f = cfgFS.open(RADIO_PRESETS_PATH, FILE_READ);
+  if (!f) { webServer.send(500, "application/json", "{}"); return; }
+  webServer.streamFile(f, "application/json");
+  f.close();
+}
+
+void handlePostRadioPresets() {
+  webServer.sendHeader("Connection", "close");
+  webServer.client().setNoDelay(true);
+  String body = webServer.arg("plain");
+  body.trim();
+  if (body.length() == 0 || body.length() > RADIO_PRESETS_MAX_BYTES) {
+    String j = "{\"ok\":false,\"error\":\"too_big\",\"bytes\":";
+    j += (unsigned)body.length();
+    j += ",\"limit\":"; j += (unsigned)RADIO_PRESETS_MAX_BYTES; j += "}";
+    webServer.send(body.length() == 0 ? 400 : 409, "application/json", j);
+    return;
+  }
+  if (body[0] != '{' || body[body.length()-1] != '}') {
+    webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"not_an_object\"}");
+    return;
+  }
+  File f = cfgFS.open(RADIO_PRESETS_PATH, "w");
   if (!f || f.print(body) != body.length()) {
     if (f) f.close();
     webServer.send(500, "application/json", "{\"ok\":false,\"error\":\"storage\"}");
@@ -4716,6 +4814,8 @@ void setupWebServer(void){
   webServer.on("/js8-config.json", HTTP_POST, handlePostJs8Config);
   webServer.on("/log-macros.json", HTTP_GET,  handleGetLogMacros);
   webServer.on("/log-macros.json", HTTP_POST, handlePostLogMacros);
+  webServer.on("/radio-presets.json", HTTP_GET,  handleGetRadioPresets);
+  webServer.on("/radio-presets.json", HTTP_POST, handlePostRadioPresets);
   webServer.on("/txgain.json", HTTP_GET,  handleGetTxGain);
   webServer.on("/txgain.json", HTTP_POST, handlePostTxGain);
   webServer.on("/txgain-plan.json", HTTP_GET,  handleGetTxGainPlan);

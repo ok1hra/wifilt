@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Setup — WIFILT</title>
-  <link rel="stylesheet" href="/setup.css?v=fd69fecf">
+  <link rel="stylesheet" href="/setup.css?v=c7126fc9">
 </head>
 <body>
   <header class="topbar">
@@ -254,6 +254,14 @@
                     <span class="setup-radio-required">always active</span>
                   </header>
                   <div class="setup-radio-fields">
+                    <div class="setup-preset-row">
+                      <select class="setup-preset-select" data-preset-select="trx1">
+                        <option value="">— new configuration —</option>
+                      </select>
+                      <input type="text" class="setup-preset-name" data-preset-name="trx1" maxlength="24" placeholder="Configuration name">
+                      <button type="button" class="use-ip-btn" data-preset-save="trx1">Save</button>
+                      <button type="button" class="use-ip-btn" data-preset-delete="trx1" disabled>Delete</button>
+                    </div>
                     <label>Label<input type="text" id="ls_trx1Label" name="trx1label" maxlength="10" placeholder="TRX1" value=""></label>
                     <label>Connection
                       <select name="trx1transport" data-radio-transport="trx1">
@@ -313,6 +321,14 @@
                     <label class="setup-radio-enable"><input type="checkbox" name="trx2enable" id="trx2enable"> Active</label>
                   </header>
                   <div class="setup-radio-fields">
+                    <div class="setup-preset-row">
+                      <select class="setup-preset-select" data-preset-select="trx2">
+                        <option value="">— new configuration —</option>
+                      </select>
+                      <input type="text" class="setup-preset-name" data-preset-name="trx2" maxlength="24" placeholder="Configuration name">
+                      <button type="button" class="use-ip-btn" data-preset-save="trx2">Save</button>
+                      <button type="button" class="use-ip-btn" data-preset-delete="trx2" disabled>Delete</button>
+                    </div>
                     <label>Label<input type="text" id="ls_trx2Label" name="trx2label" maxlength="10" placeholder="TRX2" value=""></label>
                     <label>Connection
                       <select name="trx2transport" data-radio-transport="trx2">
@@ -366,6 +382,14 @@
                     <label class="setup-radio-enable"><input type="checkbox" name="trx3enable" id="trx3enable"> Active</label>
                   </header>
                   <div class="setup-radio-fields">
+                    <div class="setup-preset-row">
+                      <select class="setup-preset-select" data-preset-select="trx3">
+                        <option value="">— new configuration —</option>
+                      </select>
+                      <input type="text" class="setup-preset-name" data-preset-name="trx3" maxlength="24" placeholder="Configuration name">
+                      <button type="button" class="use-ip-btn" data-preset-save="trx3">Save</button>
+                      <button type="button" class="use-ip-btn" data-preset-delete="trx3" disabled>Delete</button>
+                    </div>
                     <label>Label<input type="text" id="ls_trx3Label" name="trx3label" maxlength="10" placeholder="TRX3" value=""></label>
                     <label>Connection
                       <select name="trx3transport" data-radio-transport="trx3">
@@ -913,6 +937,155 @@
           var ipInput = document.querySelector('[name="' + prefix + 'lanip"]');
           if (ipInput) ipInput.addEventListener('input', function () { refreshLocalTrxLink(prefix); });
         });
+
+        // ---- Per-slot saved configurations (presets) -----------------------
+        //
+        // Each TRX slot keeps its own named list of connection settings
+        // (label/connection/civaddr/netid/lanip/lanuser/lanpass/localtrx, plus
+        // cwIpOnConnect on TRX1 only), so an operator swapping a physical
+        // radio on a slot can pick it back up by name instead of retyping
+        // everything. Fetched separately from setup-data.json -- same blob-
+        // store convention as log-macros.json: one file the browser owns the
+        // shape of, rewritten wholesale on every save/delete, never merged
+        // field-by-field on the firmware side. Picking a preset only fills
+        // the form; it takes effect on the radio like any other edit, at the
+        // next Save & Restart.
+        var PRESET_FIELDS = ['label', 'transport', 'civaddr', 'netid', 'lanip', 'lanuser', 'lanpass', 'localtrx'];
+        var radioPresets = { trx1: [], trx2: [], trx3: [] };
+
+        function presetFromFields(prefix) {
+          var preset = {};
+          PRESET_FIELDS.forEach(function (suffix) {
+            var input = document.querySelector('[name="' + prefix + suffix + '"]');
+            if (!input) return;
+            preset[suffix] = input.type === 'checkbox' ? input.checked : input.value;
+          });
+          if (prefix === 'trx1') {
+            var cwCheckbox = document.querySelector('[name="cwIpOnConnect"]');
+            if (cwCheckbox) preset.cwIpOnConnect = cwCheckbox.checked;
+          }
+          return preset;
+        }
+
+        function applyPresetFields(prefix, preset) {
+          PRESET_FIELDS.forEach(function (suffix) {
+            if (suffix in preset) setValue(prefix + suffix, preset[suffix]);
+          });
+          if (prefix === 'trx1' && 'cwIpOnConnect' in preset) {
+            setValue('cwIpOnConnect', preset.cwIpOnConnect);
+          }
+          refreshAllRadios();
+        }
+
+        function renderPresetDropdown(prefix) {
+          var select = document.querySelector('[data-preset-select="' + prefix + '"]');
+          if (!select) return;
+          var current = select.value;
+          select.innerHTML = '';
+          var placeholder = document.createElement('option');
+          placeholder.value = '';
+          placeholder.textContent = '— new configuration —';
+          select.appendChild(placeholder);
+          (radioPresets[prefix] || []).forEach(function (preset) {
+            var option = document.createElement('option');
+            option.value = preset.name;
+            option.textContent = preset.name;
+            select.appendChild(option);
+          });
+          var stillThere = (radioPresets[prefix] || []).some(function (p) { return p.name === current; });
+          select.value = stillThere ? current : '';
+          var deleteBtn = document.querySelector('[data-preset-delete="' + prefix + '"]');
+          if (deleteBtn) deleteBtn.disabled = !select.value;
+        }
+
+        function savePresetsToServer(onSaved) {
+          fetch('/radio-presets.json', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(radioPresets)
+          })
+            .then(function (r) { if (!r.ok) throw new Error('radio-presets ' + r.status); return r.json(); })
+            .then(function () { if (onSaved) onSaved(); })
+            .catch(function () {
+              alert('Could not save the configuration list — check the connection and try again.');
+            });
+        }
+
+        function fetchRadioPresets() {
+          fetch('/radio-presets.json', { cache: 'no-store' })
+            .then(function (r) { return r.ok ? r.json() : {}; })
+            .then(function (data) {
+              ['trx1', 'trx2', 'trx3'].forEach(function (prefix) {
+                radioPresets[prefix] = Array.isArray(data[prefix]) ? data[prefix] : [];
+                renderPresetDropdown(prefix);
+              });
+            })
+            .catch(function () {});
+        }
+
+        document.querySelectorAll('[data-preset-select]').forEach(function (select) {
+          var prefix = select.dataset.presetSelect;
+          select.addEventListener('change', function () {
+            var name = select.value;
+            var nameInput = document.querySelector('[data-preset-name="' + prefix + '"]');
+            var deleteBtn = document.querySelector('[data-preset-delete="' + prefix + '"]');
+            if (!name) {
+              if (nameInput) nameInput.value = '';
+              if (deleteBtn) deleteBtn.disabled = true;
+              return;
+            }
+            var preset = (radioPresets[prefix] || []).find(function (p) { return p.name === name; });
+            if (!preset) return;
+            if (nameInput) nameInput.value = name;
+            if (deleteBtn) deleteBtn.disabled = false;
+            applyPresetFields(prefix, preset);
+          });
+        });
+
+        document.querySelectorAll('[data-preset-save]').forEach(function (button) {
+          var prefix = button.dataset.presetSave;
+          button.addEventListener('click', function () {
+            var nameInput = document.querySelector('[data-preset-name="' + prefix + '"]');
+            var name = nameInput ? nameInput.value.trim() : '';
+            if (!name) { if (nameInput) nameInput.focus(); return; }
+            var list = radioPresets[prefix] || (radioPresets[prefix] = []);
+            var preset = presetFromFields(prefix);
+            preset.name = name;
+            var existingIndex = list.findIndex(function (p) { return p.name === name; });
+            if (existingIndex >= 0) {
+              if (!confirm('Configuration "' + name + '" already exists. Overwrite?')) return;
+              list[existingIndex] = preset;
+            } else {
+              list.push(preset);
+            }
+            savePresetsToServer(function () {
+              renderPresetDropdown(prefix);
+              var select = document.querySelector('[data-preset-select="' + prefix + '"]');
+              if (select) select.value = name;
+              var deleteBtn = document.querySelector('[data-preset-delete="' + prefix + '"]');
+              if (deleteBtn) deleteBtn.disabled = false;
+            });
+          });
+        });
+
+        document.querySelectorAll('[data-preset-delete]').forEach(function (button) {
+          var prefix = button.dataset.presetDelete;
+          button.addEventListener('click', function () {
+            var select = document.querySelector('[data-preset-select="' + prefix + '"]');
+            var name = select ? select.value : '';
+            if (!name) return;
+            if (!confirm('Delete configuration "' + name + '"?')) return;
+            radioPresets[prefix] = (radioPresets[prefix] || []).filter(function (p) { return p.name !== name; });
+            savePresetsToServer(function () {
+              var nameInput = document.querySelector('[data-preset-name="' + prefix + '"]');
+              if (nameInput) nameInput.value = '';
+              renderPresetDropdown(prefix);
+            });
+          });
+        });
+
+        fetchRadioPresets();
+
         document.querySelectorAll('[data-radio-select]').forEach(function (button) {
           button.addEventListener('click', function () { selectRadio(button.dataset.radioSelect); });
         });
