@@ -1,6 +1,6 @@
 {
   "name": "WIFILT (M5Stack Atom Lite)",
-  "version": "20260901",
+  "version": "20260905",
   "new_install_prompt_erase": true,
   "new_install_improv_wait_time": 0,
   "builds": [
