@@ -279,7 +279,7 @@ const PAGE_SCRIPT = `
     let staleCmds = await commandsSince();
     check("and a command sent with stale telemetry reaches the wire",
       staleCmds.length === 1 && staleCmds[0].what === "operate", JSON.stringify(staleCmds));
-    await sleep(4600);
+    await sleep(6600);
 
     // ---- 5. every flag TrxNet carries has a lamp, lit or not --------------
     await setPa(base({flags:F.ON|F.LINK|F.ALARM|F.TUNE}));
@@ -350,9 +350,11 @@ const PAGE_SCRIPT = `
       $("paBtnOperate").classList.contains("pa-pending"), $("paBtnOperate").className);
     // The amplifier never moves: after the confirm window the button must give
     // up and say why, rather than sit there looking busy forever.
-    // The give-up window is 4 s, and it is noticed on the next poll -- 500 ms
-    // apart -- so the worst case is 4.5 s. 4.2 s here was a coin flip.
-    await sleep(5200);
+    // The give-up window is 6 s -- it has to outlast the daemon's own three
+    // tries, see CONFIRM_MS -- and it is noticed on the next poll, 500 ms
+    // apart, so the worst case is 6.5 s. The old 4.2 s was a coin flip even
+    // against the old 4 s window; keep a full second of room.
+    await sleep(7200);
     check("an unanswered command stops waiting",
       !$("paBtnOperate").classList.contains("pa-pending"), $("paBtnOperate").className);
     check("and says what to check", !$("paNote").hidden && /trxnet-subscribe/.test(txt("paNote")),
@@ -408,7 +410,7 @@ const PAGE_SCRIPT = `
     await sleep(1600);
     await clearCommands();
     $("paBtnOperate").click();
-    await sleep(4600);                       // let the unanswered command lapse
+    await sleep(6600);                       // let the unanswered command lapse
     check("a command nobody answered leaves the button usable",
       !$("paBtnOperate").disabled && !$("paBtnOperate").classList.contains("pa-pending"),
       $("paBtnOperate").className);
@@ -417,7 +419,7 @@ const PAGE_SCRIPT = `
     cmds = await commandsSince();
     check("pressing again after silence sends again",
       cmds.length === 2, JSON.stringify(cmds));
-    await sleep(4600);
+    await sleep(6600);
 
     // ---- 10. a refusal from the interface is reported --------------------
     await fetch("/set-cmd-error?code=pa_absent");

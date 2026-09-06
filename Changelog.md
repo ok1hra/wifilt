@@ -13,6 +13,22 @@ published.
 
 **QRPLog can drive the linear amplifier.**
 
+* **The confirm window now outlasts the daemon's own giving up.** `CONFIRM_MS`
+  for OPERATE and PWR was four seconds, written when `expert_console.py` retried
+  six times at 0.4 s. That retry rate turned out to be the real fault at the far
+  end and has been fixed there: measured on the wire, the amplifier ACKs an
+  OPERATE key in 52 ms and then goes completely silent for about **1.2 s** while
+  it throws the relays — no ACK, no STATUS, though the stream otherwise runs at
+  eight packets a second — so a loop retrying on a timer pressed a toggle key
+  two more times inside the window in which it could not have answered, and the
+  parity of the press count decided where it ended up. The daemon now waits for
+  a STATUS newer than the keystroke and gives up after three tries, which lands
+  at about 4.7 s. Four seconds here would have reported "the amplifier did not
+  follow" while it was still trying, so the window is six. The four waits in
+  `pa-panel-smoke` that exist to let an outstanding command lapse move with it,
+  keeping the margins they had (66 checks green against the source and against
+  the minified companion).
+
 * **`/pa.json` now reports what happened to the command itself** — `txOk`, `txFailed`, `txAgeMs`.
   Three rounds were spent guessing where a press was being lost, because the one fact that would
   have settled it — did this interface put the packet on the wire — was printed only to a serial

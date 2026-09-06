@@ -30,8 +30,18 @@
   var POLL_CLOSED_MS = 3000;   // just enough to know whether the button belongs
   // The amplifier needs about seven seconds to come up from DTR, so the wait for
   // ON has to outlast that; the other three are keystroke loops inside the
-  // daemon (six tries at 0.4 s) and settle in about two.
-  var CONFIRM_MS = { on: 10000, operate: 4000, full: 4000, tune: 6000 };
+  // daemon and have to outlast the daemon's own giving up, or this says "did
+  // not follow" while it is still trying.
+  //
+  // OPERATE and PWR bound at MAX_TRIES x SETTLE_S in expert_console.py: three
+  // presses, each waiting for a STATUS that arrived at least 1.5 s after the
+  // last one. That is 4.5 s, and measured on the wire it lands at about 4.7 s,
+  // because the amplifier goes completely silent for 1.2 s while it throws the
+  // relays. Six seconds leaves a second of room on top. (It used to be four,
+  // written when the daemon retried six times at 0.4 s -- which was itself the
+  // bug: it pressed a toggle key again before the amplifier could answer, and
+  // the parity of the press count decided where it ended up.)
+  var CONFIRM_MS = { on: 10000, operate: 6000, full: 6000, tune: 6000 };
   // Reflected power's own full scale, from the console's AMP.prMax. It does not
   // follow FULL/HALF: what matters about reflected power is how much of it there
   // is, not what fraction of the forward power it represents.

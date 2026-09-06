@@ -7504,10 +7504,11 @@ void paSubscribeTopics(void) {
 // the packet-handling path, and a request handler runs in the middle of it.
 //
 // The amplifier does its own closed loop on the far side -- compare, send one
-// key, wait for the next STATUS, up to six times -- because OPERATE and PWR are
-// toggle keys. So one publish per click is right; the retry belongs to the
-// daemon. TRX_CON because a lost command to a kilowatt is worth a retransmit,
-// and publishTo() to a single peer costs one pending slot.
+// key, wait for a STATUS newer than that key, up to three times -- because
+// OPERATE and PWR are toggle keys and the amplifier goes silent for over a
+// second while it obeys one. So one publish per click is right; the retry
+// belongs to the daemon. TRX_CON because a lost command to a kilowatt is worth
+// a retransmit, and publishTo() to a single peer costs one pending slot.
 void paPublishPending(void) {
   if (!paPendingCmd || !trxNetEnabled || paPeerName[0] == '\0') return;
   uint8_t cmds = paPendingCmd, vals = paPendingVals;
