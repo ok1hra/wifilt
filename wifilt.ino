@@ -116,6 +116,11 @@ byte     TRX3_CONN_TYPE = 0x00;   // 0=TrxNet, 1=CI-V, 2=LAN (EEPROM byte 47)
 byte     TRX2_CIV_ADDR  = 0x00;   // CI-V address of TRX2 when CONN_TYPE=CI-V (EEPROM byte 48; 0x00=unset)
 byte     TRX3_CIV_ADDR  = 0x00;   // CI-V address of TRX3 when CONN_TYPE=CI-V (EEPROM byte 49; 0x00=unset)
 uint16_t TRXNET_PORT    = 5683;   // CoAP/discovery UDP port (CoAP default)
+// Linear amplifier (EXPERT 1K-FA) reachable over TrxNet as "PA.xx". Not a radio
+// slot -- a target binding in the sense of TrxNet INTEGRATION.md §9, so it lives
+// beside the other TrxNet settings rather than in radioSlots[]. 0x00 = no
+// amplifier configured, which is the same "disabled" sentinel TRXNET_ID uses.
+byte     PA_NET_ID      = 0x00;   // EEPROM byte 69
 int BaudRate        = 9600;
 // char* BTname        = "";
 // const char* BTname  = "IC705-interface";
@@ -137,7 +142,7 @@ volatile bool cwIpSendPending = false;
 #ifndef LOOP_WARN_MS
   #define LOOP_WARN_MS 200
 #endif
-#define REV 20260901
+#define REV 20260905
 #define WIFI
 #define FSK_KEYING  // RTTY by keying the FSK + PTT outputs (was UDP_TO_FSK, from when a UDP port fed it)
 #define WDT         // watchdog timer
@@ -187,7 +192,7 @@ volatile bool cwIpSendPending = false;
   51 TRX1_TRANSPORT  (1=LAN, 2=legacy Bluetooth, 3=CI-V, 4=TrxNet)
   52 TRX1_CIV_ADDR
   53-68 TRX1_LAN_IP (16B including 0xff terminator padding)
-  69 FREE            (was HTTP_CAT_PORT)
+  69 PA_NET_ID       (linear amplifier peer NET_ID → "PA.XX"; 0x00/0xff = none)
   70-71 FREE         (was udpPort)
   72-73 FREE         (was udpCatPort)
   74-75 BaudRate
@@ -588,6 +593,58 @@ volatile uint32_t trxPendingHz   = 0;
 volatile uint8_t  trxPendingMode = 0; // CI-V byte
 volatile bool     trxFreqPending = false;
 volatile bool     trxModePending = false;
+
+// ---- Linear amplifier state, fed by the five topics PA.xx publishes ---------
+//
+// The amplifier sends /fwd /ref /swr with every STATUS packet while transmitting
+// -- five to eight a second -- and the browser reads /pa.json twice a second. So
+// the peak has to be held HERE: sampling at 2 Hz would miss two readings out of
+// three, and on SSB, where the mean is low, the number on screen would be well
+// under what the amplifier is really delivering.
+//
+// The window doubles as the "still readable for two seconds after PTT" rule the
+// palette needs: one constant covers both, because both are the same question --
+// how long is an extreme worth showing after it happened.
+//
+// Reading /pa.json deliberately does NOT reset any of this. Two QRPLog tabs open
+// at once is an ordinary state in this application, and a read-clears peak would
+// hand each of them a different half of the transmission.
+#define PA_PEAK_WINDOW_MS  2000   // how long a peak stays worth showing
+#define PA_STALE_MS       15000   // 3 missed heartbeats -> telemetry is stale
+
+struct PaState {
+  bool     seen;        // anything at all has arrived from the amplifier
+  uint32_t lastRxMs;    // millis() of the last topic, for the stale check
+  uint16_t flags;       // /pa-flags, the amplifier's own bitmap
+  uint16_t fwd, ref;    // W x 10, instantaneous
+  uint16_t swr;         // x100; 0 = no answer, 65535 = infinite
+  uint8_t  band;        // metres
+  uint16_t fwdPk, refPk;
+  uint32_t fwdPkAt, refPkAt;
+};
+PaState paState = {};
+char    paPeerName[TRXNET_MAX_DEVICE_NAME] = "";  // "PA.xx", empty when unset
+
+// PA commands — set by the web handler, published from the main loop. Publishing
+// from a request handler would reenter the same paths net.loop() is walking.
+volatile uint8_t paPendingCmd  = 0;   // bit per command, see PA_CMD_* below
+volatile uint8_t paPendingVals = 0;   // matching value bit for each command
+
+// What actually happened to the last commands, reported in /pa.json.
+//
+// Three rounds of this feature were spent guessing where a press was being
+// lost, because the one fact that would have settled it -- did this interface
+// put the packet on the wire -- was only ever printed to a serial console
+// nobody was watching. The palette says "the amplifier did not follow", which
+// covers a daemon that refused it AND an interface that never sent it, and
+// those need completely different fixes.
+uint16_t paTxOk     = 0;   // publishTo() accepted it
+uint16_t paTxFailed = 0;   // publishTo() refused: peer gone, or CON queue full
+uint32_t paTxLastMs = 0;   // when the last attempt was made
+#define PA_CMD_ON       0x01
+#define PA_CMD_OPERATE  0x02
+#define PA_CMD_FULL     0x04
+#define PA_CMD_TUNE     0x08
 
 int incomingByte = 0;   // for incoming serial data
 
@@ -1031,6 +1088,15 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void onTrxHz(const char* from, const uint8_t* data, size_t len);
   void onTrxMode(const char* from, const uint8_t* data, size_t len);
   void onTrxSetHz(const char* from, const uint8_t* data, size_t len);
+  void onPaFlags(const char* from, const uint8_t* data, size_t len);
+  void onPaFwd(const char* from, const uint8_t* data, size_t len);
+  void onPaRef(const char* from, const uint8_t* data, size_t len);
+  void onPaSwr(const char* from, const uint8_t* data, size_t len);
+  void onPaBand(const char* from, const uint8_t* data, size_t len);
+  void paSubscribeTopics(void);
+  void paPublishPending(void);
+  void handlePaJson(void);
+  void handlePaCmd(void);
   static const char* trxnetModeToString(uint8_t civMode);
   void lanSecondaryCivFrameHandler(uint8_t slot, const uint8_t *frame, size_t len);
   static void civSend(uint8_t toAddr, const uint8_t* body, size_t bodyLen);
@@ -1870,6 +1936,11 @@ void handleSetupData(){
   j += ",\"trxnetid\":\""; j += trxnetHex; j += "\"";
   j += ",\"trxnetport\":\""; j += TRXNET_PORT; j += "\"";
   j += ",\"trxnetprio\":\""; j += configJsonEscape(TRXNET_PRIO); j += "\"";
+  {
+    char paHex[3];
+    snprintf(paHex, sizeof(paHex), "%02x", PA_NET_ID);
+    j += ",\"panetid\":\""; j += paHex; j += "\"";
+  }
   j += ",\"baud\":\""; j += baudSelect; j += "\"";
   String labels[3] = {g_lcTrx1Label, g_lcTrx2Label, g_lcTrx3Label};
   for (uint8_t slot = 0; slot < 3; slot++) {
@@ -1973,6 +2044,123 @@ void handleTrxNetPeers(){
   webServer.sendHeader("Connection", "close");
   webServer.client().setNoDelay(true);
   webServer.send(200, "application/json", j);
+}
+
+// ---- Linear amplifier, for the QRPLog palette ------------------------------
+//
+// Its own endpoint rather than fields on /state, for two reasons that both bite:
+// /state is one snprintf into a fixed 1536-byte buffer that TRUNCATES when it
+// overflows (tools/state-json-budget-smoke.js guards the remaining headroom),
+// and QRPLog reads /oi3/state instead whenever the active radio is an OI3 slot,
+// where anything added here would simply not be there.
+//
+// "present" is the peer table, not the freshness of telemetry. They answer
+// different questions and the palette shows both: the table says the daemon is
+// on the network at all (which is what makes the PA icon appear, and it must not
+// flicker), while ageMs says whether the numbers on screen still mean anything.
+//
+// fwdPk/refPk come back null once the peak window has expired. All the timing
+// lives here so the browser only has to decide between a number and a dash, and
+// reading this endpoint has no side effect at all -- two QRPLog tabs open at
+// once is ordinary, and a read-clears peak would split one transmission between
+// them.
+void handlePaJson(){
+  String j;
+  j.reserve(320);
+  j += "{";
+  const char* state = "ok";
+  if (APmode && !WiFiStationReady()) state = "ap";
+  else if (TRXNET_ID == 0x00 || !trxNetEnabled) state = "disabled";
+  else if (PA_NET_ID == 0x00) state = "unset";
+  j += "\"state\":\""; j += state; j += "\"";
+  j += ",\"name\":\""; j += configJsonEscape(String(paPeerName)); j += "\"";
+
+  bool present = false;
+  if (strcmp(state, "ok") == 0 && paPeerName[0] != '\0') {
+    int count = net.peerCount();
+    for (int i = 0; i < count; i++) {
+      const TrxPeer* p = net.peer(i);
+      if (p && p->active && strcmp(p->name, paPeerName) == 0) { present = true; break; }
+    }
+  }
+  j += ",\"present\":"; j += present ? "true" : "false";
+
+  uint32_t now = millis();
+  if (paState.seen) {
+    uint32_t age = now - paState.lastRxMs;
+    j += ",\"ageMs\":";  j += age;
+    j += ",\"flags\":";  j += paState.flags;
+    j += ",\"fwd\":";    j += paState.fwd;
+    j += ",\"ref\":";    j += paState.ref;
+    j += ",\"swr\":";    j += paState.swr;
+    j += ",\"band\":";   j += paState.band;
+    j += ",\"fwdPk\":";
+    if (paState.fwdPkAt && (uint32_t)(now - paState.fwdPkAt) <= PA_PEAK_WINDOW_MS) j += paState.fwdPk;
+    else j += "null";
+    j += ",\"refPk\":";
+    if (paState.refPkAt && (uint32_t)(now - paState.refPkAt) <= PA_PEAK_WINDOW_MS) j += paState.refPk;
+    else j += "null";
+  } else {
+    // Nothing has ever arrived. Saying ageMs:0 here would read as "fresh".
+    j += ",\"ageMs\":null,\"flags\":null,\"fwd\":null,\"ref\":null";
+    j += ",\"swr\":null,\"band\":null,\"fwdPk\":null,\"refPk\":null";
+  }
+  j += ",\"staleMs\":"; j += PA_STALE_MS;
+  // Command plumbing, so "nothing happened" can be told apart from "this
+  // interface never sent it" without a serial console.
+  j += ",\"txOk\":";     j += paTxOk;
+  j += ",\"txFailed\":"; j += paTxFailed;
+  j += ",\"txAgeMs\":";
+  if (paTxLastMs) j += (uint32_t)(millis() - paTxLastMs); else j += "null";
+  j += "}";
+  webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  webServer.sendHeader("Connection", "close");
+  webServer.client().setNoDelay(true);
+  webServer.send(200, "application/json", j);
+}
+
+// Queue one amplifier command. Answering {"ok":true} means "handed to TrxNet",
+// never "the amplifier did it" -- the daemon takes commands only with
+// --trxnet-subscribe, and silently ignores them when the sender is outside its
+// --trxnet-allow list. Neither refusal comes back over the wire, so the only
+// honest confirmation is the palette watching /pa-flags move.
+void handlePaCmd(){
+  webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  webServer.sendHeader("Connection", "close");
+  webServer.client().setNoDelay(true);
+
+  String body = webServer.arg("plain");
+  String what = extractJsonString(body, "what");
+  String valS = extractJsonString(body, "value");
+  // extractJsonString() returns "" both for a missing key and for a malformed
+  // one, and ""..toInt() is 0 -- which is a legitimate value here. Length first.
+  int    val  = valS.length() ? valS.toInt() : -1;
+  uint8_t bit = 0;
+  if      (what == "on")      bit = PA_CMD_ON;
+  else if (what == "operate") bit = PA_CMD_OPERATE;
+  else if (what == "full")    bit = PA_CMD_FULL;
+  else if (what == "tune")    bit = PA_CMD_TUNE;
+  if (!bit || val < 0 || val > 1) {
+    webServer.send(400, "application/json", "{\"error\":\"bad_request\"}");
+    return;
+  }
+  if (PA_NET_ID == 0x00 || !trxNetEnabled || paPeerName[0] == '\0') {
+    webServer.send(409, "application/json", "{\"error\":\"pa_unset\"}");
+    return;
+  }
+  bool present = false;
+  int count = net.peerCount();
+  for (int i = 0; i < count; i++) {
+    const TrxPeer* p = net.peer(i);
+    if (p && p->active && strcmp(p->name, paPeerName) == 0) { present = true; break; }
+  }
+  if (!present) {
+    webServer.send(409, "application/json", "{\"error\":\"pa_absent\"}");
+    return;
+  }
+  paPendingCmd  |= bit;
+  if (val) paPendingVals |= bit; else paPendingVals &= ~bit;
+  webServer.send(200, "application/json", "{\"ok\":true}");
 }
 
 // ---- LAN radio discovery endpoints (SETUP page) ----------------------------
@@ -3108,6 +3296,20 @@ static void trxLoadPrioBuffers(const String &canonical) {
       inTok = true;
     }
   }
+  // A configured amplifier is one of this device's own targets, and TrxNet
+  // INTEGRATION.md §9 asks a device to protect its targets from being evicted
+  // when the peer table fills. Added as an implicit token rather than by editing
+  // TRXNET_PRIO: the operator's string stays theirs, and it would not fit anyway
+  // once they have used all 71 characters. Its storage is static, which is what
+  // setPriorityPrefixes() requires -- it keeps the pointer, not a copy.
+  // If the operator has already spent all eight slots, theirs win.
+  static const char paPrioTok[] = "PA";
+  if (PA_NET_ID != 0x00 && trxPrioCount < TRXNET_PRIO_MAX_TOKENS) {
+    bool already = false;
+    for (uint8_t i = 0; i < trxPrioCount; i++)
+      if (trxPrioPtrs[i] && strcmp(trxPrioPtrs[i], paPrioTok) == 0) { already = true; break; }
+    if (!already) trxPrioPtrs[trxPrioCount++] = paPrioTok;
+  }
 }
 
 // True if a device name matches any active priority prefix (same strncmp
@@ -3141,6 +3343,7 @@ void handleConfigDownload() {
   j += ",\"trxnetid\":";        j += (unsigned)TRXNET_ID;
   j += ",\"trxnetport\":";      j += TRXNET_PORT;
   j += ",\"trxnetprio\":\"";    j += configJsonEscape(TRXNET_PRIO); j += "\"";
+  j += ",\"panetid\":";         j += (unsigned)PA_NET_ID;
   j += ",\"trx2netid\":";       j += (unsigned)TRX2_NET_ID;
   j += ",\"trx2conntype\":";    j += TRX2_CONN_TYPE;
   { char h[3]; snprintf(h, sizeof(h), "%02x", TRX2_CIV_ADDR); j += ",\"trx2civaddr\":\""; j += h; j += "\""; }
@@ -3352,6 +3555,8 @@ void handleConfigUpload() {
   // EEPROM 44 TRX2_CONN_TYPE
   v = parseField("trx2conntype", 0, 2); if (v >= 0) { TRX2_CONN_TYPE = (byte)v; EEPROM.writeByte(44, v); }
   v = parseField("trxnetport", 1, 65534); if (v >= 0) { TRXNET_PORT = (uint16_t)v; EEPROM.writeUShort(45, v); }
+  // EEPROM 69 PA_NET_ID (linear amplifier peer)
+  v = parseField("panetid", 0, 255); if (v >= 0) { PA_NET_ID = (byte)v; EEPROM.writeByte(69, v); }
   // EEPROM 288 flag + 289-359 TRXNET_PRIO
   if (body.indexOf("\"trxnetprio\"") >= 0) {
     TRXNET_PRIO = trxNormalizePrio(extractJsonString(body, "trxnetprio"));
@@ -4878,6 +5083,8 @@ void setupWebServer(void){
   webServer.on("/setup/wifi-try",      HTTP_POST, handleWifiTryStart);
   webServer.on("/setup/wifi-try.json", HTTP_GET,  handleWifiTryStatus);
   webServer.on("/trxnet-peers.json", HTTP_GET, handleTrxNetPeers);
+  webServer.on("/pa.json", HTTP_GET, handlePaJson);
+  webServer.on("/pa/cmd", HTTP_POST, handlePaCmd);
   webServer.on("/restart", HTTP_POST, [](){
     webServer.sendHeader("Connection", "close");
     webServer.client().setNoDelay(true);
@@ -5168,6 +5375,8 @@ void setup(){
     TRXNET_PORT = (EEPROM.read(45) == 0xff) ? 5683 : EEPROM.readUShort(45);
     // 47 TRX3_CONN_TYPE (0=TrxNet, 1=CI-V; 0xff=unprogrammed → default 0x00)
     TRX3_CONN_TYPE = (EEPROM.read(47) == 0xff) ? 0x00 : EEPROM.readByte(47);
+    // 69 PA_NET_ID (linear amplifier peer; 0x00=none; 0xff=unprogrammed → 0x00)
+    PA_NET_ID = (EEPROM.read(69) == 0xff) ? 0x00 : EEPROM.readByte(69);
     // 48 TRX2_CIV_ADDR (CI-V address of TRX2; 0xff=unprogrammed → 0x00 unset)
     TRX2_CIV_ADDR = (EEPROM.read(48) == 0xff) ? 0x00 : EEPROM.readByte(48);
     // 49 TRX3_CIV_ADDR (CI-V address of TRX3; 0xff=unprogrammed → 0x00 unset)
@@ -5417,6 +5626,7 @@ void setup(){
       net.subscribe("/hz",   onTrxHz);
       net.subscribe("/mode", onTrxMode);
       net.subscribe("/s-hz", onTrxSetHz);
+      paSubscribeTopics();
       trxNetEnabled = true;
       Serial.print("TRXNET| begin ");
       Serial.println(trxDeviceName);
@@ -7152,12 +7362,16 @@ void TrxNetLoop(){
   if (wifiConnected && !prevWifiConnected) {
     // WiFi reconnected — re-announce to network
     net.begin(trxDeviceName);
+    paSubscribeTopics();          // begin() does not carry subscriptions over
     trxNetEnabled = true;
     Serial.print("TRXNET| reconnect begin ");
     Serial.println(trxDeviceName);
   }
   prevWifiConnected = wifiConnected;
-  if (trxNetEnabled && wifiConnected) net.loop();
+  if (trxNetEnabled && wifiConnected) {
+    net.loop();
+    paPublishPending();     // after loop(): the peer table is fresh
+  }
 }
 
 //-------------------------------------------------------------------------------------------------------
@@ -7215,6 +7429,103 @@ void onTrxMode(const char* from, const uint8_t* data, size_t len) {
   if (modeStr != nullptr) {
     radioSlotSetModeState((uint8_t)slot, modeStr);
     if (Debug) Serial.printf("TRXN| TRX%d mode=%s\n", slot + 1, modeStr);
+  }
+}
+
+// ---- Linear amplifier telemetry --------------------------------------------
+//
+// Five topics from PA.xx. Every one of them checks the sender: trxnetPeerSlot()
+// above is hard-wired to "OI3." and answers a different question (which radio
+// slot), so the amplifier needs its own matcher rather than a widening of that.
+static bool paIsOurAmp(const char* from) {
+  return PA_NET_ID != 0x00 && paPeerName[0] != '\0' && strcmp(from, paPeerName) == 0;
+}
+
+// Hold an extreme for PA_PEAK_WINDOW_MS, then start again from what is arriving
+// now. No decay back towards the current reading: the palette prints a number,
+// not a bar, and a digit sliding down is harder to read than one that drops.
+static void paNotePeak(uint16_t value, uint16_t &peak, uint32_t &peakAt) {
+  uint32_t now = millis();
+  if (!peakAt || (uint32_t)(now - peakAt) > PA_PEAK_WINDOW_MS) { peak = value; peakAt = now; }
+  else if (value >= peak)                                      { peak = value; peakAt = now; }
+}
+
+static void paNoteRx() { paState.seen = true; paState.lastRxMs = millis(); }
+
+void onPaFlags(const char* from, const uint8_t* data, size_t len) {
+  if (len < sizeof(uint16_t) || !paIsOurAmp(from)) return;
+  memcpy(&paState.flags, data, sizeof(uint16_t));   // little-endian on both ends
+  paNoteRx();
+}
+
+void onPaFwd(const char* from, const uint8_t* data, size_t len) {
+  if (len < sizeof(uint16_t) || !paIsOurAmp(from)) return;
+  memcpy(&paState.fwd, data, sizeof(uint16_t));
+  paNotePeak(paState.fwd, paState.fwdPk, paState.fwdPkAt);
+  paNoteRx();
+}
+
+void onPaRef(const char* from, const uint8_t* data, size_t len) {
+  if (len < sizeof(uint16_t) || !paIsOurAmp(from)) return;
+  memcpy(&paState.ref, data, sizeof(uint16_t));
+  paNotePeak(paState.ref, paState.refPk, paState.refPkAt);
+  paNoteRx();
+}
+
+void onPaSwr(const char* from, const uint8_t* data, size_t len) {
+  if (len < sizeof(uint16_t) || !paIsOurAmp(from)) return;
+  memcpy(&paState.swr, data, sizeof(uint16_t));
+  paNoteRx();
+}
+
+void onPaBand(const char* from, const uint8_t* data, size_t len) {
+  if (len < 1 || !paIsOurAmp(from)) return;
+  paState.band = data[0];
+  paNoteRx();
+}
+
+// Register the amplifier's five topics and build the name we accept them from.
+// Called from both places that call net.begin() -- boot and WiFi reconnect --
+// because subscriptions do not survive a re-begin any more than the peer table
+// does. Subscribing with no amplifier configured would be five of the eight
+// slots spent on packets that can never be accepted.
+void paSubscribeTopics(void) {
+  if (PA_NET_ID == 0x00) { paPeerName[0] = '\0'; return; }
+  snprintf(paPeerName, sizeof(paPeerName), "PA.%02x", PA_NET_ID);
+  net.subscribe("/pa-flags", onPaFlags);
+  net.subscribe("/fwd",      onPaFwd);
+  net.subscribe("/ref",      onPaRef);
+  net.subscribe("/swr",      onPaSwr);
+  net.subscribe("/band",     onPaBand);
+}
+
+// Send whatever the web handler queued. Publishing has to happen here rather
+// than in the handler: TrxNet.h's own contract says not to publish from inside
+// the packet-handling path, and a request handler runs in the middle of it.
+//
+// The amplifier does its own closed loop on the far side -- compare, send one
+// key, wait for the next STATUS, up to six times -- because OPERATE and PWR are
+// toggle keys. So one publish per click is right; the retry belongs to the
+// daemon. TRX_CON because a lost command to a kilowatt is worth a retransmit,
+// and publishTo() to a single peer costs one pending slot.
+void paPublishPending(void) {
+  if (!paPendingCmd || !trxNetEnabled || paPeerName[0] == '\0') return;
+  uint8_t cmds = paPendingCmd, vals = paPendingVals;
+  paPendingCmd = 0;
+  static const struct { uint8_t bit; const char* path; } kMap[] = {
+    { PA_CMD_ON,      "/s-on"      },
+    { PA_CMD_OPERATE, "/s-operate" },
+    { PA_CMD_FULL,    "/s-full"    },
+    { PA_CMD_TUNE,    "/s-tune"    },
+  };
+  for (uint8_t i = 0; i < 4; i++) {
+    if (!(cmds & kMap[i].bit)) continue;
+    uint8_t v = (vals & kMap[i].bit) ? 1 : 0;
+    bool ok = net.publishTo(paPeerName, kMap[i].path, &v, 1, TRX_CON);
+    paTxLastMs = millis();
+    if (ok) paTxOk++; else paTxFailed++;
+    if (Debug || !ok)
+      Serial.printf("PA| %s %u -> %s%s\n", kMap[i].path, v, paPeerName, ok ? "" : " FAILED");
   }
 }
 
@@ -8666,6 +8977,21 @@ void handleSet() {
     if (requestHasArg("trxnetprio")) {
       TRXNET_PRIO = trxNormalizePrio(requestArg("trxnetprio"));
       eepromWriteTrxPrio(TRXNET_PRIO);
+    }
+
+    // Linear amplifier peer. The requestHasArg() guard is not optional: without
+    // it, every unrelated save from a page that does not carry this field would
+    // silently zero it -- exactly what happened to fskOutputMode once already.
+    //
+    // No uniqueness check against TRXNET_ID or the TRX slots. "PA.01" and
+    // "705.01" are different names on the wire; they cannot collide, and
+    // refusing that pair would only be superstition.
+    if (requestHasArg("panetid")) {
+      String v = requestArg("panetid");
+      v.trim();
+      long id = v.length() ? strtol(v.c_str(), nullptr, 16) : 0;
+      if (id < 0 || id > 255) id = 0;
+      if (PA_NET_ID != (byte)id) { PA_NET_ID = (byte)id; EEPROM.writeByte(69, (byte)id); }
     }
 
     {

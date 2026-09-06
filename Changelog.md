@@ -11,6 +11,206 @@ published.
 
 ## Working tree — not committed
 
+**QRPLog can drive the linear amplifier.**
+
+* **`/pa.json` now reports what happened to the command itself** — `txOk`, `txFailed`, `txAgeMs`.
+  Three rounds were spent guessing where a press was being lost, because the one fact that would
+  have settled it — did this interface put the packet on the wire — was printed only to a serial
+  console nobody was watching. The palette's "the amplifier did not follow" covered two faults
+  needing opposite fixes: a daemon that refused the command, and an interface that never sent it.
+  It now names which, by comparing `txFailed` across the command's own wait.
+
+* **Fixed, and this was the real one: stale telemetry disabled the buttons.** Measured rather than
+  guessed, layer by layer. The daemon's own `/health` said `subscribeOn: true`, so commands were
+  being accepted; the operator's ESP32 answered `/pa/cmd` with 400 on a bad body, so the route was
+  there; and its `/pa.json` read `ageMs: 38978070` — **10.8 hours** since the last topic. A probe
+  driving that actual device then showed OPERATE, PWR and TUNE all `disabled: true`, titled "No
+  telemetry from the amplifier."
+
+  The chain: the amplifier was switched off (`dtr: false`), the daemon publishes **only** from its
+  STATUS handler, so nothing was being sent at all, `ageMs` climbed past `staleMs`, and
+  `whyDisabled()` greyed three of the four buttons out. A closed circle — the amplifier could not
+  be operated precisely because it was off, which is the state you want ON for. ("The first version
+  worked" was the same code with the amplifier switched on; versions two and three were not the
+  cause.)
+
+  Stale telemetry now disables nothing. Sending blind is safe because these are not keystrokes:
+  `/s-operate 1` means "be in OPERATE" and the daemon runs its own compare-send-confirm loop, and
+  it holds a command for ten seconds while no telemetry flows — documented for exactly this case,
+  `/s-on` and `/s-operate` sent together with a seven-second power-up. Only "the amplifier is not
+  on the network" disables anything now; the buttons instead say the state shown is the last one
+  heard.
+
+* **Fixed: a refused command could report success.** `send()` read the body but not the status
+  code, so a firmware without the route — 404 with an HTML page — made `r.json()` reject, the catch
+  turned it into `{}`, and a command that never existed passed as accepted. Status is now checked
+  first, with 404 named for what it is.
+
+* Both fixes are covered against the state that produced them (stale telemetry, and a 404 from an
+  older firmware). `pa-panel-smoke` is 66 checks, green against the source and against the
+  minified companion the firmware actually serves.
+
+* **Fixed: the settle window made every button feel dead.** The guard added to stop a press being
+  undone ran from the moment a command was *sent*. With an amplifier that is not listening — a
+  daemon without `--trxnet-subscribe`, or this device missing from its `--trxnet-allow` list —
+  every press was then swallowed and nothing on screen said so. A guard may only hold a button
+  while something is actually happening, so it now runs from the moment the amplifier **confirms**;
+  an unanswered command holds nothing, and pressing again is exactly what to try next. Two new
+  checks cover it: a lapsed command leaves the button usable, and pressing again reaches the wire.
+
+* **Fixed: TUNE is available in STANDBY.** Tuning runs at low power, so STANDBY is an ordinary
+  place to do it from. Blocking it there came from reading the daemon's `"no effect - transmitting,
+  or in STANDBY?"` log line as a statement about the amplifier; it is a guess the daemon makes when
+  the TUNE flag fails to rise. The one state that genuinely locks it stays: the radio keying, where
+  the amplifier locks the whole RF path.
+
+* **`PA_SMOKE_MINIFIED=1` runs the smoke against `*.js.min`.** The firmware serves the minified
+  companion via `.gz`, never the readable source, so a suite that only ever tested the source was
+  testing a file no operator runs. It earned its keep immediately, catching a stale `.min` from a
+  regeneration that had not been run yet. Both passes are green (59 checks each).
+
+* **Fixed, from the desk: OPERATE switched on and then straight back off.** Traced on the wire,
+  not guessed at — a stand-in `PA.01` with an ephemeral UDP port (the trick `trxnet_e2e.py` uses
+  to share a host) recorded exactly what one press sends, and the firmware was innocent: one
+  press, one `/s-operate 1`. The fault was in the palette. These are toggle keys, so a second
+  press carries the *opposite* value, and the amplifier answers in well under a second — so by
+  the time an operator who saw nothing happen presses again, the first command has been confirmed
+  and any "one command outstanding" guard has already lifted. The second press then cleanly undid
+  the first. A button now also holds the wire for 1.5 s after **sending**, confirmed or not,
+  while still repainting to the new state immediately, so the panel stays responsive and only the
+  command waits. Reproduced as a failing check first (`[{operate:1},{operate:0}]`), and a second
+  check makes sure the settle window does not turn the button into a lockout.
+
+* **A greyed-out button now says why.** TUNE going grey — which is what the amplifier sitting in
+  STANDBY looked like — was indistinguishable from the radio keying, or from the panel having
+  lost the amplifier entirely. Three different problems, one appearance. Each disabled button now
+  carries the first reason that applies as its tooltip.
+
+* **Two bars between the readings and the SWR line**, touching, no scale and no frame: forward
+  power green from the left, reflected sand from the right, so the two never read as one
+  continuous quantity. Full scale follows the mode the amplifier is actually in — 1200 W in FULL,
+  600 W in HALF, and the exciter's 100 W in STANDBY — because a fixed scale would make a
+  full-power HALF transmission look like the amplifier was loafing. Reflected power keeps a scale
+  of its own (200 W, the console's `prMax`): what matters about it is how much there is, not what
+  fraction of the forward power it is. The bars carry the peak, the same figure as the digits
+  rather than the instantaneous value the full console's bars use — at two samples a second the
+  instantaneous reading is mostly the gaps between syllables, and the bar would sit near zero
+  through an entire SSB over.
+
+* **The firmware half is no longer unverified.** Against the live network it saw the real `PA.01`
+  announce itself, `PA` correctly protected as a priority prefix, and — against a stand-in on an
+  isolated port — real telemetry decoded end to end (`flags:848` = ON+LINK+FULL+BEEP, the peak
+  expiring to `null` on schedule) and a command arriving exactly once. Two things worth writing
+  down while they were being chased: the daemon publishes **only** from its STATUS handler, so a
+  switched-off amplifier sends nothing at all beyond the greeting snapshot a joining peer gets;
+  and two TrxNet devices on one host fight over the UDP port, where `SO_REUSEADDR` hands one of
+  them every unicast packet and the other sees a peer table but no data.
+
+* **A latent bug found in passing, not fixed here:** `trxnetid` in `handleSet()` has no
+  `requestHasArg()` guard (`wifilt.ino:8782`), so any POST to `/setup/save` that omits the field
+  sets it to `0x00` and switches TrxNet off. The SETUP page always sends the whole form, so
+  nothing hits it today — but it is the same shape as the `fskOutputMode` bug the file already
+  warns about, and `panetid` was written with the guard from the start.
+
+* `pa-panel-smoke` is now 58 checks.
+
+* **A PA button appears beside the `?`, and only when there is one.** WIFILT now subscribes to the
+  five topics an EXPERT 1K-FA publishes over TrxNet as `PA.xx` — `/pa-flags`, `/fwd`, `/ref`,
+  `/swr`, `/band` — and serves them at **`GET /pa.json`**. The button unhides itself when that
+  peer is actually in the TrxNet table, so a station without an amplifier never learns it exists.
+  It follows the peer table rather than the freshness of telemetry deliberately: a peer lives 95 s
+  past its last announce, so a WiFi hiccup does not make a button blink in and out mid-contest.
+
+* **A small palette, movable, that never takes the keyboard.** It shows the forward and reflected
+  power as whole watts, SWR, the band, every flag the wire carries (ALARM · TX · TUNE · CONTEST ·
+  BEEP, dark ones kept in place so the row never reflows), and the four commands TrxNet accepts —
+  ON/OFF, STANDBY/OPERATE, PWR-L/PWR-H, TUNE — in the console's own colours and button states,
+  scaled down. Every button cancels its own `mousedown`, so the click fires but the caret never
+  leaves Call or Exch. That one line is what makes a floating panel usable over a log that is
+  typed into. Position and open/closed survive a reload (`localStorage`, clamped back into the
+  viewport on load and resize, wrapped both ways because a private window refuses storage).
+
+* **The peak is held in the firmware, and reading it has no side effect.** `/fwd` arrives five to
+  eight times a second while transmitting and the browser reads twice a second — sampling would
+  miss two readings in three, and on SSB the number on screen would sit well under what the
+  amplifier is delivering. A 2 s window in `wifilt.ino` holds the extreme, which is also the
+  "still readable two seconds after PTT" rule: one constant, because both are the same question.
+  `fwdPk`/`refPk` come back `null` once it expires, so the browser only chooses between a number
+  and a dash. Nothing is cleared on read — two QRPLog tabs open at once is ordinary here, and a
+  read-clears peak would split one transmission between them.
+
+* **A command is never reported as a confirmation.** The daemon takes commands only with
+  `--trxnet-subscribe` and silently drops them from senders outside `--trxnet-allow`; neither
+  refusal comes back on the wire. So each button waits for the amplifier's own flags to move —
+  10 s for ON, which takes about seven to come up from DTR, 4 s for the rest — and when they do
+  not, it stops waiting and names the two switches to check. The closed loop that converts one
+  press into the right number of keystrokes stays in the daemon, where it belongs: `OPERATE` and
+  `PWR` are toggle keys, so a blind press is as likely to switch the wrong way.
+
+* **`PA NET_ID` in SETUP → TrxNet** (EEPROM byte 69, previously free), `00` = no amplifier, the
+  same disabled sentinel `TRXNET_ID` uses. The live peer list already in that section fills it on
+  a click, like the three radio NET_IDs. `PA` is added to the priority prefixes whenever one is
+  configured — TrxNet `INTEGRATION.md` §9 asks a device to protect its own targets from eviction
+  — as an implicit token rather than by editing the operator's `TRXNET_PRIO` string, which is
+  theirs and would not fit anyway once all 71 characters are used.
+
+* **A real bug found by the smoke test, in code this change did not add:** `const app` at the top
+  level of a classic script is not a property of `window`, so a page-local widget cannot see it
+  however it asks. The band-mismatch check and the TUNE-while-transmitting lockout both read it
+  and would have been permanently, quietly green. `log.js` now exports `window.LogRadio`
+  deliberately and narrowly — the two facts such widgets actually read, not the whole page state.
+
+* **`tools/pa-panel-smoke.js`** is new (46 checks, real headless browser, fixture serving
+  `/pa.json` and recording every `/pa/cmd` body). It asserts on rendered text, on
+  `document.activeElement` and on what went on the wire — never on internal state — because the
+  three ways this feature breaks are all silent: focus leaving Call, a `null` peak rendering as
+  `0 W`, and a dropped command reported as success. **`tools/trxnet-subs-budget-smoke.js`** is
+  new too (9 checks): `subscribe()` returns silently when the table is full, and these five topics
+  put the sketch at exactly 8/8, so a ninth subscription anywhere would compile, link, run and
+  quietly not work. Verified to fail on a deliberately added ninth, naming the topic that would
+  vanish.
+
+* Regression: `log-rst-smoke` 24/24, `log-hotkey-smoke` 12/12, `log-year-groups-smoke` 15/15,
+  `setup-spine-smoke` 97, `state-json-budget-smoke` 64/64, `fs-partition-audit`,
+  `check-page-scripts`, `make -C native`. `native-integration-test.sh` still reports its one known
+  red (`TrxNet registers a peer`), confirmed present on a clean HEAD via `git stash` — not this
+  change.
+
+* **Not covered automatically, by choice:** the firmware half — the subscriptions, the peak
+  window, `/pa.json` and `publishTo` — is verified by hand on the amplifier. `/pa.json`,
+  `/pa/cmd`, the SETUP round-trip and the `requestHasArg()` guard were exercised against the
+  native build. On the daemon side this needs `--trxnet --trxnet-subscribe`, and `705.xx` in
+  `--trxnet-allow` when that list is used.
+
+---
+
+**QRPLog: the saved-log picker folds by year.**
+
+* **One thin collapsible header per season, folded by default.** The LOG dialog listed every log
+  ever created as one flat column, so an operator with a few seasons behind them scrolled past
+  years of history to reach anything. The list now groups by the year in `createdAtUtc` — newest
+  year first, each header carrying its own `N logs · N QSO` — and every year starts closed. Logs
+  whose timestamp did not survive an import land in one `—` group, last.
+
+* **The log currently in use never goes into a fold.** It is pinned above the year headers, green
+  and tagged `active` as before, and it is omitted from its own year's body so it is never listed
+  twice. Which log the next QSO is written into must not cost a click to find out.
+
+* **The filter still searches every log of every year.** It opens whichever years hold a match and
+  leaves the rest folded; the years it opened by itself are not remembered, so clearing the filter
+  folds them back up while a year the operator opened by hand stays open across a re-render. A
+  filter that matches nothing still leaves the active log on screen, with the existing `No match.`
+  hint below it.
+
+* **`tools/log-year-groups-smoke.js`** is new (15 checks, real headless browser, IndexedDB seeded
+  with five logs across three seasons plus one undated). It asserts on the rows an operator can
+  actually see — a row inside a closed `<details>` does not count — which is the only way to catch
+  the three ways this feature breaks: years that start open, an active log buried in a fold, and a
+  filter that only reaches the years already open. `tools/log-rst-smoke.js` (24/24) and
+  `tools/log-hotkey-smoke.js` (12/12) stay green.
+
+---
+
 **M5Stack Atom Lite support, and the firmware now builds with PlatformIO.**
 
 * **New board: M5Stack Atom Lite** (ESP32-PICO-D4, 4 MB). It runs the same `wifilt.ino` as a

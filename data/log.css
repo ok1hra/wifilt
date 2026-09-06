@@ -810,6 +810,47 @@ body {
 
 .lm-log-btns { display: flex; gap: 5px; flex-shrink: 0; }
 
+/* One thin fold per year in the saved-log list. <details> carries the open
+   state without script; the row stays as low as the summary text so a screen
+   full of years is still a short list. */
+.lm-year {
+  border: 1px solid #444444;
+  border-radius: 8px;
+  background: #303030;
+}
+
+.lm-year-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 14px;
+  color: var(--dark-muted);
+  user-select: none;
+}
+.lm-year-head::-webkit-details-marker { display: none; }
+.lm-year-head::before { content: '\25B8'; font-size: 11px; }
+.lm-year[open] .lm-year-head::before { content: '\25BE'; }
+.lm-year-head:hover { color: var(--dark-text); }
+
+.lm-year-name {
+  font-weight: bold;
+  letter-spacing: 0.08em;
+  color: var(--dark-text);
+  margin-right: auto;
+}
+
+.lm-year-meta { font-size: 13px; }
+
+.lm-year-body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 5px 6px 6px;
+}
+
 .lm-log-total {
   padding: 6px 10px 2px;
   font-size: 14px;
@@ -1369,3 +1410,139 @@ body {
   .lm-row select,
   .lm-row-select { scroll-margin-bottom: 45vh; }
 }
+
+/* ── PA palette ────────────────────────────────────────────────────────────
+   A small movable window onto the linear amplifier, floating over the log.
+
+   Its colours are the amplifier console's own (--pa-fw / --pa-rev and the
+   st-off/st-on/st-op/st-hi button states), not QRPLog's. That is deliberate:
+   one colour means one thing wherever it appears, and an operator who has the
+   full console open on another screen should not have to re-learn which green
+   is which. Everything else is scaled down -- this has to fit beside a contest
+   log, not fill a browser window. */
+
+.pa-panel {
+  --pa-fw:  #3fa96e;      /* forward power, and "this is running" */
+  --pa-rev: #cfa54e;      /* reflected power, SWR, and PWR-H */
+  --pa-line: #2f3745;
+  --pa-panel2: #232936;
+  --pa-dim: #8b97a8;
+
+  position: fixed;
+  z-index: 90;            /* under .lm-modal (100): dialogs still come first */
+  width: 218px;
+  background: #1b2028;
+  border: 1px solid var(--pa-line);
+  border-radius: 7px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.55);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: #dfe6ef;
+  user-select: none;
+}
+
+/* The drag handle. Everything on this row is grab-anywhere except the close
+   button, so there is no thin strip to aim at. */
+.pa-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 6px 4px 8px;
+  border-bottom: 1px solid var(--pa-line);
+  cursor: move;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
+  color: var(--pa-dim);
+}
+.pa-head-name { margin-right: auto; color: #dfe6ef; }
+.pa-close {
+  background: none; border: none; color: var(--pa-dim);
+  font-family: inherit; font-size: 13px; line-height: 1;
+  padding: 1px 3px; cursor: pointer;
+}
+.pa-close:hover { color: #ff5c5c; }
+
+.pa-body { padding: 6px 8px 8px; display: flex; flex-direction: column; gap: 5px; }
+
+/* Power readings. The unit is dimmed so the eye lands on the number. */
+.pa-vals { display: flex; gap: 8px; }
+.pa-val  { flex: 1; display: flex; align-items: baseline; gap: 4px; }
+.pa-val-k { font-size: 10px; letter-spacing: 0.08em; color: var(--pa-dim); }
+.pa-val-v { font-size: 17px; font-weight: 700; margin-left: auto; }
+.pa-val-u { font-size: 10px; font-weight: 400; color: var(--pa-dim); }
+.pa-val-fw  .pa-val-v { color: var(--pa-fw); }
+.pa-val-rev .pa-val-v { color: var(--pa-rev); }
+
+/* Two bars, touching, no scale and no frame. Forward power grows from the left,
+   reflected from the right, so the two never read as one continuous quantity --
+   and the gap between them closing is itself the thing worth noticing. The
+   unlit ground stays visible so full scale is always readable. */
+.pa-bars { display: flex; flex-direction: column; gap: 0; margin: 1px 0 2px; }
+.pa-bar  { position: relative; height: 5px; background: #171b22; overflow: hidden; }
+.pa-bar i {
+  position: absolute; top: 0; bottom: 0; width: 0;
+  transition: width 0.12s linear;
+}
+.pa-bar-fw  { left: 0;  background: var(--pa-fw); }
+.pa-bar-ref { right: 0; background: var(--pa-rev); }
+.pa-panel.pa-stale .pa-bar i { background: #3a424e; }
+
+.pa-sub { display: flex; align-items: baseline; gap: 8px; font-size: 11px; }
+.pa-swr { color: var(--pa-rev); font-weight: 700; }
+.pa-band { margin-left: auto; font-weight: 700; color: #dfe6ef; }
+/* The amplifier standing on a different band than the radio is the expensive
+   mistake this panel can catch, so it is the one thing drawn in alarm colours. */
+.pa-band.pa-band-mismatch { color: #ff5c5c; }
+
+/* LEDs: every bit TrxNet carries, lit or not. An indicator that disappears when
+   it goes out teaches you nothing about what the panel can tell you. */
+/* Sized to fit all five on one row at the panel's width. Wrapping to a second
+   row costs more height than the lamps are worth on a palette that is meant to
+   stay out of the way. */
+.pa-leds { display: flex; flex-wrap: wrap; gap: 2px; }
+.pa-led {
+  padding: 1px 3px; border-radius: 3px;
+  font-size: 9px; font-weight: 700; letter-spacing: 0;
+  background: #171b22; color: #4a5666; border: 1px solid var(--pa-line);
+}
+.pa-led.on { color: #0c0f14; }
+.pa-led.on.g { background: var(--pa-fw); }
+.pa-led.on.y { background: #f5d048; }
+.pa-led.on.r { background: #ff5c5c; }
+.pa-led.on.c { background: #4fd6e8; }
+
+.pa-status { display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--pa-dim); }
+.pa-dot { width: 7px; height: 7px; border-radius: 50%; background: #ff5c5c; flex: none; }
+.pa-dot.ok { background: var(--pa-fw); }
+.pa-dot.warn { background: #f5d048; }
+.pa-rev-tag { margin-left: auto; }
+
+.pa-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.pa-btn {
+  font-family: inherit; font-size: 11px; font-weight: 700; letter-spacing: 0.03em;
+  padding: 4px 2px; border-radius: 4px; cursor: pointer;
+  background: var(--pa-panel2); border: 1px solid var(--pa-line); color: #dfe6ef;
+}
+.pa-btn:hover:not(:disabled) { background: #2c3444; border-color: #465264; }
+.pa-btn:active:not(:disabled) { transform: translateY(1px); }
+.pa-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+/* The top-row buttons show STATE, not action -- clicking toggles it. OPERATE
+   and PWR-H are drawn inverted because those are the states in which the
+   amplifier is actually working, and they must not be possible to overlook. */
+.pa-btn.st-off { color: var(--pa-dim); border-color: var(--pa-line); }
+.pa-btn.st-on  { color: var(--pa-fw);  border-color: #2a5f42; }
+.pa-btn.st-op  { background: var(--pa-fw);  border-color: var(--pa-fw);  color: #0c0f14; }
+.pa-btn.st-hi  { background: var(--pa-rev); border-color: var(--pa-rev); color: #0c0f14; }
+/* Waiting for the amplifier to confirm. It answers a command by moving its own
+   flags, and ON takes about seven seconds, so the wait has to be visible. */
+.pa-btn.pa-pending { opacity: 0.55; font-style: italic; }
+
+/* Telemetry has stopped arriving. The numbers stay -- they were true once and
+   the panel says how long ago -- but nothing pretends to be live. */
+.pa-panel.pa-stale .pa-val-v,
+.pa-panel.pa-stale .pa-swr,
+.pa-panel.pa-stale .pa-band { color: #49535f !important; }
+.pa-panel.pa-stale .pa-led.on { background: #171b22; color: #4a5666; }
+
+.pa-note { font-size: 10px; color: #ff9a9a; line-height: 1.35; }
+
+/* The button that opens it, beside the ? in the bottom bar. */
+.btn-pa { letter-spacing: 0.08em; }
+.btn-pa.pa-live { color: var(--btn-on-tx); border-color: #2a5f42; }

@@ -516,6 +516,38 @@
     });
   }
 
+  // Saved logs are folded into one thin collapsible header per year, closed by
+  // default -- after a few seasons the flat list is mostly history nobody is
+  // looking at. Two things stay outside the fold: the log currently in use,
+  // pinned at the top so "which log am I writing into" never costs a click,
+  // and the filter, which keeps searching every log of every year and opens
+  // whichever years hold a match.
+  const _openYears    = new Set();
+  const UNKNOWN_YEAR  = '—';
+
+  function _logYear(log) {
+    const s = String((log && log.createdAtUtc) || '');
+    return /^\d{4}/.test(s) ? s.slice(0, 4) : UNKNOWN_YEAR;
+  }
+
+  function _makeLogRow(log, count, isActive) {
+    const row     = document.createElement('div');
+    row.className = 'lm-log-row' + (isActive ? ' lm-log-active' : '');
+    row.innerHTML = `
+        <div class="lm-log-info">
+          <span class="lm-log-name">${_esc(log.contestName)}</span>
+          <span class="lm-log-meta">${_esc(log.stationCall)}${log.myLocator ? ' | ' + _esc(log.myLocator) : ''} | ${_esc(_exchDisplayLabel(log.defaultExchange))} | #${count}</span>
+        </div>
+        <div class="lm-log-btns">
+          ${!isActive ? `<button class="lm-btn lm-btn-sm" data-act="open" data-id="${_esc(log.id)}">Open</button>` : '<span class="lm-active-tag">active</span>'}
+          <button class="lm-btn lm-btn-sm lm-btn-export" data-act="csv"  data-id="${_esc(log.id)}">CSV</button>
+          <button class="lm-btn lm-btn-sm lm-btn-export" data-act="adif" data-id="${_esc(log.id)}">ADIF</button>
+          <button class="lm-btn lm-btn-sm lm-btn-del"    data-act="del"  data-id="${_esc(log.id)}">Del</button>
+        </div>
+      `;
+    return row;
+  }
+
   function applyFilter() {
     const container = document.getElementById('lmLogList');
     if (!container) return;
@@ -532,30 +564,60 @@
 
     container.innerHTML = '';
 
-    if (!filtered.length) {
-      container.innerHTML = '<div class="lm-empty">' + (_allLogs.length ? 'No match.' : 'No logs yet.') + '</div>';
+    if (!_allLogs.length) {
+      container.innerHTML = '<div class="lm-empty">No logs yet.</div>';
       return;
     }
 
-    filtered.forEach(({ log, i }) => {
-      const count    = _allCounts[i] || 0;
-      const isActive = _activeLog && _activeLog.id === log.id;
-      const row      = document.createElement('div');
-      row.className  = 'lm-log-row' + (isActive ? ' lm-log-active' : '');
-      row.innerHTML  = `
-        <div class="lm-log-info">
-          <span class="lm-log-name">${_esc(log.contestName)}</span>
-          <span class="lm-log-meta">${_esc(log.stationCall)}${log.myLocator ? ' | ' + _esc(log.myLocator) : ''} | ${_esc(_exchDisplayLabel(log.defaultExchange))} | #${count}</span>
-        </div>
-        <div class="lm-log-btns">
-          ${!isActive ? `<button class="lm-btn lm-btn-sm" data-act="open" data-id="${_esc(log.id)}">Open</button>` : '<span class="lm-active-tag">active</span>'}
-          <button class="lm-btn lm-btn-sm lm-btn-export" data-act="csv"  data-id="${_esc(log.id)}">CSV</button>
-          <button class="lm-btn lm-btn-sm lm-btn-export" data-act="adif" data-id="${_esc(log.id)}">ADIF</button>
-          <button class="lm-btn lm-btn-sm lm-btn-del"    data-act="del"  data-id="${_esc(log.id)}">Del</button>
-        </div>
-      `;
-      container.appendChild(row);
+    // The active log rides above the year folds whether or not it matches the
+    // filter -- it is the one row the operator must always be able to see.
+    const activeIdx = _activeLog ? _allLogs.findIndex(l => l.id === _activeLog.id) : -1;
+    if (activeIdx >= 0) {
+      container.appendChild(_makeLogRow(_allLogs[activeIdx], _allCounts[activeIdx] || 0, true));
+    }
+
+    const rest   = filtered.filter(({ i }) => i !== activeIdx);
+    const years  = [];
+    const byYear = new Map();
+    rest.forEach(entry => {
+      const y = _logYear(entry.log);
+      if (!byYear.has(y)) { byYear.set(y, []); years.push(y); }
+      byYear.get(y).push(entry);
     });
+    // Newest year first; logs without a usable timestamp land in one group last.
+    years.sort((a, b) => {
+      if (a === UNKNOWN_YEAR) return 1;
+      if (b === UNKNOWN_YEAR) return -1;
+      return b.localeCompare(a);
+    });
+
+    years.forEach(year => {
+      const entries = byYear.get(year);
+      const qsos    = entries.reduce((s, { i }) => s + (_allCounts[i] || 0), 0);
+      const det     = document.createElement('details');
+      det.className = 'lm-year';
+      det.dataset.year = year;
+      det.open = !!query || _openYears.has(year);
+      det.innerHTML = `
+        <summary class="lm-year-head">
+          <span class="lm-year-name">${_esc(year)}</span>
+          <span class="lm-year-meta">${entries.length} log${entries.length === 1 ? '' : 's'} · ${qsos} QSO</span>
+        </summary>
+        <div class="lm-year-body"></div>`;
+      const body = det.querySelector('.lm-year-body');
+      entries.forEach(({ log, i }) => body.appendChild(_makeLogRow(log, _allCounts[i] || 0, false)));
+      // A year the filter forced open was not the operator's choice, so it must
+      // not be remembered -- clearing the filter folds everything back up.
+      det.addEventListener('toggle', () => {
+        if (query && det.open) return;
+        if (det.open) _openYears.add(year); else _openYears.delete(year);
+      });
+      container.appendChild(det);
+    });
+
+    if (!rest.length && query) {
+      container.insertAdjacentHTML('beforeend', '<div class="lm-empty">No match.</div>');
+    }
 
     const total    = _allCounts.reduce((s, c) => s + c, 0);
     const filteredTotal = filtered.reduce((s, { i }) => s + (_allCounts[i] || 0), 0);
@@ -1189,6 +1251,23 @@ function startClock() {
   }
   tick();
 }
+
+// ── What page-local widgets may read ─────────────────────────────────────────
+//
+// `const app` at the top level of a classic script is NOT a property of window,
+// so a widget mounted beside this page (pa-panel.js) cannot see it however it
+// asks. It has to be handed over deliberately -- and narrowly: the two facts
+// those widgets actually read, rather than the whole page state, so nothing
+// outside this file starts depending on the shape of `app`.
+//
+// Both are questions about the radio, not about the log: what band are we on,
+// and are we keying right now. The PA palette needs the first to notice that
+// the amplifier is standing on a different band than the radio, and the second
+// to grey out TUNE while the radio is transmitting.
+window.LogRadio = {
+  frequency: () => (app.connected ? app.frequency : 0),
+  tx:        () => !!app.tx,
+};
 
 // ── /state polling ────────────────────────────────────────────────────────────
 

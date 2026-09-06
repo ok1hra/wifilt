@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>QRPLog — WIFILT</title>
-  <link rel="stylesheet" href="/log.css?v=8c1262ba">
+  <link rel="stylesheet" href="/log.css?v=25e8d0aa">
 </head>
 <body>
   <header class="topbar">
@@ -255,6 +255,11 @@
       <div class="log-btn-spacer"></div>
       <div class="log-btn-group">
         <button id="btnHelp" class="btn-help" type="button" title="Keyboard shortcuts">?</button>
+        <!-- Appears only once the interface has actually seen the amplifier
+             announce itself on TrxNet, so a station without one never learns
+             this button exists. pa-panel.js unhides it. -->
+        <button id="btnPa" class="btn-trx btn-pa" type="button" hidden
+                title="Linear amplifier">PA</button>
         <button id="btnOpenLog" class="btn-trx" type="button" title="Open / create log">LOG</button>
         <button id="btnMacros" class="btn-trx" type="button" title="Edit CW/RTTY macros">MACROS</button>
         <button id="btnBackup" class="btn-trx" type="button" title="Download QSO database backup">BACKUP</button>
@@ -295,6 +300,7 @@
   <script src="/dxcc.js?v=c56ee081"></script>
   <script src="/log-db.js?v=6055416f"></script>
   <script src="/station-identity.js?v=a1a20249"></script>
-  <script src="/log.js?v=d5f0226a"></script>
+  <script src="/log.js?v=f8bd9eea"></script>
+  <script src="/pa-panel.js?v=aaf5ea0c"></script>
 </body>
 </html>

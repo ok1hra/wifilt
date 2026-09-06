@@ -489,6 +489,12 @@
                 <span class="help-tip" data-tip="Space-separated device-name prefixes kept in the peer table when it fills up (prefix match). Default: OI3 ANT. Empty = priority off.">?</span>
               </div>
             </label>
+            <label>Linear amplifier NET_ID
+              <div class="input-with-tip">
+                <input type="text" name="panetid" id="panetidInput" form="setup-form" maxlength="2" placeholder="00" value="">
+                <span class="help-tip" data-tip="NET_ID of an EXPERT 1K-FA amplifier reachable over TrxNet as PA.XX (2-digit hex). 00 = no amplifier. Set it and QRPLog grows a PA button next to the ? for power, OPERATE, PWR-L/H and TUNE. The amplifier's daemon needs --trxnet-subscribe, and this device's own name in --trxnet-allow if that list is used.">?</span>
+              </div>
+            </label>
             <div class="trxnet-devices">
               <div class="trxnet-devices-head">Network devices <span class="trxnet-devices-live">live</span></div>
               <div id="trxnetPeers" class="trxnet-peers-body"><span class="trxnet-peers-empty">…</span></div>
@@ -699,7 +705,7 @@
         }
 
         var setupNames = [
-          'ssid', 'pswd', 'ssid2', 'pswd2', 'trxnetport', 'trxnetprio',
+          'ssid', 'pswd', 'ssid2', 'pswd2', 'trxnetport', 'trxnetprio', 'panetid',
           'baud',
           'dxchost', 'dxcport',
           'dxccall', 'dxclocator', 'blockedDxcc'
@@ -1350,7 +1356,7 @@
     // focused, defaulting to TRX1 (the simplest guess) until any of them
     // ever has been.
     (function () {
-      var netIdInputs = ['trx1netid', 'trx2netid', 'trx3netid'].map(function (name) {
+      var netIdInputs = ['trx1netid', 'trx2netid', 'trx3netid', 'panetid'].map(function (name) {
         return document.querySelector('[name="' + name + '"]');
       }).filter(Boolean);
       var lastFocused = netIdInputs[0] || null;
