@@ -1546,3 +1546,185 @@ body {
 /* The button that opens it, beside the ? in the bottom bar. */
 .btn-pa { letter-spacing: 0.08em; }
 .btn-pa.pa-live { color: var(--btn-on-tx); border-color: #2a5f42; }
+
+/* ── RTTY palette ──────────────────────────────────────────────────────────
+   RTTY-ICOM's waterfall and decoded text, floating over the log. See
+   data/log-rtty-panel.js for why it exists at all (short version: a word
+   clicked in the pop-up sends the caret to QRPLog but leaves the KEYBOARD in
+   the pop-up, so the operator's next Enter goes to the wrong window).
+
+   The whole block re-declares the DATA pages' dark tokens on .rtty-panel
+   itself rather than on :root. Two reasons, both load-bearing:
+
+     * QRPLog's own :root above is a LIGHT theme and defines no --panel2,
+       --cyan or --red at all, so pulling in data.css would repaint the log
+       and not pulling it in would leave these rules resolving to nothing;
+     * rtty-rxlog.js resolves its weak-signal colour with
+       getComputedStyle(<the palette>), so --muted/--panel2 have to be real
+       here for the per-character SNR gradient to read the same as it does on
+       the full page.
+
+   The .rtty-tok / .rtty-rx-char / .rtty-tx-echo rules below are therefore a
+   deliberate scoped restatement of rtty.css's own, not a shared file: they
+   are the DOM contract rtty-rxlog.js builds, and both pages have to honour
+   it while keeping their own surroundings. */
+
+.rtty-panel {
+  --panel2: #132724;
+  --line:   #28443e;
+  --text:   #e8f3ee;
+  --muted:  #8ba59d;
+  --cyan:   #66f2d5;
+  --red:    #ff6b6b;
+
+  position: fixed;
+  z-index: 91;            /* over the PA palette (90), under .lm-modal (100) */
+  width: 320px;           /* spectrum.js's own minWidth: no stretched canvas */
+  min-height: 240px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;       /* required for `resize` to apply at all */
+  resize: vertical;       /* the grab handle is the browser's own */
+  background: #0e1b19;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.55);
+  color: var(--text);
+  user-select: none;
+}
+
+/* The drag handle. Grab-anywhere except the close button, so there is no thin
+   strip to aim at. */
+.rtty-panel-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 6px 4px 8px;
+  border-bottom: 1px solid var(--line);
+  cursor: move;
+  font: 700 11px/1 var(--font-mono); letter-spacing: 0.08em;
+  color: var(--muted);
+  flex: none;
+}
+.rtty-panel-title { color: var(--text); }
+
+/* Zoom pills. Same look as the full page's own .rtty-zoom-pill, scaled to a
+   320 px title bar -- one thing meaning one thing on both screens. They sit
+   inside the drag handle, so mountDrag() ignores pointerdown on a button and
+   the palette's mousedown rule cancels theirs: a zoom press moves neither the
+   palette nor the caret. */
+.rtty-panel-zoom { display: inline-flex; gap: 3px; margin-left: 4px; }
+.rtty-panel-zoom button {
+  border: 1px solid var(--line); border-radius: 999px; padding: 1px 5px;
+  background: var(--panel2); color: var(--muted);
+  font: 700 9px/1.5 var(--font-mono); letter-spacing: .02em; cursor: pointer;
+}
+.rtty-panel-zoom button:hover { border-color: var(--muted); color: var(--text); }
+.rtty-panel-zoom button.active {
+  border-color: var(--cyan); background: #123430; color: var(--cyan);
+}
+/* The only status this palette shows: without it a silent waterfall is
+   ambiguous -- no signal, or no audio at all? Allowed to shrink and ellipsize:
+   with the title, three zoom pills and the close button also in a 320 px bar,
+   a status longer than expected must lose characters rather than push the
+   close button off the edge of the palette. */
+.rtty-panel-state {
+  margin-left: auto; font-weight: 400; color: var(--muted);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rtty-panel-close {
+  background: none; border: none; color: var(--muted);
+  font: 13px/1 var(--font-mono); padding: 1px 3px; cursor: pointer;
+}
+.rtty-panel-close:hover { color: #ff5c5c; }
+
+/* ---- the scope: live trace over waterfall, one overlay across both ----
+   Fixed height, so every pixel the operator drags onto the palette goes to
+   the RX log below instead. */
+.rtty-panel-scope { position: relative; flex: none; }
+.rtty-panel-live {
+  position: relative; height: 81px; margin-bottom: 2px;
+  background: var(--panel2); border-bottom: 1px solid var(--line);
+}
+.rtty-panel-live canvas { display: block; width: 100%; height: 100%; cursor: crosshair; }
+.rtty-panel-waterfall {
+  position: relative; height: 64px; min-height: 64px; overflow: hidden; background: #01030d;
+}
+.rtty-panel-waterfall canvas { display: block; width: 100%; height: 100%; cursor: crosshair; }
+/* pointer-events:none so it never blocks the click-to-tune listener under it. */
+.rtty-panel-overlay { display: block; position: absolute; inset: 0; pointer-events: none; }
+/* Same red as the full page's own scope veil, local to this box. The picture
+   freezes during this station's TX (onSamples skips ingest while ptt is true);
+   the veil says the frozen picture is stale, not live. Deliberately NOT the
+   page-wide body.radio-transmitting frame data.css uses -- that would repaint
+   the whole contest log. */
+.rtty-panel-tx-on .rtty-panel-scope::after {
+  content: ""; position: absolute; inset: 0;
+  background: rgba(255, 24, 56, .125); pointer-events: none;
+}
+.rtty-panel-tx-on { border-color: #ff1838; }
+
+/* ---- the RX log: the flex child, so dragging the palette taller shows more
+   decoded text and nothing else ---- */
+.rtty-panel-rx {
+  flex: 1; min-height: 0; overflow-y: auto; padding: 6px 8px;
+  background: var(--panel2);
+  font: 12px/1.5 var(--font-mono);
+  white-space: pre-wrap; word-break: break-word; color: var(--text);
+  /* The one place in this palette where selecting text has to work: reading a
+     decoded exchange out with the mouse is worth keeping, which is also why
+     log-rtty-panel.js does NOT cancel mousedown here the way it does on the
+     buttons -- it captures the target log field on pointerdown instead. */
+  user-select: text;
+}
+.rtty-panel-rx:empty::before { content: "Waiting for signal…"; color: var(--muted); }
+.rtty-panel-rx .rtty-tok { cursor: pointer; border-radius: 3px; padding: 0 1px; }
+.rtty-panel-rx .rtty-tok:hover {
+  background: #1f3a34; color: var(--cyan); text-decoration: underline;
+}
+/* Set as a custom property rather than `color` directly, so the hover rule
+   below wins by ordinary specificity instead of needing !important against an
+   inline color -- inline styles beat any selector, custom properties don't. */
+.rtty-panel-rx .rtty-rx-char { color: var(--rtty-rx-char-color, inherit); }
+.rtty-panel-rx .rtty-tok:hover .rtty-rx-char { color: var(--cyan); }
+/* This station's own sent text, echoed like a monitor. Deliberately not a
+   .rtty-tok: the operator's own callsign in "CQ CQ DE OK1HRA" must never be
+   mistaken for a station to log. */
+.rtty-panel-rx .rtty-tx-char { color: var(--muted); }
+.rtty-panel-rx .rtty-tx-char.lit { color: var(--red); }
+.rtty-panel-rx .rtty-tx-echo-failed { text-decoration: line-through; opacity: .65; }
+
+/* ---- TX strip: transient, gone the moment the message is out ---- */
+.rtty-panel-tx {
+  flex: none; display: flex; align-items: center; gap: 8px;
+  padding: 4px 8px; border-top: 1px solid var(--line);
+  font: 700 11px/1 var(--font-mono); letter-spacing: .04em; color: var(--red);
+}
+.rtty-panel-tx[hidden] { display: none; }
+.rtty-panel-tx button {
+  margin-left: auto; border: 1px solid var(--red); border-radius: 3px;
+  background: transparent; color: var(--red);
+  font: inherit; padding: 2px 7px; cursor: pointer;
+}
+.rtty-panel-tx button:hover { background: #3a1218; }
+
+/* ---- "held elsewhere": the same lock JS8Call-ICOM/WSPR/Mercury show, in the
+   space this palette has for it. Covers the RX log rather than replacing the
+   scope, so the operator can still see which radio they are arguing over. ---- */
+.rtty-panel-busy {
+  /* Below the scope (147 px) and the title bar, so the operator can still
+     see which radio they are arguing over. */
+  position: absolute; left: 0; right: 0; bottom: 0; top: 172px;
+  padding: 10px 12px; background: #21170d; border-top: 1px solid #8a572b;
+  font: 11px/1.5 var(--font-mono); color: #d9c6ad; overflow-y: auto;
+}
+.rtty-panel-busy[hidden] { display: none; }
+.rtty-panel-busy b { display: block; margin-bottom: 5px; color: #fff; font-size: 12px; }
+.rtty-panel-busy p { margin: 5px 0; }
+.rtty-panel-busy .session-busy-where,
+.rtty-panel-busy #rttyPanelBusyWhere { color: #f1e3d2; font-weight: 800; }
+.rtty-panel-busy button {
+  margin-top: 6px; padding: 5px 9px;
+  border: 1px solid #e0a020; border-radius: 4px;
+  background: #352311; color: #ffd49a;
+  font: 700 11px/1 var(--font-mono); cursor: pointer;
+}
+.rtty-panel-busy button:hover { background: #4a3016; color: #fff; }

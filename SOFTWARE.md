@@ -30,14 +30,15 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
  · [3.3 RUN and S&P](#33-run-and-sp)
  · [3.4 Working a station](#34-working-a-station)
  · [3.5 CW and RTTY macros](#35-cw-and-rtty-macros)
- · [3.6 The status bar](#36-the-status-bar)
- · [3.7 Duplicate and partial-call search](#37-duplicate-and-partial-call-search)
- · [3.8 Blocked DXCC](#38-blocked-dxcc)
- · [3.9 The journal and editing a QSO](#39-the-journal-and-editing-a-qso)
- · [3.10 Band map](#310-band-map)
- · [3.11 Radio selection](#311-radio-selection)
- · [3.12 Export and backup](#312-export-and-backup)
- · [3.13 Keyboard shortcuts](#313-keyboard-shortcuts)
+ · [3.6 The RTTY palette](#36-the-rtty-palette)
+ · [3.7 The status bar](#37-the-status-bar)
+ · [3.8 Duplicate and partial-call search](#38-duplicate-and-partial-call-search)
+ · [3.9 Blocked DXCC](#39-blocked-dxcc)
+ · [3.10 The journal and editing a QSO](#310-the-journal-and-editing-a-qso)
+ · [3.11 Band map](#311-band-map)
+ · [3.12 Radio selection](#312-radio-selection)
+ · [3.13 Export and backup](#313-export-and-backup)
+ · [3.14 Keyboard shortcuts](#314-keyboard-shortcuts)
 
 **[4. DXC — DX cluster](#4-dxc--dx-cluster)**
  · [4.1 Connecting](#41-connecting)
@@ -632,11 +633,52 @@ report straight from its field.
 CW is handed to the radio as a CI-V message and the radio generates the Morse itself, in `CW`
 and in `CW-R`. RTTY is keyed by the interface on its FSK and PTT outputs, in `RTTY` and
 `RTTY-R`. **Those four modes are the only ones anything can be keyed in.** In a data mode
-(`USB-D`, `LSB-D`), in `WFM`, or in a mode the radio does not name, the page says so and sends
-nothing — the firmware has no keying path there and would drop the text. **`Esc` aborts a CW
-or RTTY transmission immediately** — as long as no dialog is open.
+(`USB-D`, `LSB-D`) the interface has no keying output of its own, so a macro goes out as
+audio instead — see [3.6](#36-the-rtty-palette). In `WFM`, or in a mode the radio does not
+name, the page says so and sends nothing: there is no path there and the text would only be
+dropped. **`Esc` aborts a transmission immediately** — CW, RTTY and an audio send alike — as
+long as no dialog is open.
 
-### 3.6 The status bar
+### 3.6 The RTTY palette
+
+In `RTTY`, `RTTY-R`, `USB-D` and `LSB-D` a **RTTY** button appears in the bottom bar, next to
+the TRX buttons. It opens a small window that floats over the log: a waterfall with the live
+spectrum above it, and the decoded text below. Drag its title bar to move it, drag its bottom
+edge to make it taller — the extra height goes to the decoded text, the waterfall stays as it
+is. Where you put it and how tall you made it are remembered.
+
+Decoded characters are shaded by how strongly each one came through: dim grey when the tone
+pair was barely above the noise, white for a solid signal, and **sandy yellow for an
+exceptionally strong one**. It is a reading aid, not a measurement — the number behind it is a
+mark-versus-space ratio, not a calibrated signal-to-noise figure.
+
+**Click a word in the decoded text and it lands in the field you were typing in** — Call or
+Exch, whichever had the cursor — with the cursor still there, so your next `Enter` sends
+whatever macro is next in the QSO. Dragging across the text selects it for copying instead,
+and changes nothing in the log.
+
+Click the waterfall to tune. In `RTTY`/`RTTY-R` that moves the radio's dial, because real FSK
+has no audio stage to move; in `USB-D`/`LSB-D` it moves the audio tone instead. The
+**100% / 200% / 400%** buttons in the title bar zoom the waterfall in around the tone as it
+stands when you press them, for picking a station out of a crowded band.
+
+In `USB-D`/`LSB-D` the palette is also what transmits: your macro goes out as audio through
+the radio's network link, echoed into the decoded text as it goes, with a progress strip and
+an **ABORT** button while it runs (`Esc` does the same). In `RTTY`/`RTTY-R` the interface keys
+its own FSK output as before, and the palette just mirrors what was sent.
+
+> **Opening the palette takes the radio's audio.** The interface has one audio link, so
+> JS8Call-ICOM, WSPR-Beacon, Mercury and RTTY-ICOM cannot run at the same time. If one of them
+> holds it, the palette says so and offers **TAKE THE SESSION OVER HERE**; it never takes it
+> on its own, not even when it reopens itself after a page reload. Closing the palette hands
+> the audio back.
+
+Every RTTY setting — tone, shift, polarity, squelch, AFC, NORMAL/REVERSE and the
+transmit-gain calibration — lives on the full RTTY-ICOM page under the **DATA** tab. The
+palette follows whatever you set there, live. The button is hidden unless ICOM-LAN is
+configured, since without it there is no audio to listen to.
+
+### 3.7 The status bar
 
 The strip between the journal and the input row, reading left to right:
 
@@ -651,7 +693,7 @@ The strip between the journal and the input row, reading left to right:
 When the exchange contains a locator, three more fields appear showing that locator, its
 azimuth and its distance. A small azimuth indicator sits beside the Call field.
 
-### 3.7 Duplicate and partial-call search
+### 3.8 Duplicate and partial-call search
 
 Pressing **Space** in the Call field searches the log. It does two jobs at once: a duplicate
 check on the full call, and a partial-match search on a fragment — type `DL1` and space to
@@ -662,14 +704,14 @@ widens the search from the active log to *all* logs in the browser.
 
 Clicking the **Call** column header opens a search box that filters the journal itself.
 
-### 3.8 Blocked DXCC
+### 3.9 Blocked DXCC
 
 Countries listed in SETUP → *Blocked DXCC list* are refused at the point of logging. Enter a
 call from a blocked country and the form clears with `⛔ BLOCKED: <country>` for five
 seconds — and in RUN mode the CQ macro goes out again immediately, so the run does not
 stall. The same list hides those stations across the JS8 page.
 
-### 3.9 The journal and editing a QSO
+### 3.10 The journal and editing a QSO
 
 The journal shows `Nr · Date · Time · Call · Freq · Mode · Snt · Rcv · Exch · TRX · DXCC`.
 It scrolls automatically as QSOs are added; `No QSO logged yet.` is shown while it is empty.
@@ -680,7 +722,7 @@ It scrolls automatically as QSOs are added; `No QSO logged yet.` is shown while 
 If the database write fails, the form is *not* cleared and the serial number does *not*
 advance — the QSO is never silently lost.
 
-### 3.10 Band map
+### 3.11 Band map
 
 ![Band map](img/qrplog.png)
 
@@ -690,19 +732,19 @@ around your current frequency as a small spectrum. Two controls sit on it:
 - **50 kHz / 100 kHz / 200 kHz** — the span, behind the `^` button.
 - **▼** — fold the band map away.
 
-### 3.11 Radio selection
+### 3.12 Radio selection
 
 **TRX1 / TRX2 / TRX3** choose which configured radio the log talks to — frequency, mode,
 macros and RIT reset all follow the selection. `Alt+1`, `Alt+2`, `Alt+3` do the same. The
 labels are whatever you named the slots in SETUP.
 
-### 3.12 Export and backup
+### 3.13 Export and backup
 
 **BACKUP** downloads the whole QSO database as a JSON file. Per-log **CSV** and **ADIF**
 exports are in the log manager. Everything else — restore, import, device-to-device sync —
 is on the [LOGSYNC](#9-logsync) page.
 
-### 3.13 Keyboard shortcuts
+### 3.14 Keyboard shortcuts
 
 ![Keyboard shortcuts](img/qrplog-keyboard-shortcuts.png)
 
@@ -715,7 +757,7 @@ The **?** button opens this list.
 | `Alt+W` | clear the form |
 | `Alt+Enter` | log the QSO without sending a macro |
 | `Esc` (dialog open) | close the dialog |
-| `Esc` (no dialog) | **abort CW / RTTY transmission immediately** |
+| `Esc` (no dialog) | **abort the transmission immediately** — CW, RTTY or an audio send from the RTTY palette |
 | `Space` in Call | duplicate check and partial-call search |
 | `Enter` in Snt / Rcv | as if pressed in Call, or in EXCH once a callsign is entered — **it transmits**; `Tab` leaves without keying |
 

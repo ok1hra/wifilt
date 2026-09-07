@@ -193,11 +193,14 @@
     // anyone being asked.
     identity() {
       const radio = this.page.radio();
-      const model = this.page.model();
-      const band = TxGainCal.bandOf(radio.frequency);
-      if (!model || !band || radio.rfPowerSeen !== true) return null;
-      const percent = WsprCore.civPercent(radio.rfPower);
-      return {key: TxGainCal.entryKey(model, band, percent), model, band, percent};
+      // Delegated to tx-gain-cal.js 2026-09-07 so callers that only want to
+      // READ the table (QRPlog's RTTY palette) need not mount this UI.
+      return TxGainCal.identityFor({
+        model: this.page.model(),
+        frequencyHz: radio.frequency,
+        percent: WsprCore.civPercent(radio.rfPower),
+        rfPowerSeen: radio.rfPowerSeen,
+      });
     }
 
     blockingReason() {
@@ -220,29 +223,17 @@
       return this.page.modLevel ? Number(this.page.modLevel()) || 0 : 0;
     }
 
-    // What the table says for the radio as it stands right now.
+    // What the table says for the radio as it stands right now. The rules --
+    // in particular why a knee measured at another MOD level counts as
+    // uncalibrated rather than as a weaker measurement -- live in
+    // TxGainCal.resolveGain(), shared with every non-UI caller.
     resolved() {
-      const manual = this.page.manualGain();
-      const identity = this.identity();
-      if (!identity) return {gain: manual, calibrated: false, key: "",
-                             why: "the radio has not reported its model, band or power yet"};
-      const entry = this.store.entry(identity.key);
-      const status = TxGainCal.entryStatus(entry, this.modLevel());
-      if (status === "missing")
-        return {gain: manual, calibrated: false, key: identity.key,
-                band: identity.band, percent: identity.percent,
-                why: `not calibrated for ${identity.band} @ ${identity.percent} %`};
-      // A knee measured at a different MOD level is not a weaker measurement, it is
-      // the wrong number -- and with no margin under the knee, wrong upwards means
-      // distortion. Shown, never transmitted from.
-      if (status === "stale")
-        return {gain: manual, calibrated: false, stale: true, key: identity.key, entry,
-                band: identity.band, percent: identity.percent,
-                why: `measured at MOD level ${entry.modLevel}, the radio is on ` +
-                     `${this.modLevel()} — recalibrate ${identity.band} @ ${identity.percent} %`};
-      return {gain: Number(entry.gain), calibrated: true, key: identity.key, entry,
-              band: identity.band, percent: identity.percent,
-              modUnknown: status === "unknown-mod", why: ""};
+      return TxGainCal.resolveGain({
+        store: this.store,
+        identity: this.identity(),
+        modLevel: this.modLevel(),
+        manualGain: this.page.manualGain(),
+      });
     }
 
     // ---- the run -----------------------------------------------------------

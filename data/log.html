@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>QRPLog — WIFILT</title>
-  <link rel="stylesheet" href="/log.css?v=25e8d0aa">
+  <link rel="stylesheet" href="/log.css?v=92d19434">
 </head>
 <body>
   <header class="topbar">
@@ -236,18 +236,29 @@
       </div>
       <div class="log-btn-spacer" style="max-width:24px"></div>
       <div class="log-btn-group">
-        <!-- Grilled 2026-08-29: opens RTTY-ICOM (/rtty.html) as a small named
-             pop-up, same window.open('...', 'RTTY-ICOM', ...) convention the
-             DXC tab already uses -- a repeat click refocuses the same window
-             instead of spawning a duplicate. Shown only for the mode groups
-             LogMacros.modeGroup() already treats as RTTY-ICOM's own keying
-             territory (RTTY/RTTY-R = 'RTTY', USB-D/LSB-D = 'DATA'; see
-             renderStatusBar()'s own visibility toggle in log.js) -- exactly
-             the modes docs/rtty-implementace.md §8.3 documents as needing a
-             live RTTY-ICOM tab open for the audio-stream TX hand-off to work
-             at all ("open /rtty.html in another tab first"). -->
+        <!-- Opened /rtty.html as a pop-up until 2026-09-07; now toggles the
+             in-page RTTY palette (log-rtty-panel.js, which owns the click
+             handler). The pop-up handed the log a clicked word and the caret
+             but not the KEYBOARD, so the operator's next Enter went to the
+             wrong window -- see that file's header for the whole reasoning.
+
+             Shown only for the mode groups LogMacros.modeGroup() already
+             treats as RTTY-ICOM's own keying territory (RTTY/RTTY-R = 'RTTY',
+             USB-D/LSB-D = 'DATA'; see renderStatusBar()'s own visibility
+             toggle in log.js), and only once LanGate.read() confirms an
+             ICOM-LAN link is configured at all -- without one there is no
+             audio for the palette to listen to. The id is unchanged: same
+             button, same place, finally doing what it always looked like it
+             did.
+
+             Opening it TAKES the radio's audio from whatever holds it (there
+             is one AudioWsClient in the whole interface), so the palette
+             carries the same "held elsewhere" card and TAKE OVER button the
+             DATA pages show. The full RTTY-ICOM page stays one click away
+             under the DATA tab, and is still where every setting and the gain
+             calibration live. -->
         <button id="btnRttyPopup" class="btn-trx" type="button" hidden
-                title="Open RTTY-ICOM in a small window">RTTY</button>
+                title="RTTY waterfall and decoded text, over the log">RTTY</button>
         <button class="btn-trx btn-trx-active" data-trx="1" id="btnTrx1" type="button">TRX1</button>
         <button class="btn-trx" data-trx="2" id="btnTrx2" type="button">TRX2</button>
         <button class="btn-trx" data-trx="3" id="btnTrx3" type="button">TRX3</button>
@@ -300,7 +311,34 @@
   <script src="/dxcc.js?v=c56ee081"></script>
   <script src="/log-db.js?v=6055416f"></script>
   <script src="/station-identity.js?v=a1a20249"></script>
-  <script src="/log.js?v=f8bd9eea"></script>
+  <script src="/log.js?v=3901adfb"></script>
   <script src="/pa-panel.js?v=3a51dc52"></script>
+
+  <!-- RTTY palette (2026-09-07). Everything above /log.js is what the log
+       itself needs; everything below is the palette's, loaded after log.js
+       because it reads window.LogRadio -- the same reason pa-panel.js sits
+       there. All of these files are already shipped for the DATA pages, so
+       this costs script tags, not flash.
+
+       lan-gate.js is loaded for its read() alone: the palette must never call
+       gate(), whose CSS blanks every child of <body> while it checks.
+       js8-tx.js is here only for packetizeTxPcm48k(), and wspr-core.js only
+       for civPercent() -- the same two single-function borrows rtty.html
+       documents in its own script list. -->
+  <script src="/rtty-codec.js?v=5e2d128c"></script>
+  <script src="/rtty-afc.js?v=b1330905"></script>
+  <script src="/rtty-settings.js?v=5e1870b1"></script>
+  <script src="/spectrum.js?v=7fafbbb5"></script>
+  <script src="/js8-aud1.js?v=b5d81c6f"></script>
+  <script src="/js8-tx.js?v=26bed715"></script>
+  <script src="/icom-models.js?v=ddc6caa5"></script>
+  <script src="/wspr-core.js?v=450a9679"></script>
+  <script src="/tx-gain-cal.js?v=32892cb6"></script>
+  <script src="/tx-gain-mod-level.js?v=42af6a2a"></script>
+  <script src="/lan-gate.js?v=e297f7ab"></script>
+  <script src="/rtty-scope.js?v=c2f2337f"></script>
+  <script src="/rtty-rxlog.js?v=0fe620f6"></script>
+  <script src="/rtty-afsk-tx.js?v=121d6342"></script>
+  <script src="/log-rtty-panel.js?v=48cfdc47"></script>
 </body>
 </html>

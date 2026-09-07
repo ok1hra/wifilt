@@ -10,11 +10,14 @@
      docs/rtty-implementace.md -- grilled 2026-08-27. -->
 <link rel="stylesheet" href="/data.css?v=14329f65">
 <link rel="stylesheet" href="/rtty.css?v=f5c079bb">
-<!-- Grilled 2026-08-29: QRPLOG's RTTY button opens this same page as
-     /rtty.html?popup=1 in a small named pop-up. Synchronous and inline so
-     the class lands on <html> before .site-topbar is even parsed, below --
-     no flash of the full menu before rtty.css's own html.popup-mode rule
-     hides it (a deferred/external script would run too late for that). -->
+<!-- ?popup=1 strips this page down to the modem itself, hiding both nav
+     bars. QRPLOG's RTTY button opened it that way until 2026-09-07, when it
+     became an in-page palette instead (data/log-rtty-panel.js); the switch is
+     kept because the URL still makes a usable chromeless RTTY window on a
+     second screen, and it costs one line. Synchronous and inline so the class
+     lands on <html> before .site-topbar is even parsed, below -- no flash of
+     the full menu before rtty.css's own html.popup-mode rule hides it (a
+     deferred or external script would run too late for that). -->
 <script>if (/(?:^|[?&])popup=1(?:&|$)/.test(location.search)) document.documentElement.classList.add("popup-mode");</script>
 </head>
 <!-- lan-gate.js clears the checking class once it knows whether ICOM-LAN is set
@@ -316,10 +319,10 @@
   <a href="https://github.com/ok1hra/wifilt" target="_blank" rel="noopener">GitHub</a><span aria-hidden="true">|</span><a href="/THIRD-PARTY-NOTICES.txt" target="_blank" rel="noopener">Licenses</a>
 </footer>
 
-<script src="/lan-gate.js?v=2f8a12d3"></script>
+<script src="/lan-gate.js?v=e297f7ab"></script>
 <script src="/fw-version.js?v=b29c5317"></script>
 <script src="/rtty-codec.js?v=5e2d128c"></script>
-<script src="/rtty-afc.js?v=6cfcce8e"></script>
+<script src="/rtty-afc.js?v=b1330905"></script>
 <script src="/rtty-presets.js?v=5ec21ec3"></script>
 <script src="/rtty-settings.js?v=5e1870b1"></script>
 <script src="/spectrum.js?v=7fafbbb5"></script>
@@ -348,12 +351,19 @@
      (data.html) -- code-review 2026-08-28, see the module's own header for
      why WSPR/Mercury are not callers. -->
 <script src="/rf-power-auto.js?v=86d35636"></script>
-<script src="/tx-gain-cal.js?v=993b967b"></script>
-<script src="/tx-gain-cal-ui.js?v=ba7e0222"></script>
+<script src="/tx-gain-cal.js?v=32892cb6"></script>
+<script src="/tx-gain-cal-ui.js?v=8659b0f4"></script>
 <script src="/tx-gain-mod-level.js?v=42af6a2a"></script>
 <script src="/tx-gain-plan.js?v=d0eb2106"></script>
 <script src="/tx-gain-plan-store.js?v=6d5a572b"></script>
 <script src="/tx-gain-plan-ui.js?v=89d28d8c"></script>
-<script src="/rtty.js?v=4649ac4a"></script>
+<!-- Extracted from rtty.js 2026-09-07 so QRPlog's own RTTY palette
+     (log-rtty-panel.js) draws the same scope, shows the same RX log and
+     transmits through the same AFSK path instead of carrying second,
+     drifting copies of all three. Load order: rtty.js consumes them. -->
+<script src="/rtty-scope.js?v=c2f2337f"></script>
+<script src="/rtty-rxlog.js?v=0fe620f6"></script>
+<script src="/rtty-afsk-tx.js?v=121d6342"></script>
+<script src="/rtty.js?v=e6c53ab5"></script>
 </body>
 </html>

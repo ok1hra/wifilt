@@ -1260,13 +1260,25 @@ function startClock() {
 // those widgets actually read, rather than the whole page state, so nothing
 // outside this file starts depending on the shape of `app`.
 //
-// Both are questions about the radio, not about the log: what band are we on,
-// and are we keying right now. The PA palette needs the first to notice that
-// the amplifier is standing on a different band than the radio, and the second
-// to grey out TUNE while the radio is transmitting.
+// The first four are questions about the radio and the log's own state, not
+// commands: what band are we on, are we keying right now, which mode and which
+// TRX is selected. The PA palette needs the first to notice that the amplifier
+// is standing on a different band than the radio, and the second to grey out
+// TUNE while the radio is transmitting.
+//
+// The last two are the exception, added 2026-09-07 for the RTTY palette, and
+// they ARE commands -- so they are named for exactly what they do and nothing
+// more. focusedField() has to be separate from insertWord() because an in-page
+// palette's own click blurs Call/Exch before any click handler runs: the
+// answer must be taken on pointerdown, while it is still true. Same race
+// log.js already documents one step later, around selectTrx().
 window.LogRadio = {
   frequency: () => (app.connected ? app.frequency : 0),
   tx:        () => !!app.tx,
+  mode:      () => app.mode,
+  activeTrx: () => app.activeTrx,
+  focusedField: () => focusedLogField(),
+  insertWord: (word, trx, field) => insertWordIntoLog(word, trx, field),
 };
 
 // ── /state polling ────────────────────────────────────────────────────────────
@@ -1366,8 +1378,18 @@ function renderStatusBar() {
   // §8.3) applies to -- 'RTTY' (RTTY/RTTY-R, the FSK-backend keying path) and
   // 'DATA' (USB-D/LSB-D, the audio-stream path) -- reusing LogMacros.modeGroup()
   // rather than a second, drifting copy of that mode list.
+  //
+  // Second condition since 2026-09-07: the palette this now opens needs the
+  // ICOM-LAN audio link to be configured at all, which LanGate.read() answers
+  // from the saved setup. Only a definite NO hides it -- lanReady() is null
+  // until that answer arrives, and hiding the button for those few hundred
+  // milliseconds would make it flicker in on every single load. A click
+  // landing inside that window opens a palette the panel then closes again
+  // once it learns there is no link.
   const rttyPopupMg = app.connected ? LogMacros.modeGroup(app.mode) : 'NONE';
-  btnRttyPopup.hidden = rttyPopupMg !== 'RTTY' && rttyPopupMg !== 'DATA';
+  const rttyModeOk = rttyPopupMg === 'RTTY' || rttyPopupMg === 'DATA';
+  const rttyLanOk = !window.RttyPanel || window.RttyPanel.lanReady() !== false;
+  btnRttyPopup.hidden = !(rttyModeOk && rttyLanOk);
   // Preserve DXCC while call field has content; clear only when empty
   if (inpCall.value.trim()) {
     updateDxccFromCall();
@@ -1608,18 +1630,13 @@ function closeHelpModal() {
 
 document.getElementById('btnHelp').addEventListener('click', openHelpModal);
 
-// ── RTTY-ICOM pop-up (grilled 2026-08-29) ──────────────────────────────────
-// Same window.open(href, name, features) convention as the DXC tab above --
-// a fixed window name means a repeat click refocuses the one pop-up instead
-// of spawning a duplicate (and a duplicate RTTY-ICOM tab would just hit its
-// own existing session-takeover gate, not corrupt anything). Sized as small
-// as the operator asked for; the page itself reflows, it has no hard
-// minimum -- see the RTTY-ICOM page's own render() for what stays visible
-// (everything below .radio-bar) once ?popup=1 hides the DATA menu/submenu.
-btnRttyPopup.addEventListener('click', () => {
-  window.open('/rtty.html?popup=1', 'RTTY-ICOM',
-    'width=425,height=530,left=0,top=0,menubar=no,location=no,status=no');
-});
+// ── RTTY palette ───────────────────────────────────────────────────────────
+// This button opened /rtty.html as a small pop-up until 2026-09-07. It now
+// opens an in-page palette instead (log-rtty-panel.js, which owns the click
+// handler) -- because a word clicked in a separate WINDOW hands the log the
+// text and the caret but not the keyboard, so the operator's next Enter went
+// to the pop-up. The full page is still one click away under the DATA tab,
+// and is where every RTTY setting and the gain calibration still live.
 document.getElementById('helpModalClose').addEventListener('click', closeHelpModal);
 document.getElementById('helpModal').addEventListener('click', e => {
   if (e.target === e.currentTarget) closeHelpModal();
@@ -2016,7 +2033,17 @@ function sendRawText(text) {
   // through audio too). OI3 TRX (external keyer) ignore this entirely; AUD1
   // has no relationship to that keyer.
   if (mg === 'DATA' && app.aud1Role === 'rtty' && !isOi3) {
-    sendViaRttyIcomPage(text).catch(error => showHint(String(error.message || error)));
+    // The in-page palette first, when it is the one holding the session.
+    // BroadcastChannel does NOT deliver to the posting context, so with the
+    // palette open the hand-off below would reach nobody and simply time out
+    // after its full send timeout. Falls through to the channel whenever the
+    // holder is a separate RTTY-ICOM tab instead -- that setup still works
+    // exactly as it did.
+    const panel = window.RttyPanel;
+    const send = panel && panel.holdsSession()
+      ? panel.send(text)
+      : sendViaRttyIcomPage(text);
+    send.catch(error => showHint(String(error.message || error)));
     return;
   }
   if (mg === 'NONE' || mg === 'DATA') { showHint(app.mode + ' cannot be keyed — send manually'); return; }
@@ -2654,6 +2681,11 @@ function closeQsoEdit() {
 function abortTransmission() {
   const trxIdx = app.activeTrx - 1;
   const isOi3  = app.trxOi3[trxIdx] && trxIdx > 0;
+  // An AFSK send is paced by the browser, not bit-banged by the firmware, so
+  // /cmd abortCw has never been able to stop one -- until the palette existed
+  // there was no way to stop it from here at all, and Esc silently did
+  // nothing in USB-D/LSB-D.
+  if (window.RttyPanel && window.RttyPanel.txBusy()) { window.RttyPanel.abort(); return; }
   if (isOi3) {
     fetch('/oi3/abort-cw', {
       method: 'POST',
@@ -3194,37 +3226,57 @@ function focusedLogField() {
   return formStateOf() === 'CALL_ENTERED' ? inpExch : inpCall;
 }
 
+// ── A word arriving from elsewhere ───────────────────────────────────────────
+//
+// Two callers, one behaviour. dxc.html posts a spot over the BroadcastChannel
+// below; the in-page RTTY palette calls this directly through window.LogRadio,
+// because BroadcastChannel deliberately does NOT deliver to the posting
+// context and the palette lives in this very document.
+//
+// `field` is the target captured BEFORE focus could move -- the palette takes
+// it on pointerdown, since its own click blurs Call/Exch. The channel path has
+// no such problem (the click happened in another window entirely, so
+// document.activeElement here is untouched) and passes nothing, letting
+// focusedLogField() answer now.
+function insertWordIntoLog(word, trx, field) {
+  // Captured BEFORE selectTrx(): clicking a TRX button focuses Call as one
+  // of its own side effects (trxButtons' own click handler, below), which
+  // would otherwise always beat focusedLogField() to the punch and make
+  // every RTTY word land in Call regardless of where the operator actually
+  // was -- found by an on-air-style test catching the exact race, not by
+  // inspection.
+  const target = field || focusedLogField();
+  selectTrx(trx);
+  if (word) {
+    // A DXC spot is always a whole callsign, always Call. A word clicked in
+    // an RTTY RX log isn't necessarily a callsign at all -- it's whatever
+    // token was clicked, which could just as well be a piece of the exchange
+    // -- so it goes wherever the operator was actually working right now.
+    target.value = word;
+    target.dispatchEvent(new Event('input'));
+    target.focus();
+    // The caret belongs at the end of what just landed: the operator's next
+    // keystroke is either Enter or a correction typed onto the end of it.
+    try { target.setSelectionRange(target.value.length, target.value.length); } catch (_) {}
+  }
+  checkDupe(inpCall.value.trim());
+}
+
 // ── DXC tune broadcast ────────────────────────────────────────────────────────
 try {
   const dxcActionCh = new BroadcastChannel('wifilt-dxc-action');
   dxcActionCh.addEventListener('message', e => {
     const msg = e.data;
     if (!msg || msg.type !== 'dxc-tune') return;
-    // Captured BEFORE selectTrx(): clicking a TRX button focuses Call as one
-    // of its own side effects (trxButtons' own click handler, below), which
-    // would otherwise always beat focusedLogField() to the punch and make
-    // every RTTY word land in Call regardless of where the operator actually
-    // was -- found by an on-air-style test catching the exact race, not by
-    // inspection.
-    const rttyTarget = msg.source === 'rtty' ? focusedLogField() : null;
-    selectTrx(msg.trx);
     // DXC hands over a spot to work -- switching to S&P is the point. A click
-    // in RTTY-ICOM's own RX log (msg.source === 'rtty') is just "insert this
-    // word", not "start a new QSO in a particular mode" -- whatever RUN/S&P
-    // the operator was already in stays as it is.
+    // in an RTTY RX log (msg.source === 'rtty') is just "insert this word",
+    // not "start a new QSO in a particular mode" -- whatever RUN/S&P the
+    // operator was already in stays as it is.
+    // A DXC spot is always a whole callsign and always goes to Call; an RTTY
+    // token goes wherever the operator is actually working right now.
+    const target = msg.source === 'rtty' ? focusedLogField() : inpCall;
     if (msg.source !== 'rtty') setRunMode('SP');
-    if (msg.callsign) {
-      // A DXC spot is always a whole callsign, always Call (unchanged). A
-      // word clicked in RTTY-ICOM's own RX log isn't necessarily a callsign
-      // at all -- it's whatever token was clicked, which could just as well
-      // be a piece of the exchange -- so it goes wherever the operator was
-      // actually working right now, not always Call.
-      const target = rttyTarget || inpCall;
-      target.value = msg.callsign;
-      target.dispatchEvent(new Event('input'));
-      target.focus();
-    }
-    checkDupe(inpCall.value.trim());
+    insertWordIntoLog(msg.callsign, msg.trx, target);
   });
 } catch (_) {}
 

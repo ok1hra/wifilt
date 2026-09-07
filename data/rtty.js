@@ -59,8 +59,8 @@
     "rttyRxLog", "rxSummary", "rttyRxClear",
     "rttyTxText", "rttyTxAbort", "rttyTxState",
     "rttySquelchInput", "rttySquelchLive", "rttySquelchNewlineEnabled", "rttyToneInput", "settingsSummary",
-    // AFC (grilled 2026-08-28, 3rd session): see rtty.js's own afcTick()/
-    // syncDecoderTone() for what these drive.
+    // AFC (grilled 2026-08-28, 3rd session): see the RttyAfc.createTracker()
+    // wiring below for what these drive.
     "rttyAfcEnabled", "rttyAfcRateInput", "rttyAfcMaxDeviationInput",
     // Item 13 (grilled 2026-08-27, second session): RF power target, moved
     // into SETTINGS -- see that section's own comment for why it lives here.
@@ -132,29 +132,17 @@
   // pill (that file's own comment) -- so markToneHz() now reads it, and every
   // caller (the Encoder construction below, drawScopeOverlay()'s green/red
   // lines, this dial math) follows without needing its own copy of the flag.
-  function markToneHz() {
-    return settings.txPolarity === "reverse"
-      ? settings.toneHz - RttyCodec.SHIFT_HZ / 2
-      : settings.toneHz + RttyCodec.SHIFT_HZ / 2;
-  }
-
-  function dialToMarkHz(dialHz, mode) {
-    if (mode.startsWith("LSB")) return dialHz - markToneHz();
-    if (mode.startsWith("USB")) return dialHz + markToneHz();
-    return dialHz; // RTTY/RTTY-R (dial == mark already) and anything else
-  }
-  function markToDialHz(markTargetHz, mode) {
-    if (mode.startsWith("LSB")) return markTargetHz + markToneHz();
-    if (mode.startsWith("USB")) return markTargetHz - markToneHz();
-    return markTargetHz;
-  }
-  // The pair drawScopeOverlay()'s solid lines sit on and afcTick() searches
-  // around -- spaceHz is just markHz's mirror image around settings.toneHz,
-  // whichever physical tone markToneHz() currently calls mark.
-  function expectedMarkSpaceHz() {
-    const markHz = markToneHz();
-    return [markHz, 2 * settings.toneHz - markHz];
-  }
+  // All four live in rtty-scope.js since 2026-09-07, so QRPlog's own RTTY
+  // palette draws its mark/space lines from the same definitions instead of a
+  // second copy. They are pure functions of `settings`; these thin wrappers
+  // keep every call site in this file reading exactly as it did.
+  const markToneHz = () => RttyScope.markToneHz(settings);
+  const dialToMarkHz = (dialHz, mode) => RttyScope.dialToMarkHz(settings, dialHz, mode);
+  const markToDialHz = (markTargetHz, mode) => RttyScope.markToDialHz(settings, markTargetHz, mode);
+  // The pair the solid overlay lines sit on and afcTick() searches around --
+  // spaceHz is just markHz's mirror image around settings.toneHz, whichever
+  // physical tone markToneHz() currently calls mark.
+  const expectedMarkSpaceHz = () => RttyScope.expectedMarkSpaceHz(settings);
 
   // ---- reverse default (native RTTY/RTTY-R only) ---------------------------
   //
@@ -285,8 +273,7 @@
     settings.toneHz = centreHz;
     // Mirrors setToneFromSpaceHz()'s own reset -- an AFC offset accumulated
     // around the OLD centre is nonsense applied to this one.
-    afcOffsetHz = 0; afcTargetHz = 0;
-    syncDecoderTone();
+    afcReset();
     drawScopeOverlay();
     dom.rttyToneInput.value = String(Math.round(centreHz - RttyCodec.SHIFT_HZ / 2));
   }
@@ -295,8 +282,7 @@
     if (toneHzBeforeFskSync === null) return;
     settings.toneHz = toneHzBeforeFskSync;
     toneHzBeforeFskSync = null;
-    afcOffsetHz = 0; afcTargetHz = 0;
-    syncDecoderTone();
+    afcReset();
     drawScopeOverlay();
     dom.rttyToneInput.value = String(Math.round(settings.toneHz - RttyCodec.SHIFT_HZ / 2));
   }
@@ -584,216 +570,54 @@
   }
 
   // ---- waterfall + live spectrum (kap.7) ----------------------------------
-
-  // Item 3, grilled 2026-08-28: liveHopSize/liveAgcEase arm the 2nd,
-  // independent FFT/AGC tap this page's own live-spectrum panel reads
-  // (waterfall.state().liveValues/liveAgcLow/liveAgcHigh below). Pushed
-  // further in a 2nd grill the same day (still felt slow after the first
-  // pass): ~64 ms cadence (512 samples @ 8 kHz, still divides the
-  // waterfall's own 2048-sample hop evenly -- ingest()'s shared-extraction
-  // optimization still applies, just on every 4th live tick instead of every
-  // 2nd) and a steeper AGC ease, so the live-spectrum trace now catches up to
-  // a new signal in well under 0.3 s instead of the ~1-1.5 s the first pass
-  // landed on (and ~5.6 s before either pass). Traded away on purpose: more
-  // visible jitter on a short noise spike, accepted because RTTY tone-
-  // tracking cares about reacting to a real tone fast, not about smoothing
-  // transients. The scrolling waterfall's own row rate/colour ramp
-  // (this.hop/agcLow/agcHigh/lastValues) is untouched by either setting
-  // ("vodopad nechat", grilled).
   //
-  // Pushed once more 2026-08-29 (grilled): drawLiveSpectrum() only ever reads
-  // this tap once per requestAnimationFrame (~16.7 ms @ 60 Hz), so at the old
-  // 64 ms cadence roughly 3 out of every 4 paints redrew the exact same
-  // values -- visible as a small "stepping" motion rather than a continuous
-  // one. 128 samples (=16 ms, still evenly divides the 2048-sample hop, so
-  // the shared-extraction optimization still applies -- just every 16th live
-  // tick instead of every 4th) lines the tap's own cadence up with the
-  // display's, which is genuinely the ceiling: anything faster still cannot
-  // be painted any sooner than the next animation frame, so it would only
-  // burn extra FFTs nobody ever sees.
-  const waterfall = new Spectrum.Waterfall({
-    canvas: dom.waterfallCanvas, container: dom.waterfall,
-    sampleRate: RX_AUDIO_RATE, lowHz: BASE_LOW_HZ, highHz: BASE_HIGH_HZ,
-    liveHopSize: 128, liveAgcEase: .6,
+  // The whole scope -- the Spectrum.Waterfall instance, the live-spectrum
+  // trace, the single overlay spanning BOTH canvases (so the mark/space lines
+  // are one continuous stroke across the seam rather than two per-canvas
+  // draws that happen to line up), zoom, and the click/hover geometry -- lives
+  // in rtty-scope.js since 2026-09-07, shared verbatim with QRPlog's own RTTY
+  // palette (log-rtty-panel.js). That module's own header carries the
+  // reasoning those pieces accumulated; nothing about them changed here.
+  //
+  // What stays on this page is what is genuinely the page's: which settings
+  // the scope reads, what a click actually DOES (retune the radio in real-FSK
+  // modes, move the audio tone otherwise), and the zoom pills' own DOM.
+  const scope = RttyScope.create({
+    scopeEl: dom.rttyScope,
+    liveCanvas: dom.liveSpectrumCanvas,
+    liveContainer: dom.rttyLiveSpectrum,
+    waterfallCanvas: dom.waterfallCanvas,
+    waterfallContainer: dom.waterfall,
+    overlayCanvas: dom.rttyScopeOverlay,
+    sampleRate: RX_AUDIO_RATE,
+    baseLowHz: BASE_LOW_HZ, baseHighHz: BASE_HIGH_HZ,
+    settings: () => settings,
+    afcOffsetHz: () => afcTracker.offsetHz(),
+    radio: () => state.radio,
+    formatFrequency: RttyPresets.formatFrequency,
+    // The AFC slew needs to keep moving every frame, not just when a fresh
+    // FFT frame lands (e.g. still easing back to 0 after squelch closes).
+    onFrame: () => afcTick(),
+    onTune: lowHz => {
+      // Click-to-tune-the-RADIO, real FSK only (grilled 2026-08-30): real FSK
+      // has no audio stage on TX (dial == mark), so retuning the dial is the
+      // ONLY way to bring a station onto this operator's fixed passband.
+      // USB-D/LSB-D keep the original "click sets the audio tone" behaviour.
+      const isRealFsk = state.radio.mode === "RTTY" || state.radio.mode === "RTTY-R";
+      if (isRealFsk) retuneRadioForLowHz(lowHz);
+      else setToneFromSpaceHz(lowHz);
+    },
   });
+  // Kept as the names the rest of this file already reads, so every existing
+  // call site is unchanged.
+  const waterfall = scope.waterfall;
+  const drawScopeOverlay = () => scope.drawOverlay();
 
-  // "Nice" round tick values (d3.ticks()-style): pick a step from {1,2,5}x10^n
-  // closest to span/count, so the waterfall's own rough frequency ruler
-  // (item 9, grilled 2026-08-28) reads as round numbers (…900, 1300, 1700…)
-  // rather than whatever the visible window's exact edges happen to divide
-  // into. "Roughly clear where we are" -- not a precise scale.
-  function niceTicks(lowHz, highHz, count) {
-    const span = highHz - lowHz;
-    if (!(span > 0)) return [];
-    const rawStep = span / count;
-    const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)));
-    const norm = rawStep / magnitude;
-    const niceNorm = norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10;
-    const step = niceNorm * magnitude;
-    const ticks = [];
-    for (let v = Math.ceil(lowHz / step) * step; v <= highHz; v += step) ticks.push(v);
-    return ticks;
-  }
-
-  // Item 8/9, grilled 2026-08-28: the ONE overlay covering both the
-  // live-spectrum panel and the waterfall below it (#rttyScope wraps both;
-  // this canvas sits on top of the whole thing, see rtty.css's own comment).
-  // Replaces the old per-canvas drawToneOverlay(), which used to run twice
-  // (once for waterfallOverlay, once again at the end of drawLiveSpectrum())
-  // and broke into two visibly separate segments at the border between the
-  // two blocks -- drawn once here instead, so the line is continuous by
-  // construction rather than by coincidence of matching coordinates.
-  function drawScopeOverlay() {
-    const canvas = dom.rttyScopeOverlay, ctx = canvas.getContext("2d");
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    const width = canvas.width, bottomY = canvas.height;
-    // The seam between the two wrapped blocks, in this shared canvas's own
-    // pixel space -- "bottom edge of the spectrogram" (item 9) means here,
-    // not the overlay's own bottom (that is the waterfall's bottom edge).
-    const splitY = dom.rttyLiveSpectrum.clientHeight;
-
-    // Grilled 2026-08-28 (2nd session, item 3): markHz/spaceHz now follow
-    // settings.txPolarity (markToneHz()'s own comment) -- green is always
-    // whichever physical tone THIS station's encoder actually sends for a
-    // mark bit, red whichever it sends for space, so the overlay never
-    // disagrees with what goes out over the air. The old 2nd, dashed
-    // "logical space" line existed only because TX used to ignore Reverse
-    // while RX didn't; now that TX has its own explicit polarity instead of
-    // silently disagreeing with these lines, that mismatch -- and the line
-    // that existed only to flag it -- is gone.
-    const [markHz, spaceHz] = expectedMarkSpaceHz();
-
-    // AFC (grilled 2026-08-28, 3rd session): drawn FIRST so the solid
-    // mark/space lines below always sit on top of it, never hidden by it
-    // even at zero offset (the two pairs coincide when the detector hasn't
-    // drifted). Half the line weight, grey, no per-line Hz label -- just the
-    // signed offset centred between the two.
-    if (settings.afcEnabled) {
-      const afcMarkX = waterfall.hzToX(markHz + afcOffsetHz, width);
-      const afcSpaceX = waterfall.hzToX(spaceHz + afcOffsetHz, width);
-      ctx.strokeStyle = "rgba(180,180,180,.8)";
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 3]);
-      for (const x of [afcMarkX, afcSpaceX]) {
-        ctx.beginPath(); ctx.moveTo(Math.round(x) + .5, 0);
-        ctx.lineTo(Math.round(x) + .5, bottomY); ctx.stroke();
-      }
-      ctx.setLineDash([]);
-      const sign = afcOffsetHz > 0 ? "+" : afcOffsetHz < 0 ? "−" : "";
-      ctx.font = "10px ui-monospace, Menlo, Consolas, monospace";
-      ctx.fillStyle = "rgba(200,200,200,.9)";
-      ctx.textAlign = "center";
-      // Grilled 2026-08-29: pinned to the top edge (was vertically centred,
-      // which sat in the middle of the waterfall/live-spectrum content) --
-      // still horizontally centred over its own dashed AFC lines, just out
-      // of the way of what those lines are drawn over.
-      ctx.textBaseline = "top";
-      ctx.fillText(`${sign}${Math.round(Math.abs(afcOffsetHz))} Hz`, (afcMarkX + afcSpaceX) / 2, 10);
-      ctx.textBaseline = "alphabetic";
-    }
-
-    ctx.setLineDash([]);
-    for (const [hz, strokeColor] of [[markHz, "#5ad18a"], [spaceHz, "#ff6b6b"]]) {
-      const x = waterfall.hzToX(hz, width);
-      ctx.strokeStyle = strokeColor;
-      ctx.lineWidth = 2;   // item 5: thinned by 1/3 (was 3)
-      ctx.beginPath(); ctx.moveTo(Math.round(x) + .5, 0);
-      ctx.lineTo(Math.round(x) + .5, bottomY); ctx.stroke();
-    }
-
-    // Hover preview (grilled inline 2026-08-29): a thin, solid grey pair
-    // showing where the solid green/red lines above would land if the
-    // operator clicked at the current mouse position -- markSpaceForLowHz()
-    // mirrors setToneFromSpaceHz()/markToneHz()'s own math exactly, just
-    // without touching settings/the decoder. Solid (not dashed), so it
-    // never gets mistaken for the AFC pair above even when both show at
-    // once -- AFC's dashed lines mean "current drift compensation", these
-    // mean "hypothetical click target", different questions.
-    if (hoverPreviewLowHz !== null) {
-      const [previewMarkHz, previewSpaceHz] = markSpaceForLowHz(hoverPreviewLowHz);
-      ctx.strokeStyle = "rgba(190,190,190,.65)";
-      ctx.lineWidth = 1;
-      for (const hz of [previewMarkHz, previewSpaceHz]) {
-        const x = waterfall.hzToX(hz, width);
-        ctx.beginPath(); ctx.moveTo(Math.round(x) + .5, 0);
-        ctx.lineTo(Math.round(x) + .5, bottomY); ctx.stroke();
-      }
-    }
-
-    // Item 9: the waterfall's own rough frequency ruler, bottom edge.
-    ctx.font = "9px ui-monospace, Menlo, Consolas, monospace";
-    ctx.textBaseline = "bottom";
-    ctx.fillStyle = "#c8c8c8";
-    ctx.textAlign = "center";
-    for (const hz of niceTicks(waterfall.lowHz, waterfall.highHz, 5))
-      ctx.fillText(String(Math.round(hz)), waterfall.hzToX(hz, width), bottomY - 2);
-
-    // Item 9: exact SPACE/red-line frequency, just left of the line itself,
-    // at the bottom of the spectrogram (the seam, not the overlay's bottom).
-    ctx.fillStyle = "#ff6b6b";
-    ctx.textAlign = "right";
-    ctx.fillText(String(Math.round(spaceHz)), waterfall.hzToX(spaceHz, width) - 4, splitY - 2);
-
-    // Item 3 (2nd session): the dial a companion real-FSK radio would need
-    // to put ITS mark at the same actual RF frequency this AFSK mark tone
-    // lands on (dial == mark for real FSK -- dialToMarkHz()'s own comment).
-    // This is the number an operator manually aligning an AFSK radio against
-    // a 2nd, true-FSK one is after -- mirrors the space label's placement,
-    // to the right of the green line instead of left of the red one.
-    const fskDialHz = dialToMarkHz(state.radio.frequency, state.radio.mode || "");
-    ctx.fillStyle = "#5ad18a";
-    ctx.textAlign = "left";
-    ctx.fillText(`FSK ${RttyPresets.formatFrequency(fskDialHz)}`,
-      waterfall.hzToX(markHz, width) + 4, splitY - 2);
-  }
-
-  // Sized to #rttyScope's own rendered box -- top of the spectrogram through
-  // the bottom of the waterfall, INCLUDING the border/gap between them --
-  // so the mark/space lines paint straight across that seam (item 8) rather
-  // than stopping at either individual canvas's own edge.
-  function resizeScopeOverlay() {
-    const width = Math.max(320, Math.round(dom.rttyScope.clientWidth));
-    const height = Math.round(dom.rttyScope.clientHeight);
-    if (dom.rttyScopeOverlay.width !== width) dom.rttyScopeOverlay.width = width;
-    if (dom.rttyScopeOverlay.height !== height) dom.rttyScopeOverlay.height = height;
-  }
-
-  // Item 15: 100%/200%/400% narrow BASE_LOW_HZ..BASE_HIGH_HZ around the tone
-  // AS IT STANDS at the moment the pill is pressed -- not continuously
-  // re-centred on every click-to-tune, which by construction always lands
-  // inside whatever window is already visible (see the click handler below,
-  // which reads waterfall.lowHz/highHz -- the Waterfall instance's own public
-  // fields, kept current by setRange() alone -- rather than a 2nd copy), so
-  // it never needs to move the window itself. Re-centring on every click
-  // would mean a waterfall.setRange() -> resetAgc() on every click too,
-  // restarting the AGC's learned noise floor (and the visible color scale
-  // hiccuping along with it) far more often than the operator's own clicks
-  // warrant (grilled 2026-08-27, second session). Deliberately not
-  // persisted -- always starts at 100%.
-  //
-  // 100% is the fixed base range, NOT tone-centred like 200/400% (code-review,
-  // same session): centring it the same way would mean "100%" only ever
-  // reproduces the true 500-2700 Hz range when the tone happens to sit
-  // exactly at its 1600 Hz midpoint, and for a low enough tone (e.g. the
-  // 500 Hz space minimum, centre 585) the window would extend below 0 Hz --
-  // spectrum.js's draw() has no floor check on lowHz, so a negative window
-  // feeds it negative FFT bin indices, reading undefined off the end of a
-  // Float32Array and poisoning the percentile AGC with NaN until the next
-  // zoom press. 200%/400% are always safe: with toneHz clamped to
-  // [TONE_MIN_HZ+85, TONE_MAX_HZ+85] (rtty-settings.js), their narrower spans
-  // can only push the window a little past BASE_LOW_HZ/BASE_HIGH_HZ at the
-  // very edges, never negative.
+  // Item 15: the module owns the window arithmetic (including why 100 % is the
+  // fixed base range and not tone-centred like 200/400 %); this owns the DOM
+  // the page shows for it. Deliberately not persisted -- always starts at 100%.
   function applyZoom(percent) {
-    let low, high;
-    if (percent === 100) {
-      low = BASE_LOW_HZ; high = BASE_HIGH_HZ;
-    } else {
-      const span = (BASE_HIGH_HZ - BASE_LOW_HZ) * 100 / percent;
-      const center = settings.toneHz;   // the midpoint mark/space sit ±85 Hz either side of
-      low = center - span / 2; high = center + span / 2;
-    }
-    waterfall.setRange(low, high);
-    drawScopeOverlay();   // immediate feedback -- the rAF loop would repaint this within a frame anyway
+    const {low, high} = scope.setZoom(percent);
     document.querySelectorAll(".rtty-zoom-pill").forEach(button =>
       button.classList.toggle("active", Number(button.dataset.zoom) === percent));
     dom.spectrumSummary.textContent = `RX ${Math.round(low)}–${Math.round(high)} Hz`;
@@ -806,87 +630,7 @@
     // were a received one).
     if (session && session.ptt) return;
     if (decoder) decoder.pushSamples(samples);
-    waterfall.ingest(samples);
-  }
-
-  // Item 4: a smoothed line/envelope, not the bar chart this replaced -- no
-  // fill under it (grilled 2026-08-27, second session). Two independent
-  // smoothing passes, both "partial", not a heavy filter:
-  //  - temporal: a light exponential blend frame-to-frame (smoothedSpectrum),
-  //    same idea spectrum.js's own AGC already uses for agcLow/agcHigh;
-  //  - spatial: a small moving average across neighbouring bins, so the trace
-  //    reads as an envelope rather than a jagged per-bin FFT line.
-  let smoothedSpectrum = null;
-  const SPATIAL_SMOOTH_RADIUS = 2;
-
-  function drawLiveSpectrum() {
-    requestAnimationFrame(drawLiveSpectrum);
-    // AFC's slew needs to keep moving every frame, not just when a fresh FFT
-    // frame lands (e.g. still easing back to 0 after squelch closes) -- and
-    // the grey dashed lines need to visibly track that, so the overlay is
-    // repainted here too while AFC is on (harmless extra draw otherwise:
-    // drawScopeOverlay() itself already runs every frame's worth of cost
-    // this page ever pays for the live-spectrum canvas below).
-    afcTick();
-    if (settings.afcEnabled) drawScopeOverlay();
-    const canvas = dom.liveSpectrumCanvas, ctx = canvas.getContext("2d");
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    // Item 3, grilled 2026-08-28: the live tap's OWN liveValues/liveAgcLow/
-    // liveAgcHigh (spectrum.js's liveDraw(), ~128 ms cadence, faster AGC
-    // ease) -- NOT lastValues/agcLow/agcHigh, which still feed the SCROLLING
-    // waterfall's row colours at their own, deliberately slower, unchanged
-    // cadence. Empty/undefined before the first live frame lands draws
-    // nothing, never an error.
-    const {liveAgcLow: agcLow, liveAgcHigh: agcHigh, liveValues: values} = waterfall.state();
-    if (values && values.length) {
-      // A zoom change (or the first frame) alters how many FFT bins fall inside
-      // the visible window (spectrum.js's own first/last) -- a stale buffer of
-      // a different length cannot be blended into the new one, so it is simply
-      // replaced rather than reset to zero (which would draw a false dip).
-      if (!smoothedSpectrum || smoothedSpectrum.length !== values.length)
-        smoothedSpectrum = Float32Array.from(values);
-      else
-        for (let i = 0; i < values.length; i++)
-          smoothedSpectrum[i] += (values[i] - smoothedSpectrum[i]) * .35;
-
-      const lo = agcLow, hi = Math.max(agcHigh, lo + 1);
-      // Sliding-window sum (code-review 2026-08-28), not a fresh sum/count
-      // scan per point: the window for i+1 differs from i's only by one
-      // entering and one leaving sample, so it is maintained incrementally
-      // in O(1) per point instead of re-summing all ~2*RADIUS+1 of them --
-      // same numbers, same envelope, just without the redundant O(n*radius)
-      // work every animation frame.
-      const n = smoothedSpectrum.length;
-      const points = new Array(n);
-      let sum = 0, count = 0;
-      for (let j = 0; j <= Math.min(SPATIAL_SMOOTH_RADIUS, n - 1); j++) { sum += smoothedSpectrum[j]; count++; }
-      for (let i = 0; i < n; i++) {
-        const norm = Math.max(0, Math.min(1, (sum / count - lo) / (hi - lo)));
-        // Item 7: 90% headroom -- the loudest displayed point never quite
-        // touches the top edge, so a signal at or above agcHigh reads as a
-        // tall peak, not a flat line clipped against the canvas border.
-        points[i] = canvas.height - norm * canvas.height * .9;
-        const enter = i + SPATIAL_SMOOTH_RADIUS + 1, leave = i - SPATIAL_SMOOTH_RADIUS;
-        if (enter < n) { sum += smoothedSpectrum[enter]; count++; }
-        if (leave >= 0) { sum -= smoothedSpectrum[leave]; count--; }
-      }
-
-      // Item 4: light grey (was rgba(120,220,200,.9), a teal too close to the
-      // MARK line's own green #5ad18a to tell apart at a glance). Halved
-      // again 2026-08-29 (grilled): 1.5 read as too heavy a stroke for a
-      // trace that is meant to read as a thin live line, not a filled band.
-      ctx.strokeStyle = "rgba(200,200,200,.9)";
-      ctx.lineWidth = .75;
-      ctx.beginPath();
-      const stepX = canvas.width / (points.length - 1 || 1);
-      points.forEach((y, i) => (i === 0 ? ctx.moveTo(0, y) : ctx.lineTo(i * stepX, y)));
-      ctx.stroke();
-    }
-
-    // Item 8: the shared overlay (mark/space lines + item 9's ruler/readout)
-    // repaints every frame regardless of whether live-spectrum data has
-    // arrived yet, so it appears immediately on load exactly as it used to.
-    drawScopeOverlay();
+    scope.ingest(samples);
   }
 
   // ---- RX decode (RttyCodec.Decoder) --------------------------------------
@@ -894,205 +638,18 @@
   const decoder = new RttyCodec.Decoder(RX_AUDIO_RATE,
     {toneHz: settings.toneHz, reverse: settings.reverse, squelchThreshold: settings.squelchThreshold});
 
-  // kap.13 (grilled 2026-08-29): colour each decoded RX character by its own
-  // meta.snrDb (10*log10(markMag/spaceMag) from a single Goertzel window
-  // sampled at that character's last/stop bit -- rtty-codec.js's
-  // _emitCode()). The SIGN of that ratio just reflects which of the two
-  // tones the window happened to catch (varies per character with the actual
-  // bit pattern), NOT confidence -- pure noise gives roughly equal mark/space
-  // energy (ratio near 0 dB either way), clean FSK gives one tone strongly
-  // dominant (|ratio| large either way). So the mapping below keys off
-  // Math.abs(snrDb), the distance from 0 dB, not the raw signed value.
+  // kap.13/13.4 + item 6: the RX log itself -- word tokens, the per-character
+  // SNR gradient, scrollback trimming, the squelch-open break and this
+  // station's own TX echo -- lives in rtty-rxlog.js since 2026-09-07, shared
+  // with QRPlog's own RTTY palette (log-rtty-panel.js). That module's header
+  // carries the reasoning all of it accumulated, including why the gradient
+  // keys off Math.abs(snrDb) and why its dB bounds are still placeholders.
   //
-  // Floor/ceiling dB are placeholders -- snrDb here isn't physical SNR (no
-  // separate noise-floor measurement), so there's no real-air data yet to
-  // calibrate against (docs/rtty-implementace.md §13.3).
-  //
-  // Colour endpoints widened 2026-08-29 (operator feedback: the muted->text
-  // spread read as too subtle to tell weak from strong at a glance). Floor is
-  // no longer plain --muted -- that's a fixed UI token other elements (pills,
-  // labels) also rely on staying legible at ITS OWN brightness, not a knob
-  // for this gradient -- but --muted blended 50% toward the log's own
-  // --panel2 background, so weak/noisy characters recede noticeably further
-  // while still resolving to *something* readable on focus (kap.13 decision
-  // 8: never fully invisible), not a flat, separately-tuned hex. Ceiling is
-  // plain white, brighter than --text on purpose (operator: "silnější klidně
-  // i bílé") -- a deliberate break from kap.13 decision 9's original "ceiling
-  // equals --text exactly", now a two-ended widen instead of a one-sided fade.
-  const RX_CHAR_SNR_FLOOR_DB = 0, RX_CHAR_SNR_CEIL_DB = 15;
-  function cssVarRgb(name, fallbackHex) {
-    const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallbackHex;
-    const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(raw);
-    return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [255, 255, 255];
-  }
-  const RX_CHAR_FLOOR_RGB = (() => {
-    const muted = cssVarRgb("--muted", "#8ba59d"), panel2 = cssVarRgb("--panel2", "#132724");
-    return muted.map((c, i) => Math.round(c + (panel2[i] - c) * 0.5));
-  })();
-  const RX_CHAR_CEIL_RGB = [255, 255, 255];
-  function rxCharColorForSnr(snrDb) {
-    if (!Number.isFinite(snrDb)) return null;
-    const t = Math.max(0, Math.min(1,
-      (Math.abs(snrDb) - RX_CHAR_SNR_FLOOR_DB) / (RX_CHAR_SNR_CEIL_DB - RX_CHAR_SNR_FLOOR_DB)));
-    const r = Math.round(RX_CHAR_FLOOR_RGB[0] + (RX_CHAR_CEIL_RGB[0] - RX_CHAR_FLOOR_RGB[0]) * t);
-    const g = Math.round(RX_CHAR_FLOOR_RGB[1] + (RX_CHAR_CEIL_RGB[1] - RX_CHAR_FLOOR_RGB[1]) * t);
-    const b = Math.round(RX_CHAR_FLOOR_RGB[2] + (RX_CHAR_CEIL_RGB[2] - RX_CHAR_FLOOR_RGB[2]) * t);
-    return `rgb(${r},${g},${b})`;
-  }
-
-  let rxOpenWordSpan = null;
-  decoder.onChar((ch, meta) => {
-    state.rxChars++;
-    if (Number.isFinite(meta.snrDb)) state.lastSnrDb = meta.snrDb;
-    const isBreak = ch === " " || ch === "\n" || ch === "\r";
-    if (isBreak) {
-      rxOpenWordSpan = null;
-      if (ch !== "\r") dom.rttyRxLog.appendChild(document.createTextNode(ch));
-    } else {
-      if (!rxOpenWordSpan) {
-        rxOpenWordSpan = document.createElement("span");
-        rxOpenWordSpan.className = "rtty-tok";
-        dom.rttyRxLog.appendChild(rxOpenWordSpan);
-      }
-      // kap.13: one span per character (same shape as the TX echo below,
-      // rtty.css:96-105 -- just coloured by signal strength instead of
-      // elapsed send time) so each can carry its own SNR-derived colour.
-      // .rtty-tok's own click/hover (below) still targets the whole word via
-      // closest()/textContent -- unaffected by this nesting.
-      const charSpan = document.createElement("span");
-      charSpan.className = "rtty-rx-char";
-      charSpan.textContent = ch;
-      const color = rxCharColorForSnr(meta.snrDb);
-      if (color) charSpan.style.setProperty("--rtty-rx-char-color", color);
-      rxOpenWordSpan.appendChild(charSpan);
-    }
-    trimRxLog();
-    dom.rttyRxLog.scrollTop = dom.rttyRxLog.scrollHeight;
-    renderStatusPills();
-  });
-  function trimRxLog() {
-    while (dom.rttyRxLog.textContent.length > RX_LOG_MAX_CHARS && dom.rttyRxLog.firstChild)
-      dom.rttyRxLog.removeChild(dom.rttyRxLog.firstChild);
-  }
-
-  // CLEAR pill (RX summary row): wipes the log itself, not the decoder state --
-  // squelch/AFC/tone tracking all live in the decoder/settings and must keep
-  // running exactly as before. rxOpenWordSpan is reset the same way
-  // echoTxText() already does before appending, so the next decoded character
-  // starts a fresh .rtty-tok instead of resuming one whose DOM node just got
-  // removed. lastTxEcho is left alone -- markTxEchoFailed() only ever touches
-  // it through echo.container.isConnected, which is already false once this
-  // clears the log, so a send still in flight fails silently-safe rather than
-  // throwing.
-  function clearRxLog() {
-    dom.rttyRxLog.textContent = "";
-    rxOpenWordSpan = null;
-    state.rxChars = 0;
-    renderStatusPills();
-  }
-
-  // kap.13.4 (grilled 2026-08-29): on every squelch close->open transition,
-  // insert a line break into the RX log -- reuses rtty-codec.js's Decoder's
-  // existing onEvent() hook (until now unwired), no codec change needed.
-  // Throttled to at most one insert per SQUELCH_NEWLINE_THROTTLE_MS, measured
-  // from the last break actually INSERTED (not from the last squelch-open
-  // event), so a signal fluttering in and out near the squelch threshold
-  // can't spam the log -- the events in between are just silently dropped,
-  // no delayed catch-up insert. Skipped entirely while the log is still
-  // empty (nothing received yet, "Waiting for signal..." placeholder still
-  // showing, rtty.css:88) -- a break only makes sense as a separator BETWEEN
-  // receptions, not as a lone blank leading line, and that skip does NOT
-  // consume the throttle window (lastSquelchNewlineAt stays untouched), so
-  // the first real reception still gets its own break without an artificial
-  // wait.
-  const SQUELCH_NEWLINE_THROTTLE_MS = 2000;
-  let lastSquelchNewlineAt = 0;
-  decoder.onEvent(evt => {
-    if (evt.type !== "squelch" || !evt.open || !settings.squelchNewlineEnabled) return;
-    if (dom.rttyRxLog.childNodes.length === 0) return;
-    const now = Date.now();
-    if (now - lastSquelchNewlineAt < SQUELCH_NEWLINE_THROTTLE_MS) return;
-    lastSquelchNewlineAt = now;
-    // A squelch close mid-word (the tail of a transmission cut off before a
-    // natural word-break character) leaves rxOpenWordSpan pointing at that
-    // unfinished span -- without this, the NEXT reception's characters would
-    // keep appending to it, landing (in DOM order) before the break we're
-    // about to insert instead of after it.
-    rxOpenWordSpan = null;
-    dom.rttyRxLog.appendChild(document.createTextNode("\n"));
-    trimRxLog();
-    dom.rttyRxLog.scrollTop = dom.rttyRxLog.scrollHeight;
-  });
-
-  // Item 6 (grilled 2026-08-27, second session): this station's own sent text,
-  // echoed into the RX log like a monitor -- not a .rtty-tok (no click/hover:
-  // the operator's own callsign in "CQ CQ DE OK1HRA" must never be mistaken
-  // for a station to log). Called from both TX methods, at the moment each
-  // commits to sending, whether the send came from this page's own composer
-  // or a QRPlog hand-off (kap.8.3) -- there is exactly one call site per
-  // method, so every path echoes the same way.
-  //
-  // Item 1/2 (grilled 2026-08-28, 3rd session): displayed uppercase (what
-  // actually goes out -- both TX methods already uppercase at the encoding
-  // stage, textToBaudot()/wifilt.ino's chTable(), this just makes the echo
-  // agree), and coloured in per character rather than red all at once: each
-  // character starts grey and steps straight to red at its own estimated
-  // transmit time (RttyCodec.charStartTimes() -- the real Baudot frame
-  // sequence, so FIGS/LTRS shifts and characters with no Baudot mapping don't
-  // throw a flat per-character count off). Doesn't try to track real
-  // playback -- external FSK over TrxNet has no observable completion signal
-  // anyway (grilled), so elapsed wall time against this estimate is the
-  // whole design, for both TX methods alike.
-  //
-  // Tracks the most recent echo so a send that fails AFTER being echoed
-  // (session.prepare()/setMode/sendCw can all still throw here -- kap.6's own
-  // failure modes) can retract it, rather than leaving a false "sent" line
-  // for a message that never actually went out (code-review: the RX log is
-  // the one place QRPlog cross-references what was sent, and it had no way
-  // to tell a genuine send from a failed attempt). Only one at a time needs
-  // tracking -- txBusy() already keeps the two TX methods mutually exclusive.
-  let lastTxEcho = null;   // {container, timers}
-
-  function echoTxText(text) {
-    rxOpenWordSpan = null;   // don't let a live RX token keep growing into this
-    // Grilled 2026-08-28 (item 4): a TX send that lands mid-word (RX decoding
-    // "HELLO" with no trailing space/newline yet) used to run the echoed text
-    // straight onto the end of that unfinished RX line -- the code above
-    // abandons the open word span without ever closing its line. One leading
-    // break, skipped when the log is already empty or already ends on one, so
-    // back-to-back sends never grow a widening gap.
-    if (dom.rttyRxLog.textContent && !dom.rttyRxLog.textContent.endsWith("\n"))
-      dom.rttyRxLog.appendChild(document.createTextNode("\n"));
-
-    const upper = String(text).toUpperCase();
-    const container = document.createElement("span");
-    container.className = "rtty-tx-echo";
-    const charSpans = Array.from(upper, ch => {
-      const span = document.createElement("span");
-      span.className = "rtty-tx-char";
-      span.textContent = ch;
-      container.appendChild(span);
-      return span;
-    });
-    dom.rttyRxLog.appendChild(container);
-    dom.rttyRxLog.appendChild(document.createTextNode("\n"));
-    trimRxLog();
-    dom.rttyRxLog.scrollTop = dom.rttyRxLog.scrollHeight;
-
-    const timers = RttyCodec.charStartTimes(upper).map(({index, startMs}) =>
-      setTimeout(() => {
-        const span = charSpans[index];
-        if (span && span.isConnected) span.classList.add("lit");
-      }, startMs));
-    lastTxEcho = {container, timers};
-  }
-
-  function markTxEchoFailed(echo) {
-    if (!echo || !echo.container.isConnected) return;   // scrolled out of the trimmed log already
-    echo.timers.forEach(clearTimeout);   // item 3c: whatever hasn't lit yet stays grey, no catch-up
-    echo.container.classList.add("rtty-tx-echo-failed");
-    echo.container.appendChild(document.createTextNode(" (failed)"));
-  }
+  // The gradient endpoints are resolved from THIS document's own :root, which
+  // is exactly what used to happen inline here -- the module takes them as
+  // parameters because QRPlog's palette has to resolve them against its own
+  // element instead (that page is light and defines neither --muted nor
+  // --panel2, so a documentElement read there would produce nonsense).
 
   // Click a decoded token -> hand it to QRPlog, same BroadcastChannel dxc.html
   // already uses (kap.5/8.1). Unlike a DXC spot, this isn't "go work this
@@ -1101,18 +658,61 @@
   // Call/Exch the operator is actually focused in there, not always Call --
   // a clicked token is any decoded word, not necessarily a callsign.
   const dxcChannel = (() => { try { return new BroadcastChannel("wifilt-dxc-action"); } catch (_error) { return null; } })();
-  dom.rttyRxLog.addEventListener("click", event => {
-    const token = event.target.closest(".rtty-tok");
-    if (!token || !dxcChannel) return;
-    const callsign = token.textContent.trim();
-    if (!callsign) return;
-    dxcChannel.postMessage({type: "dxc-tune", callsign, trx: LanGate.slot ? LanGate.slot() : 0, source: "rtty"});
+
+  const rxLog = RttyRxLog.create({
+    el: dom.rttyRxLog,
+    maxChars: RX_LOG_MAX_CHARS,
+    onToken: word => {
+      if (!dxcChannel) return;
+      dxcChannel.postMessage({type: "dxc-tune", callsign: word,
+        trx: LanGate.slot ? LanGate.slot() : 0, source: "rtty"});
+    },
   });
+
+  decoder.onChar((ch, meta) => {
+    state.rxChars++;
+    if (Number.isFinite(meta.snrDb)) state.lastSnrDb = meta.snrDb;
+    rxLog.pushChar(ch, meta);
+    renderStatusPills();
+  });
+
+  // kap.13.4 (grilled 2026-08-29): on every squelch close->open transition,
+  // insert a line break into the RX log -- reuses rtty-codec.js's Decoder's
+  // existing onEvent() hook, no codec change needed. The throttle and the
+  // "skip while the log is still empty" rule (and why that skip must not
+  // consume the throttle window) live in the module.
+  decoder.onEvent(evt => {
+    if (evt.type !== "squelch" || !evt.open || !settings.squelchNewlineEnabled) return;
+    rxLog.squelchBreak();
+  });
+
+  // CLEAR pill (RX summary row): wipes the log itself, not the decoder state --
+  // squelch/AFC/tone tracking all live in the decoder/settings and must keep
+  // running exactly as before. lastTxEcho is deliberately left alone --
+  // markTxEchoFailed() only ever touches it through container.isConnected,
+  // already false once this clears the log, so a send still in flight fails
+  // silently-safe rather than throwing.
+  function clearRxLog() {
+    rxLog.clear();
+    state.rxChars = 0;
+    renderStatusPills();
+  }
+
+  // Tracks the most recent echo so a send that fails AFTER being echoed
+  // (session.prepare()/setMode/sendCw can all still throw -- kap.6's own
+  // failure modes) can retract it, rather than leaving a false "sent" line for
+  // a message that never actually went out: the RX log is the one place QRPlog
+  // cross-references what was sent, and it had no way to tell a genuine send
+  // from a failed attempt. Only one at a time needs tracking -- txBusy()
+  // already keeps the two TX methods mutually exclusive.
+  let lastTxEcho = null;   // {container, timers}
+  const echoTxText = text => { lastTxEcho = rxLog.echoTx(text); };
+  const markTxEchoFailed = echo => rxLog.markEchoFailed(echo);
 
   // ---- AFC (grilled 2026-08-28, 3rd/4th sessions) --------------------------
   //
   // Tracks the OTHER station's drift by nudging only the decoder's own
-  // runtime tone offset (decoder.setToneOffset(), via syncDecoderTone()
+  // runtime tone offset (decoder.setToneOffset(), from the tracker's onOffset
   // below) -- settings.toneHz itself, and therefore this station's own TX
   // tone and the solid mark/space overlay lines, never move.
   //
@@ -1125,65 +725,28 @@
   // fixed max Hz/s slew rate (afcRateHzPerChar converted from Hz/char). When
   // no pair is found, a closed decoder squelch springs the target back to the
   // operator's centre; an open squelch holds the last lock for an idle MARK.
-  let afcOffsetHz = 0, afcTargetHz = 0, afcLastLiveValues = null, afcLastTickMs = null;
+  // The slew integration, the fresh-frame gate and the deviation clamp live in
+  // rtty-afc.js's own createTracker() since 2026-09-07, beside the detector
+  // they wrap and shared with QRPlog's RTTY palette. What stays here is the
+  // wiring: which spectrum tap it reads, which decoder it re-tones.
+  const afcTracker = RttyAfc.createTracker({
+    settings: () => settings,
+    liveValues: () => waterfall.state().liveValues,
+    window: () => ({lowHz: waterfall.lowHz, highHz: waterfall.highHz}),
+    markSpace: () => expectedMarkSpaceHz(),
+    squelchOpen: () => decoder.squelchOpen,
+    // AFC nudges only the decoder's own runtime tone offset --
+    // settings.toneHz itself, and therefore this station's own TX tone and the
+    // solid mark/space overlay lines, never move.
+    onOffset: offsetHz => decoder.setToneOffset(settings.toneHz + offsetHz),
+    charDurationMs: RttyCodec.CHAR_DURATION_MS,
+  });
 
-  // How far a found pair must stand out above this scan's own
-  // median (a stand-in noise floor -- the real peak is a small minority of
-  // the samples, so the median tracks the floor around it) before it's
-  // trusted at all. Added because decoder.squelchOpen alone re-evaluates
-  // from raw magnitude every ~1 ms (rtty-codec.js's own hop) and readily
-  // flickers true on pure noise at a low/default threshold -- every flicker
-  // used to feed straight into a fresh, meaningless target, visible as the
-  // detector line jittering with no real signal present.
-  const AFC_PROMINENCE_DB = 8;
-
-  function afcRateHzPerSec() {
-    return settings.afcRateHzPerChar * 1000 / RttyCodec.CHAR_DURATION_MS;
-  }
-
-  function syncDecoderTone() {
-    decoder.setToneOffset(settings.toneHz + afcOffsetHz);
-  }
-
-  // Called every animation frame from drawLiveSpectrum() -- the continuous
-  // slew integration needs to keep moving (toward the target, or back to 0)
-  // even between fresh FFT frames, not just when new data lands.
-  function afcTick() {
-    const now = Date.now();
-    const dtSec = afcLastTickMs === null ? 0 : Math.max(0, Math.min(1, (now - afcLastTickMs) / 1000));
-    afcLastTickMs = now;
-    if (!settings.afcEnabled) return;
-
-    const {liveValues: values} = waterfall.state();
-    // Only act on a FRESH frame -- spectrum.js allocates a new Float32Array
-    // per extraction, so identity changing means real new data landed, not
-    // just another animation frame re-reading the same numbers.
-    if (values && values !== afcLastLiveValues) {
-      afcLastLiveValues = values;
-      const [markHz, spaceHz] = expectedMarkSpaceHz();
-      const found = RttyAfc.findOffset(values, {
-        lowHz: waterfall.lowHz,
-        highHz: waterfall.highHz,
-        markHz,
-        spaceHz,
-        maxDeviationHz: settings.afcMaxDeviationHz,
-        prominenceDb: AFC_PROMINENCE_DB,
-      });
-      // Pair confidence is the acquisition gate. A successfully found pair
-      // must be allowed to pull a weak/detuned decoder into lock even when its
-      // own narrow Goertzel squelch is still closed. With no fresh pair, an
-      // open squelch means a legitimate single-carrier idle MARK and holds the
-      // last lock; a closed squelch means there is nothing to track, so return
-      // to the operator's centre.
-      afcTargetHz = RttyAfc.nextTarget(afcTargetHz, found, decoder.squelchOpen);
-    }
-
-    const maxStep = afcRateHzPerSec() * dtSec;
-    const diff = afcTargetHz - afcOffsetHz;
-    afcOffsetHz += Math.max(-maxStep, Math.min(maxStep, diff));
-    afcOffsetHz = Math.max(-settings.afcMaxDeviationHz, Math.min(settings.afcMaxDeviationHz, afcOffsetHz));
-    syncDecoderTone();
-  }
+  // The names the rest of this file already calls. There is no separate
+  // "re-tone the decoder" helper any more: every site that moves
+  // settings.toneHz resets the tracker, and reset() re-tones on its way out.
+  const afcTick = () => afcTracker.tick();
+  const afcReset = () => afcTracker.reset();
 
   // ---- click-to-tune (shared RX/TX tone, kap.5) ---------------------------
 
@@ -1205,35 +768,9 @@
     // Item 4e (grilled): a manual retune re-centres on purpose -- any
     // accumulated AFC offset was relative to the OLD centre and would be
     // nonsense applied to the new one, so it starts over from 0 here.
-    afcOffsetHz = 0; afcTargetHz = 0;
-    syncDecoderTone();
+    afcReset();
     drawScopeOverlay();
     dom.rttyToneInput.value = String(clamped);
-  }
-
-  // Proportional within the CURRENTLY VISIBLE window (item 15) -- reads
-  // waterfall.lowHz/highHz directly (the Waterfall instance's own public
-  // fields) rather than a 2nd tracked copy, so a position always lands
-  // inside whatever window setRange() last established, zoomed or not.
-  // Shared by the click handler and the hover-preview mousemove handler
-  // below -- same geometry, two different uses of the resulting Hz.
-  function scopeClientXToHz(clientX) {
-    const rect = dom.rttyScope.getBoundingClientRect();
-    return Math.round(waterfall.lowHz +
-      (clientX - rect.left) / rect.width * (waterfall.highHz - waterfall.lowHz));
-  }
-
-  // [markHz, spaceHz] a click at this lower-tone frequency would produce --
-  // mirrors setToneFromSpaceHz()'s `centre = lowHz + SHIFT_HZ/2` followed by
-  // markToneHz()'s own txPolarity branch, without writing to settings or
-  // touching the decoder. Used by the hover preview (drawScopeOverlay()
-  // above, kept as a ruler regardless of what a click then does with it --
-  // grilled 2026-08-30) and, for USB-D/LSB-D, by what setToneFromSpaceHz()
-  // itself commits on an actual click.
-  function markSpaceForLowHz(lowHz) {
-    return settings.txPolarity === "reverse"
-      ? [lowHz, lowHz + RttyCodec.SHIFT_HZ]
-      : [lowHz + RttyCodec.SHIFT_HZ, lowHz];
   }
 
   // Click-to-tune-the-RADIO, real FSK only (RTTY/RTTY-R -- grilled 2026-08-30,
@@ -1265,34 +802,8 @@
     // Same reasoning as setToneFromSpaceHz()'s own reset: an AFC offset
     // tracking drift around the OLD signal position is meaningless once the
     // dial has just jumped to a different one.
-    afcOffsetHz = 0; afcTargetHz = 0;
+    afcReset();
   }
-
-  // Item 2, grilled 2026-08-28: one listener on #rttyScope (the wrapper
-  // around BOTH the live-spectrum panel and the waterfall, item 8) instead of
-  // a 2nd, separate one on the live-spectrum canvas -- the two blocks share
-  // the same Hz window and width, so a single rect/handler already covers
-  // "click anywhere in the spectrum retunes", not just the waterfall.
-  dom.rttyScope.addEventListener("click", event => {
-    const lowHz = scopeClientXToHz(event.clientX);
-    const isRealFsk = state.radio.mode === "RTTY" || state.radio.mode === "RTTY-R";
-    if (isRealFsk) retuneRadioForLowHz(lowHz);
-    else setToneFromSpaceHz(lowHz);
-  });
-
-  // Hover preview (grilled inline 2026-08-29): hovering anywhere over the
-  // spectrogram or waterfall previews, in thin grey, where the solid
-  // green/red mark/space lines would move to on a click there -- same
-  // #rttyScope wrapper/geometry as the click handler above.
-  let hoverPreviewLowHz = null;
-  dom.rttyScope.addEventListener("mousemove", event => {
-    hoverPreviewLowHz = scopeClientXToHz(event.clientX);
-    drawScopeOverlay();
-  });
-  dom.rttyScope.addEventListener("mouseleave", () => {
-    hoverPreviewLowHz = null;
-    drawScopeOverlay();
-  });
 
   // ---- TX: audio-stream method (kap.6.1) ----------------------------------
   //
@@ -1313,122 +824,44 @@
   // verbatim (see rtty.html's own script-list note for why it comes from
   // js8-tx.js and not wspr-tx.js, which has its own unexported copy).
 
-  let audioTx = null;   // {txId, packets, packetIndex, prebufferStartUtcMs, endUtcMs, watchdogUtcMs, begun, audioEnded, ticker}
-  let nextAudioTxId = 1;
-  // True from the moment sendAudioStream() commits to a send until audioTx
-  // itself is assigned (or the attempt fails) -- closes the TOCTOU window the
-  // `if (audioTx) throw` guard alone left open across the `await
-  // session.prepare(...)` below (code-review: a 2nd overlapping call, e.g. the
-  // composer's own SEND racing an external QRPlog-triggered send, could pass
-  // the guard before the 1st call's audioTx was ever assigned).
-  let audioTxStarting = false;
-
-  function resetAudioTx() {
-    if (audioTx && audioTx.ticker) clearInterval(audioTx.ticker);
-    audioTx = null;
-  }
-
-  async function sendAudioStream(text) {
-    if (!session || !session.hello) throw new Error("AUD1 session is not ready yet");
-    if (audioTx || audioTxStarting) throw new Error("a transmission is already in progress");
-    audioTxStarting = true;
-    try {
-      // Item 1 (fix 1/2, grilled 2026-08-28): the shared /txgain.json table's
-      // resolved level for the radio's CURRENT band+power, same accessor
-      // data.js/wspr.js use for their own TX amplitude -- previously this
-      // page never read it at all, so RttyCodec.Encoder always fell back to
-      // its own default (amplitude=.5), ignoring calibration entirely,
-      // regardless of which page it came from.
-      //
-      // Only overridden once resolved().calibrated is true: uncalibrated,
-      // resolved().gain is 0 (this page's gainCal.manualGain() above is a
-      // fixed 0, not a real slider like JS8/WSPR have), so passing it through
-      // unconditionally would transmit silence on a never-calibrated
-      // band/power instead of preserving the encoder's own historical
-      // default -- worse than doing nothing, since RTTY worked fine before
-      // this fix existed.
-      const resolved = resolvedGain();
-      // Item 3 (2nd session): txPolarity picked here, not read a 2nd time
-      // inside rtty-codec.js -- one source of truth for "what does reverse
-      // mean right now", same as markToneHz() above.
-      const txReverse = settings.txPolarity === "reverse";
-      const encoder = new RttyCodec.Encoder(TX_AUDIO_RATE, resolved.calibrated
-        ? {toneHz: settings.toneHz, amplitude: resolved.gain, reverse: txReverse}
-        : {toneHz: settings.toneHz, reverse: txReverse});
-      const pcm16 = encoder.encode(text);
-      if (pcm16.length === 0) throw new Error("nothing to send (no supported characters)");
-      echoTxText(text);   // item 6: as this page commits to the send, not after it finishes
-      const myTxId = nextAudioTxId++;
-      const packets = Js8Tx.packetizeTxPcm48k(pcm16, {streamId: session.hello.streamId, txId: myTxId});
-      const now = Date.now();
-      const slotUtcMs = now + TX_LEAD_MS;
-      const prebufferSamples = Math.round(TX_PREBUFFER_MS * TX_AUDIO_RATE / 1000);
-      await session.prepare(myTxId, {mode: 0, toneHz: settings.toneHz, samples: pcm16.length,
-        packets: packets.length, slotUtcMs, prebufferSamples, packetMs: TX_PACKET_MS});
-      const streamSpanMs = Math.min(TX_PREBUFFER_MS + TX_STREAM_LEAD_MS, TX_RING_LIMIT_MS);
-      audioTx = {txId: myTxId, packets, packetIndex: 0,
-        prebufferStartUtcMs: slotUtcMs - streamSpanMs,
-        endUtcMs: slotUtcMs + pcm16.length / (TX_AUDIO_RATE / 1000),
-        begun: false, audioEnded: false};
-      audioTx.watchdogUtcMs = audioTx.endUtcMs + TX_WATCHDOG_MARGIN_MS;
-      audioTx.ticker = setInterval(tickAudioTx, 40);
-      render();
-    } finally {
-      audioTxStarting = false;
-    }
-  }
-
-  function tickAudioTx() {
-    if (!audioTx) return;
-    const now = Date.now();
-    try {
-      if (!audioTx.begun && now >= audioTx.prebufferStartUtcMs) {
-        session.begin(audioTx.txId);
-        audioTx.begun = true;
+  // The send itself -- encode, packetize, the immediate-PTT pacing loop and
+  // its drain watchdog -- lives in rtty-afsk-tx.js since 2026-09-07, shared
+  // with QRPlog's own RTTY palette (log-rtty-panel.js). That module's header
+  // carries the reasoning, including why this is an own loop rather than
+  // Js8Tx.TxController.queue().
+  //
+  // What stays here is what finishing a send MEANS to this page: the
+  // composer's own state pill, and the QRPlog hand-off's result message.
+  const afskTx = RttyAfskTx.create({
+    session: () => session,
+    settings: () => settings,
+    // Item 1 (grilled 2026-08-28): the shared /txgain.json table's resolved
+    // level for the radio's CURRENT band+power, the same accessor
+    // data.js/wspr.js use -- previously this page never read it at all, so
+    // RttyCodec.Encoder always fell back to its own amplitude=.5 default and
+    // ignored calibration entirely.
+    gain: () => resolvedGain(),
+    sampleRate: TX_AUDIO_RATE,
+    leadMs: TX_LEAD_MS, prebufferMs: TX_PREBUFFER_MS,
+    streamLeadMs: TX_STREAM_LEAD_MS, packetMs: TX_PACKET_MS,
+    ringLimitMs: TX_RING_LIMIT_MS, watchdogMarginMs: TX_WATCHDOG_MARGIN_MS,
+    onEcho: text => { echoTxText(text); return lastTxEcho; },
+    onEchoFailed: echo => markTxEchoFailed(echo),
+    onFinish: error => {
+      dom.rttyTxState.textContent = error ? `error: ${error}` : "sent";
+      if (externalTxRequestId && rttyTxChannel) {
+        rttyTxChannel.postMessage({type: "rtty-tx-result", requestId: externalTxRequestId,
+          ok: !error, error: error || undefined});
+        externalTxRequestId = null;
       }
-      if (audioTx.begun) {
-        const due = Math.min(audioTx.packets.length, Math.max(0,
-          Math.floor((now - audioTx.prebufferStartUtcMs) / TX_PACKET_MS) + 1));
-        while (audioTx.packetIndex < due) {
-          session.write(audioTx.packets[audioTx.packetIndex]);
-          audioTx.packetIndex++;
-        }
-        if (audioTx.packetIndex === audioTx.packets.length && !audioTx.audioEnded) {
-          session.end(audioTx.txId);
-          audioTx.audioEnded = true;
-        }
-      }
-      if (audioTx.audioEnded && session.isDrained(audioTx.txId)) {
-        session.complete(audioTx.txId);
-        finishAudioTx(null);
-        return;
-      }
-      if (now > audioTx.watchdogUtcMs) throw new Error("TX drain watchdog");
-    } catch (error) {
-      try { session.abort(audioTx.txId, String(error.message || error)); } catch (_e) {}
-      finishAudioTx(String(error.message || error));
-      return;
-    }
-    render();
-  }
+    },
+    onTick: () => render(),
+  });
 
-  function abortAudioTx(reason) {
-    if (!audioTx) return;
-    try { session.abort(audioTx.txId, reason); } catch (_e) {}
-    finishAudioTx(reason);
-  }
-
-  function finishAudioTx(error) {
-    resetAudioTx();
-    dom.rttyTxState.textContent = error ? `error: ${error}` : "sent";
-    if (error) markTxEchoFailed(lastTxEcho);
-    if (externalTxRequestId && rttyTxChannel) {
-      rttyTxChannel.postMessage({type: "rtty-tx-result", requestId: externalTxRequestId,
-        ok: !error, error: error || undefined});
-      externalTxRequestId = null;
-    }
-    render();
-  }
+  // The names the rest of this file already calls, unchanged in meaning.
+  const sendAudioStream = text => afskTx.start(text);
+  const abortAudioTx = reason => afskTx.abort(reason);
+  const resetAudioTx = () => afskTx.reset();
 
   // ---- QRPlog hand-off receiver (docs/rtty-implementace.md §8.2/8.3) ------
   //
@@ -1469,13 +902,13 @@
       return;
     }
     if (msg.type === "rtty-tx-probe") {
-      if (isSessionHolder() && !audioTx && !audioTxStarting)
+      if (isSessionHolder() && !afskTx.busyOrStarting())
         rttyTxChannel.postMessage({type: "rtty-tx-probe-ack", requestId: msg.requestId});
       return;
     }
     if (msg.type !== "rtty-tx-send") return;
     if (!isSessionHolder()) return; // not the holder -- the real one answers, or nobody does
-    if (audioTx || audioTxStarting) {
+    if (afskTx.busyOrStarting()) {
       rttyTxChannel.postMessage({type: "rtty-tx-result", requestId: msg.requestId,
         ok: false, error: "this RTTY-ICOM page is busy with another transmission"});
       return;
@@ -1523,12 +956,12 @@
 
   // ---- TX composer wiring --------------------------------------------------
 
-  // Two TX methods, two independent pieces of state (audioTx carries its own
-  // packet-pacing detail an abort needs; fskSending is a plain flag) -- but
-  // "is either one busy" was re-derived slightly differently at each call
-  // site (code-review). Single helper for that question; call sites that
-  // need to know WHICH one is busy still check audioTx/fskSending directly.
-  function txBusy() { return Boolean(audioTx) || fskSending; }
+  // Two TX methods, two independent pieces of state (the AFSK sender carries
+  // its own packet-pacing detail an abort needs; fskSending is a plain flag)
+  // -- but "is either one busy" was re-derived slightly differently at each
+  // call site (code-review). Single helper for that question; call sites that
+  // need to know WHICH one is busy still ask afskTx/fskSending directly.
+  function txBusy() { return afskTx.busy() || fskSending; }
 
   async function onSendClick() {
     const text = dom.rttyTxText.value.trim();
@@ -1559,7 +992,7 @@
   }
 
   function onAbortClick() {
-    if (audioTx) abortAudioTx("operator");
+    if (afskTx.busy()) abortAudioTx("operator");
     else if (fskSending) command({type: "abortCw"}).catch(() => {});
   }
 
@@ -1716,7 +1149,7 @@
     dbm: () => null,
     blockingReason: () => {
       if (!session || !session.hello) return "the AUD1 session is not ready";
-      if (audioTx) return "a TX composer send is in progress";
+      if (afskTx.busy()) return "a TX composer send is in progress";
       if (fskSending) return "an FSK-backend send is in progress";
       return "";
     },
@@ -1988,7 +1421,7 @@
     // Item 8: the shared overlay is sized off #rttyScope's own box, not
     // driven by Waterfall.resize() (which only ever touched its own
     // canvas/overlay pair) -- resized alongside it so both stay in sync.
-    window.addEventListener("resize", () => { waterfall.resize(); resizeScopeOverlay(); });
+    window.addEventListener("resize", () => scope.resize());
 
     dom.rttyReverse.addEventListener("click", () => setReverse(!settings.reverse));
     // Item 7: Enter sends, like js8call -- no SEND button, no RF-safety
@@ -2063,7 +1496,7 @@
       saveSettings();
       dom.rttyAfcRateInput.disabled = !settings.afcEnabled;
       dom.rttyAfcMaxDeviationInput.disabled = !settings.afcEnabled;
-      if (!settings.afcEnabled) { afcOffsetHz = 0; afcTargetHz = 0; syncDecoderTone(); }
+      if (!settings.afcEnabled) afcReset();
       drawScopeOverlay();
     });
     dom.rttyAfcRateInput.addEventListener("change", () => {
@@ -2128,10 +1561,9 @@
     dom.rttyAfcMaxDeviationInput.disabled = !settings.afcEnabled;
 
     wire();
-    waterfall.resize();
-    resizeScopeOverlay();
+    scope.resize();
     render();
-    requestAnimationFrame(drawLiveSpectrum);
+    scope.start();
 
     // Item 5 (2nd session): firmware/EEPROM-backed, so it arrives with a
     // fetch rather than with rtty-settings.js's own localStorage load above

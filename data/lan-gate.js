@@ -180,6 +180,12 @@
 
   const LanGate = {
     gate,
+    // read() without gate(): answers the same question and touches nothing --
+    // no injected CSS, no lan-gate-checking/-blocked on <body>. Exported 2026-09-07
+    // for QRPLog's RTTY palette, which needs to know whether ICOM-LAN is
+    // configured but must NOT blank the contest log while finding out (those
+    // body classes hide every child of <body> except the topbar).
+    read,
     result: () => result,
     config: () => config,
     slot: () => (result ? result.slot : 0),

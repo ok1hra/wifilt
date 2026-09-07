@@ -410,6 +410,52 @@
     return knee * measuredAt / now;
   };
 
+  // ---- reading the table for the radio as it stands -----------------------
+  //
+  // Lifted out of tx-gain-cal-ui.js's own TxGainCal class 2026-09-07 (which now
+  // delegates here, unchanged in behaviour) so a caller that only wants to KNOW
+  // the gain does not have to mount the calibration UI to ask. QRPlog's RTTY
+  // palette is the first such caller; without this it would have been a third
+  // independent implementation of "what may this station transmit at", and the
+  // one place a third opinion is genuinely dangerous is the transmit path.
+
+  // The key this radio, band and power belong under, or null when any part is
+  // unknown. A calibration filed under a guessed model, or a power the radio
+  // has not confirmed, would be worse than none -- it would be applied without
+  // anyone being asked.
+  function identityFor({model, frequencyHz, percent, rfPowerSeen}) {
+    const band = bandOf(frequencyHz);
+    if (!model || !band || rfPowerSeen !== true) return null;
+    return {key: entryKey(model, band, percent), model, band, percent};
+  }
+
+  // What the table says right now: a gain, whether it may actually be
+  // transmitted from, and -- when it may not -- a sentence saying why.
+  //
+  // `calibrated` is the only field a transmit path may branch on. It is false
+  // for both "never measured" and "measured at a different MOD level": a knee
+  // from another MOD level is not a weaker measurement, it is the WRONG number,
+  // and with no margin under the knee, wrong upwards means distortion. Shown,
+  // never transmitted from.
+  function resolveGain({store, identity, modLevel = 0, manualGain = 0}) {
+    if (!identity) return {gain: manualGain, calibrated: false, key: "",
+                           why: "the radio has not reported its model, band or power yet"};
+    const entry = store.entry(identity.key);
+    const status = entryStatus(entry, modLevel);
+    if (status === "missing")
+      return {gain: manualGain, calibrated: false, key: identity.key,
+              band: identity.band, percent: identity.percent,
+              why: `not calibrated for ${identity.band} @ ${identity.percent} %`};
+    if (status === "stale")
+      return {gain: manualGain, calibrated: false, stale: true, key: identity.key, entry,
+              band: identity.band, percent: identity.percent,
+              why: `measured at MOD level ${entry.modLevel}, the radio is on ` +
+                   `${modLevel} \u2014 recalibrate ${identity.band} @ ${identity.percent} %`};
+    return {gain: Number(entry.gain), calibrated: true, key: identity.key, entry,
+            band: identity.band, percent: identity.percent,
+            modUnknown: status === "unknown-mod", why: ""};
+  }
+
   class TxGainStore {
     constructor(options = {}) {
       this.url = options.url || STORE_URL;
@@ -545,6 +591,7 @@
   }
 
   return {TxGainCal, TxGainStore, DEFAULTS, ULAW_BYTES_PER_SECOND, CAL_SWR_LIMIT,
-          bandOf, entryKey, compact, expand, STORE_URL, SCHEMA_VERSION, migrate,
+          bandOf, entryKey, identityFor, resolveGain,
+          compact, expand, STORE_URL, SCHEMA_VERSION, migrate,
           entryStatus, seedFrom, toDb, fromDb};
 });

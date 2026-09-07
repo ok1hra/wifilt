@@ -86,5 +86,77 @@
     return squelchOpen && Number.isFinite(currentTargetHz) ? currentTargetHz : 0;
   }
 
-  return {findOffset, nextTarget};
+  // The running tracker around the two pure functions above -- the slew
+  // integration, the fresh-frame gate and the deviation clamp. Lifted out of
+  // rtty.js 2026-09-07 so QRPlog's own RTTY palette tracks drift the same way
+  // the page does instead of carrying a fourth copy of these thirty lines.
+  //
+  // Everything it needs is injected, so it stays as clock-free and DOM-free as
+  // the detector it wraps -- the only impurity is Date.now(), which the slew
+  // genuinely needs (it must keep easing between FFT frames, not only when new
+  // data lands).
+  //
+  // options:
+  //   settings()     {afcEnabled, afcMaxDeviationHz, afcRateHzPerChar}
+  //   liveValues()   the live FFT tap's current Float32Array, or null
+  //   window()       {lowHz, highHz} of the visible spectrum
+  //   markSpace()    [markHz, spaceHz] the decoder is currently expecting
+  //   squelchOpen()  the decoder's own narrow squelch
+  //   onOffset(hz)   apply the new offset (the caller re-tones its decoder)
+  //   charDurationMs one Baudot character, for the Hz-per-character rate
+  //   prominenceDb   how far a found pair must stand out above the noise floor
+  function createTracker(options) {
+    const settingsOf = options.settings;
+    const liveValuesOf = options.liveValues;
+    const windowOf = options.window;
+    const markSpaceOf = options.markSpace;
+    const squelchOpenOf = options.squelchOpen || (() => false);
+    const onOffset = options.onOffset || (() => {});
+    const charDurationMs = options.charDurationMs;
+    // How far a found pair must stand out above this scan's own median (a
+    // stand-in noise floor -- the real peak is a small minority of the
+    // samples, so the median tracks the floor around it) before it is trusted
+    // at all. Needed because the decoder's own squelch re-evaluates from raw
+    // magnitude every ~1 ms and readily flickers true on pure noise at a low
+    // threshold; every flicker used to feed straight into a fresh, meaningless
+    // target, visible as the detector line jittering with no real signal.
+    const prominenceDb = Number.isFinite(options.prominenceDb) ? options.prominenceDb : 8;
+
+    let offsetHz = 0, targetHz = 0, lastLiveValues = null, lastTickMs = null;
+
+    function reset() { offsetHz = 0; targetHz = 0; onOffset(offsetHz); }
+
+    function tick() {
+      const now = Date.now();
+      const dtSec = lastTickMs === null ? 0 : Math.max(0, Math.min(1, (now - lastTickMs) / 1000));
+      lastTickMs = now;
+      const settings = settingsOf();
+      if (!settings.afcEnabled) return;
+
+      const values = liveValuesOf();
+      // Only act on a FRESH frame -- spectrum.js allocates a new Float32Array
+      // per extraction, so identity changing means real new data landed, not
+      // just another animation frame re-reading the same numbers.
+      if (values && values !== lastLiveValues) {
+        lastLiveValues = values;
+        const [markHz, spaceHz] = markSpaceOf();
+        const {lowHz, highHz} = windowOf();
+        const found = findOffset(values, {lowHz, highHz, markHz, spaceHz,
+          maxDeviationHz: settings.afcMaxDeviationHz, prominenceDb});
+        targetHz = nextTarget(targetHz, found, squelchOpenOf());
+      }
+
+      const rateHzPerSec = settings.afcRateHzPerChar * 1000 / charDurationMs;
+      const maxStep = rateHzPerSec * dtSec;
+      const diff = targetHz - offsetHz;
+      offsetHz += Math.max(-maxStep, Math.min(maxStep, diff));
+      offsetHz = Math.max(-settings.afcMaxDeviationHz,
+                          Math.min(settings.afcMaxDeviationHz, offsetHz));
+      onOffset(offsetHz);
+    }
+
+    return {tick, reset, offsetHz: () => offsetHz, targetHz: () => targetHz};
+  }
+
+  return {findOffset, nextTarget, createTracker};
 });
