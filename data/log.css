@@ -159,6 +159,103 @@ body {
   flex-direction: column;
 }
 
+/* ── Split shell: DX cluster left, the whole log right ─────────────────────
+   Closed (the default) this is one flex row whose only laid-out child is the
+   right column, so the page measures exactly as it did before the split
+   existed -- the left pane and the gutter are `hidden` and carry no basis.
+
+   The topbar lives INSIDE the right column, so the DX cluster gets the full
+   window height. That is why .tabs below had to stop sizing itself in `vw`. */
+.log-split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+}
+
+.log-split-right {
+  flex: 1 1 auto;
+  min-width: 0;              /* without this the right column refuses to
+                                shrink below its content and the gutter
+                                cannot be dragged left */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* flex-basis is set from JS (the stored ratio, in px, clamped to both
+   minimums); the element keeps no width of its own. */
+.log-split-left {
+  flex: 0 0 auto;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--dark-bg);
+}
+
+.log-split-gutter {
+  flex: 0 0 1px;
+  position: relative;
+  z-index: 6;
+  cursor: col-resize;
+  background: #555555;
+  touch-action: none;        /* the drag is pointer events, not scrolling */
+}
+
+.log-split-gutter::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  right: -4px;
+  cursor: col-resize;
+}
+
+.log-split-gutter:hover,
+.log-split-gutter:focus-visible {
+  background: #8a8a8a;
+}
+
+#logDxcFrame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+/* While dragging: no text selection anywhere, and the iframe must not eat the
+   pointer. setPointerCapture already routes the moves to the gutter -- this is
+   the second belt, cheap and it also stops hover effects inside the frame. */
+.log-split-dragging              { user-select: none; }
+.log-split-dragging #logDxcFrame { pointer-events: none; }
+
+/* The split being open is not the same thing as DXC being the active page, so
+   it gets its own marker rather than .tab-active -- two tabs painted active at
+   once reads as a bug. */
+.tab-split-on {
+  border-color: var(--tab-active-bd);
+  color: var(--tab-active-tx);
+}
+
+/* The tab row measures ~491px (logo + five labels + gaps) and the firmware
+   version adds ~90px more. The right column's 600px floor holds the tabs, but
+   only once the version -- decorative, and repeated on every other page --
+   gets out of the way. Nothing here wraps: a wrapping tab row grows the topbar
+   and steals height from the journal, which is the one thing the split is
+   already short of. */
+/* Measured, not guessed: the input row needs 780px in one line, so a right
+   column narrower than that used to CLIP it -- silently, because .log-shell
+   is overflow:hidden. Letting it wrap is the same answer .kbd-open already
+   gives on a phone, and flex-wrap only wraps when there really is no room, so
+   a wide column is untouched. Without this the split would need a ~1080px
+   viewport and a 1024-wide tablet in landscape could never use it. */
+.log-split-on .log-input-row { flex-wrap: wrap; row-gap: 6px; }
+
+.log-split-on .topbar-fw { display: none; }
+.log-split-on .tabs      { overflow-x: auto; scrollbar-width: none; }
+.log-split-on .tabs::-webkit-scrollbar { display: none; }
+.log-split-on .tab       { flex: 0 0 auto; }
+
 /* ── Topbar / navigation — dark ──────────────────────────────────────────── */
 
 .topbar {
@@ -171,7 +268,10 @@ body {
 }
 
 .tabs {
-  width: min(1200px, calc(100vw - 16px));
+  /* `100%` of .topbar, NOT 100vw: the topbar now sits inside the split's right
+     column, and a vw-sized row would overflow it by the width of the DX
+     cluster pane. */
+  width: min(1200px, calc(100% - 16px));
   margin: 0 auto;
   display: flex;
   gap: 5px;
@@ -223,7 +323,14 @@ body {
 
 /* ── Journal — dark ──────────────────────────────────────────────────────── */
 
+/* --jzoom scales the logged QSOs, and nothing else on the page: Alt+ and Alt-
+   drive it from log.js, the same 0.6 - 2.5 range in tenths the DX cluster's own
+   + / - buttons use. It has to multiply the COLUMN WIDTHS as well as the type,
+   because .jcol clips (overflow: hidden) -- scaling the text alone would saw
+   the DXCC names in half at the first press -- and the header has to scale with
+   the rows or the columns stop lining up under their own titles. */
 .log-journal {
+  --jzoom: 1;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -240,7 +347,7 @@ body {
   background: var(--dark-header);
   border-bottom: 1px solid #1a1a1a;
   color: var(--dark-muted);
-  font-size: 14px;
+  font-size: calc(14px * var(--jzoom));
   letter-spacing: 0.06em;
   user-select: none;
 }
@@ -258,19 +365,19 @@ body {
    shrinks to 0 when rows overflow so scrolling up works. */
 .log-journal-spacer { flex: 1; }
 
-/* Column widths */
-.jcol         { display: inline-block; overflow: hidden; white-space: nowrap; padding: 0 8px; text-align: right; }
-.jcol-nr      { width: 57px;  }
-.jcol-date    { width: 112px; }
-.jcol-time    { width: 73px;  }
-.jcol-call    { width: 140px; text-align: left; }
-.jcol-freq    { width: 125px; }
-.jcol-mode    { width: 73px;  }
-.jcol-snt     { width: 57px;  }
-.jcol-rcv     { width: 57px;  }
-.jcol-exch    { width: 125px; }
-.jcol-trx     { width: 80px;  }
-.jcol-dxcc    { width: 280px; text-align: left; }
+/* Column widths -- all scaled by --jzoom, see .log-journal above */
+.jcol         { display: inline-block; overflow: hidden; white-space: nowrap; padding: 0 calc(8px * var(--jzoom)); text-align: right; }
+.jcol-nr      { width: calc(57px  * var(--jzoom)); }
+.jcol-date    { width: calc(112px * var(--jzoom)); }
+.jcol-time    { width: calc(73px  * var(--jzoom)); }
+.jcol-call    { width: calc(140px * var(--jzoom)); text-align: left; }
+.jcol-freq    { width: calc(125px * var(--jzoom)); }
+.jcol-mode    { width: calc(73px  * var(--jzoom)); }
+.jcol-snt     { width: calc(57px  * var(--jzoom)); }
+.jcol-rcv     { width: calc(57px  * var(--jzoom)); }
+.jcol-exch    { width: calc(125px * var(--jzoom)); }
+.jcol-trx     { width: calc(80px  * var(--jzoom)); }
+.jcol-dxcc    { width: calc(280px * var(--jzoom)); text-align: left; }
 
 /* Call header — clickable search trigger */
 .log-hdr-call {
@@ -336,6 +443,7 @@ body {
   padding: 3px 10px;
   border-bottom: 1px solid var(--dark-row-line);
   color: var(--dark-text);
+  font-size: calc(17px * var(--jzoom));   /* 17px = html/body's own size */
 }
 
 .qso-row:hover {
@@ -348,7 +456,7 @@ body {
 
 .qso-row.qso-dupe .jcol-call::after {
   content: ' DUPE';
-  font-size: 13px;
+  font-size: calc(13px * var(--jzoom));
   color: var(--conn-fail);
 }
 
@@ -1145,8 +1253,14 @@ body {
 
 /* ── Help modal ── */
 
+/* Twice the 340 px it opened at (operator, 2026-09-07). The list has grown past
+   what one narrow column can hold without every second description wrapping,
+   and a shortcut table is read by scanning, which wrapping defeats. The width
+   overrides .lm-box's own min(640px, ...) -- same specificity, later in the
+   file -- and keeps the same 24 px viewport margin, so a phone still fits. */
 .hk-box {
-  max-width: 340px;
+  width: min(680px, calc(100vw - 24px));
+  max-width: 680px;
 }
 
 .hk-table {
@@ -1348,6 +1462,8 @@ body {
   .dxc-band-toggle,
   .dxc-bw-btn,
   .dxc-bw-opt          { min-height: 38px; }
+  /* The line stays hairline; only what you can grab grows. */
+  .log-split-gutter::before { left: -10px; right: -10px; }
 }
 
 /* ── No real hover (touch): neutralise sticky hover states ─────────────────*/

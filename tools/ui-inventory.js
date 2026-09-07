@@ -25,7 +25,7 @@ const DATA = path.join(ROOT, "data");
 // control of the DATA page, and the inventory has to say so, otherwise the
 // per-chapter check cannot work.
 const PAGES = {
-  "log.html":      {title: "QRPLog",  scripts: [/^log\.js$/, /^log-db\.js$/, /^log-macros\.js$/, /^station-/, /^trx-help\.js$/]},
+  "log.html":      {title: "QRPLog",  scripts: [/^log\.js$/, /^log-db\.js$/, /^log-macros\.js$/, /^log-dxc-split\.js$/, /^station-/, /^trx-help\.js$/]},
   "dxc.html":      {title: "DXC",     scripts: [/^dxcc?\.js$/]},
   "data.html":     {title: "DATA — JS8Call", scripts: [/^js8-/, /^data\.js$/, /^spectrum\.js$/, /^wake-lock\.js$/, /^lan-gate\.js$/, /^tx-/]},
   "wspr.html":     {title: "DATA — WSPR",    scripts: [/^wspr/, /^tx-/, /^lan-gate\.js$/]},

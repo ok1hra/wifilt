@@ -185,6 +185,114 @@ const PAGE_SCRIPT = `
     await sleep(80);
     check("Shift+Alt+U is not the hotkey", !isSP());
 
+    // ---- Alt+ / Alt- resize the logged QSOs --------------------------------
+    // Measured on the rendered row, not on the CSS variable: the variable being
+    // set proves nothing if the columns do not follow the type, and .jcol clips
+    // its text, so a column that stayed 57 px wide while the digits grew would
+    // silently swallow the QSO number.
+    call.value = "OM3TEST";
+    call.dispatchEvent(new Event("input", {bubbles: true}));
+    exch.value = "042";
+    exch.dispatchEvent(new Event("input", {bubbles: true}));
+    await sleep(100);
+    press("Enter", "Enter");
+    await sleep(700);
+
+    const row = document.querySelector("#logJournalBody .qso-row");
+    const nr  = row && row.querySelector(".jcol-nr");
+    const hdr = $("logJournalHeader");
+    const size = el => parseFloat(getComputedStyle(el).fontSize);
+    const width = el => parseFloat(getComputedStyle(el).width);
+    check("a logged QSO is on screen to measure", !!row && !!nr);
+
+    const baseText = size(row), baseCol = width(nr), baseHdr = size(hdr);
+    check("the journal starts at its unscaled size", Math.abs(baseText - 17) < 0.6,
+      String(baseText));
+
+    press("+", "Equal", {shiftKey: true});     // US layout: + IS Shift+Equal
+    await sleep(120);
+    check("Alt+ (Shift+Equal, as a US layout delivers it) grows the text",
+      size(row) > baseText + 1, baseText + " -> " + size(row));
+    check("and the columns grow with it, so nothing is clipped",
+      width(nr) > baseCol + 1, baseCol + " -> " + width(nr));
+    check("and the header grows too, so the columns stay under their titles",
+      size(hdr) > baseHdr + 0.5, baseHdr + " -> " + size(hdr));
+
+    const oneUp = size(row);
+    press("+", "NumpadAdd");                   // the numpad, on any layout
+    await sleep(120);
+    check("the numpad + is the same shortcut, a step further",
+      size(row) > oneUp + 1, oneUp + " -> " + size(row));
+
+    press("-", "Minus");
+    press("-", "NumpadSubtract");
+    await sleep(120);
+    check("Alt- takes it back down again", Math.abs(size(row) - baseText) < 0.6,
+      baseText + " -> " + size(row));
+
+    // The size is the operator's, and it has to survive the page they set it on.
+    press("+", "Equal", {shiftKey: true});
+    await sleep(120);
+    check("the size is remembered for the next page load",
+      Math.abs(Number(localStorage.getItem("wifilt-log-journal-zoom")) - 1.1) < 0.001,
+      String(localStorage.getItem("wifilt-log-journal-zoom")));
+
+    // A hard floor and ceiling, or one leaned-on key makes the log unreadable
+    // in either direction, with no visible way back.
+    for (let i = 0; i < 40; i++) press("+", "NumpadAdd");
+    await sleep(150);
+    check("it stops at 2.5x, however long the key is held",
+      Math.abs(Number(localStorage.getItem("wifilt-log-journal-zoom")) - 2.5) < 0.001,
+      String(localStorage.getItem("wifilt-log-journal-zoom")));
+
+    // At full zoom the row is far wider than the window. The columns are flex
+    // items, so the failure to guard against is them SHRINKING to fit -- which
+    // clips text inside .jcol and shows nothing wrong. The journal pans
+    // sideways instead, and the header pans with it.
+    const dxcc = row.querySelector(".jcol-dxcc");
+    check("at full size the widest column keeps its whole width, it is not squeezed",
+      Math.abs(width(dxcc) - 280 * 2.5) < 1, String(width(dxcc)));
+    const jbody = $("logJournalBody");
+    check("the journal pans sideways instead", jbody.scrollWidth > jbody.clientWidth + 10,
+      jbody.scrollWidth + " vs " + jbody.clientWidth);
+    jbody.scrollLeft = 120;
+    await sleep(80);
+    check("and the header pans with it, so the columns stay named",
+      /translateX\\(-?120/.test($("logJournalHeader").style.transform) ||
+      /matrix\\(1, 0, 0, 1, -120/.test($("logJournalHeader").style.transform),
+      $("logJournalHeader").style.transform);
+    jbody.scrollLeft = 0;
+    for (let i = 0; i < 40; i++) press("-", "NumpadSubtract");
+    await sleep(150);
+    check("and at 0.6x going the other way",
+      Math.abs(Number(localStorage.getItem("wifilt-log-journal-zoom")) - 0.6) < 0.001,
+      String(localStorage.getItem("wifilt-log-journal-zoom")));
+
+    // AltGr is Ctrl+Alt and types a character on Windows; it must not resize.
+    const beforeAltGr = size(row);
+    press("+", "Equal", {ctrlKey: true, shiftKey: true});
+    await sleep(120);
+    check("AltGr (Ctrl+Alt) does not resize the log", size(row) === beforeAltGr,
+      beforeAltGr + " -> " + size(row));
+
+    // Back to a readable size for whatever runs after this.
+    for (let i = 0; i < 4; i++) press("+", "NumpadAdd");
+    await sleep(120);
+
+    // ---- the shortcut list says so ----------------------------------------
+    $("btnHelp").click();
+    await sleep(150);
+    const helpText = $("helpModal").textContent.replace(/\\s+/g, " ");
+    check("the help list names both new shortcuts",
+      /Alt\\+\\+/.test(helpText) && /Alt\\+-/.test(helpText), helpText.slice(0, 400));
+    check("and says what they do", /logged QSOs/.test(helpText));
+    const helpBox = document.querySelector("#helpModal .hk-box");
+    check("the shortcut window is twice the 340 px it used to be",
+      helpBox.getBoundingClientRect().width > 660,
+      String(helpBox.getBoundingClientRect().width));
+    $("helpModalClose").click();
+    await sleep(120);
+
     // ---- Alt+Enter still logs without keying -------------------------------
     call.value = "OK5XYZ";
     call.dispatchEvent(new Event("input", {bubbles: true}));

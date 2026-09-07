@@ -16,13 +16,20 @@
 // were being written, and it cost a seven-minute round trip to find. Run this first;
 // it takes milliseconds.
 //
-// It is also the fourth appearance of the template-literal trap in this repo. The
-// others were a backslash ending a regex, a backslash ending a comment, and `\\s`
-// degrading to `s`. Those are style rules nobody can enforce; this is a check.
+// It is also the fifth appearance of the template-literal trap in this repo. The
+// others were a backslash ending a regex, a backslash ending a comment, `\\s`
+// degrading to `s`, and -- on 2026-09-07, in log-hotkey-smoke.js, which this file
+// was NOT watching -- `/Alt\\+\\+/` degrading to `/Alt++/`, an invalid regex that
+// cost exactly the seven-minute silent round trip described above. Those are style
+// rules nobody can enforce; this is a check.
+//
+// So the list is no longer a list: every harness in tools/ is scanned. A check
+// that has to be remembered when a harness is added is a check that is not there
+// the day it is needed.
 
 const fs = require("fs"), path = require("path"), vm = require("vm");
 
-const HARNESSES = ["wspr-browser-smoke.js", "data-browser-smoke.js"];
+const HARNESSES = fs.readdirSync(__dirname).filter(name => name.endsWith(".js")).sort();
 
 let checked = 0, failures = 0;
 
@@ -38,11 +45,28 @@ for (const name of HARNESSES) {
   let match;
   while ((match = pattern.exec(source)) !== null) {
     const from = match.index + match[0].length;
-    const end = source.indexOf("\n`;", from);
+    // The literal ends at the first backtick that is not escaped. Looking for
+    // "\n`;" instead -- which is how every page script happens to end -- silently
+    // swallowed the rest of the file whenever a SHORT literal came first, and then
+    // reported the code that followed it as a broken page script.
+    let end = -1;
+    for (let i = from; i < source.length; i++) {
+      if (source[i] === "\\") { i++; continue; }
+      if (source[i] === "`") { end = i; break; }
+    }
     if (end < 0) continue;
-    const body = source.slice(from, end);
+    let body = source.slice(from, end);
     // Only the ones that are really scripts, not a chunk of CSS or markup.
     if (!/\bfunction\b|=>|await /.test(body)) continue;
+    if (/^\s*</.test(body)) continue;                 // an HTML page, not a script
+    // The live-radio drivers are TEMPLATES: they interpolate a callsign, a
+    // frequency, a peer's port. Those `${...}` are the harness's own, evaluated
+    // where they are written, and there is nothing to resolve them to here -- so
+    // stand a 0 in for each one and go on checking the syntax around it, which is
+    // the part that breaks silently. (An interpolation is still a bug in a
+    // browser harness's page script; nothing here can tell the two apart, and a
+    // parse error is the thing worth catching either way.)
+    body = body.replace(/(^|[^\\])\$\{[^{}]*\}/g, "$10");
     checked++;
     try {
       // Parse what the BROWSER gets, not what the file shows. The two differ: the

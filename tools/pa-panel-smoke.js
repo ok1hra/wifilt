@@ -498,6 +498,56 @@ const PAGE_SCRIPT = `
       after.y + panel.offsetHeight <= window.innerHeight + 1,
       JSON.stringify(after) + " vp " + window.innerWidth + "x" + window.innerHeight);
 
+    // ---- 12b. a window height change keeps the gap to the log's fields -----
+    // The palette hangs from the BOTTOM of the viewport, not the top. The
+    // Call/Exch fields sit just above the bottom button bar, so a palette
+    // measured from the top edge walks into them as the window shrinks and
+    // drifts away from them as it grows -- and an operator who has parked it
+    // one line above the fields has to park it again after every resize.
+    // Chrome cannot resize its own window from inside the page, so innerHeight
+    // is stubbed and the page's own resize handler is run: the same code path a
+    // real resize takes, with the same real DOM underneath.
+    const realHeight = window.innerHeight;
+    const setViewportHeight = h => {
+      Object.defineProperty(window, "innerHeight", {configurable: true, get: () => h});
+      window.dispatchEvent(new Event("resize"));
+    };
+    const bottomGap = () =>
+      window.innerHeight - (parseInt(panel.style.top, 10) + panel.offsetHeight);
+
+    head.dispatchEvent(new PointerEvent("pointerdown", {bubbles:true, cancelable:true, clientX:400, clientY:400, pointerId:2}));
+    head.dispatchEvent(new PointerEvent("pointermove", {bubbles:true, clientX:400, clientY:500, pointerId:2}));
+    head.dispatchEvent(new PointerEvent("pointerup",   {bubbles:true, clientX:400, clientY:500, pointerId:2}));
+    await sleep(60);
+    const gapBefore = bottomGap(), topBefore = parseInt(panel.style.top, 10);
+
+    setViewportHeight(realHeight - 200);
+    await sleep(80);
+    check("a shorter window moves the palette up with the bottom edge",
+      parseInt(panel.style.top, 10) === topBefore - 200,
+      topBefore + " -> " + panel.style.top);
+    check("so its distance to the log's entry fields is unchanged",
+      bottomGap() === gapBefore, gapBefore + " -> " + bottomGap());
+
+    setViewportHeight(realHeight + 300);
+    await sleep(80);
+    check("and a taller window keeps that same distance",
+      bottomGap() === gapBefore, gapBefore + " -> " + bottomGap());
+
+    stored = JSON.parse(localStorage.getItem("wifilt-pa-panel") || "{}");
+    check("the gap to the bottom edge is what gets remembered",
+      stored.gap === gapBefore, JSON.stringify(stored));
+
+    // Closed, the palette hears no resize at all -- so the gap, not the top, is
+    // what has to be stored, or every resize made with it shut moves it.
+    $("paClose").click();
+    setViewportHeight(realHeight);
+    await sleep(60);
+    $("btnPa").click();
+    await sleep(150);
+    check("a window resized while it was closed still reopens it in place",
+      bottomGap() === gapBefore, gapBefore + " -> " + bottomGap());
+
     // ---- 13. closing ------------------------------------------------------
     $("paClose").click();
     await sleep(60);

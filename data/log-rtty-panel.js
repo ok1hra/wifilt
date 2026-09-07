@@ -73,6 +73,11 @@
   var MIN_H = SCOPE_H + CHROME_H + 67;
 
   var open = false, pos = null, height = DEFAULT_H;
+  // px from the viewport's BOTTOM edge to the palette's bottom edge: the
+  // vertical anchor everything else is derived from, see place(). `placed` is
+  // the {y, h} place() last wrote, so syncGap() can tell the operator's own
+  // moves from this file's.
+  var gap = null, placed = null;
   // null until LanGate.read() has answered -- deliberately tri-state, so the
   // log's own button rule can tell "not configured" from "not asked yet" and
   // not flicker the button in on every page load.
@@ -92,6 +97,9 @@
         open = !!v.open;
         if (typeof v.x === 'number' && typeof v.y === 'number') pos = { x: v.x, y: v.y };
         if (typeof v.height === 'number') height = v.height;
+        // Older stores hold only the top. They stay readable: place() derives
+        // the gap from that top once, against the window it is opened in.
+        if (typeof v.gap === 'number') gap = v.gap;
       }
     } catch (_) {}
   }
@@ -99,7 +107,8 @@
   function save() {
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify({
-        open: open, x: pos ? pos.x : null, y: pos ? pos.y : null, height: height
+        open: open, x: pos ? pos.x : null, y: pos ? pos.y : null,
+        height: height, gap: gap
       }));
     } catch (_) {}
   }
@@ -132,12 +141,39 @@
     return clamp({ x: r.right - w, y: r.top - h - 8 });
   }
 
+  // The palette hangs from the BOTTOM of the viewport, not the top: `gap` is the
+  // distance from the window's bottom edge to the palette's own, and the top is
+  // derived from it every time. That is what keeps it the same short distance
+  // above the log's entry fields when the browser window is resized -- the
+  // fields sit just above the bottom button bar, so a top-anchored palette would
+  // drift into them as the window shrinks and away from them as it grows.
   function place() {
     if (!el) return;
+    var h = el.offsetHeight;
     if (!pos) pos = anchorPos();
-    pos = clamp(pos);
+    if (gap === null) gap = global.innerHeight - (pos.y + h);
+    pos = clamp({ x: pos.x, y: global.innerHeight - h - gap });
     el.style.left = pos.x + 'px';
     el.style.top = pos.y + 'px';
+    placed = { y: pos.y, h: h };
+  }
+
+  // Wherever the palette's bottom edge has ENDED UP -- after a drag, or after
+  // the browser's own resize handle grew it downward from a fixed top -- is the
+  // new anchor.
+  //
+  // Unforced, a geometry place() itself wrote is not a move and is skipped: the
+  // ResizeObserver also fires for the height place() sets on a window resize,
+  // and that has to READ the gap, never rewrite it, or a placement the clamp had
+  // to pull back on a short window would forget where the operator had put the
+  // palette. A drag forces it, because a drag that the clamp happened to return
+  // to the very same pixel is still the operator saying "here".
+  function syncGap(force) {
+    if (!el || !pos) return;
+    var h = el.offsetHeight;
+    if (!force && placed && placed.y === pos.y && placed.h === h) return;
+    gap = global.innerHeight - (pos.y + h);
+    placed = { y: pos.y, h: h };
   }
 
   function mountDrag(handle) {
@@ -160,6 +196,7 @@
       if (!dragging) return;
       dragging = false;
       try { handle.releasePointerCapture(e.pointerId); } catch (_) {}
+      syncGap(true);
       save();
     }
     handle.addEventListener('pointerup', end);
@@ -693,6 +730,9 @@
       new ResizeObserver(function () {
         if (!open || !el) return;
         height = el.offsetHeight;
+        // The browser's own handle grows the palette DOWNWARD from a fixed top,
+        // so the bottom edge has moved: re-anchor to where the operator left it.
+        syncGap();
         scope.resize();
         save();
       }).observe(el);
@@ -759,8 +799,7 @@
     global.addEventListener('resize', function () {
       if (!el || !open) return;
       el.style.height = clampSize() + 'px';
-      pos = clamp(pos);
-      place();
+      place();                     // from the bottom gap, which stays as it was
       if (scope) scope.resize();
       save();
     });

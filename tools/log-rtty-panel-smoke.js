@@ -371,6 +371,65 @@ const PAGE_SCRIPT = `
       window.RttyPanel.getState().settings.toneHz !== toneBefore,
       \`\${toneBefore} -> \${window.RttyPanel.getState().settings.toneHz}\`);
 
+    // ---- 7c. a window height change keeps the gap to the log's fields -----
+    // The palette hangs from the BOTTOM of the viewport, not the top. The
+    // Call/Exch fields sit just above the bottom button bar, so a palette
+    // measured from the top edge walks into them as the window shrinks and
+    // drifts away from them as it grows -- and an operator who has parked it
+    // one line above the fields has to park it again after every resize.
+    // Chrome cannot resize its own window from inside the page, so innerHeight
+    // is stubbed and the page's own resize handler is run: the same code path a
+    // real resize takes, with the same real DOM underneath.
+    const panelEl = $("rttyPanel"), headEl = $("rttyPanelHead");
+    const realHeight = window.innerHeight;
+    const setViewportHeight = h => {
+      Object.defineProperty(window, "innerHeight", {configurable: true, get: () => h});
+      window.dispatchEvent(new Event("resize"));
+    };
+    const bottomGap = () =>
+      window.innerHeight - (parseInt(panelEl.style.top, 10) + panelEl.offsetHeight);
+
+    // Up, not down: the previous section left the palette flush with the bottom
+    // edge, and every check below is about a gap that is actually there.
+    headEl.dispatchEvent(new PointerEvent("pointerdown", {bubbles:true, cancelable:true, clientX:300, clientY:300, pointerId:7}));
+    headEl.dispatchEvent(new PointerEvent("pointermove", {bubbles:true, clientX:300, clientY:220, pointerId:7}));
+    headEl.dispatchEvent(new PointerEvent("pointerup",   {bubbles:true, clientX:300, clientY:220, pointerId:7}));
+    await sleep(120);
+    const gapBefore = bottomGap(), topBefore = parseInt(panelEl.style.top, 10);
+
+    setViewportHeight(realHeight - 150);
+    await sleep(150);
+    check("a shorter window moves the palette up with the bottom edge",
+      parseInt(panelEl.style.top, 10) === topBefore - 150,
+      topBefore + " -> " + panelEl.style.top);
+    check("so its distance to the log's entry fields is unchanged",
+      bottomGap() === gapBefore, gapBefore + " -> " + bottomGap());
+
+    setViewportHeight(realHeight + 250);
+    await sleep(150);
+    check("and a taller window keeps that same distance",
+      bottomGap() === gapBefore, gapBefore + " -> " + bottomGap());
+
+    stored = JSON.parse(localStorage.getItem("wifilt-rtty-panel") || "{}");
+    check("the gap to the bottom edge is what gets remembered",
+      stored.gap === gapBefore, JSON.stringify(stored));
+
+    // Dragging the palette TALLER by its own resize handle grows it downward
+    // from a fixed top, so the bottom edge the operator left it at is the new
+    // anchor -- otherwise the next window resize would snap it back by the
+    // height they just added.
+    const grownTop = parseInt(panelEl.style.top, 10);
+    panelEl.style.height = (panelEl.offsetHeight + 60) + "px";
+    await sleep(200);
+    check("resizing the palette itself grows it downward, top unmoved",
+      parseInt(panelEl.style.top, 10) === grownTop,
+      grownTop + " -> " + panelEl.style.top);
+    const gapAfterGrow = bottomGap();
+    setViewportHeight(realHeight);
+    await sleep(150);
+    check("and the new bottom edge is what the next window resize keeps",
+      bottomGap() === gapAfterGrow, gapAfterGrow + " -> " + bottomGap());
+
     // ---- 8. held elsewhere: the card, and TAKE OVER ------------------------
     await fetch("/set-claim-refused?v=1");
     await clearPosts();

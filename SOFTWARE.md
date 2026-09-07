@@ -36,9 +36,10 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
  · [3.9 Blocked DXCC](#39-blocked-dxcc)
  · [3.10 The journal and editing a QSO](#310-the-journal-and-editing-a-qso)
  · [3.11 Band map](#311-band-map)
- · [3.12 Radio selection](#312-radio-selection)
- · [3.13 Export and backup](#313-export-and-backup)
- · [3.14 Keyboard shortcuts](#314-keyboard-shortcuts)
+ · [3.12 The DX cluster beside the log](#312-the-dx-cluster-beside-the-log)
+ · [3.13 Radio selection](#313-radio-selection)
+ · [3.14 Export and backup](#314-export-and-backup)
+ · [3.15 Keyboard shortcuts](#315-keyboard-shortcuts)
 
 **[4. DXC — DX cluster](#4-dxc--dx-cluster)**
  · [4.1 Connecting](#41-connecting)
@@ -226,7 +227,7 @@ Every page carries the same bar:
 |---|---|---|
 | *(logo)* | — | opens a small About panel with links to the project and to RemoteQTH |
 | **QRPLog** | `/log` | the logbook |
-| **DXC** | `/dxc.html` | the DX cluster client — opens in its own 600×750 window |
+| **DXC** | `/dxc.html` | the DX cluster client — splits the QRPLog page in two; its own 600×750 window from anywhere else |
 | **DATA** | `/data` | JS8Call and, through its sub-navigation, the WSPR beacon |
 | **SETUP** | `/setup` | configuration |
 | **LOGSYNC** | `/datasync` | log synchronisation, backup, import |
@@ -732,19 +733,51 @@ around your current frequency as a small spectrum. Two controls sit on it:
 - **50 kHz / 100 kHz / 200 kHz** — the span, behind the `^` button.
 - **▼** — fold the band map away.
 
-### 3.12 Radio selection
+### 3.12 The DX cluster beside the log
+
+Press **DXC** in QRPLog's tab row and the page splits: the DX cluster on the left, the whole
+logbook — tabs, journal, band map, status bar, input row — on the right. Drag the divider
+between them to set the cluster's width; it is remembered, and so is whether the split was
+open, so a reload brings the layout back. Press **DXC** again to close it.
+
+The cluster pane keeps the **width** you gave it. Resize the browser window and the logbook
+takes up the difference — the pane is sized to the spot columns you want to read, and those
+do not get wider just because the window did. Only a window too narrow to hold both halves
+makes the pane give ground, and it takes its width back as soon as there is room again.
+
+![DX cluster beside the log](img/qrplog-dxc-split.png)
+
+**Why it is not a window any more.** Clicking a spot's frequency in the pop-up moved the
+callsign into *Call* and even put the caret there — but the keyboard stayed in the pop-up,
+so the next `Enter` went to the wrong place. In one page that cannot happen: click a
+frequency, the radio retunes, the callsign lands in *Call* with the cursor in it, the log
+switches to S&P, and you simply keep typing. Left, middle and right click still choose
+TRX1, TRX2 and TRX3 exactly as they do in the window.
+
+**Both at once.** The split pane and the external window can run together — open the window
+from any other page's **DXC** tab, since only QRPLog's tab toggles the split. They share one
+cluster login (there is only ever one), but each keeps its **own** filters, columns, view mode
+and zoom, so the pane can show one band in three columns while the window shows everything.
+Whichever opened first holds the connection and feeds the other; its `WS` chip reads `WS↗`
+on the instance being fed. Close one and the other picks the connection up on its own.
+Commands and **Reconnect Telnet** work from either.
+
+On a display narrower than 900 px a side-by-side split is not usable, so **DXC** opens the
+window instead — and rotating a tablet back to landscape restores the split.
+
+### 3.13 Radio selection
 
 **TRX1 / TRX2 / TRX3** choose which configured radio the log talks to — frequency, mode,
 macros and RIT reset all follow the selection. `Alt+1`, `Alt+2`, `Alt+3` do the same. The
 labels are whatever you named the slots in SETUP.
 
-### 3.13 Export and backup
+### 3.14 Export and backup
 
 **BACKUP** downloads the whole QSO database as a JSON file. Per-log **CSV** and **ADIF**
 exports are in the log manager. Everything else — restore, import, device-to-device sync —
 is on the [LOGSYNC](#9-logsync) page.
 
-### 3.14 Keyboard shortcuts
+### 3.15 Keyboard shortcuts
 
 ![Keyboard shortcuts](img/qrplog-keyboard-shortcuts.png)
 
@@ -756,16 +789,29 @@ The **?** button opens this list.
 | `Alt+U` | toggle RUN / S&P |
 | `Alt+W` | clear the form |
 | `Alt+Enter` | log the QSO without sending a macro |
+| `Alt++` / `Alt+-` | text size of the logged QSOs below — the numpad `+` / `-` work too |
 | `Esc` (dialog open) | close the dialog |
 | `Esc` (no dialog) | **abort the transmission immediately** — CW, RTTY or an audio send from the RTTY palette |
 | `Space` in Call | duplicate check and partial-call search |
 | `Enter` in Snt / Rcv | as if pressed in Call, or in EXCH once a callsign is entered — **it transmits**; `Tab` leaves without keying |
 
+`Alt++` and `Alt+-` scale the logged QSOs the way the DX cluster's own **+** / **−**
+buttons scale its spot table: in tenths, from 0.6× to 2.5×, columns and header
+included, so nothing is clipped. Past the window's width the log pans sideways and
+the column titles pan with it. The size is kept in this browser and is back after a
+reload; it is per browser, not per log, and it changes nothing that is stored or
+exported. On a layout where `+` sits on the `1` key — the Czech one, for instance —
+`Alt+1` stays TRX1, and the numpad is the way to resize.
+
 ---
 
 ## 4. DXC — DX cluster
 
-**`/dxc.html`** — opens in its own 600×750 window, so it can sit beside the log.
+**`/dxc.html`** — from every page except QRPLog this opens in its own 600×750 window, so it
+can sit beside the log. In QRPLog the **DXC** tab instead splits the page and puts the
+cluster in its left half, which is where a clicked spot can hand over the keyboard as well
+as the callsign — see [section 3.12](#312-the-dx-cluster-beside-the-log). Everything below
+describes both; they are the same page.
 
 ![DX cluster](img/dxc.png)
 
@@ -776,11 +822,19 @@ callsign from *Identity*. Three status chips sit in the toolbar:
 
 | Chip | Meaning |
 |---|---|
-| **WS** | the WebSocket between this page and the interface |
+| **WS** | the WebSocket between this page and the interface. `WS↗` means another DXC instance is holding it and relaying to this one — see below |
 | **Telnet** | the interface's connection to the cluster server |
 | **count** | `visible/total` spots — how many rows the filters are letting through |
 
 **Reconnect Telnet** forces a fresh login to the cluster.
+
+**Two instances, one login.** The interface accepts exactly one cluster connection, so when
+the QRPLog split pane and the external window are both open, the one that opened first holds
+it and passes everything it receives to the other; the second shows `WS↗`. Commands,
+**Reconnect Telnet** and the spot table all work from either, and each instance keeps its
+**own** filters, columns, view mode and zoom. Close the one holding the connection and the
+other picks it up by itself, with the spots so far handed over. This replaces the old rule
+that only one DXC window could be open at a time.
 
 ### 4.2 The spot table
 
@@ -831,7 +885,13 @@ call and band:
 
 TRX2 and TRX3 only respond if those slots are configured.
 
-Visible spots are also published to the QRPLog band map.
+The callsign is handed to QRPLog at the same time: it lands in *Call* and the log switches to
+S&P. In the split pane the cursor lands there too, so the next thing you type goes into the
+log — from a separate window the callsign arrives but the keyboard stays behind, which is
+why the pane exists.
+
+Visible spots are also published to the QRPLog band map. While the split pane is open the
+band map follows the **pane's** filters, since that is the list sitting next to it.
 
 ### 4.5 Views, columns and the toolbar
 
@@ -1871,7 +1931,7 @@ After logging, the button turns into **VIEW LOG** and opens the logbook in a new
 | `TX buffer underrun`, `TX packet identity/continuity failure` | the network is not keeping up with the audio stream. Move the tablet closer to the access point. |
 | Everything stalls with the tablet far from the router | dropouts follow the *tablet's* distance from the access point, not the radio's link. |
 | Nothing works on an Android phone hotspot | client isolation cannot be turned off on Android hotspots, and it breaks the audio path. Use a normal router. |
-| The radio looks dead and the DXC page is open several times | **keep exactly one DXC window open.** The cluster WebSocket accepts a single client; extra windows fight over it in a reconnect storm that starves the radio's own connection. |
+| The radio looks dead and DXC is open several times | Since 2026-09-07 the instances share one connection and no longer fight over it — the one being relayed to shows `WS↗`. If an instance sits on `WS ...` or `WS off` for more than a few seconds, reload it. A version older than that really does need exactly one DXC window open: the cluster WebSocket accepts a single client, and extra windows evict each other in a reconnect storm that starves the radio's own connection. |
 | `not calibrated for 20m @10% - using the manual 0.25` | that band and power pair has never been measured. Run **CAL PLAN**, or accept the manual gain. |
 | The unattended countdown does not start after loading the page | toggle it off and on again. |
 

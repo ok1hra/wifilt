@@ -11,6 +11,198 @@ published.
 
 ## Working tree — not committed
 
+**The logged QSOs have a text size, on Alt+ and Alt−.**
+
+* **The same thing the DX cluster already does, on keys instead of buttons.**
+  DXC has carried **+** / **−** over its spot table for a long time and the log
+  had nothing: the operator's screen is not the one this was written on, and a
+  contest log read from across the shack is a different document from one read
+  at arm's length. So `Alt++` and `Alt+-` now scale the journal — every column,
+  `Nr` through `DXCC`, header included — in the same tenths between 0.6× and
+  2.5× the cluster uses. Keys and not buttons because the bottom bar is full and
+  the log is worked from the keyboard anyway. The size is kept per browser and
+  is back after a reload; it touches nothing that is stored or exported.
+
+* **Scaling the type alone would have quietly eaten the log.** `.jcol` is
+  `overflow: hidden` with a fixed pixel width, so bigger digits in a 57 px `Nr`
+  column are simply cut off — no error, no ellipsis, just a shorter number. One
+  CSS variable therefore multiplies the column widths as well as the type, and
+  the header with them or the columns stop standing under their own titles. Past
+  the window's width the journal pans sideways, which it was already built to do
+  (`min-width: max-content`, `flex-shrink: 0` and `syncJournalHScroll` predate
+  this) — so the check that matters is that the columns keep their full width
+  instead of being squeezed by the flex layout, and at 2.5× the DXCC column
+  measures its full 700 px with the log panning under it.
+
+* **`Alt+` needs its own matcher.** Every other Alt shortcut here refuses Shift,
+  because Shift+Alt+U is not Alt+U. But on a US layout `+` **is** Shift+Equal,
+  so that rule would refuse the very keystroke the operator makes; this one
+  allows Shift and still refuses AltGr (Ctrl+Alt), which types a character on
+  Windows. It also reads `e.key` and not only `e.code`, since layouts move `+`
+  and `-` around the board — but only after the digit shortcuts have had the
+  event, which is what keeps `Alt+1` selecting TRX1 on a Czech layout, where the
+  `1` key carries `+` unshifted. That operator has the numpad, which is why both
+  `NumpadAdd` and `NumpadSubtract` are in the list.
+
+* **The shortcut list under `?` is twice as wide** — 340 px to 680 px — and
+  carries both new keys. At 340 px every second description had begun to wrap,
+  and a table that exists to be scanned should not be read line by line. The
+  same 24 px viewport margin is kept, so a phone still fits.
+
+* **`tools/check-page-scripts.js` now watches every harness, not two.** Writing
+  the checks below cost the exact silent seven-minute round trip that tool was
+  built to prevent: `/Alt\\+\\+/` in the harness source arrives in the browser as
+  `/Alt++/`, an invalid regex, so the whole injected `<script>` fails to parse
+  and nothing in it runs — including its own error handler. The tool would have
+  caught it in milliseconds, except `log-hotkey-smoke.js` was not on its
+  hand-written list of two. It now scans every `tools/*.js`, stands a `0` in for
+  the `${...}` the live-radio drivers legitimately interpolate so their syntax is
+  checked too, and ends a literal at the first unescaped backtick rather than at
+  a newline-backtick-semicolon — which had been swallowing the rest of a file
+  whenever a short literal came first. Verified by reintroducing today's bug into a copy: 22/23, named and
+  located.
+
+* **Seventeen new checks in `log-hotkey-smoke.js`** (12 → 29), measured on the
+  rendered row rather than on the CSS variable — the variable being set proves
+  nothing if the columns do not follow the type. They cover the US-layout
+  `Shift+Equal` shape and the numpad, both clamps, AltGr, the panning header,
+  the help list naming both keys and the widened window. `log-rst-smoke` 24/24,
+  `log-dxc-split-smoke` 45/45, `log-year-groups-smoke` 15/15, `pa-panel-smoke`
+  71/71, `log-rtty-panel-smoke` 48/48. No firmware change.
+
+**The floating palettes now hang from the bottom of the window, not the top.**
+
+* **Resizing the browser used to move them relative to the log.** Both palettes
+  — **PA** and **RTTY** — stored the position they were dragged to as a *top*
+  offset and wrote it back to `style.top` unchanged, so a window made shorter
+  left them where they were while the log's entry row, which sits just above the
+  bottom button bar, came up to meet them; a window made taller opened a gap
+  neither of them had been given. The operator parks a palette a line above
+  *Call* and *Exch* precisely because that is where it can be read without
+  looking away from the fields — a relationship the top edge cannot express.
+  Both files now keep `gap`, the distance from the viewport's bottom edge to the
+  palette's own, and derive `top` from it on every placement. Nothing else about
+  dragging changed, and the palettes still clamp back into view.
+
+* **The anchor follows the operator, never the window.** `syncGap()` re-reads
+  the gap after a drag and after the palette's height changes on its own — the
+  PA panel's trouble line appearing, the RTTY palette's resize handle grown
+  downward from a fixed top — while a window resize only ever *reads* it. That
+  split is what keeps a placement the clamp had to pull back on a short window
+  from being mistaken for the operator's own choice and overwriting where they
+  had put it. A drag forces the re-read even when the clamp returns the palette
+  to the very same pixel, which is a real case: the first version of this let a
+  clamped drag keep a stale anchor, and the RTTY smoke caught it.
+
+* **The gap is what is stored**, so a window resized while a palette is *closed*
+  — where neither of them hears a `resize` at all — still reopens it the right
+  distance above the fields. Stores written by the old build carry only a top;
+  they stay readable, and the gap is derived from that top once, against the
+  window it is next opened in.
+
+* **Eleven new checks**, five in `pa-panel-smoke.js` and six in
+  `log-rtty-panel-smoke.js`. Chrome cannot resize its own window from inside the
+  page, so `innerHeight` is stubbed and the page's own `resize` handler run —
+  the same code path a real resize takes, against the same real DOM — and the
+  assertions are on the measured gap between `style.top + offsetHeight` and the
+  viewport's bottom edge, never on internal state. `pa-panel-smoke` 71/71 and
+  `log-rtty-panel-smoke` 48/48, each in both the source and the minified pass;
+  `log-dxc-split-smoke` 45/45, `log-rst-smoke` 24/24, `log-hotkey-smoke` 12/12.
+  No firmware change: two browser-side files, restamped and recompressed.
+
+**The DX cluster can sit inside QRPLog, and two of them can run at once.**
+
+* **Why the cursor never came with the callsign.** Clicking a spot's frequency in
+  the DXC pop-up put the callsign in *Call* and even put the caret there —
+  `insertWordIntoLog()` has called `target.focus()` and `setSelectionRange()` all
+  along. What no page can do is move OS window focus, so the operator's next
+  `Enter` went to the pop-up. This is bit-for-bit the defect that retired the RTTY
+  pop-up eight days ago, and it has the same answer, already written down in
+  `log-rtty-panel.js`: *in one document the problem does not exist.* So **DXC** in
+  QRPLog's tab row now splits the page — cluster left, the whole log right,
+  topbar included so the cluster gets the full window height — with a divider you
+  drag, and both the ratio and whether it was open are remembered. Every other
+  page's **DXC** tab is untouched and still opens the 600×750 window.
+
+* **An iframe, not a second implementation.** `dxc.html` is 45 KB of spot table,
+  five filters, a column chooser, a histogram, a raw view and a cluster parser;
+  porting it into `log.js` would have meant two DXC implementations drifting
+  apart. Same-origin iframes are just browsing contexts, so the pane calls
+  `parent.LogRadio.insertWord()` **synchronously**, inside the click's own task —
+  which is what makes the caret, and with it the keyboard, land in *Call*. A
+  `BroadcastChannel` hop would arrive a task later and would also deliver to every
+  other open QRPLog tab instead of the one the pane belongs to. Outside an iframe
+  nothing changed: the channel is still the only way across. `window.LogRadio`
+  gained `setRunMode()` for the S&P switch the channel path used to do for itself.
+
+* **Both cluster views at once, with no firmware change.** The interface holds
+  exactly one `DxcWsClient`; a second connection evicts the first and forces a
+  fresh telnet login, and the page reconnects 2.5 s after any close, so two
+  instances used to evict each other forever — the "DXC keeps dropping WS and
+  Telnet" hunt that ended as five DXC windows open at once. Rather than put three
+  sockets in the cooperative loop that keys CW, one instance now owns the socket
+  and relays every raw telnet chunk to the others over `wifilt-dxc-link`;
+  commands and **Reconnect Telnet** travel back the same way, and a joining
+  instance is seeded with the spots so far. Whichever instance is being relayed to
+  shows `WS↗`. Every election wait carries jitter — zero jitter in thirteen retry
+  waits is what made Mercury's stations transmit over each other — and if two
+  instances claim the socket in the same instant the lower id keeps it. Each
+  instance stores its filters, columns, view mode and zoom under its own prefix,
+  which is what makes two views worth having rather than two scroll positions.
+
+* **The divider is a hairline.** 1px, the same seam weight the topbar already
+  draws, because a 6px bar between two dark panes read as a third panel. The
+  grab zone is not hairline -- a 1px pointer target is unusable -- so a
+  pseudo-element widens it to 9px (21px where the pointer is coarse) while the
+  line itself stays 1px. It needs `z-index` above the topbar's 5, or the divider
+  could not be grabbed alongside the tab row; the 4px that hangs into the right
+  pane lands inside the empty margin `.tabs` already leaves itself, so it never
+  covers the logo. Two checks: the line measures 1px, and a pointer 3px off it
+  on either side still lands on the divider.
+
+* **The pane's width is a width, not a proportion.** The first cut stored the
+  divider as a fraction, which meant resizing the browser resized the *cluster*
+  and left the log proportional — backwards. The pane is sized to fit the spot
+  columns the operator reads, and those are a fixed number of characters wide,
+  so it now stores pixels and the log is the elastic half. The operator's chosen
+  width is kept unclamped underneath the displayed one, so a window too narrow
+  for both halves makes the pane yield and then hands the width back when there
+  is room again. Four checks cover it, including that widening restores the
+  chosen width exactly.
+
+* **The band map now has two possible sources, and picks.** Both instances
+  republish their visible spots every five seconds with different filters, so
+  payloads carry `src` and the pane wins whenever it is mounted: a mark in the
+  band map that is absent from the list beside it is a lie. The pane also stops
+  writing the shared `localStorage` cache, leaving that to the window.
+
+* **Found by looking at the rendered page, not the source.** The first cut gave
+  the log a 600 px floor. A screenshot showed `BACKUP` sliced in half — and every
+  width assertion still passed, because `.log-shell` is `overflow: hidden`, so a
+  row that no longer fits is *clipped*, not overflowed. Measured in a browser, the
+  input row needs 780 px on one line; letting it wrap when the split is open (the
+  answer `.kbd-open` already gives on a phone) drops the real floor to the button
+  bar's 615 px, so the minimums are 630 px for the log and 280 px for the pane,
+  and the split refuses below a 920 px viewport — which still admits a 1024-wide
+  tablet in landscape. `.log-statusbar` is left clipping on purpose: `nowrap` plus
+  `overflow: hidden` is a deliberate choice there, keeping the log's vertical
+  budget fixed. `.tabs` had to stop sizing itself in `vw`, having moved inside the
+  right column.
+
+* **`tools/log-dxc-split-smoke.js`** — 45 checks in two Chrome passes (a viewport
+  cannot be poked into being narrow). Its fixture speaks WebSocket and models the
+  device's eviction faithfully, so a browser-side bug that opens two sockets fails
+  the test instead of passing it. The first check is `document.activeElement` in
+  the *parent* document after a click inside the iframe, plus a keystroke
+  afterwards; the band-map gate is checked in both directions, because "the
+  external window's spot did not appear" would otherwise also pass if nothing was
+  ever delivered. Three of the failures during development were the harness's own:
+  an un-awaited async predicate in `until()`, a `BroadcastChannel` posted from the
+  receiving context, and a missing `/oi3/state` route whose 404 silently switched
+  the band map off. No firmware change, so `dxc-ws-check.py` is unaffected;
+  `log-rtty-panel-smoke` 42/42, `pa-panel-smoke` 66/66, `log-rst-smoke` 24/24,
+  `log-year-groups-smoke` 15/15, `log-hotkey-smoke` 12/12, `rtty-page-smoke` 32/32.
+
 **QRPLog can drive the linear amplifier.**
 
 * **The confirm window now outlasts the daemon's own giving up.** `CONFIRM_MS`

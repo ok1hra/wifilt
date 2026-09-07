@@ -4,15 +4,26 @@ tbody tr.dupe{background:#222}
 tbody tr.dupe:hover{background:#2c2c2c}
 tbody tr.dupe td,tbody tr.dupe td *{color:#666!important}
 </style></head><body><div class="wrap"><table id="tbl"><thead><tr id="hdr"><th data-c="time" class="c-time">UTC</th><th data-c="freq" class="c-freq"><button id="freqFilterBtn" class="th-filter-btn" type="button" title="Left click: Band filter">kHz</button></th><th data-c="dx" class="c-dx"><button id="dxFilterBtn" class="th-filter-btn" type="button" title="Left click: DX filter">DX</button></th><th data-c="dir" class="c-dir"><button id="dirFilterBtn" class="th-filter-btn" type="button" title="Left click: Distance filter">km</button></th><th data-c="spotter" class="c-spotter">Spotter</th><th data-c="type" class="c-type"><button id="typeFilterBtn" class="th-filter-btn" type="button" title="Left click: Type filter">Type</button></th><th data-c="db" class="c-db"><button id="dbFilterBtn" class="th-filter-btn" type="button" title="Left click: dB filter">dB</button></th><th data-c="wpm" class="c-wpm">WPM</th><th data-c="comment" class="c-comment">Info</th><th data-c="raw" class="c-raw">Raw</th></tr></thead><tbody id="body"></tbody></table><pre id="raw" class="raw"></pre><div id="histogram" class="histogram"></div></div><div id="cols"></div><div id="typeMenu"></div><div id="dirMenu"></div><div id="freqMenu"></div><div id="dbMenu"></div><div id="dxMenu"></div><div class="bar"><span class="title">DXC</span><span id="ws" class="s bad">WS off</span><span id="tn" class="s warn">Telnet ?</span><span id="cnt" class="s n">0</span><input id="cmd" autocomplete="off" spellcheck="false" placeholder="DX cluster command, Enter sends CR/LF"><button id="recon">Reconnect Telnet</button><select id="viewMode" title="DXC view mode"><option value="table">Table</option><option value="raw">Raw</option><option value="histogram">Histogram</option></select><button id="colbtn">Columns</button><button id="clear">Clear</button><select id="logDupeMode" title="Log dupe vs active /log (same call + band): off = ignore, gray = highlight worked, hidden = remove worked"><option value="off">Dupe: off</option><option value="gray">Show gray</option><option value="hidden">Hidden</option></select><button id="scrollToggle" title="Toggle automatic scrolling">Stop scroll</button><button id="zoomIn">+</button><button id="zoomOut">-</button><span class="hint">Click on DX = Google &bull; kHz: Left = TRX1, Middle = TRX2, Right = TRX3</span></div><script src="/dxcc.js?v=c56ee081"></script><script src="/log-db.js?v=6055416f"></script><script>
-(function(){"use strict";var MAX=500,RAWMAX=60000,WS_PATH="/dxcws",RECONNECT_CMD="@reconnect",DIR_FILTER_MAX=20000,DIR_FILTER_STEP=100,DB_FILTER_MIN=-30,DB_FILTER_MAX=100,DB_FILTER_STEP=1,DX_FILTER_DEFAULT_TEXT="^(?!^(?:R[A-Z]?|U[A-I0]|E[UVW])[0-9]{1,3}[A-Z]{1,4}(?:/[A-Z0-9]+)?$).+",DXC_SPOT_STORAGE_KEY="wifilt-dxc-spots",DXC_SPOT_CHANNEL_NAME="wifilt-dxc-spots",BAND_DEFS=[{id:"160m",label:"160m",min:1800,max:2000},{id:"80m",label:"80m",min:3500,max:3800},{id:"60m",label:"60m",min:5351.5,max:5366.5},{id:"40m",label:"40m",min:7000,max:7200},{id:"30m",label:"30m",min:10100,max:10150},{id:"20m",label:"20m",min:14000,max:14350},{id:"17m",label:"17m",min:18068,max:18168},{id:"15m",label:"15m",min:21000,max:21450},{id:"12m",label:"12m",min:24890,max:24990},{id:"10m",label:"10m",min:28000,max:29700},{id:"6m",label:"6m",min:50000,max:52000},{id:"4m",label:"4m",min:70000,max:70500},{id:"2m",label:"2m",min:144000,max:146000},{id:"70cm",label:"70cm",min:430000,max:440000},{id:"23cm",label:"23cm",min:1240000,max:1300000},{id:"13cm",label:"13cm",min:2320000,max:2450000},{id:"9cm",label:"9cm",min:3400000,max:3475000},{id:"6cm",label:"6cm",min:5650000,max:5850000},{id:"3cm",label:"3cm",min:10000000,max:10500000}],rows=[],rawLines=[],hidden={},viewMode="table",ws=null,rtimer=0,dxcLocator="",callsign="",loginSent=false,loginTimer=0,trx2NetId=0,trx3NetId=0,dxcSpotChannel=null,dxcSpotLastPayload=null,typeFilter={CQ:true,DE:true,EMPTY:true},dirFilter={min:0,max:DIR_FILTER_MAX},dbFilter={min:DB_FILTER_MIN,max:DB_FILTER_MAX},freqFilter={},dxFilter={text:"",regex:false},tbody=document.getElementById("body"),raw=document.getElementById("raw"),histogram=document.getElementById("histogram"),cnt=document.getElementById("cnt"),cmd=document.getElementById("cmd"),wsEl=document.getElementById("ws"),tnEl=document.getElementById("tn"),cols=document.getElementById("cols"),typeMenu=document.getElementById("typeMenu"),dirMenu=document.getElementById("dirMenu"),freqMenu=document.getElementById("freqMenu"),dbMenu=document.getElementById("dbMenu"),dxMenu=document.getElementById("dxMenu"),viewModeSelect=document.getElementById("viewMode"),names={time:"UTC",freq:"kHz",dx:"DX",dir:"km",spotter:"Spotter",type:"Type",db:"dB",wpm:"WPM",comment:"Info",raw:"Raw"};
-try{hidden=JSON.parse(localStorage.dxcCols||"{}")||{}}catch(e){hidden={}}
+(function(){"use strict";
+/* Embed mode: this page is the LEFT half of QRPlog's split view, living in a
+   same-origin iframe. Two things change. (1) Every localStorage key gets its
+   own prefix, so the pane's filters, columns, zoom and view mode are
+   independent of the external window's -- without that, two live instances
+   would be only two scroll positions onto one setting. (2) A clicked
+   frequency goes straight to the parent document instead of over a
+   BroadcastChannel; see handOffToLog() for why that is what moves the
+   cursor. */
+var EMBED=/(?:^|[?&])embed=1(?:&|$)/.test(location.search);
+function LS(n){return (EMBED?"dxcE":"dxc")+n}
+var MAX=500,RAWMAX=60000,WS_PATH="/dxcws",RECONNECT_CMD="@reconnect",DIR_FILTER_MAX=20000,DIR_FILTER_STEP=100,DB_FILTER_MIN=-30,DB_FILTER_MAX=100,DB_FILTER_STEP=1,DX_FILTER_DEFAULT_TEXT="^(?!^(?:R[A-Z]?|U[A-I0]|E[UVW])[0-9]{1,3}[A-Z]{1,4}(?:/[A-Z0-9]+)?$).+",DXC_SPOT_STORAGE_KEY="wifilt-dxc-spots",DXC_SPOT_CHANNEL_NAME="wifilt-dxc-spots",BAND_DEFS=[{id:"160m",label:"160m",min:1800,max:2000},{id:"80m",label:"80m",min:3500,max:3800},{id:"60m",label:"60m",min:5351.5,max:5366.5},{id:"40m",label:"40m",min:7000,max:7200},{id:"30m",label:"30m",min:10100,max:10150},{id:"20m",label:"20m",min:14000,max:14350},{id:"17m",label:"17m",min:18068,max:18168},{id:"15m",label:"15m",min:21000,max:21450},{id:"12m",label:"12m",min:24890,max:24990},{id:"10m",label:"10m",min:28000,max:29700},{id:"6m",label:"6m",min:50000,max:52000},{id:"4m",label:"4m",min:70000,max:70500},{id:"2m",label:"2m",min:144000,max:146000},{id:"70cm",label:"70cm",min:430000,max:440000},{id:"23cm",label:"23cm",min:1240000,max:1300000},{id:"13cm",label:"13cm",min:2320000,max:2450000},{id:"9cm",label:"9cm",min:3400000,max:3475000},{id:"6cm",label:"6cm",min:5650000,max:5850000},{id:"3cm",label:"3cm",min:10000000,max:10500000}],rows=[],rawLines=[],hidden={},viewMode="table",ws=null,rtimer=0,dxcLocator="",callsign="",loginSent=false,loginTimer=0,trx2NetId=0,trx3NetId=0,dxcSpotChannel=null,dxcSpotLastPayload=null,typeFilter={CQ:true,DE:true,EMPTY:true},dirFilter={min:0,max:DIR_FILTER_MAX},dbFilter={min:DB_FILTER_MIN,max:DB_FILTER_MAX},freqFilter={},dxFilter={text:"",regex:false},tbody=document.getElementById("body"),raw=document.getElementById("raw"),histogram=document.getElementById("histogram"),cnt=document.getElementById("cnt"),cmd=document.getElementById("cmd"),wsEl=document.getElementById("ws"),tnEl=document.getElementById("tn"),cols=document.getElementById("cols"),typeMenu=document.getElementById("typeMenu"),dirMenu=document.getElementById("dirMenu"),freqMenu=document.getElementById("freqMenu"),dbMenu=document.getElementById("dbMenu"),dxMenu=document.getElementById("dxMenu"),viewModeSelect=document.getElementById("viewMode"),names={time:"UTC",freq:"kHz",dx:"DX",dir:"km",spotter:"Spotter",type:"Type",db:"dB",wpm:"WPM",comment:"Info",raw:"Raw"};
+try{hidden=JSON.parse(localStorage[LS("Cols")]||"{}")||{}}catch(e){hidden={}}
 function esc(s){return String(s||"").replace(/[&<>\"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
 function setClass(el,txt,cls){el.className="s "+cls;el.textContent=txt}
 function fmtThousands(value){return String(value).replace(/\B(?=(\d{3})+(?!\d))/g," ")}
 function fmtTimeUtc(value){var s=String(value||"").trim();return /^[0-2][0-9][0-5][0-9]$/.test(s)?s.slice(0,2)+":"+s.slice(2):s}
 function valueTone(value,min,max){var n=Number(value),lo=Number(min),hi=Number(max),ratio,lightness;if(!isFinite(n)||!isFinite(lo)||!isFinite(hi))return "";if(hi<=lo)return "";ratio=(n-lo)/(hi-lo);ratio=Math.max(0,Math.min(1,ratio));lightness=22+ratio*54;return "color:hsl(131, 70%, "+lightness+"%)"}
 function meterBars(value,min,max,count){var n=Number(value),lo=Number(min),hi=Number(max),ratio,bars="";count=Number(count)||9;if(!isFinite(n)||!isFinite(lo)||!isFinite(hi))return "";if(hi<=lo)return Array(count+1).join("|");ratio=(n-lo)/(hi-lo);ratio=Math.max(0,Math.min(1,ratio));bars=Math.max(1,Math.round(ratio*count));return Array(bars+1).join("|")}
-function applyCols(){Object.keys(names).forEach(function(c){var on=!hidden[c];document.querySelectorAll('[data-c="'+c+'"],.c-'+c).forEach(function(e){e.classList.toggle("hide",!on)})});try{localStorage.dxcCols=JSON.stringify(hidden)}catch(e){}buildCols()}
+function applyCols(){Object.keys(names).forEach(function(c){var on=!hidden[c];document.querySelectorAll('[data-c="'+c+'"],.c-'+c).forEach(function(e){e.classList.toggle("hide",!on)})});try{localStorage[LS("Cols")]=JSON.stringify(hidden)}catch(e){}buildCols()}
 function buildCols(){var h='<div class="cols-grid">';Object.keys(names).forEach(function(c){h+='<label><input type="checkbox" data-x="'+c+'" '+(!hidden[c]?"checked":"")+'> '+names[c]+'</label>'});cols.innerHTML=h+"</div>"}
 function columnVisible(name){return !hidden[name]}
 function clamp(value,min,max){value=Number(value);if(!isFinite(value))value=min;return Math.max(min,Math.min(max,value))}
@@ -26,33 +37,33 @@ function hideDirMenu(){dirMenu.classList.remove("on")}
 function hideFreqMenu(){freqMenu.classList.remove("on")}
 function hideDbMenu(){dbMenu.classList.remove("on")}
 function hideDxMenu(){dxMenu.classList.remove("on")}
-function loadTypeFilter(){try{var stored=JSON.parse(localStorage.dxcTypeFilter||"{}")||{};["CQ","DE","EMPTY"].forEach(function(k){if(typeof stored[k]==="boolean")typeFilter[k]=stored[k]})}catch(e){}}
-function saveTypeFilter(){try{localStorage.dxcTypeFilter=JSON.stringify(typeFilter)}catch(e){}}
+function loadTypeFilter(){try{var stored=JSON.parse(localStorage[LS("TypeFilter")]||"{}")||{};["CQ","DE","EMPTY"].forEach(function(k){if(typeof stored[k]==="boolean")typeFilter[k]=stored[k]})}catch(e){}}
+function saveTypeFilter(){try{localStorage[LS("TypeFilter")]=JSON.stringify(typeFilter)}catch(e){}}
 function buildTypeMenu(){var h="<div class='filter-menu-title'>Type filter</div>";["CQ","DE","EMPTY"].forEach(function(k){h+='<label><input type="checkbox" data-type-filter="'+k+'" '+(typeFilter[k]?"checked":"")+'> '+k+'</label>'});typeMenu.innerHTML=h}
 function typeAllowed(value){var t=String(value||"").trim().toUpperCase();if(!t)return !!typeFilter.EMPTY;return !!typeFilter[t]}
-function loadDirFilter(){try{var stored=JSON.parse(localStorage.dxcDirFilter||"{}")||{};if(stored){dirFilter.min=clamp(stored.min,0,DIR_FILTER_MAX);dirFilter.max=clamp(stored.max,0,DIR_FILTER_MAX)}}catch(e){}normalizeRangeFilter(dirFilter,0,DIR_FILTER_MAX,DIR_FILTER_STEP)}
-function saveDirFilter(){try{localStorage.dxcDirFilter=JSON.stringify(dirFilter)}catch(e){}}
+function loadDirFilter(){try{var stored=JSON.parse(localStorage[LS("DirFilter")]||"{}")||{};if(stored){dirFilter.min=clamp(stored.min,0,DIR_FILTER_MAX);dirFilter.max=clamp(stored.max,0,DIR_FILTER_MAX)}}catch(e){}normalizeRangeFilter(dirFilter,0,DIR_FILTER_MAX,DIR_FILTER_STEP)}
+function saveDirFilter(){try{localStorage[LS("DirFilter")]=JSON.stringify(dirFilter)}catch(e){}}
 function fmtKm(value){return fmtThousands(Math.round(Number(value)||0))}
 function syncDirFilterInputs(){var minInput=document.getElementById("dirMinInput"),maxInput=document.getElementById("dirMaxInput"),minLabel=document.getElementById("dirMinValue"),maxLabel=document.getElementById("dirMaxValue");if(!minInput||!maxInput||!minLabel||!maxLabel)return;minInput.value=String(dirFilter.min);maxInput.value=String(dirFilter.max);minLabel.textContent=fmtKm(dirFilter.min)+" km";maxLabel.textContent=fmtKm(dirFilter.max)+" km"}
 function buildDirMenu(){dirMenu.innerHTML="<div class='filter-menu-title'>Distance filter</div><div class='range-row'><span id='dirMinValue'></span><span id='dirMaxValue'></span></div><div class='range-track'><input id='dirMinInput' type='range' min='0' max='"+DIR_FILTER_MAX+"' step='"+DIR_FILTER_STEP+"' value='"+dirFilter.min+"'><input id='dirMaxInput' type='range' min='0' max='"+DIR_FILTER_MAX+"' step='"+DIR_FILTER_STEP+"' value='"+dirFilter.max+"'></div><div class='filter-actions'><button type='button' class='menu-btn' data-dir-action='reset'>0 - 20 000 km</button></div>";syncDirFilterInputs()}
 function dirAllowed(dir){var km;if(!dir)return true;km=Number(dir.km);if(!isFinite(km))return true;return km>=dirFilter.min&&km<=dirFilter.max}
-function loadDbFilter(){try{var stored=JSON.parse(localStorage.dxcDbFilter||"{}")||{};if(stored){dbFilter.min=clamp(stored.min,DB_FILTER_MIN,DB_FILTER_MAX);dbFilter.max=clamp(stored.max,DB_FILTER_MIN,DB_FILTER_MAX)}}catch(e){}normalizeRangeFilter(dbFilter,DB_FILTER_MIN,DB_FILTER_MAX,DB_FILTER_STEP)}
-function saveDbFilter(){try{localStorage.dxcDbFilter=JSON.stringify(dbFilter)}catch(e){}}
+function loadDbFilter(){try{var stored=JSON.parse(localStorage[LS("DbFilter")]||"{}")||{};if(stored){dbFilter.min=clamp(stored.min,DB_FILTER_MIN,DB_FILTER_MAX);dbFilter.max=clamp(stored.max,DB_FILTER_MIN,DB_FILTER_MAX)}}catch(e){}normalizeRangeFilter(dbFilter,DB_FILTER_MIN,DB_FILTER_MAX,DB_FILTER_STEP)}
+function saveDbFilter(){try{localStorage[LS("DbFilter")]=JSON.stringify(dbFilter)}catch(e){}}
 function fmtDbValue(value){var n=Number(value);if(!isFinite(n))n=0;return String(Math.round(n))+" dB"}
 function syncDbFilterInputs(){var minInput=document.getElementById("dbMinInput"),maxInput=document.getElementById("dbMaxInput"),minLabel=document.getElementById("dbMinValue"),maxLabel=document.getElementById("dbMaxValue");if(!minInput||!maxInput||!minLabel||!maxLabel)return;minInput.value=String(dbFilter.min);maxInput.value=String(dbFilter.max);minLabel.textContent=fmtDbValue(dbFilter.min);maxLabel.textContent=fmtDbValue(dbFilter.max)}
 function buildDbMenu(){dbMenu.innerHTML="<div class='filter-menu-title'>dB filter</div><div class='range-row'><span id='dbMinValue'></span><span id='dbMaxValue'></span></div><div class='range-track'><input id='dbMinInput' type='range' min='"+DB_FILTER_MIN+"' max='"+DB_FILTER_MAX+"' step='"+DB_FILTER_STEP+"' value='"+dbFilter.min+"'><input id='dbMaxInput' type='range' min='"+DB_FILTER_MIN+"' max='"+DB_FILTER_MAX+"' step='"+DB_FILTER_STEP+"' value='"+dbFilter.max+"'></div><div class='filter-actions'><button type='button' class='menu-btn' data-db-action='reset'>"+DB_FILTER_MIN+" - "+DB_FILTER_MAX+" dB</button></div>";syncDbFilterInputs()}
 function dbAllowed(value){var n=Number(value);if(!isFinite(n))return true;return n>=dbFilter.min&&n<=dbFilter.max}
 function bandForFreq(freqKhz){var value=Number(freqKhz),i,band;if(!isFinite(value))return"";for(i=0;i<BAND_DEFS.length;i++){band=BAND_DEFS[i];if(value>=band.min&&value<=band.max)return band.id}return""}
-function loadFreqFilter(){var stored;BAND_DEFS.forEach(function(band){freqFilter[band.id]=true});try{stored=JSON.parse(localStorage.dxcFreqFilter||"{}")||{};BAND_DEFS.forEach(function(band){if(typeof stored[band.id]==="boolean")freqFilter[band.id]=stored[band.id]})}catch(e){}}
-function saveFreqFilter(){try{localStorage.dxcFreqFilter=JSON.stringify(freqFilter)}catch(e){}}
+function loadFreqFilter(){var stored;BAND_DEFS.forEach(function(band){freqFilter[band.id]=true});try{stored=JSON.parse(localStorage[LS("FreqFilter")]||"{}")||{};BAND_DEFS.forEach(function(band){if(typeof stored[band.id]==="boolean")freqFilter[band.id]=stored[band.id]})}catch(e){}}
+function saveFreqFilter(){try{localStorage[LS("FreqFilter")]=JSON.stringify(freqFilter)}catch(e){}}
 function buildFreqMenu(){var h="<div class='filter-menu-title'>Band filter</div><div class='freq-grid'>";BAND_DEFS.forEach(function(band){h+='<label><input type="checkbox" data-band-filter="'+band.id+'" '+(freqFilter[band.id]?"checked":"")+'> '+band.label+"</label>"});h+="</div><div class='filter-actions'><button type='button' class='menu-btn' data-band-action='all'>All on</button><button type='button' class='menu-btn' data-band-action='none'>All off</button></div>";freqMenu.innerHTML=h}
 function freqAllowed(freqKhz){var bandId=bandForFreq(freqKhz);if(!bandId)return true;return !!freqFilter[bandId]}
 function bandIndexById(bandId){for(var i=0;i<BAND_DEFS.length;i++){if(BAND_DEFS[i].id===bandId)return i}return-1}
-function loadViewMode(){var stored="";try{stored=String(localStorage.dxcViewMode||"")}catch(e){}if(stored==="raw"||stored==="histogram"||stored==="table"){viewMode=stored}}
-function saveViewMode(){try{localStorage.dxcViewMode=viewMode}catch(e){}}
+function loadViewMode(){var stored="";try{stored=String(localStorage[LS("ViewMode")]||"")}catch(e){}if(stored==="raw"||stored==="histogram"||stored==="table"){viewMode=stored}}
+function saveViewMode(){try{localStorage[LS("ViewMode")]=viewMode}catch(e){}}
 function applyViewMode(){var table=document.getElementById("tbl");if(viewModeSelect)viewModeSelect.value=viewMode;raw.classList.toggle("on",viewMode==="raw");histogram.classList.toggle("on",viewMode==="histogram");if(table)table.style.display=viewMode==="table"?"table":"none"}
-function loadDxFilter(){try{var stored=JSON.parse(localStorage.dxcDxFilter||"{}")||{};if(stored){dxFilter.text=String(stored.text||"");dxFilter.regex=!!stored.regex}}catch(e){}}
-function saveDxFilter(){try{localStorage.dxcDxFilter=JSON.stringify(dxFilter)}catch(e){}}
+function loadDxFilter(){try{var stored=JSON.parse(localStorage[LS("DxFilter")]||"{}")||{};if(stored){dxFilter.text=String(stored.text||"");dxFilter.regex=!!stored.regex}}catch(e){}}
+function saveDxFilter(){try{localStorage[LS("DxFilter")]=JSON.stringify(dxFilter)}catch(e){}}
 function getDxRegex(){if(!dxFilter.regex||!dxFilter.text)return null;try{return new RegExp(dxFilter.text,"i")}catch(e){return false}}
 function syncDxFilterInputs(){var textInput=document.getElementById("dxFilterInput"),regexInput=document.getElementById("dxRegexInput"),regex=getDxRegex();if(textInput){textInput.value=dxFilter.text;textInput.classList.toggle("invalid",dxFilter.regex&&dxFilter.text&&regex===false)}if(regexInput){regexInput.checked=!!dxFilter.regex}}
 function buildDxMenu(){dxMenu.innerHTML="<div class='filter-menu-title'>DX filter</div><input id='dxFilterInput' class='filter-input' type='text' autocomplete='off' spellcheck='false' placeholder='Callsign, text, or regex'><label><input id='dxRegexInput' type='checkbox'> Regex</label><div class='filter-actions'><button type='button' class='menu-btn' data-dx-action='clear'>Clear</button></div><div class='filter-note'>Without Regex, this matches plain text. With Regex enabled, it uses a JavaScript regular expression and ignores letter case.</div>";syncDxFilterInputs()}
@@ -70,7 +81,20 @@ function bearingDegrees(lat1Deg,lon1Deg,lat2Deg,lon2Deg){var lat1=degToRad(lat1D
 function getDxDistanceInfo(dx){var normalized=normalizeCallsign(dx),entry,myPos,km,bearing,label;if(!normalized||!window.DXCC)return null;entry=DXCC.lookupDxcc(normalized);if(!entry)return null;myPos=maidenheadToLatLon(dxcLocator||"JO60UC");if(!myPos)return null;km=distanceKm(myPos.lat,myPos.lon,entry.latitude,entry.longitude);bearing=bearingDegrees(myPos.lat,myPos.lon,entry.latitude,entry.longitude);label=String(entry.mainPrefix||"");return{km:km,bearing:bearing,title:label&&label!==normalized?normalized+" -> "+label:normalized}}
 function freqKhzToHz(freqKhz){var value=Number(freqKhz);if(!isFinite(value)||value<=0)return"";return String(Math.round(value*1000))}
 function setTrxFrequency(freqKhz,dxCallsign){setTrxFrequencyN(freqKhz,dxCallsign,1)}
-function setTrxFrequencyN(freqKhz,dxCallsign,trxN){var hz=freqKhzToHz(freqKhz);if(!hz)return;var netId=trxN===2?trx2NetId:trxN===3?trx3NetId:0;if(trxN===1){fetch("/cmd",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({type:"setFrequency",reqId:"dxc-1",frequency:hz})}).catch(function(){})}else if(netId){fetch("/oi3/set-hz",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({trx:trxN,hz:parseInt(hz,10)})}).catch(function(){})}else{return}try{var ch=new BroadcastChannel("wifilt-dxc-action");ch.postMessage({type:"dxc-tune",callsign:normalizeCallsign(dxCallsign||""),trx:trxN});ch.close()}catch(e){}}
+/* Handing a spot to the log. The pop-up could only ever post on a channel,
+   which is why the callsign arrived but the KEYBOARD did not: the message is
+   delivered a task later, and window focus was still in the pop-up anyway.
+   Embedded, the log is our PARENT document -- so call into it synchronously,
+   inside the click's own task. insertWord() calls inpCall.focus(), which
+   blurs this iframe and puts the caret AND the keyboard in Call, so the next
+   keystroke is typed into the log. That is the entire reason the split view
+   exists.
+   It also scopes the hand-off correctly: a channel broadcast lands in every
+   open QRPlog tab, this lands in the one this pane is part of.
+   Standalone, nothing changes -- the channel is still the only way across,
+   and log.js has read it since long before this. */
+function handOffToLog(call,trxN){var lr=null;try{if(window.parent&&window.parent!==window)lr=window.parent.LogRadio}catch(e){lr=null}if(lr&&lr.insertWord){try{if(lr.setRunMode)lr.setRunMode("SP");lr.insertWord(call,trxN,null);return}catch(e){}}try{var ch=new BroadcastChannel("wifilt-dxc-action");ch.postMessage({type:"dxc-tune",callsign:call,trx:trxN});ch.close()}catch(e){}}
+function setTrxFrequencyN(freqKhz,dxCallsign,trxN){var hz=freqKhzToHz(freqKhz);if(!hz)return;var netId=trxN===2?trx2NetId:trxN===3?trx3NetId:0;if(trxN===1){fetch("/cmd",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({type:"setFrequency",reqId:"dxc-1",frequency:hz})}).catch(function(){})}else if(netId){fetch("/oi3/set-hz",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({trx:trxN,hz:parseInt(hz,10)})}).catch(function(){})}else{return}handOffToLog(normalizeCallsign(dxCallsign||""),trxN)}
 function readJson(url,onDone,onError){var http=new XMLHttpRequest();http.onreadystatechange=function(){var data;if(http.readyState!==4)return;if(http.status!==200){if(onError)onError();return}try{data=JSON.parse(String(http.responseText||"{}"))}catch(e){if(onError)onError();return}onDone(data)};http.open("GET",url,true);http.send()}
 function initDxcInfo(){readJson("/dxcinfo",function(data){var loc=normalizeMaidenheadLocator(String(data.locator||""));if(loc)dxcLocator=loc;callsign=normalizeCallsign(data.callsign||"");trx2NetId=data.trx2netid||0;trx3NetId=data.trx3netid||0;render()},function(){})}
 function addLine(line){var p;if(line===null||line===undefined)return;line=String(line).replace(/\r/g,"").trim();if(!line)return;rawLines.push(line);var r=rawLines.join("\n");if(r.length>RAWMAX){rawLines=r.slice(-RAWMAX).split("\n").filter(function(x){return String(x||"").trim()!==""})}raw.textContent=rawLines.join("\n");p=parse(line);if(!p)return;rows.push(p);if(rows.length>MAX)rows.shift();render();scrollOutputsToBottom();scheduleLogDupeRefresh()}
@@ -78,16 +102,109 @@ function renderHistogram(visibleRows){var counts={},minBandIndex=-1,maxBandIndex
 function initDxcSpotBridge(){if(typeof BroadcastChannel==="function"){try{dxcSpotChannel=new BroadcastChannel(DXC_SPOT_CHANNEL_NAME)}catch(e){dxcSpotChannel=null}}}
 function utcHmToRecentAgeMinutes(hm){var text=String(hm||"").trim(),hours,minutes,spotNow,now,diffMinutes;if(!/^[0-2][0-9][0-5][0-9]$/.test(text))return null;hours=Number(text.slice(0,2));minutes=Number(text.slice(2,4));if(hours>23||minutes>59)return null;now=new Date();spotNow=Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate(),hours,minutes,0,0);diffMinutes=Math.round((now.getTime()-spotNow)/60000);if(diffMinutes<-720){diffMinutes+=1440}else if(diffMinutes>720){diffMinutes-=1440}return diffMinutes}
 function isSpotWithinLastMinutes(row,limitMinutes){var ageMinutes=utcHmToRecentAgeMinutes(row&&row.time);return ageMinutes!==null&&ageMinutes>=0&&ageMinutes<=Number(limitMinutes||0)}
-function publishVisibleDxccSpots(visibleRows){var counts={},counts30={},i,dx,entry,payload,text,row;for(i=0;i<visibleRows.length;i++){row=visibleRows[i].row||null;dx=visibleRows[i].dx||normalizeCallsign(row&&row.dx);if(!dx)continue;entry=window.DXCC?DXCC.lookupDxcc(dx):null;if(!entry||!entry.mainPrefix)continue;counts[entry.mainPrefix]=(counts[entry.mainPrefix]||0)+1;if(isSpotWithinLastMinutes(row,30)){counts30[entry.mainPrefix]=(counts30[entry.mainPrefix]||0)+1}}var spots=[];for(i=0;i<visibleRows.length;i++){row=visibleRows[i].row||null;if(!row||!row.freq||!row.dx)continue;spots.push({dx:row.dx,freq:row.freq,time:row.time||""})}payload={ts:Date.now(),totalVisible:visibleRows.length,spotsByPrefix:counts,spotsByPrefix30Min:counts30,spots:spots};dxcSpotLastPayload=payload;if(dxcSpotChannel){try{dxcSpotChannel.postMessage(payload)}catch(e){}}try{text=JSON.stringify(payload);localStorage.setItem(DXC_SPOT_STORAGE_KEY,text)}catch(e){}}
+function publishVisibleDxccSpots(visibleRows){var counts={},counts30={},i,dx,entry,payload,text,row;for(i=0;i<visibleRows.length;i++){row=visibleRows[i].row||null;dx=visibleRows[i].dx||normalizeCallsign(row&&row.dx);if(!dx)continue;entry=window.DXCC?DXCC.lookupDxcc(dx):null;if(!entry||!entry.mainPrefix)continue;counts[entry.mainPrefix]=(counts[entry.mainPrefix]||0)+1;if(isSpotWithinLastMinutes(row,30)){counts30[entry.mainPrefix]=(counts30[entry.mainPrefix]||0)+1}}var spots=[];for(i=0;i<visibleRows.length;i++){row=visibleRows[i].row||null;if(!row||!row.freq||!row.dx)continue;spots.push({dx:row.dx,freq:row.freq,time:row.time||""})}payload={ts:Date.now(),src:EMBED?"embed":"window",totalVisible:visibleRows.length,spotsByPrefix:counts,spotsByPrefix30Min:counts30,spots:spots};dxcSpotLastPayload=payload;if(dxcSpotChannel){try{dxcSpotChannel.postMessage(payload)}catch(e){}}if(!EMBED){try{text=JSON.stringify(payload);localStorage.setItem(DXC_SPOT_STORAGE_KEY,text)}catch(e){}}}
 function collectVisibleRows(){var visibleRows=[],visibleDbs=[],visibleDirs=[],useTypeFilter=columnVisible("type"),useFreqFilter=columnVisible("freq"),useDirFilter=columnVisible("dir"),useDxFilter=columnVisible("dx"),useDbFilter=columnVisible("db"),r,dx,dir,dbValue;for(var i=0;i<rows.length;i++){r=rows[i];if(useTypeFilter&&!typeAllowed(r.type))continue;if(useFreqFilter&&!freqAllowed(r.freq))continue;if(useDxFilter&&!dxAllowed(r.dx))continue;dbValue=(r.db===null||r.db===undefined||String(r.db).trim()==="")?null:Number(r.db);if(useDbFilter&&dbValue!==null&&!dbAllowed(dbValue))continue;dx=normalizeCallsign(r.dx);if(logDupeMode==="hidden"&&logDupeSet&&logDupeSet[dx+"|"+bandForFreq(r.freq)])continue;dir=useDirFilter?getDxDistanceInfo(dx):null;if(useDirFilter&&!dirAllowed(dir))continue;visibleRows.push({row:r,dx:dx,dir:dir,dbValue:isFinite(dbValue)?dbValue:null});if(dbValue!==null&&isFinite(dbValue)){visibleDbs.push(dbValue)}if(dir&&isFinite(Number(dir.km))){visibleDirs.push(Number(dir.km))}}return{rows:visibleRows,dbs:visibleDbs,dirs:visibleDirs}}
 function republishVisibleDxccSpots(){if(!rows.length){if(dxcSpotLastPayload){publishVisibleDxccSpots([])}return}publishVisibleDxccSpots(collectVisibleRows().rows)}
 function render(){var h="",r,dx,visible=0,dir,dirHtml="",freqHtml="",dbStyle="",dirStyle="",dbMin,dbMax,dirMin,dirMax,dbBar="",collected,visibleRows,visibleDbs,visibleDirs;collected=collectVisibleRows();visibleRows=collected.rows;visibleDbs=collected.dbs;visibleDirs=collected.dirs;if(visibleDbs.length){dbMin=Math.min.apply(null,visibleDbs);dbMax=Math.max.apply(null,visibleDbs)}if(visibleDirs.length){dirMin=Math.min.apply(null,visibleDirs);dirMax=Math.max.apply(null,visibleDirs)}for(var i=0;i<visibleRows.length;i++){r=visibleRows[i].row;dx=visibleRows[i].dx;dir=visibleRows[i].dir;visible++;dirHtml="";freqHtml="<a href='#' class='freq-link' data-freq='"+esc(r.freq)+"' title='Click to set radio frequency'>"+esc(fmtThousands(r.freq))+"</a>";dirStyle=dir?valueTone(dir.km,dirMin,dirMax):"";dbStyle=visibleRows[i].dbValue===null?"":valueTone(visibleRows[i].dbValue,dbMin,dbMax);dbBar=visibleRows[i].dbValue===null?"":meterBars(visibleRows[i].dbValue,dbMin,dbMax,6);if(dir){dirHtml="<span class='dir-wrap' "+(dirStyle?"style='"+dirStyle+"'":"")+"><span class='dir-km'>"+esc(fmtThousands(dir.km))+"</span><span class='dir-arrow' style='transform:rotate("+esc(dir.bearing)+"deg)'>&uarr;</span></span>"}var _dup=logDupeMode==="gray"&&logDupeSet&&logDupeSet[dx+"|"+bandForFreq(r.freq)];h+="<tr"+(_dup?" class='dupe'":"")+" data-dx=\""+esc(dx)+"\"><td class='c-time'>"+esc(fmtTimeUtc(r.time))+"</td><td class='c-freq'>"+freqHtml+"</td><td class='c-dx'><a href='#' class='dx-link' data-dx='"+esc(dx)+"' title='Left click: Google'>"+esc(r.dx)+"</a></td><td class='c-dir'>"+dirHtml+"</td><td class='c-spotter'>"+esc(r.spotter)+"</td><td class='c-type'>"+esc(r.type)+"</td><td class='c-db'"+(dbStyle?" style='"+dbStyle+"'":"")+"><span class='db-wrap'><span class='db-meter'>"+esc(dbBar)+"</span><span class='db-value'>"+esc(r.db)+"</span></span></td><td class='c-wpm'>"+esc(r.wpm)+"</td><td class='c-comment'>"+esc(r.comment)+"</td><td class='c-raw'>"+esc(r.raw)+"</td></tr>"}tbody.innerHTML=h;renderHistogram(visibleRows);publishVisibleDxccSpots(visibleRows);cnt.textContent=visible+"/"+rows.length;applyCols();updateFilterButtonStates();applyViewMode();scrollOutputsToBottom()}
-function connect(){clearTimeout(rtimer);loginSent=false;try{ws&&ws.close()}catch(e){}ws=new WebSocket((location.protocol==="https:"?"wss://":"ws://")+location.hostname+":82"+WS_PATH);setClass(wsEl,"WS ...","warn");ws.onopen=function(){setClass(wsEl,"WS on","ok");clearTimeout(loginTimer);if(callsign){loginTimer=setTimeout(function(){if(ws&&ws.readyState===1){ws.send(callsign+"\r\n");loginSent=true}},3000)}};ws.onclose=function(){clearTimeout(loginTimer);setClass(wsEl,"WS off","bad");rtimer=setTimeout(connect,2500)};ws.onerror=function(){setClass(wsEl,"WS err","bad")};ws.onmessage=function(ev){var d=String(ev.data||"");checkLoginPrompt(d);if(d.indexOf("{\"telnet\"")===0){try{var j=JSON.parse(d);setClass(tnEl,j.telnet?"Telnet on":"Telnet off",j.telnet?"ok":"bad");return}catch(e){}}d.split(/\n/).forEach(addLine)}}
-function send(s){s=String(s||cmd.value||"");if(!s)return;if(ws&&ws.readyState===1){ws.send(s+"\r\n");cmd.value=""}}
+/* ── One cluster socket, two live views ───────────────────────────────────────
+   The firmware holds exactly ONE DX cluster WebSocket client (wifilt.ino:654).
+   A second connection EVICTS the first (:9259) and forces a fresh telnet login
+   (:9271), and this page reconnects 2.5 s after any close -- so two instances
+   evict each other forever. Not a theory: a long "DXC keeps dropping WS and
+   Telnet" hunt ended as five DXC windows open at once (Changelog.md:2554).
+
+   So exactly one instance owns the socket (LEADER) and relays every raw telnet
+   chunk to the others (FOLLOWERs); commands and reconnect requests travel back
+   the same way. Each keeps its own rows[], filters and render -- which is the
+   whole point of two views. Same shape the RTTY palette uses for the single
+   audio session (log-rtty-panel.js:256-276): probe, answer, hand over.
+
+   A follower deliberately does NOT run checkLoginPrompt() on relayed text: the
+   cluster's "login:" prompt belongs to the leader's telnet session, and a
+   follower has no socket to answer it on. */
+var LINK_NAME="wifilt-dxc-link",
+    LINK_PROBE_MS=300,
+    LINK_ALIVE_MS=3000,
+    LINK_DEAD_MS=8000,
+    LINK_SEED_RAW=400,
+    linkCh=null,
+    linkId=String(Date.now())+"-"+Math.random().toString(36).slice(2),
+    linkRole="",
+    linkSeen=0,
+    telnetOn=false,
+    linkProbeTimer=0,linkAliveTimer=0,linkWatchTimer=0;
+/* Jitter on EVERY election wait. Two instances deciding on the same tick both
+   claim the socket and evict each other -- exactly the "transmitting over each
+   other" failure that zero jitter in all 13 retry waits produced in Mercury's
+   ARQ state machine, and it was fixed there the same way. */
+function linkJitter(base){return base+Math.floor(Math.random()*150)}
+function linkPost(m){if(!linkCh)return;m.id=linkId;try{linkCh.postMessage(m)}catch(e){}}
+/* onclose is cleared BEFORE close(): otherwise a demoted leader's own handler
+   schedules a reconnect and takes the socket straight back. */
+function linkDropSocket(){clearTimeout(rtimer);rtimer=0;clearTimeout(loginTimer);
+  if(ws){try{ws.onclose=null;ws.onerror=null;ws.onmessage=null;ws.close()}catch(e){}ws=null}}
+function becomeLeader(){linkRole="leader";clearTimeout(linkWatchTimer);linkWatchTimer=0;
+  clearTimeout(linkProbeTimer);linkProbeTimer=0;wsEl.title="";
+  clearInterval(linkAliveTimer);linkAliveTimer=setInterval(function(){linkPost({t:"alive"})},LINK_ALIVE_MS);
+  connect()}
+function becomeFollower(){linkRole="follower";clearInterval(linkAliveTimer);linkAliveTimer=0;
+  clearTimeout(linkProbeTimer);linkProbeTimer=0;linkDropSocket();
+  setClass(wsEl,"WS↗","ok");wsEl.title="Relayed through the other DXC instance";
+  linkPost({t:"hello"});linkWatch()}
+function linkWatch(){clearTimeout(linkWatchTimer);
+  linkWatchTimer=setTimeout(function(){if(linkRole==="leader")return;
+    if(Date.now()-linkSeen<LINK_DEAD_MS){linkWatch();return}
+    startElection()},linkJitter(LINK_DEAD_MS))}
+function startElection(){linkRole="";clearTimeout(linkWatchTimer);linkWatchTimer=0;
+  setClass(wsEl,"WS ...","warn");linkPost({t:"probe"});
+  clearTimeout(linkProbeTimer);
+  linkProbeTimer=setTimeout(function(){if(linkRole==="")becomeLeader()},linkJitter(LINK_PROBE_MS))}
+function linkOnMessage(ev){var m=ev.data;if(!m||!m.t||m.id===linkId)return;
+  if(linkRole==="leader"){
+    if(m.t==="probe"){linkPost({t:"leader"});return}
+    if(m.t==="hello"){linkPost({t:"seed",to:m.id,rows:rows.slice(-MAX),raw:rawLines.slice(-LINK_SEED_RAW)});
+      linkPost({t:"telnet",on:telnetOn});return}
+    if(m.t==="cmd"){if(ws&&ws.readyState===1)ws.send(String(m.s||"")+"\r\n");return}
+    /* Two leaders can only overlap for an instant. The lower id keeps the
+       socket, the other stands down -- so the eviction loop never starts. */
+    if((m.t==="leader"||m.t==="alive")&&linkId>m.id)becomeFollower();
+    return}
+  switch(m.t){
+    case "leader":case "alive":
+      linkSeen=Date.now();
+      if(linkRole!=="follower")becomeFollower();
+      break;
+    case "seed":
+      if(m.to!==linkId||!Array.isArray(m.rows))break;
+      linkSeen=Date.now();rows=m.rows.slice(-MAX);
+      if(Array.isArray(m.raw)){rawLines=m.raw.slice(-LINK_SEED_RAW);raw.textContent=rawLines.join("\n")}
+      render();
+      break;
+    case "feed":
+      linkSeen=Date.now();String(m.chunk||"").split(/\n/).forEach(addLine);
+      break;
+    case "telnet":
+      linkSeen=Date.now();telnetOn=!!m.on;
+      setClass(tnEl,telnetOn?"Telnet on":"Telnet off",telnetOn?"ok":"bad");
+      break;
+    case "resign":
+      startElection();
+      break}}
+function linkStart(){try{linkCh=new BroadcastChannel(LINK_NAME)}catch(e){linkCh=null}
+  /* No BroadcastChannel: behave exactly as this page always did -- one
+     instance, one socket, and the operator keeps one window open. */
+  if(!linkCh){linkRole="leader";connect();return}
+  linkCh.onmessage=linkOnMessage;
+  addEventListener("pagehide",function(){if(linkRole==="leader")linkPost({t:"resign"})});
+  startElection()}
+
+function connect(){clearTimeout(rtimer);loginSent=false;try{ws&&ws.close()}catch(e){}ws=new WebSocket((location.protocol==="https:"?"wss://":"ws://")+location.hostname+":82"+WS_PATH);setClass(wsEl,"WS ...","warn");ws.onopen=function(){setClass(wsEl,"WS on","ok");clearTimeout(loginTimer);if(callsign){loginTimer=setTimeout(function(){if(ws&&ws.readyState===1){ws.send(callsign+"\r\n");loginSent=true}},3000)}};ws.onclose=function(){clearTimeout(loginTimer);setClass(wsEl,"WS off","bad");rtimer=setTimeout(function(){if(linkRole==="leader")connect()},2500)};ws.onerror=function(){setClass(wsEl,"WS err","bad")};ws.onmessage=function(ev){var d=String(ev.data||"");checkLoginPrompt(d);if(d.indexOf("{\"telnet\"")===0){try{var j=JSON.parse(d);telnetOn=!!j.telnet;setClass(tnEl,telnetOn?"Telnet on":"Telnet off",telnetOn?"ok":"bad");linkPost({t:"telnet",on:telnetOn});return}catch(e){}}linkPost({t:"feed",chunk:d});d.split(/\n/).forEach(addLine)}}
+/* Covers the Reconnect Telnet button too -- it is send(RECONNECT_CMD). */
+function send(s){s=String(s||cmd.value||"");if(!s)return;if(linkRole==="follower"){linkPost({t:"cmd",s:s});cmd.value="";return}if(ws&&ws.readyState===1){ws.send(s+"\r\n");cmd.value=""}}
 cmd.onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();send()}};document.getElementById("recon").onclick=function(){send(RECONNECT_CMD)};viewModeSelect.onchange=function(){viewMode=this.value||"table";saveViewMode();applyViewMode();scrollOutputsToBottom()};document.getElementById("clear").onclick=function(){rows=[];rawLines=[];raw.textContent="";histogram.innerHTML="";render()};document.getElementById("colbtn").onclick=function(){cols.classList.toggle("on")};document.getElementById("typeFilterBtn").onclick=function(e){e.stopPropagation();if(typeMenu.classList.contains("on")){hideTypeMenu();return}hideDirMenu();hideFreqMenu();hideDbMenu();hideDxMenu();showMenuForButton(typeMenu,this,buildTypeMenu)};document.getElementById("dirFilterBtn").onclick=function(e){e.stopPropagation();if(dirMenu.classList.contains("on")){hideDirMenu();return}hideTypeMenu();hideFreqMenu();hideDbMenu();hideDxMenu();showMenuForButton(dirMenu,this,buildDirMenu)};document.getElementById("freqFilterBtn").onclick=function(e){e.stopPropagation();if(freqMenu.classList.contains("on")){hideFreqMenu();return}hideTypeMenu();hideDirMenu();hideDbMenu();hideDxMenu();showMenuForButton(freqMenu,this,buildFreqMenu)};document.getElementById("dbFilterBtn").onclick=function(e){e.stopPropagation();if(dbMenu.classList.contains("on")){hideDbMenu();return}hideTypeMenu();hideDirMenu();hideFreqMenu();hideDxMenu();showMenuForButton(dbMenu,this,buildDbMenu)};document.getElementById("dxFilterBtn").onclick=function(e){e.stopPropagation();if(dxMenu.classList.contains("on")){hideDxMenu();return}hideTypeMenu();hideDirMenu();hideFreqMenu();hideDbMenu();showMenuForButton(dxMenu,this,buildDxMenu)};document.addEventListener("click",function(e){if(!typeMenu.contains(e.target) && e.target!==document.getElementById("typeFilterBtn"))hideTypeMenu();if(!dirMenu.contains(e.target) && e.target!==document.getElementById("dirFilterBtn"))hideDirMenu();if(!freqMenu.contains(e.target) && e.target!==document.getElementById("freqFilterBtn"))hideFreqMenu();if(!dbMenu.contains(e.target) && e.target!==document.getElementById("dbFilterBtn"))hideDbMenu();if(!dxMenu.contains(e.target) && e.target!==document.getElementById("dxFilterBtn"))hideDxMenu()});typeMenu.onclick=function(e){var k=e.target.getAttribute("data-type-filter");if(k){typeFilter[k]=e.target.checked;saveTypeFilter();render()}};dirMenu.oninput=function(e){var minInput,maxInput,nextMin,nextMax;if(e.target.id!=="dirMinInput"&&e.target.id!=="dirMaxInput")return;minInput=document.getElementById("dirMinInput");maxInput=document.getElementById("dirMaxInput");nextMin=clamp(minInput.value,0,DIR_FILTER_MAX);nextMax=clamp(maxInput.value,0,DIR_FILTER_MAX);if(nextMin>=nextMax){if(e.target.id==="dirMinInput"){nextMin=Math.min(nextMin,DIR_FILTER_MAX-DIR_FILTER_STEP);nextMax=Math.max(nextMax,nextMin+DIR_FILTER_STEP);maxInput.value=String(nextMax);minInput.value=String(nextMin)}else{nextMax=Math.max(nextMax,DIR_FILTER_STEP);nextMin=Math.min(nextMin,nextMax-DIR_FILTER_STEP);minInput.value=String(nextMin);maxInput.value=String(nextMax)}}dirFilter.min=nextMin;dirFilter.max=nextMax;syncDirFilterInputs();saveDirFilter();render()};dirMenu.onclick=function(e){var action=e.target.getAttribute("data-dir-action");if(action==="reset"){dirFilter.min=0;dirFilter.max=DIR_FILTER_MAX;syncDirFilterInputs();saveDirFilter();render()}};freqMenu.onclick=function(e){var bandId=e.target.getAttribute("data-band-filter"),action=e.target.getAttribute("data-band-action");if(bandId){freqFilter[bandId]=e.target.checked;saveFreqFilter();render();return}if(action==="all"||action==="none"){BAND_DEFS.forEach(function(band){freqFilter[band.id]=action==="all"});buildFreqMenu();saveFreqFilter();render()}};dbMenu.oninput=function(e){var minInput,maxInput,nextMin,nextMax;if(e.target.id!=="dbMinInput"&&e.target.id!=="dbMaxInput")return;minInput=document.getElementById("dbMinInput");maxInput=document.getElementById("dbMaxInput");nextMin=clamp(minInput.value,DB_FILTER_MIN,DB_FILTER_MAX);nextMax=clamp(maxInput.value,DB_FILTER_MIN,DB_FILTER_MAX);if(nextMin>=nextMax){if(e.target.id==="dbMinInput"){nextMin=Math.min(nextMin,DB_FILTER_MAX-DB_FILTER_STEP);nextMax=Math.max(nextMax,nextMin+DB_FILTER_STEP);maxInput.value=String(nextMax);minInput.value=String(nextMin)}else{nextMax=Math.max(nextMax,DB_FILTER_MIN+DB_FILTER_STEP);nextMin=Math.min(nextMin,nextMax-DB_FILTER_STEP);minInput.value=String(nextMin);maxInput.value=String(nextMax)}}dbFilter.min=nextMin;dbFilter.max=nextMax;syncDbFilterInputs();saveDbFilter();render()};dbMenu.onclick=function(e){var action=e.target.getAttribute("data-db-action");if(action==="reset"){dbFilter.min=DB_FILTER_MIN;dbFilter.max=DB_FILTER_MAX;syncDbFilterInputs();saveDbFilter();render()}};dxMenu.oninput=function(e){var input;if(e.target.id==="dxFilterInput"){dxFilter.text=e.target.value||"";syncDxFilterInputs();saveDxFilter();render();return}if(e.target.id==="dxRegexInput"){input=document.getElementById("dxFilterInput");if(e.target.checked && !(input&&input.value)){dxFilter.text=DX_FILTER_DEFAULT_TEXT}else if(input){dxFilter.text=input.value||""}dxFilter.regex=!!e.target.checked;syncDxFilterInputs();saveDxFilter();render()}};dxMenu.onclick=function(e){var action=e.target.getAttribute("data-dx-action");if(action==="clear"){dxFilter.text="";dxFilter.regex=false;syncDxFilterInputs();saveDxFilter();render()}};cols.onclick=function(e){var c=e.target.getAttribute("data-x");if(c){hidden[c]=!e.target.checked;applyCols();render()}};tbody.onclick=function(e){var freqLink=e.target.closest(".freq-link"),dxLink=e.target.closest(".dx-link"),dx,row;if(freqLink){e.preventDefault();row=freqLink.closest("tr");dx=row?row.getAttribute("data-dx"):"";setTrxFrequency(freqLink.getAttribute("data-freq")||"",dx);return}if(dxLink){e.preventDefault();dx=normalizeCallsign(dxLink.getAttribute("data-dx")||dxLink.textContent);if(!dx)return;window.open("https://www.google.com/search?q="+encodeURIComponent(dx),"_blank","noopener");return}};tbody.addEventListener("auxclick",function(e){if(e.button!==1)return;var freqLink=e.target.closest(".freq-link"),row,dx;if(!freqLink||!trx2NetId)return;e.preventDefault();row=freqLink.closest("tr");dx=row?row.getAttribute("data-dx"):"";setTrxFrequencyN(freqLink.getAttribute("data-freq")||"",dx,2)});tbody.oncontextmenu=function(e){var freqLink=e.target.closest(".freq-link"),dxLink=e.target.closest(".dx-link"),row,dx;if(freqLink&&trx3NetId){e.preventDefault();row=freqLink.closest("tr");dx=row?row.getAttribute("data-dx"):"";setTrxFrequencyN(freqLink.getAttribute("data-freq")||"",dx,3);return}if(dxLink){dx=normalizeCallsign(dxLink.getAttribute("data-dx")||dxLink.textContent);if(!dx)return;e.preventDefault();window.open("https://www.google.com/search?q="+encodeURIComponent(dx),"_blank","noopener")}};loadTypeFilter();loadDirFilter();loadFreqFilter();loadDbFilter();loadDxFilter();loadViewMode();buildTypeMenu();buildDirMenu();buildFreqMenu();buildDbMenu();buildDxMenu();applyCols();updateFilterButtonStates();applyViewMode();initDxcInfo();
 
-var autoScroll=localStorage.dxcAutoScroll!=="0";
-var zoomLevel=Number(localStorage.dxcZoom||"1")||1;
+var autoScroll=localStorage[LS("AutoScroll")]!=="0";
+var zoomLevel=Number(localStorage[LS("Zoom")]||"1")||1;
 function updateScrollButton(){
   var btn=document.getElementById("scrollToggle");
   if(!btn)return;
@@ -104,11 +221,11 @@ function scrollOutputsToBottom(){
 function applyZoom(){
   zoomLevel=Math.max(0.6,Math.min(2.5,zoomLevel));
   document.documentElement.style.setProperty("--zoom",String(zoomLevel));
-  try{localStorage.dxcZoom=String(zoomLevel)}catch(e){}
+  try{localStorage[LS("Zoom")]=String(zoomLevel)}catch(e){}
 }
 document.getElementById("scrollToggle").onclick=function(){
   autoScroll=!autoScroll;
-  try{localStorage.dxcAutoScroll=autoScroll?"1":"0"}catch(e){}
+  try{localStorage[LS("AutoScroll")]=autoScroll?"1":"0"}catch(e){}
   updateScrollButton();
   scrollOutputsToBottom();
 };
@@ -128,13 +245,13 @@ document.addEventListener("click",function(e){
   }
 });
 
-var logDupeMode=(function(){try{var v=String(localStorage.dxcLogDupeMode||"");return (v==="off"||v==="gray"||v==="hidden")?v:"gray"}catch(e){return "gray"}})();
+var logDupeMode=(function(){try{var v=String(localStorage[LS("LogDupeMode")]||"");return (v==="off"||v==="gray"||v==="hidden")?v:"gray"}catch(e){return "gray"}})();
 var logDupeSet=Object.create(null),logDupeTimer=0,logDupeSelect=document.getElementById("logDupeMode");
 function refreshLogDupeSet(){if(logDupeMode==="off"||!window.LogDB){logDupeSet=Object.create(null);return}LogDB.getSetting("activeLogId",null).then(function(logId){if(!logId){logDupeSet=Object.create(null);render();return}return LogDB.getQsosForLog(logId).then(function(qsos){var set=Object.create(null),i,q,call,bandId;for(i=0;i<qsos.length;i++){q=qsos[i];if(!q||q.deleted)continue;call=normalizeCallsign(q.call);if(!call)continue;bandId=bandForFreq(Number(q.frequencyHz)/1000);if(!bandId)continue;set[call+"|"+bandId]=true}logDupeSet=set;render()})}).catch(function(){})}
 function scheduleLogDupeRefresh(){if(logDupeMode==="off"||logDupeTimer)return;logDupeTimer=setTimeout(function(){logDupeTimer=0;refreshLogDupeSet()},300)}
-if(logDupeSelect){logDupeSelect.value=logDupeMode;logDupeSelect.onchange=function(){var v=this.value;logDupeMode=(v==="off"||v==="gray"||v==="hidden")?v:"gray";try{localStorage.dxcLogDupeMode=logDupeMode}catch(e){}if(logDupeMode==="off"){logDupeSet=Object.create(null);render()}else{refreshLogDupeSet()}}}
+if(logDupeSelect){logDupeSelect.value=logDupeMode;logDupeSelect.onchange=function(){var v=this.value;logDupeMode=(v==="off"||v==="gray"||v==="hidden")?v:"gray";try{localStorage[LS("LogDupeMode")]=logDupeMode}catch(e){}if(logDupeMode==="off"){logDupeSet=Object.create(null);render()}else{refreshLogDupeSet()}}}
 refreshLogDupeSet();
 
-connect();
+linkStart();
 })();
 </script></body></html>

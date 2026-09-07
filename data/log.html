@@ -4,9 +4,27 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>QRPLog — WIFILT</title>
-  <link rel="stylesheet" href="/log.css?v=92d19434">
+  <link rel="stylesheet" href="/log.css?v=1a7bf863">
 </head>
 <body>
+  <!-- Split shell (2026-09-07). Everything the log itself is lives in the RIGHT
+       column -- topbar included, so the DX cluster on the left gets the full
+       window height rather than starting below the tabs. The left pane and the
+       gutter stay `hidden` and carry no width until LogDxcSplit opens them, so
+       with the split closed this is one flex row with a single child and the
+       page lays out exactly as it did before.
+
+       Why the DX cluster moves in here at all: clicking a spot in the DXC
+       pop-up handed the log a callsign and the caret but not the KEYBOARD --
+       the operator's next Enter went to the pop-up. Same defect the RTTY
+       pop-up had, same answer (log-rtty-panel.js:11-27): in one document the
+       problem does not exist. -->
+  <div class="log-split" id="logSplit">
+    <div class="log-split-left" id="logSplitLeft" hidden></div>
+    <div class="log-split-gutter" id="logSplitGutter" hidden
+         role="separator" aria-orientation="vertical" tabindex="0"
+         aria-label="Resize DX cluster pane"></div>
+    <div class="log-split-right" id="logSplitRight">
   <header class="topbar">
     <nav class="tabs" aria-label="Primary">
       <!-- Brand mark and the About panel behind it. padding:0 keeps the 26px logo inside
@@ -22,7 +40,14 @@
       </details>
       <script>document.addEventListener("click",function(e){var b=document.querySelector(".brand-about");if(b.open&&!b.contains(e.target))b.open=false;});</script>
       <a class="tab tab-active" href="/log">QRPLog</a>
-      <a class="tab" href="/dxc.html" onclick="window.open(this.href,'DXC','width=600,height=750,left=0,top=0,menubar=no,location=no,status=no'); return false;">DXC</a>
+      <!-- DXC is the ONE page where this tab does not open a pop-up: here it
+           toggles the split above, so a clicked spot lands in Call with the
+           keyboard still in Call. The window.open() below is the fallback that
+           runs when the split refuses (viewport under 900px) and when
+           log-dxc-split.js has not loaded. Every OTHER page keeps the pop-up
+           unchanged -- that is where the external window is opened from, and
+           it can run alongside this panel. -->
+      <a class="tab" id="tabDxc" href="/dxc.html" onclick="if (window.LogDxcSplit &amp;&amp; LogDxcSplit.toggle(event)) return false; window.open(this.href,'DXC','width=600,height=750,left=0,top=0,menubar=no,location=no,status=no'); return false;">DXC</a>
       <a class="tab" href="/data" title="JS8Call-ICOM, WSPR-Beacon and Mercury over ICOM-LAN">DATA</a>
       <a class="tab" href="/setup">SETUP</a>
       <a class="tab" href="/datasync">LOGSYNC</a>
@@ -279,6 +304,9 @@
 
   </main>
 
+    </div><!-- /.log-split-right -->
+  </div><!-- /.log-split -->
+
   <!-- Keyboard shortcuts help modal -->
   <div id="helpModal" class="lm-modal lm-hidden" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
     <div class="lm-box hk-box">
@@ -295,6 +323,8 @@
             <tr><td><kbd>Alt+U</kbd></td><td>Toggle RUN / S&amp;P</td></tr>
             <tr><td><kbd>Alt+W</kbd></td><td>Clear form</td></tr>
             <tr><td><kbd>Alt+Enter</kbd></td><td>Log QSO without sending memory</td></tr>
+            <tr><td><kbd>Alt++</kbd></td><td>Larger text in the logged QSOs below — numpad <kbd>+</kbd> too</td></tr>
+            <tr><td><kbd>Alt+-</kbd></td><td>Smaller text in the logged QSOs below — numpad <kbd>-</kbd> too. The size is remembered</td></tr>
             <tr><td><kbd>Esc</kbd> <em>(dialog open)</em></td><td>Close dialog</td></tr>
             <tr><td><kbd>Esc</kbd> <em>(no dialog)</em></td><td>Abort CW / RTTY TX immediately</td></tr>
             <tr><td colspan="2" class="hk-sep"></td></tr>
@@ -311,8 +341,11 @@
   <script src="/dxcc.js?v=c56ee081"></script>
   <script src="/log-db.js?v=6055416f"></script>
   <script src="/station-identity.js?v=a1a20249"></script>
-  <script src="/log.js?v=3901adfb"></script>
-  <script src="/pa-panel.js?v=3a51dc52"></script>
+  <script src="/log.js?v=a17717ce"></script>
+  <!-- After log.js: it reads window.LogRadio (for setRunMode) and log.js reads
+       window.LogDxcSplit only from inside a channel callback, never at load. -->
+  <script src="/log-dxc-split.js?v=7a0f42be"></script>
+  <script src="/pa-panel.js?v=e4b84ebb"></script>
 
   <!-- RTTY palette (2026-09-07). Everything above /log.js is what the log
        itself needs; everything below is the palette's, loaded after log.js
@@ -339,6 +372,6 @@
   <script src="/rtty-scope.js?v=c2f2337f"></script>
   <script src="/rtty-rxlog.js?v=0fe620f6"></script>
   <script src="/rtty-afsk-tx.js?v=121d6342"></script>
-  <script src="/log-rtty-panel.js?v=48cfdc47"></script>
+  <script src="/log-rtty-panel.js?v=2b255ade"></script>
 </body>
 </html>

@@ -73,6 +73,10 @@
   var state   = null;    // last /pa.json
   var open    = false;
   var pos     = null;    // {x, y}, null until placed
+  var gap     = null;    // px from the viewport's BOTTOM edge to the panel's
+                         // bottom edge -- the vertical anchor, see place()
+  var placed  = null;    // the {y, h} place() last wrote, so syncGap() can tell
+                         // the operator's own moves from this file's
   var el      = null;    // the panel, built on first open
   var btn     = null;    // the PA button in the bottom bar
   var pollTimer = null;
@@ -92,6 +96,9 @@
       if (v && typeof v === 'object') {
         open = !!v.open;
         if (typeof v.x === 'number' && typeof v.y === 'number') pos = { x: v.x, y: v.y };
+        // Older stores hold only the top. They stay readable: place() derives
+        // the gap from that top once, against the window it is opened in.
+        if (typeof v.gap === 'number') gap = v.gap;
       }
     } catch (_) {}
   }
@@ -99,7 +106,7 @@
   function save() {
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify({
-        open: open, x: pos ? pos.x : null, y: pos ? pos.y : null
+        open: open, x: pos ? pos.x : null, y: pos ? pos.y : null, gap: gap
       }));
     } catch (_) {}
   }
@@ -128,12 +135,37 @@
     return clamp({ x: r.right - w, y: r.top - h - 8 });
   }
 
+  // The panel hangs from the BOTTOM of the viewport, not the top: `gap` is the
+  // distance from the window's bottom edge to the panel's own, and the top is
+  // derived from it every time. That is what keeps the palette the same short
+  // distance above the log's entry fields when the browser window is resized --
+  // the fields sit just above the bottom button bar, so a top-anchored palette
+  // would drift into them as the window shrinks and away from them as it grows.
   function place() {
     if (!el) return;
+    var h = el.offsetHeight;
     if (!pos) pos = anchorPos();
-    pos = clamp(pos);
+    if (gap === null) gap = global.innerHeight - (pos.y + h);
+    pos = clamp({ x: pos.x, y: global.innerHeight - h - gap });
     el.style.left = pos.x + 'px';
     el.style.top  = pos.y + 'px';
+    placed = { y: pos.y, h: h };
+  }
+
+  // Wherever the panel's bottom edge has ENDED UP -- after a drag, or after its
+  // own content changed height -- is the new anchor.
+  //
+  // Unforced, a geometry place() itself wrote is not a move and is skipped: a
+  // window resize has to READ the gap, never rewrite it, or a placement the
+  // clamp had to pull back on a short window would forget where the operator
+  // had put the panel. A drag forces it, because a drag that the clamp happened
+  // to return to the very same pixel is still the operator saying "here".
+  function syncGap(force) {
+    if (!el || !pos) return;
+    var h = el.offsetHeight;
+    if (!force && placed && placed.y === pos.y && placed.h === h) return;
+    gap = global.innerHeight - (pos.y + h);
+    placed = { y: pos.y, h: h };
   }
 
   // ── build ─────────────────────────────────────────────────────────────────
@@ -214,6 +246,7 @@
       if (!dragging) return;
       dragging = false;
       try { handle.releasePointerCapture(e.pointerId); } catch (_) {}
+      syncGap(true);
       save();
     }
     handle.addEventListener('pointerup', end);
@@ -486,6 +519,14 @@
     var noteEl = document.getElementById('paNote');
     noteEl.textContent = note;
     noteEl.hidden = !note;
+
+    // The trouble line appearing or going makes the panel taller or shorter, and
+    // it grows downward from wherever it stands. Re-derive the anchor so the gap
+    // still describes the bottom edge the operator can actually see -- otherwise
+    // the next window resize would snap the panel by the height of one line.
+    // Deliberately syncGap() and not place(): render() runs on every poll, and
+    // re-placing here would fight a drag in progress.
+    syncGap();
   }
 
   // window.LogRadio is log.js's deliberate, narrow export -- `const app` at the
@@ -568,8 +609,7 @@
     btn.addEventListener('click', function () { setOpen(!open); });
     global.addEventListener('resize', function () {
       if (!el || !open) return;
-      pos = clamp(pos);
-      place();
+      place();                     // from the bottom gap, which stays as it was
       save();
     });
     if (open) { build(); place(); }

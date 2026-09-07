@@ -1266,12 +1266,20 @@ function startClock() {
 // is standing on a different band than the radio, and the second to grey out
 // TUNE while the radio is transmitting.
 //
-// The last two are the exception, added 2026-09-07 for the RTTY palette, and
+// The last three are the exception, added 2026-09-07 for the RTTY palette, and
 // they ARE commands -- so they are named for exactly what they do and nothing
 // more. focusedField() has to be separate from insertWord() because an in-page
 // palette's own click blurs Call/Exch before any click handler runs: the
 // answer must be taken on pointerdown, while it is still true. Same race
 // log.js already documents one step later, around selectTrx().
+//
+// setRunMode() joined them for the DXC split pane: handing over a spot to work
+// means switching to S&P, which the BroadcastChannel path below does for
+// itself. The embedded cluster deliberately does NOT use that channel -- it
+// calls in here synchronously, inside the click's own task, because that is
+// what makes the caret land in Call -- so it needs the mode switch as a
+// separate call rather than as a side effect of delivering a word. It stays a
+// command named for what it does, not a door onto `app`.
 window.LogRadio = {
   frequency: () => (app.connected ? app.frequency : 0),
   tx:        () => !!app.tx,
@@ -1279,6 +1287,7 @@ window.LogRadio = {
   activeTrx: () => app.activeTrx,
   focusedField: () => focusedLogField(),
   insertWord: (word, trx, field) => insertWordIntoLog(word, trx, field),
+  setRunMode: (m) => setRunMode(m),
 };
 
 // ── /state polling ────────────────────────────────────────────────────────────
@@ -1642,6 +1651,53 @@ document.getElementById('helpModal').addEventListener('click', e => {
   if (e.target === e.currentTarget) closeHelpModal();
 });
 
+// ── Journal text size ─────────────────────────────────────────────────────────
+//
+// Alt+ and Alt- scale the logged QSOs, exactly as the DX cluster's own + / -
+// buttons scale its spot table: same 0.6 - 2.5 range in tenths, same reason.
+// The operator's screen is not the one this was written on, and a log read from
+// two metres away across the shack is a different document from one read at
+// arm's length. Keys rather than buttons here because the bottom bar is full
+// and the log is worked from the keyboard anyway.
+//
+// The zoom is a single CSS variable on #logJournal; log.css multiplies the row
+// and header type AND every column width by it, because .jcol clips.
+
+const JOURNAL_ZOOM_KEY  = 'wifilt-log-journal-zoom';
+const JOURNAL_ZOOM_MIN  = 0.6;
+const JOURNAL_ZOOM_MAX  = 2.5;
+const JOURNAL_ZOOM_STEP = 0.1;
+let journalZoom = 1;
+
+function applyJournalZoom(persist) {
+  journalZoom = Math.max(JOURNAL_ZOOM_MIN, Math.min(JOURNAL_ZOOM_MAX, journalZoom));
+  const journal = document.getElementById('logJournal');
+  if (journal) journal.style.setProperty('--jzoom', String(journalZoom));
+  if (persist) {
+    try { localStorage.setItem(JOURNAL_ZOOM_KEY, String(journalZoom)); } catch (_) {}
+  }
+}
+
+// The newest QSO is the one being worked, and it lives at the BOTTOM of the
+// journal. Rows that grow under a scroll position measured from the top would
+// push it out of sight, so a journal that was at the bottom is put back there.
+function stepJournalZoom(delta) {
+  const body = document.getElementById('logJournalBody');
+  const wasAtBottom = !body ||
+    body.scrollHeight - body.scrollTop - body.clientHeight < 4;
+  journalZoom = Math.round((journalZoom + delta) * 10) / 10;
+  applyJournalZoom(true);
+  if (body && wasAtBottom) body.scrollTop = body.scrollHeight;
+}
+
+(function loadJournalZoom() {
+  try {
+    const stored = Number(localStorage.getItem(JOURNAL_ZOOM_KEY));
+    if (stored) journalZoom = stored;
+  } catch (_) {}
+  applyJournalZoom(false);
+})();
+
 // ── Global hotkeys ────────────────────────────────────────────────────────────
 
 // Under Alt the browser reports the character the *layout* produced, not the
@@ -1655,6 +1711,22 @@ function altHotkey(e, codes, key) {
   if (!e.altKey || e.ctrlKey || e.shiftKey) return false;   // AltGr is Ctrl+Alt
   if (e.code) return codes.includes(e.code);
   return typeof e.key === 'string' && e.key.toLowerCase() === key;
+}
+
+// Alt+ and Alt- need their own matcher, on two counts. Shift is ALLOWED: on a US
+// layout "+" IS Shift+Equal, so the rule that guards the letter shortcuts would
+// refuse the very keystroke the operator makes. And the character is worth
+// looking at even when a code came with it -- layouts move + and - around the
+// board, and a keyboard that puts either of them somewhere unexpected still
+// says so in e.key. AltGr (Ctrl+Alt) is still refused, as everywhere else.
+//
+// e.key is consulted only AFTER the digit shortcuts have had the event, which
+// is what keeps Alt+1 selecting TRX1 on a Czech layout, where the 1 key carries
+// "+" unshifted. That operator has the numpad, and the physical =/- keys.
+function altSizeHotkey(e, codes, keys) {
+  if (!e.altKey || e.ctrlKey) return false;
+  if (e.code && codes.includes(e.code)) return true;
+  return typeof e.key === 'string' && keys.includes(e.key);
 }
 
 document.addEventListener('keydown', e => {
@@ -1680,6 +1752,18 @@ document.addEventListener('keydown', e => {
       selectTrx(n);
       return;
     }
+  }
+  // Alt+ / Alt− — text size of the logged QSOs. After the digits on purpose:
+  // see altSizeHotkey().
+  if (altSizeHotkey(e, ['Equal', 'NumpadAdd'], ['+', '='])) {
+    e.preventDefault();
+    stepJournalZoom(JOURNAL_ZOOM_STEP);
+    return;
+  }
+  if (altSizeHotkey(e, ['Minus', 'NumpadSubtract'], ['-', '_'])) {
+    e.preventDefault();
+    stepJournalZoom(-JOURNAL_ZOOM_STEP);
+    return;
   }
   // Alt+U — toggle RUN / S&P
   if (altHotkey(e, ['KeyU'], 'u')) {
@@ -3533,13 +3617,41 @@ function _updateDxcBand(freqHz, dxcConnected) {
   _renderDxcLine(freqHz);
 }
 
+// ── Who may feed the band map ────────────────────────────────────────────────
+//
+// A spot payload carries only the rows its sender's filters are letting
+// through, and since 2026-09-07 there can be two senders with DIFFERENT
+// filters: the DXC pane embedded in this very page (`src: 'embed'`) and an
+// external DXC window (`src: 'window'`), both re-publishing every 5 s. Left
+// alone they would fight, and the band map would flip between two spot sets
+// twice a decasecond.
+//
+// The pane wins whenever it is mounted: its table is the one sitting next to
+// the band map, so those are the spots the operator is actually looking at, and
+// a mark in the band map that is absent from the list beside it is a lie. With
+// the split closed nothing changes -- there is only ever the window.
+//
+// `src` is absent on payloads from an older dxc.html, which is treated as
+// 'window' by not being 'embed'.
+function _dxcSpotsWelcome(msg) {
+  if (!window.LogDxcSplit || !LogDxcSplit.isOpen()) return true;
+  return msg.src === 'embed';
+}
+
 try {
   // Initial load from localStorage — covers the case where dxc.html has spots
   // cached but hasn't broadcast yet (no new spots since log.js opened).
+  //
+  // Only the external window seeds this key; the embedded pane deliberately
+  // does not write it, so it cannot clobber the window's cache. The gate below
+  // cannot refuse this one in practice -- log-dxc-split.js loads after this
+  // file, so LogDxcSplit does not exist yet -- which is deliberate rather than
+  // overlooked: the worst case is the window's last spots showing for the few
+  // hundred ms until the pane's first render publishes its own.
   const cached = localStorage.getItem('wifilt-dxc-spots');
   if (cached) {
     const msg = JSON.parse(cached);
-    if (msg && Array.isArray(msg.spots)) _dxcSpots = msg.spots;
+    if (msg && Array.isArray(msg.spots) && _dxcSpotsWelcome(msg)) _dxcSpots = msg.spots;
   }
 } catch (_) {}
 
@@ -3548,6 +3660,7 @@ try {
   dxcSpotsChannel.addEventListener('message', e => {
     const msg = e.data;
     if (!msg || !Array.isArray(msg.spots)) return;
+    if (!_dxcSpotsWelcome(msg)) return;
     _dxcSpots = msg.spots;
     if (_dxcActive) _renderDxcSpots();
   });
