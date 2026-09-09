@@ -17,11 +17,13 @@ IC-705 (Bluetooth CI-V)
             │  publishes /hz, /mode
             │  subscribes /hz, /mode  ← from OI3 keyer(s) for Band Decoder
             │  subscribes /s-hz       ← remote VFO set command
+            │  subscribes 6 PA topics ← from a linear amplifier, for the PA palette
             │
             └── WiFi LAN (UDP broadcast port 5683)
                     │
                     ├── OI3.ff  (k3ng keyer, TRX2 slot)
-                    └── OI3.01  (k3ng keyer, TRX3 slot)
+                    ├── OI3.01  (k3ng keyer, TRX3 slot)
+                    └── PA.xx   (EXPERT 1K-FA daemon, SETUP → TrxNet → PA NET_ID)
 ```
 
 ### Published topics (WIFILT → network)
@@ -38,6 +40,18 @@ IC-705 (Bluetooth CI-V)
 | `/hz` | `uint32_t` LE | OI3 peers | Frequency from a peer radio. Used to drive the Band Decoder when TRX2 or TRX3 is selected as the BD source. |
 | `/mode` | `uint8_t` | OI3 peers | Mode from a peer radio. Stored for display in Band Decoder status. |
 | `/s-hz` | `uint32_t` LE | any device | Remote command: set IC-705 VFO to this frequency via CI-V. |
+| `/pa-flags` | `uint16_t` LE | `PA.xx` only | Linear amplifier state: TUNE/OPERATE/TX/ALARM/FULL/CONTEST/BEEP in the low byte (the amplifier's own FLAGS, bit 7 masked), then ON (bit 8), LINK (bit 9), REV2 (bit 10). |
+| `/fwd` | `uint16_t` LE | `PA.xx` only | Forward power, W × 10, instantaneous. Peak-held here for 2 s — see `PA_PEAK_WINDOW_MS`. |
+| `/ref` | `uint16_t` LE | `PA.xx` only | Reflected power, W × 10, instantaneous. Peak-held the same way. |
+| `/swr` | `uint16_t` LE | `PA.xx` only | SWR × 100; `0` = no answer, `65535` = infinite. |
+| `/band` | `uint8_t` | `PA.xx` only | Band in metres. Compared against the radio's own frequency; a mismatch is what the palette draws in red. |
+| `/pa-temp` | `int16_t` LE | `PA.xx` only | Heatsink temperature, °C × 100 — always °C, converted by the daemon from whichever scale the amplifier reports in. |
+
+The six PA topics are accepted **only** from the peer named `PA.xx`, where `xx`
+is the `PA NET_ID` set in SETUP → TrxNet; with it at `00` they are not
+subscribed at all. `/pa-temp` is a separate topic from the WX node's `/temp`
+even though the encoding is identical: one name for both would have a heatsink
+reported as the weather.
 
 ### Mode byte values (ICOM CI-V standard)
 

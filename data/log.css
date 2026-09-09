@@ -1607,6 +1607,21 @@ body {
    mistake this panel can catch, so it is the one thing drawn in alarm colours. */
 .pa-band.pa-band-mismatch { color: #ff5c5c; }
 
+/* Heatsink temperature, coloured by which fan stage the amplifier has reached
+   -- the thresholds and these exact colours are the full web console's own (see
+   PA_FAN_ON in pa-panel.js), so one reading means one thing on both screens.
+   The steps are a HUE ramp toward the trip colour, not a brightness ramp:
+   yellow 50deg -> sand 39deg -> red 0deg. Sand looks calmer than yellow and is
+   nonetheless the hotter step, which is the console's design and worth not
+   "fixing" here. Grey below the first fan step is the point: a cold amplifier
+   should not draw the eye at all. */
+.pa-temp { font-weight: 700; color: #dfe6ef; }
+.pa-temp.t-cool { color: #8e9aab; }
+.pa-temp.t-warm { color: #3ddc84; }
+.pa-temp.t-hot  { color: #f5d048; }
+.pa-temp.t-vhot { color: #e3c88b; }
+.pa-temp.t-trip { color: #ff5c5c; }
+
 /* LEDs: every bit TrxNet carries, lit or not. An indicator that disappears when
    it goes out teaches you nothing about what the panel can tell you. */
 /* Sized to fit all five on one row at the panel's width. Wrapping to a second
@@ -1654,6 +1669,7 @@ body {
    the panel says how long ago -- but nothing pretends to be live. */
 .pa-panel.pa-stale .pa-val-v,
 .pa-panel.pa-stale .pa-swr,
+.pa-panel.pa-stale .pa-temp,
 .pa-panel.pa-stale .pa-band { color: #49535f !important; }
 .pa-panel.pa-stale .pa-led.on { background: #171b22; color: #4a5666; }
 
@@ -1793,14 +1809,18 @@ body {
 }
 .rtty-panel-rx:empty::before { content: "Waiting for signal…"; color: var(--muted); }
 .rtty-panel-rx .rtty-tok { cursor: pointer; border-radius: 3px; padding: 0 1px; }
-.rtty-panel-rx .rtty-tok:hover {
-  background: #1f3a34; color: var(--cyan); text-decoration: underline;
-}
-/* Set as a custom property rather than `color` directly, so the hover rule
-   below wins by ordinary specificity instead of needing !important against an
-   inline color -- inline styles beat any selector, custom properties don't. */
+/* Hover marks the word and changes nothing else (operator, 2026-09-08). It used
+   to repaint the token cyan and light its background too, which fought the one
+   job the colour has here: every character carries its own signal strength, so
+   a hover that overrode it hid exactly the information being pointed at.
+   Underline says "clickable" without spending the colour channel twice. */
+.rtty-panel-rx .rtty-tok:hover { text-decoration: underline; }
+/* Set as a custom property rather than `color` directly. Nothing overrides it
+   any more -- the cyan hover above it did, and is gone -- but it stays the DOM
+   contract rtty-rxlog.js writes, and it keeps any future override winnable by
+   ordinary specificity instead of needing !important against an inline color:
+   inline styles beat any selector, custom properties don't. */
 .rtty-panel-rx .rtty-rx-char { color: var(--rtty-rx-char-color, inherit); }
-.rtty-panel-rx .rtty-tok:hover .rtty-rx-char { color: var(--cyan); }
 /* This station's own sent text, echoed like a monitor. Deliberately not a
    .rtty-tok: the operator's own callsign in "CQ CQ DE OK1HRA" must never be
    mistaken for a station to log. */

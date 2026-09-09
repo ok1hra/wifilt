@@ -148,17 +148,25 @@ body.radio-transmitting .rtty-scope::after {
 .rtty-tok {
   cursor: pointer; border-radius: 3px; padding: 0 1px;
 }
-.rtty-tok:hover { background: #1f3a34; color: var(--cyan); text-decoration: underline; }
+/* Hover marks the word and changes nothing else (operator, 2026-09-08). It used
+   to repaint the token cyan and light its background too, which fought the one
+   job the colour has here: every character carries its own signal strength, so
+   a hover that overrode it hid exactly the information being pointed at.
+   Underline says "clickable" without spending the colour channel twice. Kept
+   identical to the QRPLog palette's own rule (log.css) -- two views of one
+   RTTY, one behaviour. */
+.rtty-tok:hover { text-decoration: underline; }
 /* kap.13 (grilled 2026-08-29): one span per decoded RX character, coloured by
    that character's own meta.snrDb (rtty.js's rxCharColorForSnr()). Set as a
-   custom property rather than `color` directly, so the hover rule below can
-   win by ordinary specificity (0,3,0 > 0,1,0) instead of needing !important
-   against an inline `color` -- inline styles beat any stylesheet selector
-   regardless of specificity, custom properties don't. No property at all
-   (falls through to `inherit`, i.e. .rtty-rx-log's var(--text)) when snrDb
-   wasn't finite -- today's appearance, unchanged. */
+   custom property rather than `color` directly. Nothing overrides it any more
+   -- the cyan hover above it did, and is gone -- but it stays the DOM contract
+   rtty-rxlog.js writes, and it keeps any future override winnable by ordinary
+   specificity (0,3,0 > 0,1,0) instead of needing !important against an inline
+   `color`: inline styles beat any stylesheet selector regardless of
+   specificity, custom properties don't. No property at all (falls through to
+   `inherit`, i.e. .rtty-rx-log's var(--text)) when snrDb wasn't finite --
+   today's appearance, unchanged. */
 .rtty-rx-char { color: var(--rtty-rx-char-color, inherit); }
-.rtty-tok:hover .rtty-rx-char { color: var(--cyan); }
 /* Item 6: this station's own sent text, echoed into the RX log like a monitor.
    Deliberately not a .rtty-tok -- no click/hover, so an operator's own
    callsign in "CQ CQ DE OK1HRA" is never mistaken for a station to log

@@ -11,6 +11,124 @@ published.
 
 ## Working tree — not committed
 
+**Four operator reports: RTTY colour, the DX cluster's memory, its zoom, and the amplifier's temperature.**
+
+* **The strongest RTTY characters are green now, not sand.** The RX log colours
+  every decoded character by its own signal strength, and above 20 dB the scale
+  runs out of white and turns to a hue — which was a sandy yellow and read as
+  washed out. It is now `#63ff7c`, the green QRPLog's own top and bottom bars
+  are built from and the green the DX cluster pane beside the palette already
+  uses for its text. Deliberately **not** the bars' `#008800`: that is a
+  background colour carrying white text, and as 12 px type on the palette's own
+  ground it lands at 3.4:1 — dimmer than the sand it was replacing, which is the
+  opposite of the complaint. `#63ff7c` sits at luminance 0.76 against white's
+  1.0, the same size of step the sand made (0.68), so the top of the scale is
+  still a move in hue rather than a dimming. One constant, so both the palette
+  and the full `/rtty` page changed together.
+
+* **Hovering a word in that log now only underlines it.** It used to repaint the
+  token cyan and light its background as well, which fought the one job the
+  colour has there: every character carries its own signal strength, and a hover
+  that overrode it hid exactly what was being pointed at.
+
+* **The DX cluster keeps its spots for 30 minutes across leaving the page.**
+  Opening QRPLog with the cluster in the left pane, going somewhere else and
+  coming back gave an empty table. `log-dxc-split.js` **removes** the iframe on
+  close and has to — a hidden but live frame would keep holding the single
+  cluster socket and stay leader — so `rows[]` died with it, and the
+  leader/follower seed only helps while some other instance is still alive to
+  seed from. The rows are now cached in `localStorage` under **one** key shared
+  by the pane and the standalone window (filters, columns, zoom and view mode
+  stay per-instance as before: those are settings, this is one feed off one
+  socket). Firmware untouched.
+
+* **Aged on the spot's own UTC stamp, not on when it arrived.** What the
+  operator needs to know is whether the station might still be there, and a
+  cluster that dumps an hour of backlog on login must not have it counted fresh
+  for another half hour. The one place this parts company with the existing
+  30-minute window used for the DXCC counts is a few minutes of tolerance for a
+  spotter whose clock runs fast: there, dropping an odd row costs nothing; here
+  a spot that arrived forty seconds ago vanishing across a page change would
+  read as the cache having failed.
+
+* **The seed from a leader now merges instead of overwriting.** A pane that has
+  just restored 30 minutes would otherwise be wiped by a leader that came up two
+  minutes ago. Keyed on the exact telnet line, which is an exact and cheap
+  identity. It sorts by spot time **only** when the cache actually contributed
+  rows the leader never had — in the ordinary case the leader has been running
+  longer and already holds every restored row, and the table keeps its arrival
+  order untouched, which matters because spotters' clocks disagree by a minute
+  or two and a gratuitous sort would visibly reshuffle it.
+
+* **The Raw view is rebuilt from the rows themselves**, not stored separately:
+  every row already carries the telnet line it was parsed from, so it costs
+  nothing and the two views show the same 30 minutes. What it cannot bring back
+  is the non-spot traffic — cluster announcements, WWV, answers to typed
+  commands — because those never became rows.
+
+* **The cluster's + / − buttons now move the COLUMNS, not just the type.**
+  Shrinking left the columns at full width and opened big gaps; enlarging sawed
+  the longer values off behind the ellipsis. The table is `table-layout: fixed`
+  with every cell clipping, so scaling the font alone could only ever produce
+  one of those two. Every fixed width and horizontal padding is multiplied by
+  `--zoom` — the same fix, and the same reasoning, as the journal's own
+  `--jzoom` two entries above this one.
+
+* **The PA palette shows the amplifier's temperature.** It was never on the wire
+  at all: the daemon decodes byte 21 of every STATUS record and simply did not
+  publish it. It now goes out as **`/pa-temp`**, `int16` °C × 100 — the encoding
+  `/temp` already uses on this network, so a temperature has one shape whatever
+  measures it, but a **separate topic**, because `/temp` is the WX node's
+  outdoor reading and one name would have a heatsink reported as the weather.
+  Exactly the `/flags` vs `/pa-flags` split, for the same reason.
+
+* **The scale conversion belongs to the daemon, and only the daemon can do it.**
+  The amplifier reports whole degrees in whichever scale its menu is set to;
+  Rev. 2.0 says which in `FLAGS` bit 7 (`T_SCALE`), Rev. 1.0 uses that bit for
+  `PA_PROT` and does not say, so °C is assumed there — the same assumption the
+  web console makes. Bit 7 is masked out of `/pa-flags` before it goes on the
+  wire, precisely because it means two different things, so by the time anything
+  else sees the reading the scale is gone.
+
+* **The temperature sits with the numbers, beside SWR and the band** — not in
+  the LED row, whose whole trick is staying exactly as wide whatever happens; a
+  value running 9 °C to 105 °C would make it reflow. It is coloured by the fan
+  switching thresholds from manual §18.17, in the full web console's own colours
+  and with its own steps, so one reading means one thing on both screens. In
+  CONTEST the schedule shifts — the first fan stage runs continuously, so
+  nothing is ever "cool" and 62 °C reads hot where outside a contest it is only
+  warm. `—` and not `0 °C` until a `/pa-temp` has actually arrived: a daemon
+  older than this publishes the other five topics perfectly and this one never,
+  which is not the same thing as a cold amplifier.
+
+* **`TRXNET_MAX_SUBS` had to grow, and it was one short.** The interface used
+  exactly 8 of 8 slots — three for the radio, five for the amplifier — and
+  `subscribe()` drops a path it cannot fit **silently**, so a ninth topic would
+  have compiled, run, and never fired its callback. It is now per board like the
+  library's other three RAM-scaling limits: **16** on ESP32/ESP8266, **8** on
+  AVR. The AVR figure is deliberately not lowered as the others are — shrinking
+  a table that fails silently would break existing sketches with no diagnostic
+  at all — so the OI3 keyer's `sizeof(TrxNet)` does not move and its ABI guard
+  never fires.
+
+* **Three documentation faults found while writing the above, and fixed.** The
+  TrxNet README promised `TRXNET_MAX_SUBS` "(default 16)" while the header said
+  8; `MONITOR.md` listed `/temp` among the unsigned weather topics when
+  `monitor.py` has always unpacked it as `<h`, signed, which is what an outdoor
+  sensor below freezing needs; and this repo's own `docs/trxnet.md` had never
+  listed **any** of the amplifier's topics in its subscribed table. The header's
+  ABI warning also named only two of the seven macros that size `class TrxNet`.
+
+* Smoke coverage: `rtty-page-smoke` 32 checks (the two that asserted the sand's
+  red channel now assert the green's), `log-dxc-split-smoke` 45 → **54** (the
+  cache round trip, the 30-minute cut, the rebuilt Raw view, CLEAR forgetting
+  it, and the zoom moving columns and type by the same factor),
+  `pa-panel-smoke` 68 → **83** (all five fan steps, the CONTEST shift, and
+  `—` vs `0 °C`), and the daemon's own `trxnet_e2e` 38 checks including the new
+  topic's width, range and offline value. **On the radio and on the amplifier:
+  not verified** — no live cluster, no live 1K-FA, and no real RTTY signal above
+  20 dB has been seen with the new colour.
+
 **The logged QSOs have a text size, on Alt+ and Alt−.**
 
 * **The same thing the DX cluster already does, on keys instead of buttons.**

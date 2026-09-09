@@ -3,7 +3,7 @@
  * pa-panel.js — the linear amplifier, on the contest log
  *
  * A small movable palette showing everything TrxNet carries about an EXPERT
- * 1K-FA (five topics, nothing more is on the wire) and offering the four
+ * 1K-FA (six topics, nothing more is on the wire) and offering the four
  * commands it accepts. The firmware does the TrxNet half and serves it as
  * /pa.json; this file is only the window onto it.
  *
@@ -42,6 +42,16 @@
   // bug: it pressed a toggle key again before the amplifier could answer, and
   // the parity of the press count decided where it ended up.)
   var CONFIRM_MS = { on: 10000, operate: 6000, full: 6000, tune: 6000 };
+  // Fan switching thresholds in °C, from the amplifier's manual 18.17 by way of
+  // the web console's AMP.fanOn -- the same numbers it colours its own TEMP cell
+  // by, so one reading means one thing on both screens. The CONTEST set starts
+  // at 0 because in that mode the first fan stage runs continuously: during a
+  // contest the number is always at least "warm", which is a fact about the fan
+  // rather than a fault.
+  var PA_FAN_ON   = { normal: [40, 65, 75], contest: [0, 60, 70] };
+  // Above this the amplifier's own hardware protection trips (AMP.tempMax).
+  var PA_TEMP_MAX = 90;
+
   // Reflected power's own full scale, from the console's AMP.prMax. It does not
   // follow FULL/HALF: what matters about reflected power is how much of it there
   // is, not what fraction of the forward power it represents.
@@ -193,6 +203,7 @@
         '<div class="pa-sub">' +
           '<span class="pa-swr" id="paSwr">SWR &mdash;</span>' +
           '<span class="pa-band" id="paBand">&mdash;</span>' +
+          '<span class="pa-temp" id="paTemp">&mdash;</span>' +
         '</div>' +
         '<div class="pa-leds" id="paLeds"></div>' +
         '<div class="pa-status"><span class="pa-dot" id="paDot"></span>' +
@@ -429,6 +440,17 @@
     return stale ? ' (last known state — no telemetry right now)' : '';
   }
 
+  // Which fan stage the heatsink has reached, as the web console names it. The
+  // thresholds move with CONTEST because the amplifier's own fan schedule does.
+  function tempClass(c, f) {
+    var on = (f & F.CONTEST) ? PA_FAN_ON.contest : PA_FAN_ON.normal;
+    if (c >= PA_TEMP_MAX) return 't-trip';
+    if (c >= on[2]) return 't-vhot';
+    if (c >= on[1]) return 't-hot';
+    if (c >= on[0]) return 't-warm';
+    return 't-cool';
+  }
+
   function render() {
     if (!el) return;
     var f = flags(), stale = isStale(), live = !!(state && state.present);
@@ -471,6 +493,22 @@
     bandEl.classList.toggle('pa-band-mismatch', bandMismatch(band));
     bandEl.title = bandMismatch(band)
       ? 'The amplifier is on a different band than the radio' : '';
+
+    // Beside SWR and the band, because it is a NUMBER and those are the numbers.
+    // Not in the LED row below: that row's whole trick is staying exactly as
+    // wide whatever happens, and a value that runs 9 °C to 105 °C would make it
+    // reflow. Null rather than 0 whenever no /pa-temp has arrived -- a daemon
+    // older than 2026-09-08 publishes the other five topics and never this one,
+    // so "no reading" has to be distinguishable from "cold".
+    var tempEl = document.getElementById('paTemp');
+    var tempC = (state && state.temp !== null && state.temp !== undefined)
+      ? state.temp / 100 : null;
+    tempEl.textContent = tempC === null ? '—' : (Math.round(tempC) + ' °C');
+    tempEl.className = 'pa-temp' + (tempC === null ? '' : ' ' + tempClass(tempC, f));
+    tempEl.title = tempC === null
+      ? 'The amplifier is not reporting a temperature'
+      : ('Fan steps at ' + ((f & F.CONTEST) ? PA_FAN_ON.contest : PA_FAN_ON.normal)
+         .join(' / ') + ' °C, protection at ' + PA_TEMP_MAX + ' °C');
 
     // Every flag TrxNet carries, lit or dark. The dark ones stay in place so
     // the row never reflows and the eye learns where to look.

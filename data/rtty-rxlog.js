@@ -43,14 +43,22 @@
   const DEFAULT_FLOOR_DB = 0, DEFAULT_CEIL_DB = 15;
   const DEFAULT_CEIL_RGB = [255, 255, 255];
   // A third stop above the white one (operator, 2026-09-07): an exceptionally
-  // strong character goes sandy yellow. White is already the brightest a
+  // strong character leaves the greyscale. White is already the brightest a
   // screen has, so the top of the scale has no headroom left in LUMINANCE --
   // the only axis still free is hue, which is exactly how a waterfall
-  // colormap runs out of "brighter" and turns to colour. Sand rather than the
-  // shared --amber: amber is this app's warning colour everywhere else, and a
-  // booming station is not a warning.
+  // colormap runs out of "brighter" and turns to colour.
+  //
+  // Green rather than the sandy yellow this started as (operator, 2026-09-08:
+  // the sand read as washed out): it is the green QRPLog's own top and bottom
+  // bars are built from, and the one the DX cluster pane sitting beside this
+  // palette already uses for its text, so a booming station looks like it
+  // belongs to the same screen. NOT the bars' #008800 itself -- that is a
+  // BACKGROUND colour carrying white text, and as 12 px type on this palette's
+  // ground it lands at 3.4:1, dimmer than the sand it replaces. #63ff7c keeps
+  // luminance 0.76 against white's 1.0, the same size of step the sand made
+  // (0.68) -- still a move in hue, not a dimming.
   const DEFAULT_HOT_DB = 20;
-  const DEFAULT_HOT_RGB = [240, 214, 140];   // #f0d68c
+  const DEFAULT_HOT_RGB = [99, 255, 124];   // #63ff7c
   const SQUELCH_NEWLINE_THROTTLE_MS = 2000;
 
   function cssVarRgb(name, fallbackHex, element) {
@@ -78,7 +86,7 @@
   //   floorRgb    weak-signal colour, default floorRgbFrom(el)
   //   ceilRgb     strong-signal colour, default white -- brighter than --text
   //               on purpose, a deliberate two-ended widen of the gradient
-  //   hotRgb      exceptionally-strong colour, default sandy yellow
+  //   hotRgb      exceptionally-strong colour, default bright green
   //   floorDb/ceilDb/hotDb   |snrDb| mapped across the two ramps
   //   onToken(word, event)   a .rtty-tok was clicked
   function create(options) {
@@ -91,7 +99,7 @@
     const ceilDb = Number.isFinite(options.ceilDb) ? options.ceilDb : DEFAULT_CEIL_DB;
     // Never below the white stop: a caller that inverts them would otherwise
     // divide by a negative span and paint the whole scale backwards. Equal is
-    // allowed and means "step straight from white to sand at that level".
+    // allowed and means "step straight from white to green at that level".
     const hotDb = Math.max(ceilDb,
       Number.isFinite(options.hotDb) ? options.hotDb : DEFAULT_HOT_DB);
     const throttleMs = options.squelchNewlineThrottleMs || SQUELCH_NEWLINE_THROTTLE_MS;
@@ -105,16 +113,16 @@
     const mix = (from, to, t) =>
       rgbString([0, 1, 2].map(i => Math.round(from[i] + (to[i] - from[i]) * t)));
 
-    // Two ramps, not one: floor -> white up to ceilDb, then white -> sand up to
-    // hotDb, flat sand above it.
+    // Two ramps, not one: floor -> white up to ceilDb, then white -> green up
+    // to hotDb, flat green above it.
     //
     // The second ramp is a ramp and not a hard threshold on purpose. snrDb is
     // measured per character from a single Goertzel window, so it moves by
     // several dB between adjacent characters of the SAME word -- a step at
-    // exactly hotDb would make one word flicker white/sand letter by letter
+    // exactly hotDb would make one word flicker white/green letter by letter
     // and read as noise rather than as information. Ramped, a word straddling
-    // the level simply looks warm, and only a genuinely booming one is fully
-    // sand.
+    // the level simply looks tinted, and only a genuinely booming one is fully
+    // green.
     function colorForSnr(snrDb) {
       if (!Number.isFinite(snrDb)) return null;
       const db = Math.abs(snrDb);

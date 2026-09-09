@@ -214,6 +214,53 @@ const PAGE_SCRIPT = `
     await setPa(base({flags:F.ON|F.LINK|F.OPERATE, swr:65535}));
     check("SWR 65535 is infinity, not a number", txt("paSwr") === "SWR ∞", txt("paSwr"));
 
+    // ---- 3a. temperature --------------------------------------------------
+    // /pa-temp is °C x 100 and arrived on 2026-09-08. The base fixture above
+    // deliberately does NOT carry it: that is a daemon older than the topic,
+    // which publishes the other five perfectly and this one never. It has to be
+    // a dash and not 0 °C, the same null-is-not-zero rule the power readings
+    // follow -- an amplifier that has said nothing about its heatsink must not
+    // read as a cold one.
+    const tempCls = () => $("paTemp").className;
+    await setPa(base({flags:F.ON|F.LINK|F.OPERATE}));
+    check("an amplifier that never reported a temperature shows a dash",
+      txt("paTemp") === "—", txt("paTemp"));
+    await setPa(base({flags:F.ON|F.LINK|F.OPERATE, temp:null}));
+    check("and an explicit null does too", txt("paTemp") === "—", txt("paTemp"));
+    await setPa(base({flags:F.ON|F.LINK|F.OPERATE, temp:0}));
+    check("but 0 °C is a reading, not a dash", txt("paTemp") === "0 °C", txt("paTemp"));
+
+    await setPa(base({flags:F.ON|F.LINK|F.OPERATE, temp:5849}));
+    check("°C x 100 is shown as whole degrees", txt("paTemp") === "58 °C", txt("paTemp"));
+
+    // The colours are the fan schedule, manual 18.17, exactly as the full web
+    // console draws it -- one reading meaning one thing on both screens.
+    await setPa(base({flags:F.ON|F.LINK|F.OPERATE, temp:3200}));
+    check("below the first fan step the temperature stays out of the way",
+      tempCls() === "pa-temp t-cool", tempCls());
+    await setPa(base({flags:F.ON|F.LINK|F.OPERATE, temp:5800}));
+    check("past the first fan step it is warm", tempCls() === "pa-temp t-warm", tempCls());
+    await setPa(base({flags:F.ON|F.LINK|F.OPERATE, temp:6800}));
+    check("past the second it is hot", tempCls() === "pa-temp t-hot", tempCls());
+    await setPa(base({flags:F.ON|F.LINK|F.OPERATE, temp:7800}));
+    check("past the third it is very hot", tempCls() === "pa-temp t-vhot", tempCls());
+    await setPa(base({flags:F.ON|F.LINK|F.OPERATE, temp:9200}));
+    check("and at 90 °C it is the amplifier's own protection tripping",
+      tempCls() === "pa-temp t-trip", tempCls());
+
+    // CONTEST moves the whole schedule: the first fan stage runs continuously,
+    // so nothing is ever "cool", and the second and third steps come earlier.
+    // Reading 62 °C as merely warm during a contest would understate it.
+    await setPa(base({flags:F.ON|F.LINK|F.OPERATE|F.CONTEST, temp:3200}));
+    check("in CONTEST nothing is cool, because the first fan stage never stops",
+      tempCls() === "pa-temp t-warm", tempCls());
+    await setPa(base({flags:F.ON|F.LINK|F.OPERATE|F.CONTEST, temp:6200}));
+    check("and the hot step comes earlier than it would outside a contest",
+      tempCls() === "pa-temp t-hot", tempCls());
+    await setPa(base({flags:F.ON|F.LINK|F.OPERATE, temp:6200}));
+    check("the very same 62 °C is only warm with CONTEST off",
+      tempCls() === "pa-temp t-warm", tempCls());
+
     // ---- 3b. the two bars -------------------------------------------------
     // Full scale follows the mode, so the same 600 W reads differently in HALF
     // and in FULL. Getting that wrong would make a full-power HALF transmission

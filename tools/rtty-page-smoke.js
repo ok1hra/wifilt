@@ -278,26 +278,30 @@ const PAGE_SCRIPT = `
     check("a strong character is drawn brighter than a weak one",
       strong && weak && lum(strong) > lum(weak), \`\${weak} vs \${strong}\`);
 
-    // The third stop: above hotDb a character goes sandy yellow, because white
+    // The third stop: above hotDb a character goes bright green, because white
     // is the brightest a screen has and the scale has to keep saying something
-    // above it. Checked on hue, not on brightness -- sand is DIMMER than white,
-    // which is the whole point and also the easiest thing to get backwards.
+    // above it. Checked on hue, not on brightness -- the green is DIMMER than
+    // white, which is the whole point and also the easiest thing to get
+    // backwards. (It was sandy yellow until 2026-09-08; the operator read the
+    // sand as washed out and asked for QRPLog's own bar green instead.)
     for (const ch of " OK1ABC") rxLog.pushChar(ch, {snrDb: 24});
     const hotTok = scratch.querySelectorAll(".rtty-tok")[2];
     const hot = hotTok.querySelector(".rtty-rx-char").style
       .getPropertyValue("--rtty-rx-char-color");
     const rgb = c => (c.match(/\\d+/g) || []).map(Number);
-    // Sand is a HUE shift, not a dimming: red must stay up at the white end's
-    // level while blue drops away. Getting that backwards would make the
-    // strongest characters read as the weakest.
-    check("an exceptionally strong character keeps white's red channel",
-      rgb(hot)[0] >= 235, hot);
-    check("and gets its colour by losing blue, not by going darker",
-      rgb(hot)[2] <= 160 && rgb(hot)[0] - rgb(hot)[2] > 60, hot);
+    // Green is a HUE shift, not a dimming: the green channel must stay up at
+    // the white end's level while red drops away. Getting that backwards would
+    // make the strongest characters read as the weakest.
+    check("an exceptionally strong character keeps white's green channel",
+      rgb(hot)[1] >= 250, hot);
+    check("and gets its colour by losing red, not by going darker",
+      rgb(hot)[0] <= 160 && rgb(hot)[1] - rgb(hot)[0] > 60, hot);
 
-    // A character just above the white stop must be only slightly warm, not a
-    // jump to full sand -- snrDb moves several dB between adjacent characters
+    // A character just above the white stop must be only slightly tinted, not a
+    // jump to full green -- snrDb moves several dB between adjacent characters
     // of one word, and a hard threshold would make that word flicker.
+    // Measured on RED, the channel that actually separates this green from
+    // white (255 -> 99); blue moves too, but less, so it is the weaker probe.
     const scratch3 = document.createElement("div");
     document.body.appendChild(scratch3);
     const rx3 = RttyRxLog.create({el: scratch3, maxChars: 500,
@@ -305,15 +309,15 @@ const PAGE_SCRIPT = `
     rx3.pushChar("A", {snrDb: 16});
     const warm = rgb(scratch3.querySelector(".rtty-rx-char").style
       .getPropertyValue("--rtty-rx-char-color"));
-    check("just above the white stop is barely tinted, not a jump to full sand",
-      warm[2] > 200 && warm[2] < 255, JSON.stringify(warm));
+    check("just above the white stop is barely tinted, not a jump to full green",
+      warm[0] > 200 && warm[0] < 255, JSON.stringify(warm));
     check("and the tint deepens with the level rather than stepping",
       (function () {
         rx3.clear();
         rx3.pushChar("B", {snrDb: 19});
         const deeper = rgb(scratch3.querySelector(".rtty-rx-char").style
           .getPropertyValue("--rtty-rx-char-color"));
-        return deeper[2] < warm[2] && deeper[2] > 140;
+        return deeper[0] < warm[0] && deeper[0] > 110;
       })());
 
     tokens[1].querySelector(".rtty-rx-char").click();

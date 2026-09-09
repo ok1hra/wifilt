@@ -142,7 +142,7 @@ volatile bool cwIpSendPending = false;
 #ifndef LOOP_WARN_MS
   #define LOOP_WARN_MS 200
 #endif
-#define REV 20260907
+#define REV 20260909
 #define WIFI
 #define FSK_KEYING  // RTTY by keying the FSK + PTT outputs (was UDP_TO_FSK, from when a UDP port fed it)
 #define WDT         // watchdog timer
@@ -594,7 +594,7 @@ volatile uint8_t  trxPendingMode = 0; // CI-V byte
 volatile bool     trxFreqPending = false;
 volatile bool     trxModePending = false;
 
-// ---- Linear amplifier state, fed by the five topics PA.xx publishes ---------
+// ---- Linear amplifier state, fed by the six topics PA.xx publishes ---------
 //
 // The amplifier sends /fwd /ref /swr with every STATUS packet while transmitting
 // -- five to eight a second -- and the browser reads /pa.json twice a second. So
@@ -619,6 +619,16 @@ struct PaState {
   uint16_t fwd, ref;    // W x 10, instantaneous
   uint16_t swr;         // x100; 0 = no answer, 65535 = infinite
   uint8_t  band;        // metres
+  // Heatsink temperature, °C x 100 — the encoding /temp already uses on this
+  // network. Signed because that encoding is, not because a kilowatt amplifier
+  // is expected below freezing.
+  //
+  // tempSeen is NOT the same question as "is the telemetry fresh": a daemon
+  // older than 2026-09-08 publishes the other five topics perfectly while never
+  // sending this one, so LINK is up, everything else is live, and there simply
+  // is no temperature. Without this flag the palette would show that as 0.00 °C.
+  int16_t  temp;
+  bool     tempSeen;
   uint16_t fwdPk, refPk;
   uint32_t fwdPkAt, refPkAt;
 };
@@ -2094,6 +2104,10 @@ void handlePaJson(){
     j += ",\"ref\":";    j += paState.ref;
     j += ",\"swr\":";    j += paState.swr;
     j += ",\"band\":";   j += paState.band;
+    // null, not 0, until a /pa-temp has actually arrived: an older daemon
+    // publishes the other five topics and never this one.
+    j += ",\"temp\":";
+    if (paState.tempSeen) j += paState.temp; else j += "null";
     j += ",\"fwdPk\":";
     if (paState.fwdPkAt && (uint32_t)(now - paState.fwdPkAt) <= PA_PEAK_WINDOW_MS) j += paState.fwdPk;
     else j += "null";
@@ -2103,7 +2117,8 @@ void handlePaJson(){
   } else {
     // Nothing has ever arrived. Saying ageMs:0 here would read as "fresh".
     j += ",\"ageMs\":null,\"flags\":null,\"fwd\":null,\"ref\":null";
-    j += ",\"swr\":null,\"band\":null,\"fwdPk\":null,\"refPk\":null";
+    j += ",\"swr\":null,\"band\":null,\"temp\":null";
+    j += ",\"fwdPk\":null,\"refPk\":null";
   }
   j += ",\"staleMs\":"; j += PA_STALE_MS;
   // Command plumbing, so "nothing happened" can be told apart from "this
@@ -7484,11 +7499,29 @@ void onPaBand(const char* from, const uint8_t* data, size_t len) {
   paNoteRx();
 }
 
-// Register the amplifier's five topics and build the name we accept them from.
+// The daemon converts to °C before publishing: the amplifier reports whole
+// degrees in whichever scale its front-panel menu is set to, and only the
+// daemon still knows which. Rev. 2.0 says so in FLAGS bit 7 (T_SCALE), Rev. 1.0
+// uses that bit for PA_PROT and does not say — and bit 7 is masked out of
+// /pa-flags before it reaches here precisely because it means two things.
+void onPaTemp(const char* from, const uint8_t* data, size_t len) {
+  if (len < sizeof(int16_t) || !paIsOurAmp(from)) return;
+  memcpy(&paState.temp, data, sizeof(int16_t));
+  paState.tempSeen = true;
+  paNoteRx();
+}
+
+// Register the amplifier's six topics and build the name we accept them from.
 // Called from both places that call net.begin() -- boot and WiFi reconnect --
 // because subscriptions do not survive a re-begin any more than the peer table
-// does. Subscribing with no amplifier configured would be five of the eight
+// does. Subscribing with no amplifier configured would be six of the sixteen
 // slots spent on packets that can never be accepted.
+//
+// Sixteen, not eight: TRXNET_MAX_SUBS became per-board in the library on
+// 2026-09-08 (ESP32 16, AVR 8) when /pa-temp made this device want a ninth.
+// Worth knowing why that mattered -- subscribe() drops a path it cannot fit
+// SILENTLY, so a ninth topic on the old table would have compiled, run, and
+// simply never fired its callback.
 void paSubscribeTopics(void) {
   if (PA_NET_ID == 0x00) { paPeerName[0] = '\0'; return; }
   snprintf(paPeerName, sizeof(paPeerName), "PA.%02x", PA_NET_ID);
@@ -7497,6 +7530,7 @@ void paSubscribeTopics(void) {
   net.subscribe("/ref",      onPaRef);
   net.subscribe("/swr",      onPaSwr);
   net.subscribe("/band",     onPaBand);
+  net.subscribe("/pa-temp",  onPaTemp);
 }
 
 // Send whatever the web handler queued. Publishing has to happen here rather

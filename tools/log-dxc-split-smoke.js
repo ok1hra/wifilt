@@ -554,6 +554,123 @@ const PAGE_SCRIPT = `
     await sleep(800);
     check("with no instance left, nothing holds the cluster socket",
       (await stats()).live === 0, JSON.stringify(await stats()));
+
+    // ---- 15. the spot backlog survives leaving the page -------------------
+    // The operator's report: DXC open in the split, go somewhere else, come
+    // back -- empty. log-dxc-split.js REMOVES the iframe on close and has to
+    // (a hidden but live frame would keep holding the single cluster socket and
+    // stay leader), so rows[] died with it; with no other instance alive there
+    // was nobody to seed from either. The rows are now cached for 30 minutes,
+    // aged on the spot's OWN UTC stamp rather than on when it arrived.
+    //
+    // Deliberately the LAST section, with every other instance already gone:
+    // the leader/follower seed cannot be what puts the rows back, so only the
+    // cache can be.
+    //
+    // Step 9 left {"20m": false} in the pane's own band filter. That never bit
+    // the instance it was written into -- loadFreqFilter() had already run --
+    // but a FRESH pane reads it at boot and would hide every spot below, which
+    // would look exactly like a cache that did not work.
+    localStorage.removeItem("dxcEFreqFilter");
+
+    const hm = at => String(at.getUTCHours()).padStart(2, "0") +
+                     String(at.getUTCMinutes()).padStart(2, "0");
+    const ago = mins => hm(new Date(Date.now() - mins * 60000));
+    const spotAt = (call, khz, at) =>
+      "DX de OK2XYZ:    " + khz + "  " + call + "       cache test            " + at + "Z";
+
+    $("tabDxc").click();
+    await until(() => $("logDxcFrame") && $("logDxcFrame").contentDocument &&
+      $("logDxcFrame").contentDocument.getElementById("body"), 8000,
+      "the pane to come back for the cache pass");
+    let pane = $("logDxcFrame").contentDocument;
+    const paneText = () => pane.getElementById("body").textContent;
+    // The document existing is not the same as the pane being on the cluster:
+    // it still has to win an election and open the socket, and a line pushed
+    // before that is simply lost.
+    await until(async () => (await stats()).live === 1, 10000,
+      "the returning pane to take the cluster socket");
+
+    // CLEAR is also what forgets the cache, so this starts from a known-empty
+    // one rather than from whatever the sections above left behind.
+    pane.getElementById("clear").click();
+    await sleep(150);
+
+    await fetch("/ws-push?line=" + encodeURIComponent(spotAt("CACHE1", "14045.0", ago(1))));
+    await fetch("/ws-push?line=" + encodeURIComponent(spotAt("CACHE2", "14055.0", ago(20))));
+    await fetch("/ws-push?line=" + encodeURIComponent(spotAt("STALE9", "14065.0", ago(95))));
+    await until(() => /STALE9/.test(paneText()), 6000,
+      "all three cache-pass spots to render").catch(() => {});
+    check("the cache pass starts with all three spots on screen",
+      /CACHE1/.test(paneText()) && /CACHE2/.test(paneText()) && /STALE9/.test(paneText()),
+      paneText().slice(0, 200));
+
+    // ---- 15a. the zoom buttons move the COLUMNS, not just the type --------
+    // Reported alongside the cache: shrinking the text left the columns at full
+    // width and opened big gaps, enlarging it sawed the longer values off
+    // behind the ellipsis. The table is table-layout:fixed and every cell
+    // clips, so scaling the font on its own could only ever produce one of
+    // those two. QRPLog's own journal hit this and was fixed the same way --
+    // see .jcol-* and the --jzoom note in log.css.
+    const cell = () => pane.querySelector("#body tr td.c-freq");
+    const colW = () => cell().getBoundingClientRect().width;
+    const fontPx = () => parseFloat(pane.defaultView.getComputedStyle(cell()).fontSize);
+    const base = {w: colW(), f: fontPx()};
+    pane.getElementById("zoomOut").click();
+    await sleep(150);
+    const small = {w: colW(), f: fontPx()};
+    check("zooming out shrinks the column, not just the text",
+      small.f < base.f && small.w < base.w, JSON.stringify({base, small}));
+    pane.getElementById("zoomIn").click();
+    pane.getElementById("zoomIn").click();
+    await sleep(150);
+    const big = {w: colW(), f: fontPx()};
+    check("and zooming in widens it, so longer values still fit",
+      big.f > base.f && big.w > base.w, JSON.stringify({base, big}));
+    // The two must move by the SAME factor. Widths that merely moved in the
+    // right direction would still drift out of step over the 0.6-2.5 range,
+    // which is the whole complaint.
+    check("the column tracks the type in proportion",
+      Math.abs((big.w / base.w) - (big.f / base.f)) < 0.02,
+      JSON.stringify({wRatio: big.w / base.w, fRatio: big.f / base.f}));
+    pane.getElementById("zoomOut").click();   // back to 1.0 for everything below
+    await sleep(150);
+
+    // Closed well inside the 3 s write throttle on purpose: what is under test
+    // here is the pagehide flush, not the timer that would have covered for it.
+    $("tabDxc").click();
+    await sleep(300);
+    check("and the iframe went away again", !$("logDxcFrame"));
+
+    $("tabDxc").click();
+    await until(() => $("logDxcFrame") && $("logDxcFrame").contentDocument &&
+      /CACHE1/.test($("logDxcFrame").contentDocument.getElementById("body").textContent),
+      8000, "the cached spots to come back").catch(() => {});
+    pane = $("logDxcFrame").contentDocument;
+    check("spots come back after leaving the pane and returning",
+      /CACHE1/.test(paneText()) && /CACHE2/.test(paneText()), paneText().slice(0, 200));
+    check("a spot older than 30 minutes does not",
+      !/STALE9/.test(paneText()), paneText().slice(0, 200));
+    check("and the Raw view is rebuilt from the surviving rows",
+      /CACHE1/.test(pane.getElementById("raw").textContent) &&
+      !/STALE9/.test(pane.getElementById("raw").textContent),
+      pane.getElementById("raw").textContent.slice(0, 200));
+
+    // ---- 15b. CLEAR forgets the cache as well as the table ----------------
+    // Without this the table would refill itself on the next visit and the
+    // button would look broken.
+    pane.getElementById("clear").click();
+    await sleep(150);
+    $("tabDxc").click();
+    await sleep(300);
+    $("tabDxc").click();
+    await until(() => $("logDxcFrame") && $("logDxcFrame").contentDocument &&
+      $("logDxcFrame").contentDocument.getElementById("body"), 8000,
+      "the pane to come back after CLEAR");
+    pane = $("logDxcFrame").contentDocument;
+    await sleep(600);
+    check("CLEAR forgets the cache, so nothing comes back", paneText() === "",
+      paneText().slice(0, 200));
   } catch (error) {
     check("the test script ran to the end", false, String(error && error.stack || error));
   }
