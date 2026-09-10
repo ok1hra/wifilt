@@ -74,6 +74,29 @@ published.
   `--zoom` — the same fix, and the same reasoning, as the journal's own
   `--jzoom` two entries above this one.
 
+* **And the widths themselves were measured rather than guessed.** That first
+  fix left a second complaint standing: narrowing the pane still stopped at a
+  floor with visible gaps between the columns. Measured, every column was
+  carrying 16–34 px more than the widest thing it ever has to show — its own
+  header button or its widest realistic value. (The buttons look too wide for
+  their labels because `.th-filter-btn` is `width: 100%` of an over-wide
+  column, so they are a symptom, not the cause; their own padding is 12 px.)
+  UTC 64→48, DX 108→98, km 96→76, Spotter 96→72, Type 72→54, WPM 62→40. **kHz
+  and dB are deliberately left alone**: kHz has to hold `1 296 000.0` for 23 cm
+  and dB holds a 6ch meter beside a 3ch value, so their apparent slack is 2 px,
+  not slack at all. The floor the table stops shrinking at falls 582 → **496 px**
+  (349 → 298 at 0.6×), a 900 px pane no longer has a horizontal scrollbar at
+  all, and the recovered width goes to the Info column — 182 → 292 px — instead
+  of sitting between the columns as gaps.
+
+* **Not changed, by the operator's own call: the bottom bar.** Measuring the
+  above also showed where the *vertical* scrolling in a narrow pane comes from —
+  the bar wraps as it narrows and grows from 63 px to **157 px**, a quarter of
+  the pane, squeezing 710 px of table into 585 px. Leaving it as it is was
+  chosen deliberately; the fix, if it is ever wanted, is one line
+  (`flex-wrap: nowrap; overflow-x: auto`, exactly what QRPLog's own tab row
+  already does when the split is open).
+
 * **The PA palette shows the amplifier's temperature.** It was never on the wire
   at all: the daemon decodes byte 21 of every STATUS record and simply did not
   publish it. It now goes out as **`/pa-temp`**, `int16` °C × 100 — the encoding
