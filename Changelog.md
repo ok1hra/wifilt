@@ -13,6 +13,33 @@ published.
 
 **Four operator reports: RTTY colour, the DX cluster's memory, its zoom, and the amplifier's temperature.**
 
+* **The DX cluster's bottom toolbar is one row now, with an arrow for the rest.**
+  It carries fourteen controls and needs ~1360 px to stand on one line, so in the
+  split pane it wrapped into three to six of them. Measured in a real browser, the
+  worst case was not the narrowest: between **720 and 800 px of pane width the bar
+  was 175 px tall**, because above the 700 px breakpoint it did not wrap *at all*
+  and `.hint` collapsed to min-content, stacking its 68 characters into nine lines
+  — and `FIRST_FRAC = 0.42` lands a 1920 px screen at ~806 px, dead centre of that
+  band. Collapsed it is **27 px at every width**, so the default split gets ~146 px
+  of pane height back. What stays visible is the row that answers *is it working
+  and what am I typing*: `DXC`, WS, Telnet, the spot counter and the command box;
+  the other nine controls are `.bar-more` and one CSS rule hides them. The arrow is
+  **last in the DOM** on purpose — the bar grows upward, so the last row is always
+  the bottom row and the button keeps its exact rectangle across the toggle rather
+  than sliding out from under the finger that tapped it. Opening **reflows** (the
+  table gives up the height) instead of overlaying, so no spot is ever covered;
+  the bottom of each output is made sticky across the toggle, independent of
+  `autoScroll`, because `scrollOutputsToBottom()` opens with `if(!autoScroll)return`
+  and the operator who froze the list is exactly the one parked at its end. Two
+  things fixed on the way past: `#cols` was anchored at a hardcoded `bottom:76px`
+  that matched one particular wrapped bar and nothing else, and now follows the
+  bar's real height; and the spot counter turns amber when automatic scrolling is
+  off, since **Stop scroll** is one of the controls that are put away and a frozen
+  list with no visible reason reads as a dead cluster. Eight checks added to
+  `tools/log-dxc-split-smoke.js` (62/62), two of which cannot be read out of the
+  source at all: the arrow's rectangle across the toggle, and the newest spot
+  surviving the reflow.
+
 * **The strongest RTTY characters are green now, not sand.** The RX log colours
   every decoded character by its own signal strength, and above 20 dB the scale
   runs out of white and turns to a hue — which was a sandy yellow and read as

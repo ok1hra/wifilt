@@ -402,6 +402,15 @@ rather than repeating it, builds the LittleFS image from `data/`, and writes
 ./tools/gh-pages.sh --publish    # build and push to the gh-pages branch
 ```
 
+Alongside the ESP32 flash it publishes whatever desktop archives `native/dist/` happens to
+hold for this revision — Linux x86-64, Linux ARM64 and Windows — each in its own folded panel,
+and leaves out the ones that are not there. It also **looks inside each archive** for a
+bundled `local-trx` (§ 5) rather than assuming: an archive that has it gets a paragraph
+saying so and the page grows a *Not a networked Icom?* section explaining the three
+connections and the setup wizard; an archive without it reads exactly as it did before that
+program existed. Nothing has to be passed on the command line — `tools/release.sh` decides
+whether to bundle it, and this script only reports what it finds.
+
 The page has no "what does this release do to your configuration" switch, on purpose. The
 esp-web-tools dialog already asks the only question that decides it — its *Erase device*
 checkbox — and the page explains that checkbox instead of guessing on the operator's

@@ -671,6 +671,110 @@ const PAGE_SCRIPT = `
     await sleep(600);
     check("CLEAR forgets the cache, so nothing comes back", paneText() === "",
       paneText().slice(0, 200));
+
+    // ---- 16. the bottom bar: one row unless asked --------------------------
+    // Measured in a real browser before this was built: the bar stood 175px
+    // tall at 720-800px of pane width, because above the 700px breakpoint it
+    // did not wrap at all and .hint stacked its 68 characters into nine lines
+    // -- and the split's default 0.42 fraction lands a 1920px screen at ~806px.
+    // Two of the checks below cannot be read out of the source: that the arrow
+    // keeps its rectangle across the toggle (it is last in the DOM so the bar,
+    // which grows upward, always leaves it in the bottom-right corner), and
+    // that the newest spot survives the reflow the opening causes.
+    const paneWin = $("logDxcFrame").contentWindow;
+    const bar     = pane.getElementById("bar");
+    const toggle  = pane.getElementById("barToggle");
+
+    // align-items:center puts items of unequal height on unequal offsetTops
+    // inside ONE row, so anything within 6px counts as the same row.
+    const barRows = () => {
+      const tops = [];
+      for (const el of bar.children) {
+        if (el.offsetParent === null) continue;
+        tops.push(Math.round(el.offsetTop + el.offsetHeight / 2));
+      }
+      tops.sort((a, b) => a - b);
+      let n = 0, last = -99;
+      for (const v of tops) if (v - last > 6) { n++; last = v; }
+      return n;
+    };
+    const putAway = () => Array.prototype.filter.call(
+      bar.querySelectorAll(".bar-more"), el => el.offsetParent === null).length;
+
+    check("the pane's bar starts collapsed, on one row",
+      bar.classList.contains("collapsed") && barRows() === 1,
+      barRows() + " row(s), " + Math.round(bar.getBoundingClientRect().height) + "px");
+    check("nine controls are put away and the status row is not",
+      putAway() === 9 && pane.getElementById("cmd").offsetParent !== null
+      && pane.getElementById("ws").offsetParent !== null
+      && pane.getElementById("cnt").offsetParent !== null,
+      putAway() + " hidden");
+
+    const arrowShut = toggle.getBoundingClientRect();
+    toggle.click();
+    await sleep(120);
+    check("the arrow opens it and everything comes back",
+      !bar.classList.contains("collapsed") && putAway() === 0 && barRows() > 1,
+      putAway() + " hidden, " + barRows() + " row(s)");
+    const arrowOpen = toggle.getBoundingClientRect();
+    check("and the arrow itself stays put",
+      Math.abs(arrowOpen.right - arrowShut.right) <= 1
+      && Math.abs(arrowOpen.bottom - arrowShut.bottom) <= 2,
+      Math.round(arrowShut.right) + "," + Math.round(arrowShut.bottom) + " -> "
+      + Math.round(arrowOpen.right) + "," + Math.round(arrowOpen.bottom));
+    check("the open state is stored under the pane's own prefix",
+      paneWin.localStorage.getItem("dxcEBarOpen") === "1"
+      && paneWin.localStorage.getItem("dxcBarOpen") === null,
+      String(paneWin.localStorage.getItem("dxcEBarOpen")));
+
+    // The Columns panel used to sit at a hardcoded bottom:76px, which matched
+    // one particular wrapped bar and nothing else.
+    pane.getElementById("colbtn").click();
+    await sleep(80);
+    const colsBottom = parseInt(pane.getElementById("cols").style.bottom, 10);
+    check("the Columns panel anchors above the bar's real height",
+      Math.abs(colsBottom - (bar.offsetHeight + 6)) <= 1,
+      colsBottom + " vs bar " + bar.offsetHeight);
+
+    // ---- 16b. opening the bar must not push the newest spot out of sight ---
+    // The bar reflows rather than overlays, so .wrap loses height while
+    // keeping its scrollTop. scrollOutputsToBottom() cannot cover this on its
+    // own: it opens with if(!autoScroll)return, and the operator who froze the
+    // list is exactly the one parked at its end. So auto-scroll is turned OFF
+    // here on purpose -- with it on, the check would pass either way.
+    const bulk = [];
+    for (let i = 0; i < 80; i++) {
+      bulk.push("DX de OK1AAA:    14025.0  T" + (100 + i)
+        + "ABC       filler                1220Z");
+    }
+    await fetch("/ws-push?line=" + encodeURIComponent(bulk.join("\\n")));
+    await until(() => pane.querySelectorAll("#body tr").length > 60, 6000,
+      "the filler spots to render").catch(() => {});
+
+    pane.getElementById("scrollToggle").click();   // auto-scroll OFF
+    await sleep(80);
+    check("with auto-scroll off the always-visible counter says so",
+      pane.getElementById("cnt").classList.contains("scroll-off"),
+      pane.getElementById("cnt").className);
+
+    toggle.click();                                 // collapse
+    await sleep(120);
+    const wrapEl = pane.querySelector(".wrap");
+    wrapEl.scrollTop = wrapEl.scrollHeight;
+    await sleep(60);
+    const scrollable = wrapEl.scrollHeight > wrapEl.clientHeight + 10;
+    const rowsNow    = pane.querySelectorAll("#body tr");
+    const lastRow    = rowsNow[rowsNow.length - 1];
+    toggle.click();                                 // and open it again
+    await sleep(120);
+    check("opening the bar keeps the newest spot visible",
+      scrollable && !!lastRow
+      && lastRow.getBoundingClientRect().bottom
+         <= wrapEl.getBoundingClientRect().bottom + 1,
+      (scrollable ? "" : "NOT SCROLLABLE ") + (lastRow
+        ? Math.round(lastRow.getBoundingClientRect().bottom) + " vs wrap "
+          + Math.round(wrapEl.getBoundingClientRect().bottom) : "no rows"));
+    pane.getElementById("scrollToggle").click();    // auto-scroll back on
   } catch (error) {
     check("the test script ran to the end", false, String(error && error.stack || error));
   }

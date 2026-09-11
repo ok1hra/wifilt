@@ -17,6 +17,7 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
  · [1.3 Which radios](#13-which-radios)
  · [1.4 The navigation bar](#14-the-navigation-bar)
  · [1.5 Where it runs](#15-where-it-runs)
+ · [1.6 local-trx — any radio, on a PC](#16-local-trx--any-radio-on-a-pc)
 
 **[2. First run](#2-first-run)**
  · [2.1 AP mode](#21-ap-mode)
@@ -38,8 +39,9 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
  · [3.11 Band map](#311-band-map)
  · [3.12 The DX cluster beside the log](#312-the-dx-cluster-beside-the-log)
  · [3.13 Radio selection](#313-radio-selection)
- · [3.14 Export and backup](#314-export-and-backup)
- · [3.15 Keyboard shortcuts](#315-keyboard-shortcuts)
+ · [3.14 PA — the linear amplifier](#314-pa--the-linear-amplifier)
+ · [3.15 Export and backup](#315-export-and-backup)
+ · [3.16 Keyboard shortcuts](#316-keyboard-shortcuts)
 
 **[4. DXC — DX cluster](#4-dxc--dx-cluster)**
  · [4.1 Connecting](#41-connecting)
@@ -68,50 +70,59 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
  · [5.17 Logging JS8 QSOs](#517-logging-js8-qsos)
  · [5.18 Troubleshooting](#518-troubleshooting)
 
-**[6. DATA — WSPR beacon](#6-data--wspr-beacon)**
- · [6.1 What the beacon does](#61-what-the-beacon-does)
- · [6.2 Starting and stopping](#62-starting-and-stopping)
- · [6.3 Power](#63-power)
- · [6.4 Waterfall and TX SESSION](#64-waterfall-and-tx-session)
- · [6.5 Activity](#65-activity)
- · [6.6 Time table](#66-time-table)
- · [6.7 SETTINGS](#67-settings)
- · [6.8 TX audio gain and CAL PLAN](#68-tx-audio-gain-and-cal-plan)
- · [6.9 Radio setup help](#69-radio-setup-help)
+**[6. DATA — RTTY-ICOM](#6-data--rtty-icom)**
+ · [6.1 What the page is](#61-what-the-page-is)
+ · [6.2 Header: frequency, CAL PLAN, mode, power, session](#62-header-frequency-cal-plan-mode-power-session)
+ · [6.3 Waterfall and live spectrum](#63-waterfall-and-live-spectrum)
+ · [6.4 RX — the decoded text](#64-rx--the-decoded-text)
+ · [6.5 TX — sending](#65-tx--sending)
+ · [6.6 SETTINGS](#66-settings)
+ · [6.7 What the page takes from the radio](#67-what-the-page-takes-from-the-radio)
 
-**[7. DATA — Mercury file transfer](#7-data--mercury-file-transfer)**
- · [7.1 What Mercury does](#71-what-mercury-does)
- · [7.2 Header: radio, timetable and CAL PLAN](#72-header-radio-timetable-and-cal-plan)
- · [7.3 Waterfall](#73-waterfall)
- · [7.4 Calling a station, and CQ](#74-calling-a-station-and-cq)
- · [7.5 Connection test and live status](#75-connection-test-and-live-status)
- · [7.6 Sending and receiving a file](#76-sending-and-receiving-a-file)
- · [7.7 A transfer running elsewhere](#77-a-transfer-running-elsewhere)
- · [7.8 SETTINGS](#78-settings)
+**[7. DATA — WSPR beacon](#7-data--wspr-beacon)**
+ · [7.1 What the beacon does](#71-what-the-beacon-does)
+ · [7.2 Starting and stopping](#72-starting-and-stopping)
+ · [7.3 Power](#73-power)
+ · [7.4 Waterfall and TX SESSION](#74-waterfall-and-tx-session)
+ · [7.5 Activity](#75-activity)
+ · [7.6 Time table](#76-time-table)
+ · [7.7 SETTINGS](#77-settings)
+ · [7.8 TX audio gain and CAL PLAN](#78-tx-audio-gain-and-cal-plan)
+ · [7.9 Radio setup help](#79-radio-setup-help)
 
-**[8. SETUP](#8-setup)**
- · [8.1 WiFi](#81-wifi)
- · [8.2 Identity](#82-identity)
- · [8.3 Radio](#83-radio)
- · [8.4 DX Cluster](#84-dx-cluster)
- · [8.5 TrxNet](#85-trxnet)
- · [8.6 TX audio gain](#86-tx-audio-gain)
- · [8.7 LOG](#87-log)
- · [8.8 Remote management of JS8 unattended operation](#88-remote-management-of-js8-unattended-operation)
- · [8.9 Save, download and upload the configuration](#89-save-download-and-upload-the-configuration)
+**[8. DATA — Mercury file transfer](#8-data--mercury-file-transfer)**
+ · [8.1 What Mercury does](#81-what-mercury-does)
+ · [8.2 Header: radio, timetable and CAL PLAN](#82-header-radio-timetable-and-cal-plan)
+ · [8.3 Waterfall](#83-waterfall)
+ · [8.4 Calling a station, and CQ](#84-calling-a-station-and-cq)
+ · [8.5 Connection test and live status](#85-connection-test-and-live-status)
+ · [8.6 Sending and receiving a file](#86-sending-and-receiving-a-file)
+ · [8.7 A transfer running elsewhere](#87-a-transfer-running-elsewhere)
+ · [8.8 SETTINGS](#88-settings)
 
-**[9. LOGSYNC](#9-logsync)**
- · [9.1 Where your QSOs live](#91-where-your-qsos-live)
- · [9.2 Pairing and syncing](#92-pairing-and-syncing)
- · [9.3 Sync status](#93-sync-status)
- · [9.4 Backup and restore](#94-backup-and-restore)
- · [9.5 Importing ADIF, Cabrillo and EDI](#95-importing-adif-cabrillo-and-edi)
+**[9. SETUP](#9-setup)**
+ · [9.1 WiFi](#91-wifi)
+ · [9.2 Identity](#92-identity)
+ · [9.3 Radio](#93-radio)
+ · [9.4 DX Cluster](#94-dx-cluster)
+ · [9.5 TrxNet](#95-trxnet)
+ · [9.6 TX audio gain](#96-tx-audio-gain)
+ · [9.7 LOG](#97-log)
+ · [9.8 Remote management of JS8 unattended operation](#98-remote-management-of-js8-unattended-operation)
+ · [9.9 Save, download and upload the configuration](#99-save-download-and-upload-the-configuration)
 
-**[10. BD — band decoder](#10-bd--band-decoder)**
+**[10. LOGSYNC](#10-logsync)**
+ · [10.1 Where your QSOs live](#101-where-your-qsos-live)
+ · [10.2 Pairing and syncing](#102-pairing-and-syncing)
+ · [10.3 Sync status](#103-sync-status)
+ · [10.4 Backup and restore](#104-backup-and-restore)
+ · [10.5 Importing ADIF, Cabrillo and EDI](#105-importing-adif-cabrillo-and-edi)
 
-**[11. Transmit safety](#11-transmit-safety)**
+**[11. BD — band decoder](#11-bd--band-decoder)**
 
-**[12. Component licences](#12-component-licences)**
+**[12. Transmit safety](#12-transmit-safety)**
+
+**[13. Component licences](#13-component-licences)**
 
 ---
 
@@ -197,7 +208,7 @@ The beacon's encoder is checked against WSJT-X's own golden vectors on every bui
 **[Mercury](https://github.com/Rhizomatica/mercury)** — Rafael Diniz and Rhizomatica. Mercury
 is a wire-compatible ARQ file-transfer modem built for the same constraint WIFILT itself is
 built around — real HF, real noise, no assumption of a clean link — and the Mercury tab on the
-DATA page ([section 7](#7-data--mercury-file-transfer)) runs its actual ARQ engine, compiled
+DATA page ([section 8](#8-data--mercury-file-transfer)) runs its actual ARQ engine, compiled
 to WebAssembly, over the FreeDV data modem (David Rowe and the Codec 2 project) it carries.
 
 RTTY-ICOM's own FSK demodulator (`data/rtty-codec.js`) is original code, but credits
@@ -207,7 +218,7 @@ horusdemodlib's own balloon-telemetry framing is unrelated to ham Baudot RTTY.
 
 Thanks also to the authors of the smaller pieces this project leans on — the DXCC prefix
 engine, the FFT library, the compression codecs. They are listed with their licences in
-[section 12](#12-component-licences).
+[section 13](#13-component-licences).
 
 ### 1.3 Which radios
 
@@ -217,7 +228,19 @@ CI-V command set, so they are expected to work, but they have not been verified 
 yet.
 
 Radios without network control connect over **CI-V** or **TrxNet** instead. Those carry
-commands only — no audio — so the JS8 and WSPR pages are not available on them.
+commands only — no audio — so the DATA pages are not available on them.
+
+**A radio that is not an Icom at all — or an Icom without a network port — can still be used**,
+if WIFILT is running on a PC: a companion program called **local-trx** pretends to be a
+LAN-networked Icom and translates for whatever the computer's sound card, CAT adapter and
+keying adapter are wired to. WIFILT itself is not told anything about it; you point its
+ICOM-LAN slot at the program's address exactly as if it were a radio. See
+[section 1.6](#16-local-trx--any-radio-on-a-pc) and [section 9.3](#93-radio).
+
+Which radios the interface knows by name matters in a few places — it is how RTTY Mark
+Frequency, the network MOD level and the model's own power limits are reached over CI-V. A
+model it does not recognise, **local-trx included**, simply loses those features rather than
+guessing at them.
 
 ### 1.4 The navigation bar
 
@@ -228,7 +251,7 @@ Every page carries the same bar:
 | *(logo)* | — | opens a small About panel with links to the project and to RemoteQTH |
 | **QRPLog** | `/log` | the logbook |
 | **DXC** | `/dxc.html` | the DX cluster client — splits the QRPLog page in two; its own 600×750 window from anywhere else |
-| **DATA** | `/data` | JS8Call and, through its sub-navigation, the WSPR beacon |
+| **DATA** | `/data` | four modes over the radio's LAN audio, chosen in the page's own sub-navigation: **JS8Call-ICOM**, **RTTY-ICOM**, **WSPR-Beacon** and **Mercury**. Only one of them can run at a time — see [section 12](#12-transmit-safety). |
 | **SETUP** | `/setup` | configuration |
 | **LOGSYNC** | `/datasync` | log synchronisation, backup, import |
 | **BD** | `/bd` | band decoder — hidden unless the hardware has it |
@@ -272,10 +295,15 @@ built for both x86_64 PCs and 64-bit Raspberry Pi (aarch64):
 | Needs | the interface hardware, see [HARDWARE.md](HARDWARE.md) | nothing but the radio on the network | nothing but the radio on the network |
 | Runs unattended, 24/7 | yes | only while the computer and the program are running | only while the computer and the program are running |
 | CI-V over a serial wire, CW/RTTY GPIO keying, Status LED, POWER-OUT, Band Decoder | yes | no | no |
-| ICOM-LAN control + audio, TrxNet, QRPLog, DXC, JS8Call, WSPR beacon, LOGSYNC | yes | yes | yes |
+| ICOM-LAN control + audio, TrxNet, QRPLog, DXC, the whole DATA page, LOGSYNC | yes | yes | yes |
+| A non-Icom radio, or an Icom without LAN, through [local-trx](#16-local-trx--any-radio-on-a-pc) | no | yes | yes |
 
-A radio without its own network port — reached only over CI-V on a serial wire, or over
-TrxNet — needs the ESP32 board regardless; a PC has no serial port and no GPIO to offer it.
+A radio without its own network port can go either way. The ESP32 board reaches it directly,
+over CI-V on a serial wire or over TrxNet. A PC reaches it through **local-trx**
+([section 1.6](#16-local-trx--any-radio-on-a-pc)), which turns the computer's own sound card
+and USB serial adapters into the radio's network port — and which is also the only route to a
+transceiver that is not an Icom at all.
+
 SETUP reads which build it is talking to and hides controls that would not do anything on
 it — a Linux or Windows install never shows WiFi fields to save into, and a slot already set
 to CI-V keeps showing it rather than being silently rewritten. Its title also carries a
@@ -287,6 +315,66 @@ grab, never how the interface behaves once it is running.
 Building either native binary from source, and what `install.sh` does on Linux (including the
 Raspberry Pi build), is in
 [BUILD.md § 4](BUILD.md#4-native-build-linux-windows-and-raspberry-pi-arm64).
+
+
+### 1.6 local-trx — any radio, on a PC
+
+`local-trx` is a **second, separate program** that ships inside the same Linux, Raspberry Pi
+and Windows archives as WIFILT itself. It exists for one job: to let a PC install of WIFILT
+drive a transceiver that has no network port of its own — a Kenwood, a Yaesu, an older Icom,
+anything hamlib knows.
+
+The trick it plays is simple. WIFILT can already talk to an "Icom LAN radio" at any address,
+including the computer's own. `local-trx` implements that same protocol **from the radio's
+side** — it pretends to be a networked Icom — and translates each request into whatever the
+PC's hardware actually offers:
+
+| WIFILT asks for | `local-trx` uses |
+|---|---|
+| frequency, mode, RIT, AF/RF gain, S-meter, SWR, ALC | the CAT adapter, through **hamlib** |
+| receive and transmit audio | the PC's **sound card** |
+| CW keying, FSK keying and PTT | a **second, independent serial adapter**, on its DTR and RTS lines |
+
+**It is off until you configure it.** A freshly installed copy opens no port, no serial
+adapter and no audio device at all. Its own setup page — a browser page of its own, on port
+**8765** — walks through the three things it needs, and there are test buttons beside each so
+you can prove the wiring before trusting it on the air:
+
+1. **Audio** — capture device (receive) and playback device (transmit), with a live input
+   meter and a test tone.
+2. **CAT** — serial port, baud rate, and which rig it is, picked from hamlib's full model
+   list; **Test read freq** reads the dial back.
+3. **Keying** — a *different* serial port from the CAT one, its baud rate, the CW speed in
+   WPM, and which of DTR/RTS is the key line and which is PTT (adapters differ, so it is a
+   choice). **Test KEY** and **Test PTT** assert each line on its own.
+
+Above those sit the identity WIFILT will see at login — a radio name, a CI-V address
+(`A6` by default) and the address to listen on (`127.0.0.1` by default) — and a **Configure /
+Run** switch that keeps the program quiet while you are still setting it up.
+
+**Nothing is applied while it runs.** Saving the configuration restarts `local-trx` itself;
+until then, every field is describing what the *next* start will use, not what is happening
+now.
+
+**CW, FSK and PTT never go through CAT.** Not every CAT dialect has an ASCII "send this in
+Morse" command the way Icom's CI-V does, and a physical key jack works on every rig — so
+keying is always the DTR/RTS adapter, and `local-trx` generates the Morse and the Baudot
+itself. FSK text is the one thing that does not arrive over the fake CI-V link at all: it
+comes in as a **TrxNet peer**, which is why the keying step also asks for a TrxNet ID.
+
+**What it deliberately cannot do.** It introduces itself under a name WIFILT does not
+recognise, and that is the point: an unknown model already makes WIFILT stop assuming
+anything about the radio's capabilities. So the features that are reached by model-specific
+CI-V — the network MOD-level TX-gain calibration, GPS position, the radio's waterfall — switch
+themselves off rather than misbehave. The transmit gain is still calibrated, just through the
+ordinary audio path.
+
+On Linux and Raspberry Pi, `install.sh` copies it to `/opt/wifilt` beside WIFILT but installs
+no service for it. A **`start-wifilt.sh`** (and `start-wifilt.bat` on Windows) starts both
+programs and opens both pages, because an operator has no other way to discover that there
+are two. Building it from source is [BUILD.md § 5](BUILD.md#5-local-trx-a-hamlib-bridge-for-non-icom-radios).
+
+Pointing WIFILT at it is one checkbox in [SETUP → Radio](#93-radio).
 
 ---
 
@@ -392,7 +480,7 @@ This is the only step with real work in it, and it is guided.
    immediately, and the page moves on — **there is no restart**.
 
 Under the guided walk sits the full **Radio** editor, folded away: three slots, transports,
-CI-V addresses, labels. It is described in [section 8.3](#83-radio).
+CI-V addresses, labels. It is described in [section 9.3](#93-radio).
 
 If the interface is still in AP mode, this step is blocked and says so — the radio lives on
 your home network and cannot be reached from the hotspot.
@@ -406,7 +494,7 @@ until the ALC just begins to act. It proves the whole transmit chain in one go �
 audio path, PTT, power, SWR — and gives the digital modes the audio level to use.
 
 This step is **advice, not a gate**. Without it JS8 and WSPR still transmit, just worse. It
-opens the calibration on the WSPR page; see [section 8.6](#86-tx-audio-gain).
+opens the calibration on the WSPR page; see [section 9.6](#96-tx-audio-gain).
 
 On a CI-V or TrxNet radio the step shows `—`: there is no network audio path, so there is
 nothing to measure and nothing missing.
@@ -436,7 +524,7 @@ permanent fix. Failing that:
 - **From the radio's headphones** — if *Announce WiFi IP via CW* is enabled, the interface
   reads its own address to you in Morse the first time it connects to the radio. It is
   sidetone only: break-in is forced off, so it never transmits. See
-  [section 8.3](#83-radio).
+  [section 9.3](#93-radio).
 
 Every method, and why the AP-mode "tap to open" prompt cannot exist on a home network, is in
 [docs/find-device-ip.md](docs/find-device-ip.md).
@@ -627,18 +715,84 @@ The same contest in RTTY, where everything is doubled for readability:
 | `TXEXCH` | `DL1XYZ DL1XYZ 599-007 599-007` |
 | `TU` | `DL1XYZ tu OK1ABC` |
 
-In **SSB and FM there are no macros** — nothing is sent, and Enter only logs. This is
-unconditional and there is nothing to switch. With no macro sent, the log takes the sent
-report straight from its field.
+#### What each mode does
 
-CW is handed to the radio as a CI-V message and the radio generates the Morse itself, in `CW`
-and in `CW-R`. RTTY is keyed by the interface on its FSK and PTT outputs, in `RTTY` and
-`RTTY-R`. **Those four modes are the only ones anything can be keyed in.** In a data mode
-(`USB-D`, `LSB-D`) the interface has no keying output of its own, so a macro goes out as
-audio instead — see [3.6](#36-the-rtty-palette). In `WFM`, or in a mode the radio does not
-name, the page says so and sends nothing: there is no path there and the text would only be
-dropped. **`Esc` aborts a transmission immediately** — CW, RTTY and an audio send alike — as
-long as no dialog is open.
+The log never guesses. **The mode the radio reports decides whether Enter transmits at all,
+and by what route** — there is no mode selector anywhere in QRPLog to disagree with it.
+
+| Radio mode | What Enter does | Logged as |
+|---|---|---|
+| `CW`, `CW-R` | the text is handed to the radio as a CI-V message and **the radio generates the Morse itself** | `CW` / `CW-R` |
+| `RTTY`, `RTTY-R` | the interface keys **real FSK and PTT** on its own output — or on a TrxNet device, if that is how *FSK output* is set ([section 6.6](#66-settings)) | `RTTY` / `RTTY-R` |
+| `USB-D`, `LSB-D` | **only if RTTY-ICOM is holding the radio's audio** — the full page under DATA, or the palette ([section 3.6](#36-the-rtty-palette)). The text is handed to it and goes out as AFSK audio, built exactly as a real RTTY macro would be. | `RTTY` |
+| `USB-D`, `LSB-D` while **JS8Call-ICOM** holds the audio | nothing is keyed — JS8 has no free-text keying path — but the QSO is tagged correctly | `JS8` |
+| `USB-D`, `LSB-D` with nobody holding the audio | refused: `<mode> cannot be keyed — send manually` | the raw mode |
+| `SSB`, `LSB`, `USB`, `FM`, `AM`, `DV` | **no macros exist.** Nothing is sent and Enter only logs. This is unconditional and there is nothing to switch. | the mode |
+| `WFM`, or a mode the radio does not name | refused: `<mode> cannot be keyed — send manually`. There is no path there, and the text would only be dropped. | the mode |
+
+With no macro sent, the log takes the sent report straight from its field. When a macro *was*
+sent, the report that actually went on the air wins over the field, so editing the field
+afterwards cannot rewrite history.
+
+`JS8` is not a mode ADIF has, so an exported QSO carries the standard encoding instead:
+`MODE=MFSK` with `SUBMODE=JS8`.
+
+**`Esc` aborts a transmission immediately** — CW, RTTY and an audio send alike — as long as no
+dialog is open.
+
+A macro sent on **TRX2 or TRX3 over TrxNet** goes to that remote device rather than to this
+one's own outputs, and the audio hand-off above is not available there — it belongs to the one
+slot that has the LAN audio.
+
+#### Editing the macros — the MACROS button
+
+![CW / RTTY macro editor](img/qrplog-macros.png)
+
+**MACROS** in the bottom bar opens the editor. It holds **eight macro types × two modes**:
+
+| Row | Sent when |
+|---|---|
+| **CQ** | calling in RUN |
+| **Exchange — RUN** | answering a caller (`TXEXCH`) |
+| **Exchange — S&P** | giving your exchange in S&P (`TXEXCHSP`) |
+| **Prev exchange — S&P** | repeating the previous serial number (`TXEXCHSP2`, the **prev exch** button) |
+| **TU (after log)** | confirming after the QSO is logged |
+| **Call + TU** | his call plus the confirmation |
+| **My call (S&P)** | answering a CQ with just your call |
+| **NR? (repeat number)** | the **nr?** button |
+
+The **CW** and **RTTY** tabs hold their own set of eight; a tab carries a dot when any of its
+rows has been changed from stock, and a changed row's **Default** button turns amber, so a
+customisation you made weeks ago is still visible. Under each field is a live preview against
+a fixed sample QSO, so you can see what a template produces without being in a contest.
+
+The templates are plain text with `{PLACEHOLDER}` tokens:
+
+| Token | |
+|---|---|
+| `{MYCALL}` | your own callsign |
+| `{DXCALL}` | the station you are working |
+| `{RSTS}` | sent report — 5NN-style on CW, plain digits on RTTY |
+| `{NR}` · `{PREVNR}` | your serial number, and the previous one |
+| `{LOC}` | your own locator |
+| `{UTC}` | current UTC time, `HHMM` |
+| `{EXCH}` | the whole exchange payload for this log's exchange type — on RTTY it already contains the report |
+| `{TU}` | `tu` where the rules above would add a confirmation, otherwise empty |
+
+A token the editor does not know is left in place rather than treated as an error, so a typo
+is harmless. Runs of blank space left by an empty placeholder collapse to one. The RTTY
+defaults begin with a carriage return and line feed; the field shows those as the literal
+two-character escapes `\r` and `\n`, because a single-line text box cannot hold the real
+control characters.
+
+> **Editing a template changes the wording, never the logic.** *When* `{LOC}`, `{UTC}` or
+> `{TU}` resolve to something instead of nothing is decided by the rules above — the exchange
+> type, the band, RUN versus S&P — and no template can make the locator appear where it never
+> did.
+
+**The macros are stored in the interface, not in this browser** (`/log-macros.json`), so every
+computer, tablet and phone pointed at this station sends the same wording. Saving takes effect
+in the tab you saved from immediately, with no reload.
 
 ### 3.6 The RTTY palette
 
@@ -649,8 +803,8 @@ edge to make it taller — the extra height goes to the decoded text, the waterf
 is. Where you put it and how tall you made it are remembered.
 
 Decoded characters are shaded by how strongly each one came through: dim grey when the tone
-pair was barely above the noise, white for a solid signal, and **sandy yellow for an
-exceptionally strong one**. It is a reading aid, not a measurement — the number behind it is a
+pair was barely above the noise, white for a solid signal, and **green for an exceptionally
+strong one**. It is a reading aid, not a measurement — the number behind it is a
 mark-versus-space ratio, not a calibrated signal-to-noise figure.
 
 **Click a word in the decoded text and it lands in the field you were typing in** — Call or
@@ -675,9 +829,22 @@ its own FSK output as before, and the palette just mirrors what was sent.
 > the audio back.
 
 Every RTTY setting — tone, shift, polarity, squelch, AFC, NORMAL/REVERSE and the
-transmit-gain calibration — lives on the full RTTY-ICOM page under the **DATA** tab. The
-palette follows whatever you set there, live. The button is hidden unless ICOM-LAN is
-configured, since without it there is no audio to listen to.
+transmit-gain calibration — lives on the full RTTY-ICOM page under the **DATA** tab
+([section 6](#6-data--rtty-icom)). The palette follows whatever you set there, live, and
+changing a setting on that page reaches an open palette without a reload. The button is
+hidden unless ICOM-LAN is configured, since without it there is no audio to listen to.
+
+> **The palette does not read the radio's own RTTY menu.** The full page does
+> ([section 6.7](#67-what-the-page-takes-from-the-radio)); the palette simply decodes with
+> the tone and polarity as they stand in SETTINGS. Two things follow, and both matter the
+> first time you work real FSK from the log:
+>
+> - **REVERSE.** Open the full RTTY-ICOM page once while the radio is in `RTTY`/`RTTY-R`. It
+>   switches REVERSE on and *stores* it, and the palette picks it up from there.
+> - **The tone.** The page's own retune to the radio's Mark Frequency is deliberately never
+>   stored, so the palette does not inherit it. If your radio's *RTTY Mark Frequency* is not
+>   2125 Hz, set **Default TX/RX tone** on the full page to match it — that field is the same
+>   lower tone the radio's menu names.
 
 ### 3.7 The status bar
 
@@ -771,13 +938,57 @@ window instead — and rotating a tablet back to landscape restores the split.
 macros and RIT reset all follow the selection. `Alt+1`, `Alt+2`, `Alt+3` do the same. The
 labels are whatever you named the slots in SETUP.
 
-### 3.14 Export and backup
+### 3.14 PA — the linear amplifier
+
+![PA panel](img/qrplog-pa-panel.png)
+
+With an **EXPERT 1K-FA** on the network, a **PA** button appears in the bottom bar and opens
+a small movable palette over the log. It is fed by TrxNet, so it is the amplifier's own
+telemetry on screen, not an estimate: everything the amplifier publishes is here and nothing
+else is invented.
+
+The button only exists once the amplifier's NET_ID is set in
+[SETUP → TrxNet](#95-trxnet).
+
+| Reading | |
+|---|---|
+| **FW** / **REV** with two bars | forward and reflected **peak** power in watts. The forward bar's full scale follows the amplifier's actual state — 1200 W in FULL, 600 W in HALF, and the exciter's 100 W in STANDBY — so a full-power HALF transmission does not read as half a job. |
+| **SWR** | `—` when the amplifier did not answer, `∞` when it reports infinite |
+| Band | the amplifier's own band, in metres. **It turns amber when it disagrees with the radio.** |
+| Temperature | the heatsink, coloured by which fan stage it has reached. The steps move with CONTEST mode, because the amplifier's own fan schedule does; the tooltip gives the numbers and the protection threshold. |
+| **ALARM · TX · TUNE · CONTEST · BEEP** | every flag TrxNet carries, lit or dark. The dark ones stay in place so the row never moves under your eye. |
+| The status line | three things that are easy to confuse, told apart: `OFFLINE` (the amplifier's daemon is not on the network), `NO DATA` with an age (it is, but nothing is arriving), `NO LINK` (it is there but has no serial link to the amplifier), `OFF`, or `ON` — plus the amplifier's `REV 1.0` / `REV 2.0`. |
+
+Four buttons, each showing the state it is in rather than the state it would move to:
+
+| Button | |
+|---|---|
+| **OFF / ON** | mains power |
+| **STANDBY / OPERATE** | in line, or bypassed |
+| **PWR-L / PWR-H** | half or full power |
+| **TUNE** | runs the tuner. It works in STANDBY — tuning runs at low power — but **not while the radio is keying**: the amplifier locks the whole RF path while TX is asserted. |
+
+> **A command is not a confirmation.** The amplifier's daemon accepts commands only if it was
+> started to, and silently drops them if this device is not on its allow list — neither
+> refusal comes back. So every button waits to see the amplifier's *own* flags move, reads
+> `…` while it waits, and **says so when they do not**. A button that was not confirmed is
+> released immediately: if the amplifier is not listening, pressing again is exactly what to
+> try next.
+
+The panel never takes the keyboard. Every button cancels its own mousedown, so the click
+happens but the caret stays in *Call* or *Exch* — that one rule is what makes it usable
+during a run at all. Where you put it is remembered, and it stays put across a reload.
+
+Stale telemetry greys the panel but does **not** disable the buttons. "No reading right now"
+is not a reason to refuse to switch an amplifier off.
+
+### 3.15 Export and backup
 
 **BACKUP** downloads the whole QSO database as a JSON file. Per-log **CSV** and **ADIF**
 exports are in the log manager. Everything else — restore, import, device-to-device sync —
-is on the [LOGSYNC](#9-logsync) page.
+is on the [LOGSYNC](#10-logsync) page.
 
-### 3.15 Keyboard shortcuts
+### 3.16 Keyboard shortcuts
 
 ![Keyboard shortcuts](img/qrplog-keyboard-shortcuts.png)
 
@@ -903,6 +1114,17 @@ band map follows the **pane's** filters, since that is the list sitting next to 
 | **Stop scroll** | freeze automatic scrolling so a row stays put while you read it |
 | **+** / **−** | text zoom |
 | **command box** | type any cluster command; **Enter** sends it with CR/LF |
+| **▲** / **▼** (far right) | show the rest of the toolbar, or put it away again |
+
+The toolbar holds fourteen controls and needs about 1360 px to stand on one line, so in the
+split pane it used to wrap into three to six of them — and between 720 and 800 px of pane
+width, which is where the default split lands a 1920 px screen, it grew to 175 px. It
+therefore starts **collapsed**: one row with the connection badges, the spot counter and the
+command box, and the arrow at the far right brings back everything else. Each window
+remembers its own choice, so the pane inside QRPLog and a separate DX cluster window can
+differ. While the toolbar is collapsed the spot counter turns amber whenever automatic
+scrolling is stopped — **Stop scroll** is one of the controls that are put away, and a
+frozen list with no visible reason is easy to mistake for a dead cluster.
 
 The command box is a full telnet prompt — `sh/dx`, `set/filter`, `dx 14025 DL1XYZ` and
 anything else your cluster understands.
@@ -954,7 +1176,7 @@ IC-7610, IC-9700, IC-7300MK2 and IC-7760 the same setting is called `LAN MOD Lev
    already selected.
 
 The **`?`** button at the left of the radio bar opens the same instructions for your model —
-see [section 6.9](#69-radio-setup-help). It also opens **by itself the first time** this
+see [section 7.9](#79-radio-setup-help). It also opens **by itself the first time** this
 browser loads the page, and again whenever the radio's mode is neither `USB-D` nor plain
 `USB`.
 
@@ -970,7 +1192,7 @@ The bar across the top of the page, left to right:
 | **`?`** | radio setup help for your model |
 | **TRX *n* · frequency** | which slot is on ICOM-LAN, and the dial frequency with a dot every three digits. A coloured dot shows whether the radio is answering. Click to open the dial-frequency menu. |
 | **TIMETABLE** | the 24-hour frequency schedule — [section 5.16](#516-frequency-timetable) |
-| **CAL PLAN** | the band × power TX-gain calibration matrix — [section 6.8](#68-tx-audio-gain-and-cal-plan). It turns **red by itself** when nothing is calibrated, or when the radio is on a band that has never been measured. |
+| **CAL PLAN** | the band × power TX-gain calibration matrix — [section 7.8](#78-tx-audio-gain-and-cal-plan). It turns **red by itself** when nothing is calibrated, or when the radio is on a band that has never been measured. |
 | **mode** | the radio's mode, `---` when unknown |
 | **power** | RF power as a ten-segment bar and in watts |
 | **link state** | `● LOADING` and `● LOAD ERROR` while the modem starts, then `● RX WAIT` (connected, nothing arriving), `● RX LIVE` (audio flowing), `● TX` (transmitting), or `● OFFLINE` in red when the browser loses the interface — with a **Reconnect** button |
@@ -1358,7 +1580,7 @@ Four filters sit between "somebody transmitted" and "your callsign published it"
   truncated — a `JN89HK` cut short to `JN89` is a valid locator tens of kilometres away.
   The row is still shown; it is simply not gated.
 - **Blocked callsigns and DXCC entities.** The same list that hides a station from Recent
-  traffic and refuses to answer it — see [section 3.8](#38-blocked-dxcc) — also refuses it
+  traffic and refuses to answer it — see [section 3.9](#39-blocked-dxcc) — also refuses it
   a gateway.
 - **A repeat.** The same station with the same content is carried once every ten minutes.
 - **A ceiling of thirty packets an hour**, across all stations. Without it, one station on
@@ -1791,7 +2013,7 @@ The tooltip gives the reason and the time left — *"Auto replies paused 8 min (
    anything that arrived for you.
 
 Unattended operation can also be revoked remotely from SETUP — see
-[section 8.8](#88-remote-management-of-js8-unattended-operation).
+[section 9.8](#98-remote-management-of-js8-unattended-operation).
 
 ### 5.14 SETTINGS
 
@@ -1813,7 +2035,7 @@ transmitter. Its number is verified packets against the hourly ceiling —
 | **Auto timing** | let the software correct the clock from decoded traffic |
 | **TRX RF power** | percent, with the watts shown beside it and a **SET** button. Written to the radio when the page opens and after the link returns. **Turning the knob on the radio stops that until the next SET.** Needs *Enable radio TX*. |
 | **TX audio gain** | 0.1–0.8. The line under it says what is actually in force — the measured value for this band and power, or the manual one with the reason. Shared with the WSPR beacon: one modulator input, one level. |
-| *(calibration panel)* | the automatic gain measurement, identical to the one on the WSPR page — [section 6.8](#68-tx-audio-gain-and-cal-plan) |
+| *(calibration panel)* | the automatic gain measurement, identical to the one on the WSPR page — [section 7.8](#78-tx-audio-gain-and-cal-plan) |
 | **Enable radio TX** | **the master switch.** Off, and nothing transmits: HB, TUNE, auto-reply, heartbeats, CQ repeat and the calibration are all disabled, and their markers in the header go grey. The tickbox carries the pledge *"I will use safe RF power and a suitable load/antenna."* |
 | **INFO answer** | up to 40 characters, e.g. `50W VERT` |
 | **STATUS answer** | a menu — see [What the station answers to STATUS?](#what-the-station-answers-to-status) |
@@ -1834,7 +2056,7 @@ station's schedule.
 Once the profile is on the interface it is **shared**: every browser that opens DATA reads
 it, so a setting changed on the tablet is in force on the phone as well. That includes the
 APRS-IS gate — the login is part of the profile, and so it is also part of the configuration
-backup in [section 8.9](#89-save-download-and-upload-the-configuration).
+backup in [section 9.9](#99-save-download-and-upload-the-configuration).
 
 #### What the station answers to STATUS?
 
@@ -1937,13 +2159,177 @@ After logging, the button turns into **VIEW LOG** and opens the logbook in a new
 
 ---
 
-## 6. DATA — WSPR beacon
+## 6. DATA — RTTY-ICOM
+
+**`/rtty.html`** — the **RTTY-ICOM** tab of the DATA page.
+
+![RTTY-ICOM](img/rtty.png)
+
+### 6.1 What the page is
+
+A full Baudot RTTY station: a live spectrum and waterfall of the receiver's audio, a
+decoder that writes into a scrolling RX log, and a one-line composer that transmits. The
+demodulator runs in the browser tab — nothing is decoded on the interface — and the audio
+comes over the radio's LAN stream, the same one JS8Call-ICOM, WSPR-Beacon and Mercury use.
+
+It **needs a radio on ICOM-LAN**, and it holds the same single-operator session those three
+hold: open it while one of them is running and it shows *The radio is driven from somewhere
+else*, says where, and offers **TAKE THE SESSION OVER HERE**. It never takes the session by
+itself.
+
+There are two entirely different ways this page can key, and **the radio's own mode decides
+which** — there is no switch:
+
+| Radio mode | How RTTY goes out | What tunes |
+|---|---|---|
+| `RTTY`, `RTTY-R` | real FSK, keyed by the interface's own output (or by a TrxNet device — see [FSK output](#66-settings)) | the radio's dial |
+| `USB-D`, `LSB-D` | AFSK audio through the radio's LAN link | the audio tone |
+
+Everything else — the decoder, the waterfall, the RX log, the settings — is identical in
+both. Only the transmit path and what a click on the waterfall moves are different.
+
+The whole thing is also available as a small floating palette inside QRPLog, for operating a
+contest without leaving the log; see [section 3.6](#36-the-rtty-palette). The palette carries
+no settings of its own — this page owns them all, and the palette follows them live.
+
+### 6.2 Header: frequency, CAL PLAN, mode, power, session
+
+The frequency button opens a menu of **IARU Region 1 RTTY calling frequencies** — 160, 80,
+40, 30, 20, 17, 15, 12 and 10 m. 60, 6 and 2 m are deliberately absent: RTTY is not
+practised there.
+
+Unlike JS8 and WSPR, which sit on one channelised dial frequency per band, RTTY is worked
+anywhere inside a band's data segment. So the frequency turns **red only when the mark tone
+falls outside *every* one of those segments**, not when it differs from the preset. In
+`USB-D`/`LSB-D` the displayed number is still the radio's own dial — the tooltip then says
+where the mark actually lands on the air, because that is what the segment test uses.
+
+| Element | Meaning |
+|---|---|
+| **CAL PLAN** | the band × power TX-gain matrix, shared with WSPR and Mercury — [section 7.8](#78-tx-audio-gain-and-cal-plan). **It disappears entirely in `RTTY`/`RTTY-R`**: the calibration carrier is an audio tone, and real FSK keys the radio's shift modulator instead, so there would be nothing for it to measure. It comes straight back in `USB-D`/`LSB-D`. |
+| Mode | the radio's current mode — this is what picks the transmit path above |
+| Power bar + watts | the radio's own RF power |
+| Model | what the radio called itself at login |
+| **AUD1** | `ready` once the audio channel is up |
+| **● ONLINE / OFFLINE** | the control link, with a **Reconnect** button when it is down |
+| **NORMAL / REVERSE** | swaps mark and space **for decoding only** — for copying a station whose own transmission is inverted. What *this* station transmits is the separate *TX polarity* setting in SETTINGS, and keeping them apart is deliberate: fixing one backwards contact used to silently invert your own signal for the rest of the QSO. |
+| **SQL** | the squelch threshold as configured in SETTINGS, highlighted whenever it is not 0. **Click it to turn squelch off and back on** without opening SETTINGS. |
+| **SNR** | the mark-versus-space magnitude ratio at the last decoded character |
+
+> **SNR here is not a calibrated signal-to-noise figure.** It is one Goertzel window's
+> mark/space ratio, and there is no separate noise-floor measurement behind it. Read it as a
+> reading aid — "this character came through strongly" — not as a number to compare between
+> stations.
+
+While the radio is keyed, a red frame appears around the whole page and a veil over the
+waterfall, exactly as on the WSPR and Mercury pages.
+
+### 6.3 Waterfall and live spectrum
+
+Two stacked canvases sharing one overlay: a fast line trace of the current spectrum on top,
+the scrolling waterfall below. The mark and space lines are drawn as **one continuous
+stroke across both**, and a rough frequency ruler and the live red readout sit on the same
+overlay.
+
+- **Click to tune.** In `RTTY`/`RTTY-R` this moves the radio's dial — real FSK has no audio
+  stage to move. In `USB-D`/`LSB-D` it moves the audio tone instead, and the radio's dial
+  stays where it is.
+- **Hover** anywhere over the two canvases and a preview pair of mark/space lines follows
+  the pointer, so you can see where a click would land before making it.
+- **100% / 200% / 400%** narrow the displayed window around the tone **as it stands when you
+  press the button**. It does not re-centre on every later click — a zoom that chased the
+  cursor would make a crowded band harder to read, not easier.
+
+The waterfall is blank during this station's own transmission, the same as JS8, WSPR and
+Mercury, even though the LAN audio path is itself duplex.
+
+### 6.4 RX — the decoded text
+
+Decoded characters are appended as clickable word tokens and shaded per character by how
+strongly each one came through: dim grey when the tone pair was barely above the noise,
+white for a solid signal, and **green for an exceptionally strong one** (from about 20 dB —
+white is already the brightest a screen has, so the top of the scale moves in hue rather
+than in brightness).
+
+**Click a word and it is handed to QRPLog** — into whichever field the log's cursor is in,
+*Call* or *Exch*. Unlike a DX cluster spot, it does **not** switch the log to S&P: a word out
+of an RTTY stream is "insert this", not "start a new QSO". Dragging across the text selects it
+for copying instead and hands over nothing.
+
+**CLEAR** empties the log. With *Squelch-open marker* enabled in SETTINGS, a line break is
+inserted each time the squelch opens from silence, at most once every couple of seconds, so
+separate receptions do not run together.
+
+Your own transmissions are echoed into the same log as they go out — including macros sent
+from QRPLog over real FSK, which are bit-banged by the interface itself and would otherwise
+never appear anywhere on screen.
+
+### 6.5 TX — sending
+
+One text field, up to 200 characters. **Enter sends**; there is no SEND button and no
+per-message confirmation checkbox. **ABORT** stops a transmission in progress, and `Esc`
+does the same.
+
+Which path it takes is the radio's mode, as above. In `USB-D`/`LSB-D` the AFSK audio is
+encoded in the tab and streamed to the radio, with a progress indication while it runs; in
+`RTTY`/`RTTY-R` the text is handed to the interface, which keys FSK and PTT itself.
+
+The composer is where free text goes. Contest exchanges are better sent from QRPLog, whose
+macros build the whole exchange for you — [section 3.5](#35-cw-and-rtty-macros).
+
+### 6.6 SETTINGS
+
+| Field | Meaning |
+|---|---|
+| **TX polarity** | `Normal` / `Reverse` — what this station's own AFSK transmits. Independent of the RX-only NORMAL/REVERSE pill in the header. |
+| **Squelch level** | on a dB scale. This only sets the level for when squelch *is* on; on/off is the header's SQL pill. Default 4. |
+| **Squelch-open marker** | inserts a line break in the RX log each time squelch opens from silence, at most once per ~2 s |
+| **Default TX/RX tone** | the lower of the two tones, in Hz, 500–2700. One number serves both receive and transmit. |
+| **AFC** | nudges the *decoder's* frequency to follow another station's drift on short messages such as a lone callsign. **This station's own transmit tone never moves.** |
+| **AFC rate** | Hz per Baudot character (165 ms), not Hz per second — the unit the operator actually reasons in |
+| **AFC max deviation** | Hz, up to 180. The cap keeps both tones inside the 400% view, and the fixed 170 Hz shift keeps the pair unambiguous beyond half a shift. |
+| **TRX RF power** | percent, with the watts beside it and a **SET** button. Written to the radio when the page opens and after the link returns; turning the knob on the radio stops that until the next SET — the same convention as JS8, WSPR and Mercury. |
+| **FSK output** | `Internal (this device's own GPIO)` or `External (TrxNet device)`, and the peer's **NET_ID** when external, with the live peer list below it. **This is a station-wide setting** — QRPLog uses it too, from any computer — and it is stored in the interface, not in this browser. It only chooses *where* the FSK signal originates; whether FSK is used at all is always the radio's mode. |
+
+The shift is a fixed **170 Hz** at **45.45 baud** — the decoder is built around those and
+cannot follow another value, which is also why the radio's own *Shift Width* menu item is
+deliberately never read.
+
+### 6.7 What the page takes from the radio
+
+In `RTTY`/`RTTY-R` on a radio whose CI-V subaddresses are known (see
+[section 1.3](#13-which-radios)), entering the mode reads two of the radio's own SET-menu
+items once:
+
+- **RTTY Mark Frequency** (1275 / 1615 / 2125 Hz) retunes the decoder to match — **in memory
+  only.** It is never saved, and it is put back the moment the radio leaves real FSK, so it
+  can never bleed into your own `USB-D`/`LSB-D` tone preference.
+- **RTTY Keying Polarity** is forced to *Normal* if the radio answers *Reverse*. Unlike the
+  network MOD level, this menu item has no legitimate reason to sit on Reverse, and the
+  header's REVERSE pill already covers "this one contact is inverted" at the decode layer.
+
+**REVERSE is switched on automatically in `RTTY`/`RTTY-R`, every time, on every band.** This
+is not a band convention and not a fault: this application calls mark the *upper* tone, the
+radio's own FSK modem does not, and the two disagree regardless of what Keying Polarity says.
+Confirmed on the air on both 80 m and 20 m. It is re-derived only when the radio enters or
+leaves real FSK, so a manual override you set for one contact survives a link blip.
+
+Every step of this fails silently: an unverified model, a read that times out, an answer that
+makes no sense — the sync is simply skipped and the settings stand as they are.
+
+> **On the palette in QRPLog this radio sync does not run** — the palette decodes with the
+> tone and polarity stored in SETTINGS. If your radio's Mark Frequency is not the stored
+> value, open this page once in the DATA tab to have it read and applied.
+
+---
+
+## 7. DATA — WSPR beacon
 
 **`/wspr.html`** — the **WSPR-Beacon** tab of the DATA page.
 
 ![WSPR beacon](img/wspr.png)
 
-### 6.1 What the beacon does
+### 7.1 What the beacon does
 
 WSPR transmits your callsign, locator and power in a two-minute frame at a few hundred
 milliwatts, and receiving stations all over the world upload what they hear. It is how you
@@ -1964,7 +2350,7 @@ needs no re-orientation.
 > your callsign has a prefix or suffix, the beacon will tell you rather than transmit
 > something wrong.
 
-### 6.2 Starting and stopping
+### 7.2 Starting and stopping
 
 The top bar carries the same **`?`**, frequency, **TIMETABLE** and **CAL PLAN** controls as
 the JS8 page ([section 5.2](#52-header-radio-frequency-power-session)), and three readouts of
@@ -2006,7 +2392,7 @@ page is framed in red while transmitting**, the same convention JS8Call uses.
 > **TUNE keys the transmitter and modulates it**, and it retunes the radio to do so. The
 > countdown beside START shows the TUNE watchdog — the time until TUNE switches itself off.
 
-### 6.3 Power
+### 7.3 Power
 
 This is the part of the page most worth understanding, because WSPR reports your power to
 the world and a wrong figure makes your spots meaningless.
@@ -2034,7 +2420,7 @@ Powers below the radio's 1 % step simply cannot be set — that is the smallest 
 has. **The default is 1 %.** Your choice is stored and re-applied automatically the next
 time the page opens and after a reconnection, but never in the middle of a transmission.
 
-### 6.4 Waterfall and TX SESSION
+### 7.4 Waterfall and TX SESSION
 
 ![Waterfall](img/wspr-waterfall.png)
 
@@ -2059,7 +2445,7 @@ shows:
 
 The level bar empties on the switch back to receive and starts from zero each time.
 
-### 6.5 Activity
+### 7.5 Activity
 
 ![Activity](img/wspr-activity.png)
 
@@ -2090,7 +2476,7 @@ first thing to look at when the grid shows a colour you did not expect.
 find out who heard you. They open in a new tab and need internet — there is nothing to see
 there when your browser is on the interface's own hotspot.
 
-### 6.6 Time table
+### 7.6 Time table
 
 ![Transmission schedule](img/wspr-timetable-schedule-window.png)
 
@@ -2135,7 +2521,7 @@ Each band waits at least six minutes, and frequency and mode are confirmed betwe
 | `18:00` | 40 m, 80 m | two bands, alternating; each band every six minutes with a gap between |
 | `23:00` | 160 m | one band, so every third frame — the pacing rule at its plainest |
 
-### 6.7 SETTINGS
+### 7.7 SETTINGS
 
 ![WSPR settings](img/wspr-settings.png)
 
@@ -2144,12 +2530,12 @@ Each band waits at least six minutes, and frequency and mode are confirmed betwe
 | **My callsign** / **My locator** | shown, not editable — change them in SETUP. The line beside the locator says what will actually be transmitted: **WSPR type 1 carries four characters**, so `JO70FD` goes out as `JO70`. |
 | **Clock correction** | milliseconds, **shared with the JS8Call-ICOM page** but stored per device |
 | **Radio** | `auto (from the radio)`, or force a model when the radio cannot be asked |
-| **Power** | see [section 6.3](#63-power) |
+| **Power** | see [section 7.3](#73-power) |
 | **TX audio gain** | 0.1–0.8, **shared with JS8Call-ICOM** — one modulator input, one level. The measured value in force is shown beside the field rather than in it, because a calibrated level can be 0.006 or 0.63 and the field steps in 0.05. |
 | **TUNE power references** | how many bands have a reference, and a **Clear** button. A transmission whose forward power drifts more than 20 % from its band's TUNE reading is logged *power unconfirmed*. |
 | **Enable radio TX** | the same pledge as on the JS8 page — one radio, one confirmation — and settable from either page. |
 
-### 6.8 TX audio gain and CAL PLAN
+### 7.8 TX audio gain and CAL PLAN
 
 ![CAL PLAN](img/wspr-cal-plan-window.png)
 
@@ -2199,7 +2585,7 @@ all, a correction written to the radio's **MOD level** over CI-V.
 | `not calibrated for 20m @10% - using the manual 0.25` | that pair was never measured; the manual gain is used instead |
 | **Continue** seems not to react on the first press | the PTT frame is still lit although PTT is already released. It does no harm — wait for the frame to go out. |
 
-### 6.9 Radio setup help
+### 7.9 Radio setup help
 
 ![Radio setup help](img/wspr-setup-window.png)
 
@@ -2225,15 +2611,15 @@ radio, so turning the knob changes what is reported, to the nearest legal WSPR l
 
 ---
 
-## 7. DATA — Mercury file transfer
+## 8. DATA — Mercury file transfer
 
 **`/mercury.html`** — the **Mercury** tab of the DATA page.
 
-### 7.1 What Mercury does
+### 8.1 What Mercury does
 
 Mercury is a point-to-point file transfer mode for HF: call a station, exchange a file, hang
 up — half-duplex with a full ARQ handshake, not a one-way broadcast. It runs the real Mercury
-v2 / HERMES modem ([section 12](#12-component-licences)), compiled to WebAssembly and driven
+v2 / HERMES modem ([section 13](#13-component-licences)), compiled to WebAssembly and driven
 from a background Worker, over the same ICOM-LAN audio path (AUD1) as JS8Call and WSPR — the
 page needs a radio on ICOM-LAN and refuses to open without one, the same gate as the other two
 DATA tabs.
@@ -2244,9 +2630,9 @@ same lease-holding pattern JS8Call and WSPR already use. Mercury's session lease
 separate from the one JS8Call and WSPR share: opening Mercury does not disturb a JS8Call or
 WSPR tab already using the radio, and the reverse holds too. Only one of the three, and only
 one device, can actually hold the radio at a time — a second attempt gets a takeover offer
-([section 7.7](#77-a-transfer-running-elsewhere)).
+([section 8.7](#87-a-transfer-running-elsewhere)).
 
-### 7.2 Header: radio, timetable and CAL PLAN
+### 8.2 Header: radio, timetable and CAL PLAN
 
 The frequency button opens Mercury's own dial-frequency presets — a separate catalogue from
 JS8's calling channels, built on the Winlink ARDOP/VARA-HF gateway convention rather than
@@ -2256,7 +2642,7 @@ every band a station runs both on.
 **TIMETABLE** and **CAL PLAN** work exactly like their JS8-page counterparts
 ([section 5.2](#52-header-radio-frequency-power-session),
 [section 5.16](#516-frequency-timetable),
-[section 6.8](#68-tx-audio-gain-and-cal-plan)), with one behavioural difference and one
+[section 7.8](#78-tx-audio-gain-and-cal-plan)), with one behavioural difference and one
 mechanical one:
 
 - The timetable retunes the radio whenever Mercury is monitoring — LISTEN on or off — not
@@ -2270,7 +2656,7 @@ mechanical one:
 The rest of the bar — radio model, **AUD1**, link state and **Reconnect** — reads the same as
 the JS8 and WSPR pages. Mercury has no operator-set power percentage of its own in the header;
 that readout is read-only, showing whatever the radio is set to. The power Mercury actually
-writes on load lives in SETTINGS ([section 7.8](#78-settings)).
+writes on load lives in SETTINGS ([section 8.8](#88-settings)).
 
 **LISTEN**, at the right of the bar, is the one header control the other two pages don't have.
 With it on, this station may answer an incoming CALL unattended, and the indicator glows red —
@@ -2280,13 +2666,13 @@ open, but the waterfall and this station's own audio keep running regardless of 
 the moment the page loads: you can always see whether the band and the audio path are alive
 without exposing the station to an unattended CALL.
 
-### 7.3 Waterfall
+### 8.3 Waterfall
 
 The same 500–2700 Hz display as JS8/WSPR ([section 5.3](#53-waterfall)), read-only — Mercury's
 ARQ modem picks its own bandwidth, so there is no offset to click. It goes blank during this
 station's own transmission, the same convention as the other two pages.
 
-### 7.4 Calling a station, and CQ
+### 8.4 Calling a station, and CQ
 
 Type the other station's callsign — `OK2XYZ` — into **Station callsign** and press **CALL**.
 Mercury dials out and retries the CALL/ACCEPT handshake on its own, using the retry counts and
@@ -2300,7 +2686,7 @@ can be worked — hearing it still needs the other station tuned in and decoding
 beside the button as they come in: `Heard: OK2XYZ (50 Hz)`, the number being the bandwidth of
 the signal that was decoded. The list is cleared each time a new session starts.
 
-### 7.5 Connection test and live status
+### 8.5 Connection test and live status
 
 Once a CALL is answered — or an incoming one accepted while LISTEN is on — **CONNECTION TEST**
 reports what the handshake measured, once: the peer's callsign, the SNR each way, and the mode
@@ -2313,7 +2699,7 @@ same SNR reading kept live, both ends' current mode and that mode's nominal bit 
 running count of clean versus retried frames for this connection — `Frames: 12 clean, 2 needed
 a retry (86% clean)` — noting when few retries are left on the frame currently in flight.
 
-### 7.6 Sending and receiving a file
+### 8.6 Sending and receiving a file
 
 Pick a **File**; Mercury shows its size immediately and, once connected, an estimate of how
 long the send will take at the current mode's rate. **SEND** stays disabled until both a file
@@ -2325,11 +2711,11 @@ An incoming file needs nothing beyond LISTEN being on: it downloads automaticall
 complete, appears as a link to save with its size beside it.
 
 Two limits worth knowing: the **transfer size limit** set in SETTINGS (default 200 KiB, hard
-cap 250 KiB — [section 7.8](#78-settings)), and that a cancelled or otherwise interrupted
+cap 250 KiB — [section 8.8](#88-settings)), and that a cancelled or otherwise interrupted
 receive keeps its partial bytes and can resume on a later reconnect with the same peer instead
 of starting over.
 
-### 7.7 A transfer running elsewhere
+### 8.7 A transfer running elsewhere
 
 Opening Mercury on a second device while a transfer is already running elsewhere does not show
 the generic "session busy" panel JS8/WSPR use — it names the file and its progress:
@@ -2338,7 +2724,7 @@ the generic "session busy" panel JS8/WSPR use — it names the file and its prog
 
 **TAKE OVER AND CANCEL** ends that transfer and hands this device the radio.
 
-### 7.8 SETTINGS
+### 8.8 SETTINGS
 
 Everything here lives on the interface itself, not this browser — every device sees the same
 values — and is picked up **only at the start of the next CALL or LISTEN session**, never
@@ -2346,7 +2732,7 @@ mid-transfer. The section locks while a session is already running.
 
 | Setting | Meaning |
 |---|---|
-| **Power** | Mercury's own target transmit power, applied on page load and after a reconnect, same auto-apply convention as JS8/WSPR ([section 6.3](#63-power)) — but its own value, not shared with them, because different modes want different power. Leave it blank to leave this radio's power alone. |
+| **Power** | Mercury's own target transmit power, applied on page load and after a reconnect, same auto-apply convention as JS8/WSPR ([section 7.3](#73-power)) — but its own value, not shared with them, because different modes want different power. Leave it blank to leave this radio's power alone. |
 | **CALL retries** / **ACCEPT retries** / **DATA retries** / **DISCONNECT retries** | how many times each step of the ARQ handshake retries before giving up. Defaults 4 / 4 / 10 / 2. |
 | **CALL/ACCEPT interval** | seconds between retries of the CALL/ACCEPT handshake; `0` uses Mercury's own built-in table. |
 | **Retry-downgrade threshold** | consecutive retries on one frame before Mercury forces the link down to a slower, more robust mode. Default 2. |
@@ -2358,7 +2744,7 @@ into the fields but does not save them until SAVE is pressed.
 
 ---
 
-## 8. SETUP
+## 9. SETUP
 
 **`/setup`**
 
@@ -2378,7 +2764,7 @@ Each section carries a badge saying where its values live:
 Everything except the guided radio walk is applied by **Save & Restart** at the bottom. The
 browser waits while the device reboots and comes back on its own.
 
-### 8.1 WiFi
+### 9.1 WiFi
 
 `eeprom` — two networks, SSID and password each.
 
@@ -2390,7 +2776,7 @@ otherwise reachable only from the USB-C serial console.
 The handover screen, the QR code and what happens in AP mode are covered in
 [section 2.2](#22-the-five-steps).
 
-### 8.2 Identity
+### 9.2 Identity
 
 `eeprom` — **My callsign** (`OK1HRA`) and **My locator** (`JO70FD`).
 
@@ -2398,7 +2784,7 @@ This is the single source of truth. The DX cluster logs in with the callsign, JS
 it, WSPR encodes it, and the logbook stamps QSOs with it. The JS8 and WSPR pages show both
 values but cannot change them.
 
-### 8.3 Radio
+### 9.3 Radio
 
 `eeprom + config`
 
@@ -2423,6 +2809,25 @@ tab shows the slot's label, its transport and whether it is answering.
 
 TRX1 is always active; TRX2 and TRX3 have an enable checkbox.
 
+**LOCAL-TRX** — a checkbox beside the connection, for pointing this slot at the
+[local-trx bridge](#16-local-trx--any-radio-on-a-pc) instead of at a real radio. Ticking it
+fills in what a bare `local-trx` install expects: CI-V address `A6`, and a user name and
+password it ignores outright. **The address it fills in depends on where WIFILT is running.**
+On a PC install it fills in `127.0.0.1`, because `local-trx` is on that same machine; on the
+ESP32 board it deliberately leaves the address alone, since loopback there would point at the
+box itself — type the LAN address of the PC running `local-trx`. The **Scan** button can never
+find it, so once an address is entered the page probes it directly, and a *local-trx detected
+— open its settings* link appears when it answers.
+
+**Saved configurations** — each slot keeps its own named list of connection settings. Type a
+name and press **Save** to store the slot as it stands — label, connection, CI-V address,
+NET_ID, LAN address, credentials, the LOCAL-TRX flag, and on TRX1 the CW-announce checkbox —
+then pick it from the menu to bring it back, or **Delete** to drop it. Saving a name that
+already exists overwrites it. **Picking a configuration only fills the form**; it reaches the
+radio like any other edit, at the next *Save & Restart*. This is for a slot that swaps between
+physical radios — the borrowed set for a contest, the local-trx bridge, the club station —
+without retyping everything each time.
+
 > **ICOM-LAN may be used by only one slot.** The audio path and the single-operator lock
 > belong to one radio. The form enforces it: once a slot is on ICOM-LAN, the option
 > disappears from the others, and saving anyway is refused.
@@ -2436,7 +2841,7 @@ to hear it.
 
 **RADIO CONFIG INCOMPLETE** appears beside the section title when a slot is half-configured.
 
-### 8.4 DX Cluster
+### 9.4 DX Cluster
 
 `eeprom`
 
@@ -2450,7 +2855,7 @@ to hear it.
 The section says which callsign it will log in with, taken from Identity. There is nothing
 to type here — a second copy of the callsign is a second thing to get wrong.
 
-### 8.5 TrxNet
+### 9.5 TrxNet
 
 `eeprom`
 
@@ -2463,12 +2868,13 @@ TrxNet is a peer-to-peer link between RemoteQTH devices on the same network.
 | **Own NET_ID** | this device's identity, two hex digits. **`00` disables TrxNet.** Must be unique on the network. The device name is derived from it. **Use IP last octet** fills it from the address the device was given. |
 | **UDP port** | discovery and CoAP port; every device on the network must use the same one. Default `5683`. |
 | **Priority prefixes** | space-separated device-name prefixes kept in the peer table when it fills up. Default `OI3 ANT`; empty turns priority off. |
+| **Linear amplifier NET_ID** | the peer NET_ID of an EXPERT 1K-FA reachable over TrxNet as `PA.XX`, two hex digits. **`00` = no amplifier.** Set it and QRPLog grows the **PA** button described in [section 3.14](#314-pa--the-linear-amplifier). The amplifier's own daemon has to be started so it accepts commands, and this device's name has to be on its allow list if it uses one. |
 
 **Network devices** below lists the peers seen right now, live.
 
 The protocol is documented in [docs/trxnet.md](docs/trxnet.md).
 
-### 8.6 TX audio gain
+### 9.6 TX audio gain
 
 `config`
 
@@ -2480,14 +2886,14 @@ without the network audio path there is nothing to calibrate.
 
 | Control | Action |
 |---|---|
-| **CALIBRATE ON THE WSPR PAGE ↗** | opens the calibration; see [section 6.8](#68-tx-audio-gain-and-cal-plan) |
+| **CALIBRATE ON THE WSPR PAGE ↗** | opens the calibration; see [section 7.8](#78-tx-audio-gain-and-cal-plan) |
 | **Forget all** | discard every stored calibration |
 
 Set the band and the power you want to measure **first** — a calibration describes the radio
 as it stands, and it is filed under that exact band and power. A whole matrix at once is what
 **CAL PLAN** in the DATA page top bar is for.
 
-### 8.7 LOG
+### 9.7 LOG
 
 `config`
 
@@ -2512,7 +2918,7 @@ The blocked list has two different effects, which is worth knowing before you us
   traffic list, the map and every automatic function. They are discarded silently, with no
   error, and transmission to them is refused outright.
 
-### 8.8 Remote management of JS8 unattended operation
+### 9.8 Remote management of JS8 unattended operation
 
 `live`
 
@@ -2534,7 +2940,7 @@ and visible on the station computer for anything to transmit at all.
 Because this is running state and nothing else, it resets when the device restarts. That is
 deliberate: a station should not come back from a power cut still armed.
 
-### 8.9 Save, download and upload the configuration
+### 9.9 Save, download and upload the configuration
 
 **Save & Restart** at the bottom of the page writes everything and reboots.
 
@@ -2553,13 +2959,13 @@ The page footer links to the licence notices the device serves from its own file
 
 ---
 
-## 9. LOGSYNC
+## 10. LOGSYNC
 
 **`/datasync`**
 
 ![LOGSYNC](img/logsync.png)
 
-### 9.1 Where your QSOs live
+### 10.1 Where your QSOs live
 
 QSO records are stored in **this browser, on this device**, in IndexedDB. The ESP32 does not
 store them and there is no cloud backup.
@@ -2574,7 +2980,7 @@ good. Firefox is the most aggressive about this, which is why it gets a standing
 with three remedies: bookmark the page (Firefox protects IndexedDB for bookmarked origins),
 add a storage exception, or export a backup after each session.
 
-### 9.2 Pairing and syncing
+### 10.2 Pairing and syncing
 
 ![Pairing](img/logsync-pairing.png)
 
@@ -2598,7 +3004,7 @@ While waiting, the page shows *Waiting for the other device…* with a **Cancel*
 the receiving side an offer appears naming who wants to sync, with **Accept** and
 **Reject**.
 
-### 9.3 Sync status
+### 10.3 Sync status
 
 ![Sync status](img/logsync-sync-status.png)
 
@@ -2623,7 +3029,7 @@ Every field has an **ⓘ** button explaining it.
 > finished — and a peer that cancels after a completed transfer does not turn it into a
 > failure. It has been tested at 16 000 QSOs.
 
-### 9.4 Backup and restore
+### 10.4 Backup and restore
 
 ![Backup and restore](img/logsync-backup-restore.png)
 
@@ -2632,7 +3038,7 @@ as a single JSON file. **Import backup** reads one back.
 
 This is the only real protection for your log. Do it after each session.
 
-### 9.5 Importing ADIF, Cabrillo and EDI
+### 10.5 Importing ADIF, Cabrillo and EDI
 
 ![Import](img/logsync-import-adif-cabrillo-edi.png)
 
@@ -2644,7 +3050,7 @@ The importer reports progress and finishes with **Done ✓**, or offers **Retry*
 
 ---
 
-## 10. BD — band decoder
+## 11. BD — band decoder
 
 **`/bd`**
 
@@ -2704,7 +3110,7 @@ An external controller can read and write the same configuration over
 
 ---
 
-## 11. Transmit safety
+## 12. Transmit safety
 
 Several functions in WIFILT key the transmitter, some of them without you pressing anything
 at that moment. They are gathered here so nothing is a surprise.
@@ -2718,7 +3124,17 @@ at that moment. They are gathered here so nothing is a surprise.
 | **JS8 Repeat CQ** | calls CQ on an interval |
 | **JS8 SEND LATER** | may transmit a deferred message at any time, without you present |
 | **TUNE** on either DATA page | keys a modulated carrier until its watchdog stops it |
-| **QRPLog macros** | key CW or RTTY when you press Enter |
+| **Mercury** | keys for as long as a transfer or a CQ round takes |
+| **RTTY-ICOM** | keys when you press Enter in its composer — as FSK, or as AFSK audio, depending on the radio's mode ([section 6.1](#61-what-the-page-is)) |
+| **QRPLog macros** | key CW or RTTY when you press Enter — including through the RTTY palette in a data mode ([section 3.5](#35-cw-and-rtty-macros)) |
+| **PA — TUNE** | starts the amplifier's own tuning cycle ([section 3.14](#314-pa--the-linear-amplifier)) |
+
+**One radio, one operator.** The interface has exactly one audio link to the transceiver, so
+**JS8Call-ICOM, RTTY-ICOM, WSPR-Beacon and Mercury cannot run at the same time** — and neither
+can the RTTY palette in QRPLog, which is a full holder of that same session. Opening a second
+one shows *The radio is driven from somewhere else*, says where, and offers **TAKE THE SESSION
+OVER HERE**. Nothing ever takes the session on its own, not even a page restoring itself after
+a reload: a running beacon is never silently stolen by a browser refresh.
 
 Three things govern all of it:
 
@@ -2744,7 +3160,7 @@ And two that do *not* transmit, despite appearances:
 
 ---
 
-## 12. Component licences
+## 13. Component licences
 
 WIFILT is free software under the **GNU General Public License, version 3 or later** — see
 [LICENSE](LICENSE). This repository is the corresponding source for every binary the project

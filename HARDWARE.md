@@ -426,6 +426,13 @@ Decoder tab on a bare module (section 2 above); it also titles itself accordingl
 `WIFILT-LINUX`, `WIFILT-WINDOWS` or `WIFILT-ESP32` — so a box and a desktop binary open in
 two tabs stay easy to tell apart.
 
+**A radio that is not on the network — or not an Icom at all — can still be worked from a PC.**
+The same archives carry a second program, `local-trx`, which pretends to be a LAN-networked
+Icom and translates for whatever the computer's sound card, CAT adapter and DTR/RTS keying
+adapter are wired to (hamlib's full rig list). It is off until its own setup page is used;
+what it can and cannot do is [SOFTWARE.md § 1.6](SOFTWARE.md#16-local-trx--any-radio-on-a-pc),
+and building it is [BUILD.md § 5](BUILD.md#5-local-trx-a-hamlib-bridge-for-non-icom-radios).
+
 The Linux archive — Raspberry Pi included, it is the same `install.sh` — installs a `systemd`
 unit that is not enabled by default and needs one privileged step redone on every upgrade
 (binding ports 80/82/83); the Windows build is a single static `.exe` with nothing to

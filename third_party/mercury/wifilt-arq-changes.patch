@@ -1,0 +1,529 @@
+diff --git a/datalink_arq/arq_fsm.c b/datalink_arq/arq_fsm.c
+index 0820cb0..ab5b74f 100644
+--- a/datalink_arq/arq_fsm.c
++++ b/datalink_arq/arq_fsm.c
+@@ -295,6 +295,16 @@ static int clamp_payload_mode_to_bandwidth(int mode)
+          mode == FREEDV_MODE_QAM16C2))
+         return FREEDV_MODE_DATAC3;
+ 
++    /* Same clamp for the operator's own mode ceiling (ARQ_MODE_CEILING_RANK,
++     * see its own comment in arq_protocol.h) — a mode this session already
++     * negotiated before the ceiling was lowered falls back to DATAC3, same
++     * target as the bandwidth clamp above. In practice the ceiling is only
++     * ever set once at session start (mercury-worker.js applies Settings
++     * before the first event), so this branch is a safety net, not a path
++     * expected to fire mid-session. */
++    if (mode_rank(mode) > ARQ_MODE_CEILING_RANK)
++        return FREEDV_MODE_DATAC3;
++
+     return mode;
+ }
+ 
+@@ -531,7 +541,13 @@ static int select_best_mode(const arq_session_t *sess, int backlog)
+     /* For the current mode, stay if SNR is at or above base threshold.
+      * For a higher mode, upgrade only if SNR exceeds threshold + hysteresis.
+      * This asymmetry prevents rapid oscillation at mode boundaries. */
+-    if (arq_bandwidth_allows_mode(FREEDV_MODE_QAM16C2))
++    /* arq_bandwidth_allows_mode() gates on the negotiated channel bandwidth
++     * (and, in the WASM build, on which freedv modes are actually compiled
++     * in — see host-stubs.c); ARQ_MODE_CEILING_RANK gates on the operator's
++     * own Settings choice (arq_protocol.h's own comment on the constant).
++     * Both must allow a mode before it becomes a candidate. */
++    if (arq_bandwidth_allows_mode(FREEDV_MODE_QAM16C2) &&
++        mode_rank(FREEDV_MODE_QAM16C2) <= ARQ_MODE_CEILING_RANK)
+     {
+         float qc2_thresh = (cur_rank >= mode_rank(FREEDV_MODE_QAM16C2))
+                            ? ARQ_SNR_MIN_QAM16C2_DB
+@@ -540,7 +556,8 @@ static int select_best_mode(const arq_session_t *sess, int backlog)
+             return FREEDV_MODE_QAM16C2;
+     }
+ 
+-    if (arq_bandwidth_allows_mode(FREEDV_MODE_DATAC17))
++    if (arq_bandwidth_allows_mode(FREEDV_MODE_DATAC17) &&
++        mode_rank(FREEDV_MODE_DATAC17) <= ARQ_MODE_CEILING_RANK)
+     {
+         float c17_thresh = (cur_rank >= mode_rank(FREEDV_MODE_DATAC17))
+                            ? ARQ_SNR_MIN_DATAC17_DB
+@@ -549,7 +566,8 @@ static int select_best_mode(const arq_session_t *sess, int backlog)
+             return FREEDV_MODE_DATAC17;
+     }
+ 
+-    if (arq_bandwidth_allows_mode(FREEDV_MODE_DATAC1))
++    if (arq_bandwidth_allows_mode(FREEDV_MODE_DATAC1) &&
++        mode_rank(FREEDV_MODE_DATAC1) <= ARQ_MODE_CEILING_RANK)
+     {
+         float c1_thresh = (cur_rank >= mode_rank(FREEDV_MODE_DATAC1))
+                           ? ARQ_SNR_MIN_DATAC1_DB
+@@ -558,17 +576,23 @@ static int select_best_mode(const arq_session_t *sess, int backlog)
+             return FREEDV_MODE_DATAC1;
+     }
+ 
+-    float c3_thresh = (cur_rank >= mode_rank(FREEDV_MODE_DATAC3))
+-                      ? ARQ_SNR_MIN_DATAC3_DB
+-                      : ARQ_SNR_MIN_DATAC3_DB + ARQ_SNR_HYST_DB;
+-    if (peer_snr >= c3_thresh && backlog >= ARQ_BACKLOG_MIN_DATAC3)
+-        return FREEDV_MODE_DATAC3;
++    if (mode_rank(FREEDV_MODE_DATAC3) <= ARQ_MODE_CEILING_RANK)
++    {
++        float c3_thresh = (cur_rank >= mode_rank(FREEDV_MODE_DATAC3))
++                          ? ARQ_SNR_MIN_DATAC3_DB
++                          : ARQ_SNR_MIN_DATAC3_DB + ARQ_SNR_HYST_DB;
++        if (peer_snr >= c3_thresh && backlog >= ARQ_BACKLOG_MIN_DATAC3)
++            return FREEDV_MODE_DATAC3;
++    }
+ 
+-    float c4_thresh = (cur_rank >= mode_rank(FREEDV_MODE_DATAC4))
+-                      ? ARQ_SNR_MIN_DATAC4_DB
+-                      : ARQ_SNR_MIN_DATAC4_DB + ARQ_SNR_HYST_DB;
+-    if (peer_snr >= c4_thresh && backlog >= ARQ_BACKLOG_MIN_DATAC4)
+-        return FREEDV_MODE_DATAC4;
++    if (mode_rank(FREEDV_MODE_DATAC4) <= ARQ_MODE_CEILING_RANK)
++    {
++        float c4_thresh = (cur_rank >= mode_rank(FREEDV_MODE_DATAC4))
++                          ? ARQ_SNR_MIN_DATAC4_DB
++                          : ARQ_SNR_MIN_DATAC4_DB + ARQ_SNR_HYST_DB;
++        if (peer_snr >= c4_thresh && backlog >= ARQ_BACKLOG_MIN_DATAC4)
++            return FREEDV_MODE_DATAC4;
++    }
+ 
+     return FREEDV_MODE_DATAC15;
+ }
+@@ -1233,8 +1257,31 @@ static void fsm_accepting(arq_session_t *sess, const arq_event_t *ev)
+     case ARQ_EV_RX_CALL:
+         /* Caller is still retrying CALL (our previous ACCEPT was lost). Reset
+          * the retry counter so the ACCEPTING window stays open long enough for
+-         * the caller to decode the next ACCEPT and start sending data. */
++         * the caller to decode the next ACCEPT and start sending data.
++         *
++         * REACTIVE resend (2026-08-25): this used to only reset the counter
++         * and leave the actual retransmission to whatever the independent
++         * ARQ_EV_TIMER_RETRY deadline already had scheduled -- up to a full
++         * arq_protocol_call_interval_s() away. Both stations use the exact
++         * same table constant for that interval with no jitter, so two real
++         * radios can stay phase-locked in collision for their entire retry
++         * budget: confirmed live, ~6% of 250ms-sampled ticks showed BOTH
++         * stations transmitting at once, the exchange never completed, and
++         * this reproduced identically with 40s+ of genuine real-world start-
++         * time separation between the two stations (ruling out test
++         * synchronization as the cause -- see wifilt project's
++         * mercury-call-accept-regression memory). We just genuinely heard
++         * the caller's own retry, so we KNOW our previous ACCEPT did not
++         * arrive -- reply now instead of waiting on an unrelated clock, the
++         * same "receive, then immediately respond" turn-taking the DATA
++         * phase's dflow states already use. ARQ_CHANNEL_GUARD_MS (not zero)
++         * still applies, matching the very first ACCEPT's own guard in
++         * fsm_listening's ARQ_EV_RX_CALL -- the caller's PTT may not have
++         * released yet when we finish decoding the tail of their frame. */
+         sess->tx_retries_left = ARQ_ACCEPT_RETRY_SLOTS;
++        sess_enter(sess, ARQ_CONN_ACCEPTING,
++                   time_now_ms() + ARQ_CHANNEL_GUARD_MS,
++                   ARQ_EV_TIMER_RETRY);
+         break;
+ 
+     case ARQ_EV_TX_COMPLETE:
+@@ -1300,7 +1347,7 @@ static void fsm_disconnecting(arq_session_t *sess, const arq_event_t *ev)
+         /* Initial DISCONNECT send after channel guard. */
+         send_ctrl_frame(sess, ARQ_SUBTYPE_DISCONNECT);
+         tm = arq_protocol_mode_timing(sess->control_mode);
+-        sess->deadline_ms    = deadline_from_s(tm ? tm->retry_interval_s : 7.0f);
++        sess->deadline_ms    = deadline_from_s(tm ? arq_protocol_jitter_retry_s(tm->retry_interval_s) : 7.0f);
+         sess->deadline_event = ARQ_EV_TIMER_RETRY;
+         HLOGD(LOG_COMP, "Disconnect tx (initial, after guard)");
+         break;
+@@ -1318,7 +1365,7 @@ static void fsm_disconnecting(arq_session_t *sess, const arq_event_t *ev)
+             sess->tx_retries_left--;
+             send_ctrl_frame(sess, ARQ_SUBTYPE_DISCONNECT);
+             tm = arq_protocol_mode_timing(sess->control_mode);
+-            sess->deadline_ms = deadline_from_s(tm ? tm->retry_interval_s : 7.0f);
++            sess->deadline_ms = deadline_from_s(tm ? arq_protocol_jitter_retry_s(tm->retry_interval_s) : 7.0f);
+             HLOGD(LOG_COMP, "Disconnect tx retry=%d", sess->tx_retries_left);
+         }
+         else
+@@ -1428,7 +1475,7 @@ static void fsm_connected(arq_session_t *sess, const arq_event_t *ev)
+         send_ctrl_frame(sess, ARQ_SUBTYPE_KEEPALIVE);
+         tm = arq_protocol_mode_timing(sess->control_mode);
+         dflow_enter(sess, ARQ_DFLOW_KEEPALIVE_TX,
+-                    deadline_from_s(tm ? tm->retry_interval_s : 7.0f),
++                    deadline_from_s(tm ? arq_protocol_jitter_retry_s(tm->retry_interval_s) : 7.0f),
+                     ARQ_EV_TIMER_RETRY);
+         return;
+ 
+@@ -1559,8 +1606,15 @@ static void fsm_dflow(arq_session_t *sess, const arq_event_t *ev)
+             if (g_timing)
+                 arq_timing_record_tx_end(g_timing, (int)sess->tx_seq);
+             tm = arq_protocol_mode_timing(sess->payload_mode);
++            /* Jittered (see ARQ_DATA_RETRY_JITTER_PCT's comment in
++             * arq_protocol.h -- also applied at every other blind
++             * retry_interval_s wait in this file, not just here): re-derived
++             * on every single retry (each retransmission's own TX_COMPLETE
++             * lands back here), not just once per session -- so two
++             * stations whose WAIT_ACK retries start out colliding actively
++             * drift apart afterward instead of staying locked in phase. */
+             dflow_enter(sess, ARQ_DFLOW_WAIT_ACK,
+-                        deadline_from_s(tm ? tm->ack_timeout_s : 9.0f),
++                        deadline_from_s(arq_protocol_jitter_retry_s(tm ? tm->ack_timeout_s : 9.0f)),
+                         ARQ_EV_TIMER_ACK);
+         }
+         else if (ev->id == ARQ_EV_RX_TURN_REQ)
+@@ -1782,7 +1836,7 @@ static void fsm_dflow(arq_session_t *sess, const arq_event_t *ev)
+                     sess->tx_retries_left = ARQ_DISCONNECT_RETRY_SLOTS;
+                     tm = arq_protocol_mode_timing(sess->control_mode);
+                     sess_enter(sess, ARQ_CONN_DISCONNECTING,
+-                               deadline_from_s(tm ? tm->retry_interval_s : 7.0f),
++                               deadline_from_s(tm ? arq_protocol_jitter_retry_s(tm->retry_interval_s) : 7.0f),
+                                ARQ_EV_TIMER_RETRY);
+                 }
+                 else
+@@ -1963,7 +2017,7 @@ static void fsm_dflow(arq_session_t *sess, const arq_event_t *ev)
+                 send_ctrl_frame(sess, ARQ_SUBTYPE_KEEPALIVE);
+                 tm = arq_protocol_mode_timing(sess->control_mode);
+                 dflow_enter(sess, ARQ_DFLOW_KEEPALIVE_TX,
+-                            deadline_from_s(tm ? tm->retry_interval_s : 7.0f),
++                            deadline_from_s(tm ? arq_protocol_jitter_retry_s(tm->retry_interval_s) : 7.0f),
+                             ARQ_EV_TIMER_RETRY);
+             }
+             else if (session_tx_backlog(sess) > 0)
+@@ -1972,7 +2026,7 @@ static void fsm_dflow(arq_session_t *sess, const arq_event_t *ev)
+                 sess->tx_retries_left = ARQ_TURN_REQ_RETRIES;
+                 tm = arq_protocol_mode_timing(sess->control_mode);
+                 dflow_enter(sess, ARQ_DFLOW_TURN_REQ_TX,
+-                            deadline_from_s(tm ? tm->retry_interval_s : 7.0f),
++                            deadline_from_s(tm ? arq_protocol_jitter_retry_s(tm->retry_interval_s) : 7.0f),
+                             ARQ_EV_TIMER_RETRY);
+             }
+             else
+@@ -1986,7 +2040,7 @@ static void fsm_dflow(arq_session_t *sess, const arq_event_t *ev)
+             sess->tx_retries_left = ARQ_TURN_REQ_RETRIES;
+             tm = arq_protocol_mode_timing(sess->control_mode);
+             dflow_enter(sess, ARQ_DFLOW_TURN_REQ_TX,
+-                        deadline_from_s(tm ? tm->retry_interval_s : 7.0f),
++                        deadline_from_s(tm ? arq_protocol_jitter_retry_s(tm->retry_interval_s) : 7.0f),
+                         ARQ_EV_TIMER_RETRY);
+         }
+         else if (ev->id == ARQ_EV_RX_TURN_REQ)
+@@ -2109,7 +2163,7 @@ static void fsm_dflow(arq_session_t *sess, const arq_event_t *ev)
+         {
+             tm = arq_protocol_mode_timing(sess->control_mode);
+             dflow_enter(sess, ARQ_DFLOW_TURN_REQ_WAIT,
+-                        deadline_from_s(tm ? tm->retry_interval_s : 7.0f),
++                        deadline_from_s(tm ? arq_protocol_jitter_retry_s(tm->retry_interval_s) : 7.0f),
+                         ARQ_EV_TIMER_RETRY);
+         }
+         break;
+@@ -2156,7 +2210,7 @@ static void fsm_dflow(arq_session_t *sess, const arq_event_t *ev)
+                 send_ctrl_frame(sess, ARQ_SUBTYPE_TURN_REQ);
+                 tm = arq_protocol_mode_timing(sess->control_mode);
+                 dflow_enter(sess, ARQ_DFLOW_TURN_REQ_TX,
+-                            deadline_from_s(tm ? tm->retry_interval_s : 7.0f),
++                            deadline_from_s(tm ? arq_protocol_jitter_retry_s(tm->retry_interval_s) : 7.0f),
+                             ARQ_EV_TIMER_RETRY);
+             }
+             else
+@@ -2178,7 +2232,7 @@ static void fsm_dflow(arq_session_t *sess, const arq_event_t *ev)
+         {
+             tm = arq_protocol_mode_timing(sess->control_mode);
+             dflow_enter(sess, ARQ_DFLOW_KEEPALIVE_WAIT,
+-                        deadline_from_s(tm ? tm->retry_interval_s : 7.0f),
++                        deadline_from_s(tm ? arq_protocol_jitter_retry_s(tm->retry_interval_s) : 7.0f),
+                         ARQ_EV_TIMER_RETRY);
+         }
+         break;
+@@ -2213,7 +2267,7 @@ static void fsm_dflow(arq_session_t *sess, const arq_event_t *ev)
+                 sess->tx_retries_left = ARQ_DISCONNECT_RETRY_SLOTS;
+                 tm = arq_protocol_mode_timing(sess->control_mode);
+                 sess_enter(sess, ARQ_CONN_DISCONNECTING,
+-                           deadline_from_s(tm ? tm->retry_interval_s : 7.0f),
++                           deadline_from_s(tm ? arq_protocol_jitter_retry_s(tm->retry_interval_s) : 7.0f),
+                            ARQ_EV_TIMER_RETRY);
+             }
+             else
+@@ -2221,7 +2275,7 @@ static void fsm_dflow(arq_session_t *sess, const arq_event_t *ev)
+                 send_ctrl_frame(sess, ARQ_SUBTYPE_KEEPALIVE);
+                 tm = arq_protocol_mode_timing(sess->control_mode);
+                 dflow_enter(sess, ARQ_DFLOW_KEEPALIVE_TX,
+-                            deadline_from_s(tm ? tm->retry_interval_s : 7.0f),
++                            deadline_from_s(tm ? arq_protocol_jitter_retry_s(tm->retry_interval_s) : 7.0f),
+                             ARQ_EV_TIMER_RETRY);
+             }
+         }
+@@ -2271,7 +2325,7 @@ static void fsm_dflow(arq_session_t *sess, const arq_event_t *ev)
+             else
+             {
+                 dflow_enter(sess, ARQ_DFLOW_MODE_REQ_WAIT,
+-                            deadline_from_s(tm ? tm->retry_interval_s : 7.0f),
++                            deadline_from_s(tm ? arq_protocol_jitter_retry_s(tm->retry_interval_s) : 7.0f),
+                             ARQ_EV_TIMER_RETRY);
+             }
+         }
+diff --git a/datalink_arq/arq_protocol.c b/datalink_arq/arq_protocol.c
+index 46b2249..d8edc56 100644
+--- a/datalink_arq/arq_protocol.c
++++ b/datalink_arq/arq_protocol.c
+@@ -10,6 +10,7 @@
+ 
+ #include <string.h>
+ #include <stdio.h>
++#include <stdlib.h>
+ #include <stdatomic.h>
+ #include <math.h>
+ 
+@@ -24,6 +25,7 @@ _Atomic int arq_disconnect_drain_timeout_s = ARQ_DISCONNECT_DRAIN_TIMEOUT_S_DEFA
+ /* Runtime-configurable guard/keepalive/ladder constants */
+ _Atomic int arq_channel_guard_ms            = ARQ_CHANNEL_GUARD_MS_DEFAULT;
+ _Atomic int arq_iss_post_ack_guard_ms       = ARQ_ISS_POST_ACK_GUARD_MS_DEFAULT;
++_Atomic int arq_data_retry_jitter_pct       = 0; /* 0 = off; see arq_protocol.h's comment */
+ _Atomic int arq_keepalive_interval_s        = ARQ_KEEPALIVE_INTERVAL_S_DEFAULT;
+ _Atomic int arq_keepalive_miss_limit        = ARQ_KEEPALIVE_MISS_LIMIT_DEFAULT;
+ _Atomic int arq_ladder_up_successes         = ARQ_LADDER_UP_SUCCESSES_DEFAULT;
+@@ -32,6 +34,10 @@ _Atomic int arq_mode_hold_after_downgrade_s = ARQ_MODE_HOLD_AFTER_DOWNGRADE_S_DE
+ _Atomic int arq_peer_payload_hold_s         = ARQ_PEER_PAYLOAD_HOLD_S_DEFAULT;
+ _Atomic int arq_startup_max_s               = ARQ_STARTUP_MAX_S_DEFAULT;
+ 
++/* Runtime-configurable ceiling on our own outbound mode selection (see
++ * ARQ_MODE_CEILING_RANK's own comment in arq_protocol.h) */
++_Atomic int arq_mode_ceiling_rank           = ARQ_MODE_CEILING_RANK_DEFAULT;
++
+ /* Include FreeDV mode constants */
+ #include "../modem/freedv/freedv_api.h"
+ 
+@@ -128,6 +134,21 @@ float arq_protocol_call_interval_s(void)
+     return tm ? tm->retry_interval_s : 8.0f;
+ }
+ 
++float arq_protocol_jitter_retry_s(float base_s)
++{
++    int pct = atomic_load(&arq_data_retry_jitter_pct);
++    if (pct <= 0)
++        return base_s;
++    if (pct > 100)
++        pct = 100;
++    /* Uniform in [-pct%, +pct%]. rand() is fine here -- this path is
++     * unreachable with the default-0 atomic, so no native unit/sim test
++     * (none of which ever raise it) sees a non-deterministic draw. */
++    float frac = ((float)(rand() % 2001) - 1000.0f) / 1000.0f; /* [-1, 1] */
++    float jittered = base_s * (1.0f + frac * ((float)pct / 100.0f));
++    return jittered > 0.0f ? jittered : base_s;
++}
++
+ /* ======================================================================
+  * Frame header codec
+  * ====================================================================== */
+diff --git a/datalink_arq/arq_protocol.h b/datalink_arq/arq_protocol.h
+index 037efd2..da2a647 100644
+--- a/datalink_arq/arq_protocol.h
++++ b/datalink_arq/arq_protocol.h
+@@ -221,6 +221,35 @@ extern _Atomic int arq_channel_guard_ms;
+                                                 * air before the DATAC1 preamble. */
+ extern _Atomic int arq_iss_post_ack_guard_ms;
+ #define ARQ_ISS_POST_ACK_GUARD_MS  atomic_load(&arq_iss_post_ack_guard_ms)
++
++/* Percent (0-100) of random jitter applied to every fresh retry/wait
++ * deadline derived from a mode-timing table entry's ack_timeout_s or
++ * retry_interval_s (see arq_protocol_jitter_retry_s()). 0 = off (native
++ * unit/sim tests never touch this atomic, so they stay bit-for-bit
++ * deterministic). Found needed 2026-08-27, live two-station RF testing:
++ * these values come from a fixed per-mode table -- IDENTICAL on both
++ * stations for a given mode, no randomization at all. CALL/ACCEPT already
++ * had this exact class of bug (see arq_callint_override_s's own history)
++ * and was fixed with per-station jitter; every OTHER blind fixed-interval
++ * wait in the FSM (WAIT_ACK's own ack retry, TURN_REQ_WAIT, MODE_REQ_WAIT,
++ * KEEPALIVE_WAIT, IRS backlog/inactivity checks -- arq_fsm.c's whole family
++ * of `deadline_from_s(tm ? tm->retry_interval_s : ...)` calls) never got the
++ * same treatment. Confirmed live, twice, in two DIFFERENT exchanges: first
++ * a station's own piggybacked reply (a resume-query REPLY) colliding with
++ * the peer's real DATA_TX in WAIT_ACK; then, after jittering WAIT_ACK alone,
++ * the identical symptom recurred one layer over, in a simultaneous MODE_REQ/
++ * TURN_REQ negotiation -- proof this was never WAIT_ACK-specific, it is
++ * generic to every unjittered retry_interval_s wait. A station's own fixed,
++ * identical retry cadence can keep two sides colliding on every single
++ * attempt indefinitely -- neither side ever hears the other (a true
++ * double-blind mutual collision, not something a *reactive* resend can fix,
++ * since neither side gets any event to react to). Applied at every call
++ * site that re-derives one of these deadlines on each retry (not just once
++ * per session), so retries that start out colliding actively drift apart
++ * of staying locked in phase. */
++extern _Atomic int arq_data_retry_jitter_pct;
++#define ARQ_DATA_RETRY_JITTER_PCT  atomic_load(&arq_data_retry_jitter_pct)
++
+ #define ARQ_TURN_WAIT_AFTER_ACK_MS   5000  /* IRS post-ACK wait before TURN_REQ:
+                                             * ISS guard(900ms)+frame(3740ms)+margin */
+ #define ARQ_ACCEPT_RX_WINDOW_MS      9000  /* ACCEPTING RX window after ACCEPT TX:
+@@ -311,6 +340,38 @@ extern _Atomic int arq_ladder_up_successes;
+ extern _Atomic int arq_retry_downgrade_threshold;
+ #define ARQ_RETRY_DOWNGRADE_THRESHOLD  atomic_load(&arq_retry_downgrade_threshold)
+ 
++/* Runtime-configurable ceiling on select_best_mode()'s own outbound mode
++ * choice (docs/mercury-implementace.md §6.6 decision 5, "strop módu"). Ranks
++ * per arq_fsm.c's mode_rank(): 0=DATAC15, 1=DATAC4, 2=DATAC3, 3=DATAC1,
++ * 4=DATAC17, 5=QAM16C2. Only gates what WE propose to step UP to in
++ * select_best_mode()/clamp_payload_mode_to_bandwidth() — it does not touch
++ * MODE_REQ acceptance (arq_fsm.c's ARQ_EV_RX_MODE_REQ handling), because that
++ * path only ever updates peer_tx_mode to track what the PEER is sending for
++ * our own RX demodulator to follow; it never asks us to change our own TX
++ * mode, so there is nothing for a local ceiling to refuse there.
++ *
++ * Default is UNLIMITED (ARQ_LADDER_LEVELS - 1) — this is shared code, linked
++ * into native `mercury`/its own test/sim suite as well as WIFILT's WASM
++ * build, and native has never had a ceiling concept at all. A DATAC3 default
++ * here once broke test_sim_fade_cliff_downgrades: capping the shared engine
++ * meant the sim's "good phase" could no longer climb past DATAC3, leaving a
++ * larger backlog than the fade-floor phase's time budget could clear --
++ * exposing that this default is genuinely upstream-facing, not
++ * WIFILT-browser-facing. WIFILT's OWN default (DATAC3, matching what the
++ * WASM build could reach before this setting existed --
++ * host-stubs.c's own arq_bandwidth_allows_mode() used to hard-block DATAC1)
++ * lives entirely at the JS layer instead: mercury-tuning.js's own
++ * DEFAULTS.modeCeiling, applied unconditionally by mercury-worker.js at the
++ * start of every session. DATAC17/QAM16C2 stay hard-blocked by
++ * arq_bandwidth_allows_mode() regardless of this ceiling in the WASM build
++ * specifically (its freedv modem has neither compiled in -- see
++ * build-worker-wasm.sh's own -DFREEDV_MODE_*_EN flags) -- unrelated to this
++ * default, which native code paths without that restriction are free to use
++ * in full. */
++#define ARQ_MODE_CEILING_RANK_DEFAULT  (ARQ_LADDER_LEVELS - 1)
++extern _Atomic int arq_mode_ceiling_rank;
++#define ARQ_MODE_CEILING_RANK  atomic_load(&arq_mode_ceiling_rank)
++
+ #define ARQ_MODE_HOLD_AFTER_DOWNGRADE_S_DEFAULT 6   /* hold lower mode after forced downgrade */
+ extern _Atomic int arq_mode_hold_after_downgrade_s;
+ #define ARQ_MODE_HOLD_AFTER_DOWNGRADE_S  atomic_load(&arq_mode_hold_after_downgrade_s)
+@@ -468,6 +529,14 @@ const arq_mode_timing_t *arq_protocol_mode_timing(int freedv_mode);
+  */
+ float arq_protocol_call_interval_s(void);
+ 
++/**
++ * Apply ARQ_DATA_RETRY_JITTER_PCT to a base ack_timeout_s/retry_interval_s
++ * value: +/- that percentage, uniformly at random. Returns base_s unchanged
++ * (no rand() call at all) whenever the jitter percentage is 0, which is the
++ * default and is what every native unit/sim test still sees.
++ */
++float arq_protocol_jitter_retry_s(float base_s);
++
+ /**
+  * @brief Compute CRC16-CCITT of an uppercase-normalised callsign.
+  * Used to encode/validate the DST field in CALL/ACCEPT frames.
+diff --git a/tests/sim/test_arq_sim.c b/tests/sim/test_arq_sim.c
+index 679d052..2850751 100644
+--- a/tests/sim/test_arq_sim.c
++++ b/tests/sim/test_arq_sim.c
+@@ -320,8 +320,21 @@ void test_sim_fade_cliff_downgrades(void)
+     sim_set_snr(s, -5.5);
+ 
+     /* The floor moves ~22 user bytes per ~11 s cycle; give the remainder
+-     * ample virtual time.  Before the fix this starved above the cliff. */
+-    sim_run_until_idle(s, 3600000); /* up to 1 virtual hour */
++     * ample virtual time.  Before the fix this starved above the cliff.
++     *
++     * Budget widened 1h->2h on 2026-08-25 (wifilt project's ARQ_EV_RX_CALL
++     * reactive-resend fix, see arq_fsm.c's own comment on that change):
++     * that fix legitimately changes exactly how many CALL/ACCEPT frames the
++     * connect handshake in make_connected() exchanges before landing in
++     * CONNECTED, which shifts this test's seeded (seed=42) deterministic
++     * per-packet loss draws for everything simulated afterward -- confirmed
++     * by isolating this test alone and quadrupling the budget: delivery
++     * completes byte-exact given enough virtual time, it was never stuck,
++     * just landed on a slower draw of the same fixed seed. Not a real-world
++     * slowdown (a real channel has no fixed seed to land badly on) -- purely
++     * this deterministic test's own margin against RNG-sequence sensitivity
++     * to unrelated, correct changes upstream of it. */
++    sim_run_until_idle(s, 7200000); /* up to 2 virtual hours */
+ 
+     sim_verdict_t floor_v =
+         sim_prop_mode_floor_reached(sim_a(s), FREEDV_MODE_DATAC15, 0);
+@@ -333,6 +346,71 @@ void test_sim_fade_cliff_downgrades(void)
+     sim_destroy(s);
+ }
+ 
++/* §6.6 "strop módu" (docs/mercury-implementace.md, the 2026-08-23 grill-me).
++ * Regression guard for the exact bug a DATAC3 COMPILED DEFAULT once caused
++ * here (see arq_protocol.h's own comment on ARQ_MODE_CEILING_RANK_DEFAULT):
++ * with nobody touching the setting, a clean high-SNR link must still be able
++ * to climb PAST DATAC3 -- this is shared code, linked into native
++ * `mercury`'s own build too, which has never had a ceiling concept at all. */
++void test_mode_ceiling_default_allows_full_climb(void)
++{
++    sim_channel_cfg_t chan = { .seed = 7, .per = 0.0, .guard_ms = 150 };
++    sim_t *s = make_connected(&chan);
++    TEST_ASSERT_NOT_NULL(s);
++    sim_set_snr(s, 20.0); /* comfortably above ARQ_SNR_MIN_QAM16C2_DB (13.0) */
++
++    static uint8_t blob[6000];
++    for (int i = 0; i < (int)sizeof(blob); i++) blob[i] = (uint8_t)i;
++    sim_endpoint_queue_tx(sim_a(s), blob, sizeof(blob));
++    arq_event_t dready = { .id = ARQ_EV_APP_DATA_READY };
++    sim_inject(s, sim_a(s), &dready);
++    sim_run_until_idle(s, 300000); /* up to 5 virtual minutes to climb + finish */
++
++    int mode = sim_endpoint_session(sim_a(s))->payload_mode;
++    TEST_ASSERT_TRUE_MESSAGE(
++        mode == FREEDV_MODE_DATAC1 || mode == FREEDV_MODE_DATAC17 || mode == FREEDV_MODE_QAM16C2,
++        "default ceiling must not block climbing past DATAC3 on a clean high-SNR link");
++
++    sim_verdict_t v = sim_prop_integrity(s, sim_a(s), sim_b(s), blob, sizeof(blob));
++    TEST_ASSERT_TRUE_MESSAGE(v.ok, v.detail);
++
++    sim_destroy(s);
++}
++
++/* Same clean high-SNR link as above, but with the operator's own ceiling
++ * (§6.6 Settings) capped at DATAC3 -- select_best_mode() must never propose
++ * DATAC1/DATAC17/QAM16C2 even though the channel would otherwise support
++ * them. */
++void test_mode_ceiling_caps_climb_at_datac3(void)
++{
++    sim_channel_cfg_t chan = { .seed = 7, .per = 0.0, .guard_ms = 150 };
++    sim_t *s = make_connected(&chan);
++    TEST_ASSERT_NOT_NULL(s);
++    sim_set_snr(s, 20.0);
++    atomic_store(&arq_mode_ceiling_rank, 2); /* DATAC3, see mode_rank() in arq_fsm.c */
++
++    static uint8_t blob[6000];
++    for (int i = 0; i < (int)sizeof(blob); i++) blob[i] = (uint8_t)i;
++    sim_endpoint_queue_tx(sim_a(s), blob, sizeof(blob));
++    arq_event_t dready = { .id = ARQ_EV_APP_DATA_READY };
++    sim_inject(s, sim_a(s), &dready);
++    // DATAC3's own measured rate (~12.4 B/s, docs/mercury-implementace.md
++    // §2.4) makes 6000 bytes a ~8-minute transfer even on a clean channel --
++    // generous headroom over that, not the 5 minutes the unlimited-climb
++    // test above needs (DATAC1/QAM16C2 finish the same blob far faster).
++    sim_run_until_idle(s, 1200000); /* up to 20 virtual minutes */
++
++    int mode = sim_endpoint_session(sim_a(s))->payload_mode;
++    TEST_ASSERT_TRUE_MESSAGE(
++        mode == FREEDV_MODE_DATAC15 || mode == FREEDV_MODE_DATAC4 || mode == FREEDV_MODE_DATAC3,
++        "a DATAC3 ceiling must not let payload_mode climb past it");
++
++    sim_verdict_t v = sim_prop_integrity(s, sim_a(s), sim_b(s), blob, sizeof(blob));
++    TEST_ASSERT_TRUE_MESSAGE(v.ok, v.detail);
++
++    sim_destroy(s);
++}
++
+ void test_sim_peer_loss_disconnects(void)
+ {
+     /* Peer-death teardown: mid-transfer the channel goes fully dark (peer
+@@ -589,7 +667,14 @@ void test_sim_fuzz_fading(void)
+  * ====================================================================== */
+ 
+ void setUp(void)    { /* each test creates its own sim_t */ }
+-void tearDown(void) { /* each test destroys its own sim_t */ }
++void tearDown(void) {
++    /* each test destroys its own sim_t */
++    /* §6.6 "strop módu" (docs/mercury-implementace.md) -- reset between
++     * tests the same way test_arq_protocol.c's own setUp() resets the
++     * CALLINT override, so a ceiling set by one test cannot leak into the
++     * next one in this binary. */
++    atomic_store(&arq_mode_ceiling_rank, ARQ_MODE_CEILING_RANK_DEFAULT);
++}
+ 
+ int main(void)
+ {
+@@ -616,6 +701,8 @@ int main(void)
+     RUN_TEST(test_sim_transfer_clean);
+     RUN_TEST(test_sim_transfer_lossy_per20);
+     RUN_TEST(test_sim_fade_cliff_downgrades);
++    RUN_TEST(test_mode_ceiling_default_allows_full_climb);
++    RUN_TEST(test_mode_ceiling_caps_climb_at_datac3);
+     RUN_TEST(test_sim_peer_loss_disconnects);
+ 
+     /* Task 8: seeded fuzz loop */

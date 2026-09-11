@@ -50,7 +50,7 @@ assert(firmware.includes('frequency = freq;')
 assert(firmware.includes('setModesText(mode);')
   && firmware.includes('g_trxMode[slot - 1]'),
   'TRX1 and TRX2/3 mode state paths are not both routed');
-assert(firmware.includes('radioLanLocalControlPort(slot)'),
+assert(firmware.includes('radioLanLocalControlPort(slot,'),
   'per-slot LAN port routing missing');
 // The client hands every frame to one router and stays slot-agnostic; the
 // sketch decides what a slot's state means.

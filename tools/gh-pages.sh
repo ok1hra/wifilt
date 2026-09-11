@@ -471,23 +471,49 @@ human_size() {
 
 DESKTOP_SUMS_NAME=""
 
+# Whether tools/release.sh's own optional bundling step actually put local-trx
+# (the hamlib bridge for a non-Icom rig, BUILD.md section 5) into each archive.
+# It is a per-archive, per-release fact -- cross-compiling it for Windows/ARM64
+# needs libraries that may simply not be around at release time -- so the page
+# has to look inside rather than assume. An archive without it gets the same
+# panel it always had, with no mention of a program it does not contain.
+DESKTOP_LINUX_LTX=0
+DESKTOP_WIN_LTX=0
+DESKTOP_ARM64_LTX=0
+
+# Names the staging directory inside each archive (native/Makefile's dist-*
+# targets), so a stray "local-trx" anywhere else in the tree cannot answer yes.
+archive_has_local_trx() {
+  local archive="$1" staging="$2" kind="$3"
+  [[ -f "$archive" ]] || return 1
+  if [[ "$kind" == "tar" ]]; then
+    tar tzf "$archive" 2>/dev/null | grep -qx "${staging}/local-trx"
+  else
+    command -v unzip >/dev/null 2>&1 || return 1
+    unzip -Z1 "$archive" 2>/dev/null | grep -qx "${staging}/local-trx.exe"
+  fi
+}
+
 if [[ -f "$DESKTOP_LINUX" ]]; then
   DESKTOP_LINUX_NAME="$(basename "$DESKTOP_LINUX")"
   DESKTOP_LINUX_SIZE="$(human_size "$(stat -c%s "$DESKTOP_LINUX")")"
   cp "$DESKTOP_LINUX" "${OUTPUT_DIR}/${DESKTOP_LINUX_NAME}"
-  echo "==> Desktop archive: ${DESKTOP_LINUX_NAME} (${DESKTOP_LINUX_SIZE})"
+  if archive_has_local_trx "$DESKTOP_LINUX" "wifilt-linux-x86_64" tar; then DESKTOP_LINUX_LTX=1; fi
+  echo "==> Desktop archive: ${DESKTOP_LINUX_NAME} (${DESKTOP_LINUX_SIZE}$([[ $DESKTOP_LINUX_LTX -eq 1 ]] && echo ", with local-trx"))"
 fi
 if [[ -f "$DESKTOP_WIN" ]]; then
   DESKTOP_WIN_NAME="$(basename "$DESKTOP_WIN")"
   DESKTOP_WIN_SIZE="$(human_size "$(stat -c%s "$DESKTOP_WIN")")"
   cp "$DESKTOP_WIN" "${OUTPUT_DIR}/${DESKTOP_WIN_NAME}"
-  echo "==> Desktop archive: ${DESKTOP_WIN_NAME} (${DESKTOP_WIN_SIZE})"
+  if archive_has_local_trx "$DESKTOP_WIN" "wifilt-windows-x64" zip; then DESKTOP_WIN_LTX=1; fi
+  echo "==> Desktop archive: ${DESKTOP_WIN_NAME} (${DESKTOP_WIN_SIZE}$([[ $DESKTOP_WIN_LTX -eq 1 ]] && echo ", with local-trx"))"
 fi
 if [[ -f "$DESKTOP_ARM64" ]]; then
   DESKTOP_ARM64_NAME="$(basename "$DESKTOP_ARM64")"
   DESKTOP_ARM64_SIZE="$(human_size "$(stat -c%s "$DESKTOP_ARM64")")"
   cp "$DESKTOP_ARM64" "${OUTPUT_DIR}/${DESKTOP_ARM64_NAME}"
-  echo "==> Desktop archive: ${DESKTOP_ARM64_NAME} (${DESKTOP_ARM64_SIZE})"
+  if archive_has_local_trx "$DESKTOP_ARM64" "wifilt-linux-arm64" tar; then DESKTOP_ARM64_LTX=1; fi
+  echo "==> Desktop archive: ${DESKTOP_ARM64_NAME} (${DESKTOP_ARM64_SIZE}$([[ $DESKTOP_ARM64_LTX -eq 1 ]] && echo ", with local-trx"))"
 fi
 # The page tells people to check the download against this, so it has to travel
 # with the downloads rather than being left behind in native/dist.
@@ -496,6 +522,31 @@ if [[ -n "$DESKTOP_LINUX_NAME" || -n "$DESKTOP_WIN_NAME" || -n "$DESKTOP_ARM64_N
   DESKTOP_SUMS_NAME="SHA256SUMS"
   cp "${ROOT_DIR}/native/dist/SHA256SUMS" "${OUTPUT_DIR}/${DESKTOP_SUMS_NAME}"
 fi
+# The "this archive also carries local-trx" paragraph, per platform. Built here
+# rather than inline in the page heredoc below: an `if` inside a $( ) inside
+# that heredoc would be a third level of nesting, and the empty string is
+# exactly what "not bundled" should contribute to the page.
+local_trx_note() {
+  cat <<'LTXNOTE'
+
+          <p class="muted">
+            This download also carries <strong>local-trx</strong> &mdash; the bridge that lets WIFILT
+            run a transceiver which is <em>not</em> a networked Icom (a Kenwood, a Yaesu, an older
+            Icom) from this computer's sound card and two USB serial adapters. It is installed
+            alongside and starts switched off, doing nothing at all until its own setup page is used.
+            See <a href="#anyrig">Not a networked Icom?</a> below.
+          </p>
+LTXNOTE
+}
+LOCAL_TRX_NOTE_LINUX=""
+LOCAL_TRX_NOTE_ARM64=""
+LOCAL_TRX_NOTE_WIN=""
+if [[ $DESKTOP_LINUX_LTX -eq 1 ]]; then LOCAL_TRX_NOTE_LINUX="$(local_trx_note)"; fi
+if [[ $DESKTOP_ARM64_LTX -eq 1 ]]; then LOCAL_TRX_NOTE_ARM64="$(local_trx_note)"; fi
+if [[ $DESKTOP_WIN_LTX   -eq 1 ]]; then LOCAL_TRX_NOTE_WIN="$(local_trx_note)"; fi
+ANY_LOCAL_TRX=0
+if [[ $DESKTOP_LINUX_LTX -eq 1 || $DESKTOP_ARM64_LTX -eq 1 || $DESKTOP_WIN_LTX -eq 1 ]]; then ANY_LOCAL_TRX=1; fi
+
 if [[ -z "$DESKTOP_LINUX_NAME" && -z "$DESKTOP_WIN_NAME" && -z "$DESKTOP_ARM64_NAME" ]]; then
   echo "==> No desktop archives for REV ${FW_REV} (run: make -C native dist)"
 fi
@@ -1214,11 +1265,18 @@ sudo ./install.sh</code></pre>
           <p class="muted">
             The installer copies the program to <code>/opt/wifilt</code> and grants it permission to
             use port&nbsp;80. That permission is not optional: ports 80, 82 and 83 are all privileged,
-            and port&nbsp;83 carries the audio, so without it JS8 and WSPR cannot work. It installs a
-            service but deliberately does not enable it &mdash; starting a transmitter's control
-            interface at boot should be your decision. To run it without installing:
-            <code>sudo ./wifilt</code> from the unpacked folder.
+            and port&nbsp;83 carries the audio, so without it JS8, RTTY, WSPR and Mercury cannot work.
+            It installs a service but deliberately does not enable it &mdash; starting a transmitter's
+            control interface at boot should be your decision.
           </p>
+          <p>Then start it, as yourself &mdash; not with <code>sudo</code>:</p>
+          <pre><code>/opt/wifilt/start-wifilt.sh</code></pre>
+          <p class="muted">
+            That opens the browser for you. If you would rather have the service:
+            <code>sudo systemctl start wifilt</code> for this boot, or
+            <code>sudo systemctl enable --now wifilt</code> for every boot. To run it without
+            installing at all: <code>sudo ./wifilt</code> from the unpacked folder.
+          </p>${LOCAL_TRX_NOTE_LINUX}
         </div>
       </details>
 LINUX
@@ -1245,11 +1303,18 @@ sudo ./install.sh</code></pre>
           <p class="muted">
             The installer copies the program to <code>/opt/wifilt</code> and grants it permission to
             use port&nbsp;80. That permission is not optional: ports 80, 82 and 83 are all privileged,
-            and port&nbsp;83 carries the audio, so without it JS8 and WSPR cannot work. It installs a
-            service but deliberately does not enable it &mdash; starting a transmitter's control
-            interface at boot should be your decision. To run it without installing:
-            <code>sudo ./wifilt</code> from the unpacked folder.
+            and port&nbsp;83 carries the audio, so without it JS8, RTTY, WSPR and Mercury cannot work.
+            It installs a service but deliberately does not enable it &mdash; starting a transmitter's
+            control interface at boot should be your decision.
           </p>
+          <p>Then start it, as yourself &mdash; not with <code>sudo</code>:</p>
+          <pre><code>/opt/wifilt/start-wifilt.sh</code></pre>
+          <p class="muted">
+            That opens the browser for you. If you would rather have the service:
+            <code>sudo systemctl start wifilt</code> for this boot, or
+            <code>sudo systemctl enable --now wifilt</code> for every boot. A Pi left running
+            headless is exactly the case the service is for.
+          </p>${LOCAL_TRX_NOTE_ARM64}
         </div>
       </details>
 RASPBERRYPI
@@ -1267,13 +1332,14 @@ $(if [[ -n "$DESKTOP_WIN_NAME" ]]; then cat <<WINDOWS
             &nbsp;&bull;&nbsp; <a href=\"${DESKTOP_SUMS_NAME}\">SHA256SUMS</a>"; fi)
           </p>
           <p>
-            Unpack the ZIP anywhere and run <code>wifilt.exe</code>. There is nothing to install and no
-            runtime to add. Windows will ask once whether to allow it through the firewall &mdash; say
-            yes, or other devices on your network will not reach it. Because the file is not
-            code-signed, SmartScreen may warn on first run; choose <em>More info</em> &rarr;
-            <em>Run anyway</em>.$(if [[ -n "$DESKTOP_SUMS_NAME" ]]; then echo " Verify the download against
+            Unpack the ZIP anywhere and run <code>start-wifilt.bat</code> &mdash; it starts the
+            program and opens the browser. (<code>wifilt.exe</code> on its own works too.) There is
+            nothing to install and no runtime to add. Windows will ask once whether to allow it
+            through the firewall &mdash; say yes, or other devices on your network will not reach it.
+            Because the file is not code-signed, SmartScreen may warn on first run; choose
+            <em>More info</em> &rarr; <em>Run anyway</em>.$(if [[ -n "$DESKTOP_SUMS_NAME" ]]; then echo " Verify the download against
             <code>SHA256SUMS</code> if you would rather not take that on trust."; fi)
-          </p>
+          </p>${LOCAL_TRX_NOTE_WIN}
         </div>
       </details>
 WINDOWS
@@ -1311,6 +1377,57 @@ fi)
           what is already done and asks only for what is missing.
         </p>
       </section>
+$(if [[ $ANY_LOCAL_TRX -eq 1 ]]; then cat <<'ANYRIG'
+
+      <hr class="divider">
+
+      <section aria-labelledby="anyrig-title" id="anyrig">
+        <h2 id="anyrig-title">Not a networked Icom?</h2>
+        <p>
+          The three steps above assume a transceiver with Network Control of its own. If yours has
+          none &mdash; a Kenwood, a Yaesu, an Icom older than the networked models, anything
+          <a href="https://hamlib.github.io/" target="_blank" rel="noopener">hamlib</a> knows &mdash;
+          the desktop downloads carry a second program that stands in for one.
+          <strong>local-trx</strong> pretends to be a networked Icom and translates each request into
+          whatever this computer is actually wired to. Nothing in WIFILT itself changes; you point it
+          at the bridge exactly as you would at a radio.
+        </p>
+        <p>You need three connections, and the last two are <em>separate</em> adapters:</p>
+        <ul>
+          <li>the computer's <strong>sound card</strong>, to the rig's audio in and out;</li>
+          <li>a <strong>CAT adapter</strong> on the rig's control port &mdash; frequency, mode, meters;</li>
+          <li>a <strong>second serial adapter</strong>, its DTR and RTS lines to the rig's
+              <strong>KEY</strong> and <strong>PTT</strong> jacks. CW, RTTY and PTT always go this
+              way, never over CAT: not every CAT dialect can send Morse, and a key jack works on
+              every rig.</li>
+        </ul>
+        <ol>
+          <li><strong>Start both programs.</strong> <code>/opt/wifilt/start-wifilt.sh</code> on Linux
+              and Raspberry&nbsp;Pi, <code>start-wifilt.bat</code> on Windows. Both pages open by
+              themselves.</li>
+          <li><strong>Set up local-trx</strong> on
+              <a href="http://localhost:8765" target="_blank" rel="noopener">http://localhost:8765</a>.
+              It ships opening no port, no serial adapter and no audio device at all. The page asks
+              for the audio devices, the CAT port and rig model, and the keying port with its
+              DTR/RTS assignment &mdash; each with a test button beside it, so you can prove the
+              wiring before going on the air. Switch it from <em>Configure</em> to <em>Run</em> and
+              press <strong>Save</strong>; saving restarts local-trx itself, because nothing is
+              applied while it runs.</li>
+          <li><strong>Point WIFILT at it.</strong> In <strong>SETUP &rarr; Radio</strong>, set TRX1 to
+              <code>ICOM-LAN</code> and tick <strong>LOCAL-TRX</strong>. On this same computer that
+              fills in the address and the rest for you; if WIFILT is on the ESP32 box instead, type
+              this computer's LAN address by hand.</li>
+        </ol>
+        <p class="muted">
+          What you give up is only what is reached by model-specific Icom commands &mdash; the
+          network MOD-level gain calibration, GPS position, the radio's own waterfall. The logbook,
+          the DX cluster, JS8, RTTY, WSPR, Mercury and the ordinary transmit-gain calibration all
+          work. The full description is
+          <a href="https://github.com/ok1hra/wifilt/blob/main/SOFTWARE.md#16-local-trx--any-radio-on-a-pc" target="_blank" rel="noopener">SOFTWARE.md&nbsp;&sect;&nbsp;1.6</a>.
+        </p>
+      </section>
+ANYRIG
+fi)
       <p class="muted legal">
         Icom is a registered trademark of Icom Incorporated. WIFILT is an independent software
         project and is not affiliated with, endorsed by, or sponsored by Icom Incorporated.

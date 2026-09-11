@@ -25,9 +25,13 @@ const DATA = path.join(ROOT, "data");
 // control of the DATA page, and the inventory has to say so, otherwise the
 // per-chapter check cannot work.
 const PAGES = {
-  "log.html":      {title: "QRPLog",  scripts: [/^log\.js$/, /^log-db\.js$/, /^log-macros\.js$/, /^log-dxc-split\.js$/, /^station-/, /^trx-help\.js$/]},
+  // log-rtty-panel.js and pa-panel.js carry their own markup and mount it at
+  // run time (the wake-lock.js pattern), so an HTML-only scan of log.html sees
+  // neither the RTTY palette nor the amplifier panel at all.
+  "log.html":      {title: "QRPLog",  scripts: [/^log\.js$/, /^log-db\.js$/, /^log-macros\.js$/, /^log-dxc-split\.js$/, /^log-rtty-panel\.js$/, /^pa-panel\.js$/, /^station-/, /^trx-help\.js$/]},
   "dxc.html":      {title: "DXC",     scripts: [/^dxcc?\.js$/]},
   "data.html":     {title: "DATA — JS8Call", scripts: [/^js8-/, /^data\.js$/, /^spectrum\.js$/, /^wake-lock\.js$/, /^lan-gate\.js$/, /^tx-/]},
+  "rtty.html":     {title: "DATA — RTTY",    scripts: [/^rtty/, /^tx-/, /^lan-gate\.js$/]},
   "wspr.html":     {title: "DATA — WSPR",    scripts: [/^wspr/, /^tx-/, /^lan-gate\.js$/]},
   "mercury.html":  {title: "DATA — Mercury",  scripts: [/^mercury/, /^tx-/, /^spectrum\.js$/, /^lan-gate\.js$/, /^icom-models\.js$/, /^js8-presets\.js$/, /^wspr-core\.js$/]},
   "setup.html":    {title: "SETUP",   scripts: [/^setup-spine\.js$/, /^icom-/, /^station-/]},
@@ -278,7 +282,10 @@ const pages = inventory();
 if (args[0] === "--json") {
   console.log(JSON.stringify(pages, null, 2));
 } else if (args[0] === "--check") {
-  process.exitCode = check(pages, args.slice(1)) ? 1 : 0;
+  // Flags are read from process.argv where they are used (--verbose, in check()),
+  // so strip them here: everything left after --check is a manual to read, and
+  // passing "--verbose" through as a filename crashed on ENOENT.
+  process.exitCode = check(pages, args.slice(1).filter((a) => !a.startsWith("--"))) ? 1 : 0;
 } else {
   let n = 0;
   for (const [, {title, items}] of Object.entries(pages)) {
