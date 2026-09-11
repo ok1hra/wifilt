@@ -241,7 +241,7 @@
     <div class="card">
       <h1>WIFILT<span class="tagline">Web interface for Icom LAN Transceivers</span></h1>
       <p class="subtitle">
-        Firmware installer &mdash; version <code>20260907</code> &nbsp;&bull;&nbsp;
+        Firmware installer &mdash; version <code>20260911</code> &nbsp;&bull;&nbsp;
         <a href="https://github.com/ok1hra/wifilt" target="_blank">GitHub</a>
       </p>
 
@@ -279,7 +279,7 @@
           <strong>A radio already on your network</strong> &mdash; an IC-705, IC-7610 or
           IC-7300&nbsp;MK2 with <strong>Network&nbsp;Control</strong> switched on &mdash; needs no
           hardware at all. The program on your computer reaches it over IP, and it is the same
-          software as the firmware, version <code>20260907</code>.
+          software as the firmware, version <code>20260911</code>.
         </p>
         <p>
           <strong>The interface board adds what a computer cannot do</strong>: the CI-V serial
@@ -388,7 +388,7 @@
         </ul>
 
         <div class="cta gate" id="flashGate-esp32" data-locked="1">
-          <esp-web-install-button manifest="manifest.json?v=20260907" baudrate="9600"></esp-web-install-button>
+          <esp-web-install-button manifest="manifest.json?v=20260911" baudrate="9600"></esp-web-install-button>
         </div>
         <p class="gate-note" id="gateNote-esp32">Answer the question above to continue.</p>
 
@@ -439,7 +439,7 @@
           lets your settings survive an update.
         </p>
         <p class="muted">
-          For manual flashing there is <code>wifilt-20260907-full.bin</code> at offset <code>0x0</code>
+          For manual flashing there is <code>wifilt-20260911-full.bin</code> at offset <code>0x0</code>
           with <code>esptool.py</code>. <strong>That one erases everything</strong> &mdash; it is a whole-chip
           image, so it overwrites the WiFi credentials in NVS and the configuration partition
           as well. Use it to recover a board that will not boot, not to update a working one.
@@ -550,7 +550,7 @@
         </ul>
 
         <div class="cta gate" id="flashGate-m5atom" data-locked="1">
-          <esp-web-install-button manifest="manifest-m5atom.json?v=20260907" baudrate="9600"></esp-web-install-button>
+          <esp-web-install-button manifest="manifest-m5atom.json?v=20260911" baudrate="9600"></esp-web-install-button>
         </div>
         <p class="gate-note" id="gateNote-m5atom">Answer the question above to continue.</p>
 
@@ -597,7 +597,7 @@
           lets your settings survive an update.
         </p>
         <p class="muted">
-          For manual flashing there is <code>wifilt-20260907-m5atom-full.bin</code> at offset <code>0x0</code>
+          For manual flashing there is <code>wifilt-20260911-m5atom-full.bin</code> at offset <code>0x0</code>
           with <code>esptool.py</code>. <strong>That one erases everything</strong> &mdash; it is a whole-chip
           image, so it overwrites the WiFi credentials in NVS and the configuration partition
           as well. Use it to recover a board that will not boot, not to update a working one.
@@ -612,20 +612,34 @@
         </summary>
         <div class="platform-body">
           <p class="dl-line">
-            <a href="wifilt-20260907-linux-x86_64.tar.gz"><strong>wifilt-20260907-linux-x86_64.tar.gz</strong></a>
+            <a href="wifilt-20260911-linux-x86_64.tar.gz"><strong>wifilt-20260911-linux-x86_64.tar.gz</strong></a>
             &nbsp;&bull;&nbsp; Linux x86-64, 3.3 MB
             &nbsp;&bull;&nbsp; <a href="SHA256SUMS">SHA256SUMS</a>
           </p>
-          <pre><code>tar xzf wifilt-20260907-linux-x86_64.tar.gz
+          <pre><code>tar xzf wifilt-20260911-linux-x86_64.tar.gz
 cd wifilt-linux-x86_64
 sudo ./install.sh</code></pre>
           <p class="muted">
             The installer copies the program to <code>/opt/wifilt</code> and grants it permission to
             use port&nbsp;80. That permission is not optional: ports 80, 82 and 83 are all privileged,
-            and port&nbsp;83 carries the audio, so without it JS8 and WSPR cannot work. It installs a
-            service but deliberately does not enable it &mdash; starting a transmitter's control
-            interface at boot should be your decision. To run it without installing:
-            <code>sudo ./wifilt</code> from the unpacked folder.
+            and port&nbsp;83 carries the audio, so without it JS8, RTTY, WSPR and Mercury cannot work.
+            It installs a service but deliberately does not enable it &mdash; starting a transmitter's
+            control interface at boot should be your decision.
+          </p>
+          <p>Then start it, as yourself &mdash; not with <code>sudo</code>:</p>
+          <pre><code>/opt/wifilt/start-wifilt.sh</code></pre>
+          <p class="muted">
+            That opens the browser for you. If you would rather have the service:
+            <code>sudo systemctl start wifilt</code> for this boot, or
+            <code>sudo systemctl enable --now wifilt</code> for every boot. To run it without
+            installing at all: <code>sudo ./wifilt</code> from the unpacked folder.
+          </p>
+          <p class="muted">
+            This download also carries <strong>local-trx</strong> &mdash; the bridge that lets WIFILT
+            run a transceiver which is <em>not</em> a networked Icom (a Kenwood, a Yaesu, an older
+            Icom) from this computer's sound card and two USB serial adapters. It is installed
+            alongside and starts switched off, doing nothing at all until its own setup page is used.
+            See <a href="#anyrig">Not a networked Icom?</a> below.
           </p>
         </div>
       </details>
@@ -636,7 +650,7 @@ sudo ./install.sh</code></pre>
         </summary>
         <div class="platform-body">
           <p class="dl-line">
-            <a href="wifilt-20260907-linux-arm64.tar.gz"><strong>wifilt-20260907-linux-arm64.tar.gz</strong></a>
+            <a href="wifilt-20260911-linux-arm64.tar.gz"><strong>wifilt-20260911-linux-arm64.tar.gz</strong></a>
             &nbsp;&bull;&nbsp; Linux ARM64 (aarch64), 7.6 MB
             &nbsp;&bull;&nbsp; <a href="SHA256SUMS">SHA256SUMS</a>
           </p>
@@ -644,16 +658,30 @@ sudo ./install.sh</code></pre>
             Needs a <strong>64-bit</strong> Raspberry Pi OS (aarch64) &mdash; Pi&nbsp;3, 4, 5 or
             newer. The 32-bit (armhf) Raspberry Pi OS cannot run this build.
           </p>
-          <pre><code>tar xzf wifilt-20260907-linux-arm64.tar.gz
+          <pre><code>tar xzf wifilt-20260911-linux-arm64.tar.gz
 cd wifilt-linux-arm64
 sudo ./install.sh</code></pre>
           <p class="muted">
             The installer copies the program to <code>/opt/wifilt</code> and grants it permission to
             use port&nbsp;80. That permission is not optional: ports 80, 82 and 83 are all privileged,
-            and port&nbsp;83 carries the audio, so without it JS8 and WSPR cannot work. It installs a
-            service but deliberately does not enable it &mdash; starting a transmitter's control
-            interface at boot should be your decision. To run it without installing:
-            <code>sudo ./wifilt</code> from the unpacked folder.
+            and port&nbsp;83 carries the audio, so without it JS8, RTTY, WSPR and Mercury cannot work.
+            It installs a service but deliberately does not enable it &mdash; starting a transmitter's
+            control interface at boot should be your decision.
+          </p>
+          <p>Then start it, as yourself &mdash; not with <code>sudo</code>:</p>
+          <pre><code>/opt/wifilt/start-wifilt.sh</code></pre>
+          <p class="muted">
+            That opens the browser for you. If you would rather have the service:
+            <code>sudo systemctl start wifilt</code> for this boot, or
+            <code>sudo systemctl enable --now wifilt</code> for every boot. A Pi left running
+            headless is exactly the case the service is for.
+          </p>
+          <p class="muted">
+            This download also carries <strong>local-trx</strong> &mdash; the bridge that lets WIFILT
+            run a transceiver which is <em>not</em> a networked Icom (a Kenwood, a Yaesu, an older
+            Icom) from this computer's sound card and two USB serial adapters. It is installed
+            alongside and starts switched off, doing nothing at all until its own setup page is used.
+            See <a href="#anyrig">Not a networked Icom?</a> below.
           </p>
         </div>
       </details>
@@ -664,17 +692,25 @@ sudo ./install.sh</code></pre>
         </summary>
         <div class="platform-body">
           <p class="dl-line">
-            <a href="wifilt-20260907-windows-x64.zip"><strong>wifilt-20260907-windows-x64.zip</strong></a>
+            <a href="wifilt-20260911-windows-x64.zip"><strong>wifilt-20260911-windows-x64.zip</strong></a>
             &nbsp;&bull;&nbsp; Windows x64, 8.4 MB
             &nbsp;&bull;&nbsp; <a href="SHA256SUMS">SHA256SUMS</a>
           </p>
           <p>
-            Unpack the ZIP anywhere and run <code>wifilt.exe</code>. There is nothing to install and no
-            runtime to add. Windows will ask once whether to allow it through the firewall &mdash; say
-            yes, or other devices on your network will not reach it. Because the file is not
-            code-signed, SmartScreen may warn on first run; choose <em>More info</em> &rarr;
-            <em>Run anyway</em>. Verify the download against
+            Unpack the ZIP anywhere and run <code>start-wifilt.bat</code> &mdash; it starts the
+            program and opens the browser. (<code>wifilt.exe</code> on its own works too.) There is
+            nothing to install and no runtime to add. Windows will ask once whether to allow it
+            through the firewall &mdash; say yes, or other devices on your network will not reach it.
+            Because the file is not code-signed, SmartScreen may warn on first run; choose
+            <em>More info</em> &rarr; <em>Run anyway</em>. Verify the download against
             <code>SHA256SUMS</code> if you would rather not take that on trust.
+          </p>
+          <p class="muted">
+            This download also carries <strong>local-trx</strong> &mdash; the bridge that lets WIFILT
+            run a transceiver which is <em>not</em> a networked Icom (a Kenwood, a Yaesu, an older
+            Icom) from this computer's sound card and two USB serial adapters. It is installed
+            alongside and starts switched off, doing nothing at all until its own setup page is used.
+            See <a href="#anyrig">Not a networked Icom?</a> below.
           </p>
         </div>
       </details>
@@ -709,6 +745,54 @@ sudo ./install.sh</code></pre>
           The rest of the road above &mdash; identity, the transmit check, this browser's own
           settings &mdash; the SETUP page walks you through step by step. It works out on its own
           what is already done and asks only for what is missing.
+        </p>
+      </section>
+
+      <hr class="divider">
+
+      <section aria-labelledby="anyrig-title" id="anyrig">
+        <h2 id="anyrig-title">Not a networked Icom?</h2>
+        <p>
+          The three steps above assume a transceiver with Network Control of its own. If yours has
+          none &mdash; a Kenwood, a Yaesu, an Icom older than the networked models, anything
+          <a href="https://hamlib.github.io/" target="_blank" rel="noopener">hamlib</a> knows &mdash;
+          the desktop downloads carry a second program that stands in for one.
+          <strong>local-trx</strong> pretends to be a networked Icom and translates each request into
+          whatever this computer is actually wired to. Nothing in WIFILT itself changes; you point it
+          at the bridge exactly as you would at a radio.
+        </p>
+        <p>You need three connections, and the last two are <em>separate</em> adapters:</p>
+        <ul>
+          <li>the computer's <strong>sound card</strong>, to the rig's audio in and out;</li>
+          <li>a <strong>CAT adapter</strong> on the rig's control port &mdash; frequency, mode, meters;</li>
+          <li>a <strong>second serial adapter</strong>, its DTR and RTS lines to the rig's
+              <strong>KEY</strong> and <strong>PTT</strong> jacks. CW, RTTY and PTT always go this
+              way, never over CAT: not every CAT dialect can send Morse, and a key jack works on
+              every rig.</li>
+        </ul>
+        <ol>
+          <li><strong>Start both programs.</strong> <code>/opt/wifilt/start-wifilt.sh</code> on Linux
+              and Raspberry&nbsp;Pi, <code>start-wifilt.bat</code> on Windows. Both pages open by
+              themselves.</li>
+          <li><strong>Set up local-trx</strong> on
+              <a href="http://localhost:8765" target="_blank" rel="noopener">http://localhost:8765</a>.
+              It ships opening no port, no serial adapter and no audio device at all. The page asks
+              for the audio devices, the CAT port and rig model, and the keying port with its
+              DTR/RTS assignment &mdash; each with a test button beside it, so you can prove the
+              wiring before going on the air. Switch it from <em>Configure</em> to <em>Run</em> and
+              press <strong>Save</strong>; saving restarts local-trx itself, because nothing is
+              applied while it runs.</li>
+          <li><strong>Point WIFILT at it.</strong> In <strong>SETUP &rarr; Radio</strong>, set TRX1 to
+              <code>ICOM-LAN</code> and tick <strong>LOCAL-TRX</strong>. On this same computer that
+              fills in the address and the rest for you; if WIFILT is on the ESP32 box instead, type
+              this computer's LAN address by hand.</li>
+        </ol>
+        <p class="muted">
+          What you give up is only what is reached by model-specific Icom commands &mdash; the
+          network MOD-level gain calibration, GPS position, the radio's own waterfall. The logbook,
+          the DX cluster, JS8, RTTY, WSPR, Mercury and the ordinary transmit-gain calibration all
+          work. The full description is
+          <a href="https://github.com/ok1hra/wifilt/blob/main/SOFTWARE.md#16-local-trx--any-radio-on-a-pc" target="_blank" rel="noopener">SOFTWARE.md&nbsp;&sect;&nbsp;1.6</a>.
         </p>
       </section>
       <p class="muted legal">
