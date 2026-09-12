@@ -26,7 +26,7 @@ function sessionReply(res,status){res.writeHead(status,{"Content-Type":"applicat
 // and millis() starts over. Any arm/extend brings the fixture back, exactly like
 // the firmware would; revoke leaves it as it was, so the revoke check below is
 // unaffected by this switch.
-let unaReboot=false;
+let unaReboot=false, unaRefuse=false;
 function unattendedState(){return{armed:!unaReboot,remainingMs:unaReboot?0:43200000,clientLive:false,clientAgeMs:31000,clientSeen:true,blockedLiveness:2,blockedNotArmed:0,livenessTimeoutMs:5000,ptt:false,txState:0,txUsed:0,txCapacity:12288,rxPackets:5,lan:true,upMs:unaReboot?1200:90500,choicesH:[1,6,12,24,168]};}
 let lanStateRequests=0, primaryStateRequests=0, primaryCommands=[];
 // The radio's own power level and link, as far as this fixture is concerned.
@@ -78,6 +78,10 @@ const server=http.createServer((req,res)=>{
   if(url.pathname==="/js8/session/ping"&&req.method==="POST"){return sessionBody(req,res,(body)=>{if(session.token&&!sessionOwns(body.token))return sessionReply(res,409);session.token=body.token||"";sessionReply(res,200);});}
   if(url.pathname==="/js8/session/release"&&req.method==="POST"){return sessionBody(req,res,(body)=>{if(sessionOwns(body.token)){session.token="";session.releases++;}res.writeHead(200,{"Content-Type":"application/json"});res.end('{"ok":true}');});}
   if(url.pathname==="/fixture/unattended-reboot"&&req.method==="POST"){unaReboot=true;res.setHeader("Content-Type","application/json");res.end('{"ok":true}');return;}
+  // A firmware that answers the arming with an error. The page must keep the
+  // switch where the operator put it and say so where the operator can see it.
+  if(url.pathname==="/fixture/unattended-refuse"&&req.method==="POST"){unaRefuse=true;res.setHeader("Content-Type","application/json");res.end('{"ok":true}');return;}
+  if(url.pathname==="/fixture/unattended-accept"&&req.method==="POST"){unaRefuse=false;res.setHeader("Content-Type","application/json");res.end('{"ok":true}');return;}
   // The APRS-IS gate's two firmware routes, answering the way wifilt.ino does:
   // the passcode is checked before anything is "sent", the frame is built here so
   // the page cannot smuggle its own, and the verdict arrives separately through
@@ -116,6 +120,7 @@ const server=http.createServer((req,res)=>{
   // What the page actually wrote back, so the migration can be asserted on the
   // wire rather than on the mirror it lives in.
   if(url.pathname==="/fixture/msgbox-writes"){res.setHeader("Content-Type","application/json");res.end(JSON.stringify({count:inboxWrites.length,last:inboxWrites[inboxWrites.length-1]||""}));return;}
+  if(url.pathname==="/unattended"&&req.method==="POST"&&unaRefuse){res.writeHead(503,{"Content-Type":"application/json"});res.end('{"ok":false}');return;}
   if(url.pathname==="/unattended"&&req.method==="POST"){let body="";req.on("data",c=>body+=c);req.on("end",()=>{try{const post=JSON.parse(body);unattendedPosts.push({...post,afterReboot:unaReboot});if(post.action==="arm"||post.action==="extend")unaReboot=false;}catch(_error){}res.setHeader("Content-Type","application/json");res.end(JSON.stringify(unattendedState()));});return;}
   if(url.pathname==="/unattended"){res.setHeader("Content-Type","application/json");res.end(JSON.stringify(unattendedState()));return;}
   if(url.pathname==="/unattended/log"){res.setHeader("Content-Type","text/plain");res.end("1200 ARM 12 h\n90500 BLOCK liveness lost before keying\n");return;}
@@ -1032,6 +1037,15 @@ f.onload=()=>{
       // CQ interval selector: values offered and the setting applied.
       const cqSel=d.querySelector('#cqRepeat');
       const cqFlag=()=>[...d.querySelectorAll('#settingsFlags .summary-flag')].find(node=>node.textContent.trim()==='CQ');
+      // The CQ pill switches an interval, not a boolean. With nothing ever chosen
+      // it falls back to 10 min -- checked here, because the menu below teaches the
+      // page a value of its own and after that this fallback is unobservable.
+      const cqPillFirst=[...d.querySelectorAll('#settingsFlags .summary-flag')]
+        .find(node=>node.textContent.trim().startsWith('CQ'));
+      cqPillFirst.click();
+      const cqPillDefault=cqSel.value;
+      cqPillFirst.click();
+      const cqPillOff=cqSel.value;
       cqSel.value='5'; cqSel.dispatchEvent(new f.contentWindow.Event('change',{bubbles:true}));
       checks.cqIntervalWiring=[...cqSel.options].map(o=>o.value).join(',')==='0,2,5,10,15'&&
         d.querySelector('#cqState').textContent.includes('5 min');
@@ -1057,7 +1071,11 @@ f.onload=()=>{
       const flagText=key=>flagNodes.find(node=>node.textContent.trim().startsWith(key))?.textContent.trim()||'';
       checks.settingsFlags=flagKeys==='TX,AUTO,CQ,HB,ACK,IGATE'&&hhMmTail(flagText('AUTO'))&&hhMmTail(flagText('HB'))&&
         cqFlagOn&&cqFlag()?.classList.contains('on')===false&&
-        !d.querySelector('#settingsFlags button,#settingsFlags input,#settingsFlags a');
+        // Grilled 2026-09-12: the row is the switch as well as the readout, so the
+        // assertion that used to forbid anything clickable in the header is
+        // inverted -- every pill is a <button> that reports its state to a reader.
+        flagNodes.every(node=>node.tagName==='BUTTON'&&node.type==='button'&&
+          node.getAttribute('aria-pressed')===String(node.classList.contains('on')));
       // Turning Radio TX off must stand down every TX-dependent pill (AUTO/CQ/HB/ACK):
       // none of them can reach the air without it, so a lit pill would promise a
       // function that cannot fire. TX itself reads off; the dependents name the reason
@@ -1074,14 +1092,118 @@ f.onload=()=>{
       // wrongly grouped with the transmitting switches.
       dt.aprsGateSet({enabled:true,call:'OK1HRA-10',
         passcode:f.contentWindow.Js8AprsGate.passcode('OK1HRA-10')});
+      const flagBlocked=key=>[...d.querySelectorAll('#settingsFlags .summary-flag')]
+        .find(node=>node.textContent.trim().startsWith(key))?.getAttribute('aria-disabled')==='true';
       checks.settingsFlagsTxGate=flagOn('TX')===false&&flagOn('AUTO')===false&&flagOn('CQ')===false&&
         flagOn('HB')===false&&flagOn('ACK')===false&&flagTip('AUTO').includes('needs Radio TX')&&
-        flagOn('IGATE')===true;
+        flagOn('IGATE')===true&&
+        // Standing down is not only a colour now: the dependent pills refuse to
+        // switch while Radio TX is off, and the gate -- which never keys the
+        // transmitter -- must not be caught up in it.
+        flagBlocked('AUTO')&&flagBlocked('CQ')&&flagBlocked('HB')&&flagBlocked('ACK')&&
+        flagBlocked('TX')===false&&flagBlocked('IGATE')===false;
       dt.aprsGateSet({enabled:false});
       // Restore Radio TX (the manual-TX checks below expect it on) and the CQ selector.
       txSafetyBox.checked=true; txSafetyBox.dispatchEvent(new f.contentWindow.Event('change',{bubbles:true}));
       cqSel.value='0'; cqSel.dispatchEvent(new f.contentWindow.Event('change',{bubbles:true}));
       if(!hbFlagWas){hbFlag.click();}
+
+      // ---- SETTINGS header pills as controls (grilled 2026-09-12) -------------
+      // Everything below drives the page the way a finger does: click the pill,
+      // read the checkbox inside the section. The section is held closed on
+      // purpose -- a pill click that unrolls the panel under the finger is the
+      // bug onSettingsFlagClick's stopPropagation exists to prevent.
+      const settingsDetails=d.querySelector('[data-section="settings"]');
+      const flagPill=key=>[...d.querySelectorAll('#settingsFlags .summary-flag')]
+        .find(node=>node.textContent.trim().startsWith(key));
+      const revealed=id=>d.querySelector(id).closest('label').classList.contains('setting-reveal');
+      settingsDetails.open=false;
+      const hbBox=d.querySelector('#hbEnabled'), ackBox=d.querySelector('#hbAck');
+      const hbWas=hbBox.checked, ackWas=ackBox.checked;
+      flagPill('HB').click();
+      const hbToggled=hbBox.checked===!hbWas&&settingsDetails.open===false;
+      flagPill('HB').click();
+      flagPill('ACK').click();
+      const ackToggled=ackBox.checked===!ackWas;
+      flagPill('ACK').click();
+      checks.settingsFlagsToggle=hbToggled&&ackToggled&&
+        hbBox.checked===hbWas&&ackBox.checked===ackWas;
+
+      // ...and once a value has been in force, that is the one it comes back to:
+      // 5 min chosen in the menu, switched off, and the pill brings 5 back rather
+      // than the default. (cqPillDefault/cqPillOff were measured further up, on a
+      // page that had never had CQ on.)
+      cqSel.value='5'; cqSel.dispatchEvent(new f.contentWindow.Event('change',{bubbles:true}));
+      cqSel.value='0'; cqSel.dispatchEvent(new f.contentWindow.Event('change',{bubbles:true}));
+      flagPill('CQ').click();
+      checks.settingsFlagsCqPill=cqPillDefault==='10'&&cqPillOff==='0'&&cqSel.value==='5';
+      flagPill('CQ').click();
+
+      // Radio TX asks twice, and only on the way ON: stopping a transmitter is one
+      // click, starting one is a deliberate second. Anything else clicked in the
+      // header stands the armed TX? down again.
+      flagPill('TX').click();
+      const txOffAtOnce=txSafetyBox.checked===false;
+      flagPill('TX').click();
+      const txArmed=flagPill('TX').textContent.trim()==='TX?'&&txSafetyBox.checked===false;
+      settingsDetails.querySelector('summary').click();
+      const txStoodDown=flagPill('TX').textContent.trim()==='TX'&&txSafetyBox.checked===false;
+      settingsDetails.open=false;
+      flagPill('TX').click(); flagPill('TX').click();
+      checks.settingsFlagsTxConfirm=txOffAtOnce&&txArmed&&txStoodDown&&txSafetyBox.checked===true;
+
+      // With Radio TX off the dependent pills do not switch anything: the click
+      // goes to the switch that has to come first and unrolls SETTINGS at it.
+      flagPill('TX').click();
+      settingsDetails.open=false;
+      const autoBox=d.querySelector('#autoReply'), autoPillWas=autoBox.checked;
+      flagPill('AUTO').click();
+      checks.settingsFlagsBlocked=autoBox.checked===autoPillWas&&settingsDetails.open===true&&
+        revealed('#txSafety');
+      settingsDetails.open=false;
+      flagPill('TX').click(); flagPill('TX').click();
+
+      // The gate switches on from the header only when it could actually gate.
+      // With the passcode missing the click stores nothing and opens SETTINGS at
+      // the field that is missing -- the pill follows readiness, so an "enabled"
+      // gate with a bad login would look identical to a working one out here.
+      dt.aprsGateSet({enabled:false,call:'OK1HRA-10',passcode:''});
+      settingsDetails.open=false;
+      flagPill('IGATE').click();
+      const gateRefused=dt.aprsGateConfig().enabled===false&&settingsDetails.open===true&&
+        revealed('#aprsGatePass')&&d.activeElement&&d.activeElement.id==='aprsGatePass';
+      dt.aprsGateSet({passcode:f.contentWindow.Js8AprsGate.passcode('OK1HRA-10')});
+      settingsDetails.open=false;
+      flagPill('IGATE').click();
+      checks.settingsFlagsIgatePill=gateRefused&&dt.aprsGateConfig().enabled===true&&
+        settingsDetails.open===false;
+      flagPill('IGATE').click();
+      dt.aprsGateSet({enabled:false});
+
+      // A firmware that refuses the arming leaves the switch where the operator put
+      // it (armUnattended's own rule) and explains itself in #autoState -- which is
+      // inside the closed section, so the pill has to open it there.
+      if(autoBox.checked)flagPill('AUTO').click();
+      await new Promise(resolve=>setTimeout(resolve,200));
+      await fetch('/fixture/unattended-refuse',{method:'POST'});
+      settingsDetails.open=false;
+      flagPill('AUTO').click();
+      await new Promise(resolve=>setTimeout(resolve,400));
+      checks.settingsFlagsAutoRefusal=autoBox.checked===true&&settingsDetails.open===true&&
+        revealed('#armHours')&&d.querySelector('#autoState').textContent.includes('did not confirm');
+      await fetch('/fixture/unattended-accept',{method:'POST'});
+      settingsDetails.open=false;
+      // Back to the state the checks below expect: AUTO on and armed for real.
+      if(!autoBox.checked)flagPill('AUTO').click();
+      await dt.unattendedPoll();
+      // Same hygiene as every other block that can provoke a transmission: flipping
+      // HB and AUTO above can arm a beacon, and a queued one keys up in the middle
+      // of a later timing check (the flapping heartbeatTx the note further down
+      // describes).
+      dt.clearTxQueue();
+      dt.clearTxCaptured();
+      d.querySelector('#abortButton').click();
+      await new Promise(resolve=>setTimeout(resolve,120));
 
       // Multi-frame reassembly: a fully assembled, checksum-verified MSG message
       // must be stored; a checksum-failed one must be dropped. This is the real

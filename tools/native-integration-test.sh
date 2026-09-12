@@ -4,8 +4,9 @@
 #
 # Starts the fake ICOM radio, starts the binary pointed at it, and asserts the
 # whole chain works: the RS-BA1 handshake, CI-V reaching /state as a frequency,
-# and -- when ports below 1024 can be bound -- the AUD1 audio WebSocket carrying
-# an intact tone.
+# a teardown that releases the radio on both channels so an in-place reconnect
+# still gets CI-V, and -- when ports below 1024 can be bound -- the AUD1 audio
+# WebSocket carrying an intact tone.
 #
 # This is what makes "CI builds both targets" mean something. CI has no IC-705,
 # so without a fake one the entire LAN and audio path would be untested on every
@@ -87,7 +88,9 @@ cat > "$WORK/radio-config.json" <<EOF
 EOF
 
 echo "== starting fake radio on $RADIO_IP =="
-python3 "$ROOT/tools/icom-lan-fake-radio.py" --ip "$RADIO_IP" --seconds 120 \
+# 180, not 120: the teardown/reconnect round at the end of this script needs a
+# second full session after everything above has already run.
+python3 "$ROOT/tools/icom-lan-fake-radio.py" --ip "$RADIO_IP" --seconds 180 \
   > "$WORK/radio.log" 2>&1 &
 FAKE_PID=$!
 
@@ -207,6 +210,47 @@ else
   echo
   echo "  SKIP dx cluster relay -- port 82 not bound (same setcap)"
 fi
+
+# ---- teardown: the session must be given back on BOTH channels ---------------
+#
+# The radio keys its CI-V conversation to our fixed local port 50002, and a
+# logout sent only on the control channel parks that conversation instead of
+# ending it: the radio stops pinging, nothing expires it, and every later session
+# from the same port is answered on the control channel while no CI-V data ever
+# arrives. That cost an operator a working link for an evening (Changelog,
+# FW 20260912) and it had already been diagnosed and half-fixed once before, in
+# 2521448 -- which is why it is asserted here rather than trusted to a comment.
+#
+# POST /lan/reconnect is the real operator path: lanClientLoop() calls stop() and
+# then begin() on the same local ports, exactly as SETUP's radio scan, "Test &
+# identify radio" and a radio-config save do.
+echo
+echo "== teardown and in-place reconnect =="
+CIV_BYE_BEFORE=$(grep -c '^\[civ\] <- Disconnect' "$WORK/radio.log")
+curl -s -m 3 -o /dev/null -X POST "http://127.0.0.1:$HTTP_PORT/lan/reconnect"
+sleep 3
+CIV_BYE_AFTER=$(grep -c '^\[civ\] <- Disconnect' "$WORK/radio.log")
+check "teardown says goodbye on the CI-V channel" \
+      "$([[ $CIV_BYE_AFTER -gt $CIV_BYE_BEFORE ]] && echo 1 || echo 0)"
+check "teardown says goodbye on the control channel" \
+      "$(grep -q '^\[ctl\] <- Disconnect' "$WORK/radio.log" && echo 1 || echo 0)"
+
+FREQ2=0
+for _ in $(seq 1 30); do
+  sleep 1
+  FREQ2=$(curl -s -m 3 "http://127.0.0.1:$HTTP_PORT/state" 2>/dev/null \
+          | sed -n 's/.*"frequency":\([0-9]*\).*/\1/p')
+  [[ "${FREQ2:-0}" == "7035920" ]] && break
+done
+check "CI-V comes back on the same local ports" \
+      "$([[ "${FREQ2:-0}" == "7035920" ]] && echo 1 || echo 0)"
+# begin() zeroes civPort while leaving the civ progress flags set from the
+# previous session, and the ESP32 core's beginPacket() on port 0 returns before
+# allocating the buffer that write() then dereferences. The native UDP shim is
+# immune, so this only proves the sequence is survived -- the guard itself is
+# `civGotHere && civPort` plus the flag reset in stop().
+check "binary survived the teardown" \
+      "$(kill -0 "$APP_PID" 2>/dev/null && echo 1 || echo 0)"
 
 echo
 if [[ $FAILURES -eq 0 ]]; then

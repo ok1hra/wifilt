@@ -44,11 +44,13 @@
   // Only ever used to pick a first width, when nothing is stored yet.
   var FIRST_FRAC = 0.42;
 
-  var split   = document.getElementById('logSplit');
-  var left    = document.getElementById('logSplitLeft');
-  var gutter  = document.getElementById('logSplitGutter');
-  var right   = document.getElementById('logSplitRight');
-  var tabDxc  = document.getElementById('tabDxc');
+  var split     = document.getElementById('logSplit');
+  var left      = document.getElementById('logSplitLeft');
+  var gutter    = document.getElementById('logSplitGutter');
+  var right     = document.getElementById('logSplitRight');
+  var tabDxc    = document.getElementById('tabDxc');
+  var tabs      = document.querySelector('.tabs');
+  var statusBox = document.getElementById('topbarFw');   // GPS | dBm | FW
 
   var open     = false;
   // The width the operator asked for, in PIXELS, unclamped -- see the sizing
@@ -114,6 +116,44 @@
     left.style.flexBasis = clampLeft(wantLeft) + 'px';
   }
 
+  // ── Topbar status block ───────────────────────────────────────────────────
+  //
+  // GPS, signal strength, the OFFLINE badge and the firmware version share the
+  // tab row, and that row does not wrap -- a second line of topbar comes
+  // straight out of the journal's height. The first version of the split
+  // simply hid the block whenever the split was open, which took the OFFLINE
+  // warning and the GPS panel away from the operator even on a 1920 screen
+  // where everything fitted with room to spare.
+  //
+  // What replaces it is measured rather than written down here, because none
+  // of the terms are constant: the tab labels come from the page, the block's
+  // own width follows what the radio reports (GPS chip or not, `⚠ OFFLINE`
+  // instead of dBm, an available-update arrow behind the version), and the
+  // width they have to fit into is whatever the operator left the divider at.
+  // log.css:248 documents the two classes and the order they come in.
+
+  function tabsOverflow() {
+    // +1: sub-pixel layout means a row that fits exactly can measure a
+    // fraction wider than its box.
+    return tabs.scrollWidth > tabs.clientWidth + 1;
+  }
+
+  function applyTopbar() {
+    if (!tabs) return;
+    var cls = document.body.classList;
+    // Measure with the whole block shown, always. "Does it fit" has one
+    // answer; "does it fit given what is already hidden" has two, and asking
+    // the second one makes the row flap between them.
+    cls.remove('log-split-fw-off');
+    cls.remove('log-split-status-off');
+    if (!(open && wide()) || !tabsOverflow()) return;
+    cls.add('log-split-fw-off');
+    if (!tabsOverflow()) return;
+    // The version alone was not enough; nothing here is worth a clipped tab.
+    cls.remove('log-split-fw-off');
+    cls.add('log-split-status-off');
+  }
+
   // ── Mount / unmount ───────────────────────────────────────────────────────
   //
   // close() REMOVES the iframe rather than hiding it. A hidden-but-alive frame
@@ -147,6 +187,7 @@
     document.body.classList.toggle('log-split-on', on);
     if (tabDxc) tabDxc.classList.toggle('tab-split-on', on);
     if (on) { mount(); applyWidth(); } else { unmount(); left.style.flexBasis = ''; }
+    applyTopbar();
   }
 
   function doOpen() {
@@ -200,6 +241,10 @@
       var box = split.getBoundingClientRect();
       wantLeft = ev.clientX - box.left;
       left.style.flexBasis = clampLeft(wantLeft) + 'px';
+      // Per move, because the topbar is what the operator is looking at while
+      // they drag. Two forced reflows of one flex row is nothing next to the
+      // relayout the flex-basis write already costs.
+      applyTopbar();
     }
 
     function onUp(ev) {
@@ -230,6 +275,7 @@
     e.preventDefault();
     wantLeft = clampLeft(wantLeft);
     applyWidth();
+    applyTopbar();
     save();
   }
 
@@ -240,7 +286,17 @@
     paint();
     gutter.addEventListener('pointerdown', onDown);
     gutter.addEventListener('keydown', onKey);
-    global.addEventListener('resize', applyWidth);
+    global.addEventListener('resize', function () { applyWidth(); applyTopbar(); });
+    // fw-version.js rebuilds the status block from /state every 5 s and its
+    // width changes with it -- the radio starts reporting a GPS fix, the link
+    // drops and `⚠ OFFLINE` appears, a newer firmware adds " -> 20260910 ▲".
+    // Without this the row would only be measured correctly until the next
+    // poll changed its mind. Safe against a loop: applyTopbar() writes classes
+    // on <body> and never touches this subtree.
+    if (statusBox && global.MutationObserver) {
+      new global.MutationObserver(function () { applyTopbar(); })
+        .observe(statusBox, { childList: true, subtree: true, characterData: true });
+    }
     try {
       var mq = global.matchMedia('(min-width: ' + MIN_VIEW + 'px)');
       if (mq.addEventListener) mq.addEventListener('change', applyViewport);

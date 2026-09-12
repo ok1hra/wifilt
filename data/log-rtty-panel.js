@@ -56,6 +56,11 @@
   var SESSION_PING_MS = 5000, SESSION_RETRY_MS = 3000, SESSION_PROBE_MS = 250;
   var SESSION_TOKEN_KEY = 'js8lan.session.token.v1';
   var RX_LOG_MAX_CHARS = 6000;   // a palette, not the page: less scrollback
+  // Silence long enough to count as a new reception, for the RX log's own
+  // separator -- see decoder.onChar() below for why this palette cannot use
+  // the squelch edge the full page uses. Three seconds is about eighteen
+  // Baudot characters at 45.45 Bd, so it never breaks mid-transmission.
+  var RX_GAP_BREAK_MS = 3000;
   // 320 is spectrum.js's own minWidth, so the waterfall's backing store is
   // never stretched. At the 500-2700 Hz base window that is 6.9 Hz/px, and a
   // 170 Hz shift lands 25 px apart -- comfortably clickable.
@@ -209,18 +214,76 @@
   // followed live: `storage` fires in THIS document when another tab writes, so
   // changing the tone or squelch on the full page lands here without a reload.
   // This palette never writes them -- it has no settings UI by design.
+  //
+  // TWO objects, since 2026-09-10. `stored` is that shared store verbatim.
+  // `effective` is what this palette's decoder, waterfall overlay and AFC
+  // actually run on, and it differs in two documented ways:
+  //
+  //   * the real-FSK override (rtty-fsk-sync.js): in RTTY/RTTY-R the tone and
+  //     polarity come from the radio's own SET menu, never from the stored
+  //     AFSK tone. Keeping it OUT of `stored` is what makes reloadSettings()
+  //     below harmless -- the old single-object version would have wiped the
+  //     override every time the full page saved any unrelated setting, with
+  //     the mode edge long past and nothing left to restore it.
+  //
+  //   * squelch is ALWAYS OFF here (operator, 2026-09-10). A squelch dialled
+  //     in on the full page can silently swallow a weak caller, and this
+  //     palette has no squelch control to notice it with -- the same class of
+  //     invisible dead end the FSK tone was. The stored level is untouched:
+  //     the full page keeps gating exactly as its operator set it.
 
-  var settings = RttySettings.defaults();
+  var stored = RttySettings.defaults();
+  var effective = stored;
 
   function reloadSettings() {
-    settings = RttySettings.load(localStorage);
+    stored = RttySettings.load(localStorage);
+    applyEffective();
+  }
+
+  function applyEffective() {
+    var base = fskSync.effective(stored);
+    // Copy before overriding: `base` is the stored object itself whenever the
+    // FSK sync is idle, and writing into that would put a zero squelch into
+    // everyone else's settings on the next save.
+    effective = base === stored ? Object.assign({}, stored) : base;
+    effective.squelchThreshold = 0;
     if (decoder) {
-      decoder.setReverse(settings.reverse);
-      decoder.setSquelchThreshold(settings.squelchThreshold);
-      decoder.setToneOffset(settings.toneHz + (afc ? afc.offsetHz() : 0));
+      decoder.setReverse(effective.reverse);
+      decoder.setSquelchThreshold(effective.squelchThreshold);
+      decoder.setToneOffset(effective.toneHz + (afc ? afc.offsetHz() : 0));
     }
     if (scope) scope.drawOverlay();
+    renderState();
   }
+
+  // The radio's own FSK decode settings, shared verbatim with the full page.
+  // The CI-V reader is the ModLevelClient built in buildEngine() below -- the
+  // palette already owns one for the MOD level, and its read(command) is
+  // generic -- so nothing here opens a socket or duplicates the /civread poll.
+  // Silent before the engine exists: nothing is decoding yet either.
+  var fskSync = RttyFskSync.create({
+    read: function (command) {
+      if (!modLevelClient) return Promise.resolve(null);
+      return modLevelClient.read(command).then(function (answer) {
+        return answer && answer.value;
+      });
+    },
+    model: function () { return radio.model; },
+    fallbackMarkHz: function () { return stored.fskMarkHz; },
+    // The self-healing write-back. This palette has no settings UI, but the
+    // mark frequency is a fact about the radio rather than a preference, and
+    // whichever surface last spoke to the radio is the one that knows it --
+    // so it saves, and the full page picks it up through the same storage
+    // event it already listens to.
+    onMarkRead: function (hz) {
+      if (stored.fskMarkHz === hz) return;
+      stored.fskMarkHz = hz;
+      stored = RttySettings.save(localStorage, stored);
+    },
+    onChange: function () { applyEffective(); }
+  });
+
+  var lastCharMs = 0;
 
   // ── the radio this palette listens to ─────────────────────────────────────
   //
@@ -245,6 +308,16 @@
         radio.rfPower = Number(d.rfPower) || 0;
         radio.rfPowerSeen = d.rfPowerSeen === true;
         radio.model = String(d.radioName || d.transceiverType || '').trim();
+        // Only while THIS palette holds the lease. `sessionHeld`, not
+        // holdsSession(): the lease is the exclusive thing, and it is what
+        // keeps two pages out of the firmware's single civ.read slot -- while
+        // the extra "and the audio socket has said hello" that holdsSession()
+        // adds is about being able to DECODE, which a CI-V read needs nothing
+        // of. Reading a moment earlier, while the socket is still coming up,
+        // is also strictly better: the tone is already right when audio
+        // starts. Cheap and idempotent -- it returns immediately unless the
+        // edge actually moved.
+        fskSync.observe(radio.mode, sessionHeld);
       })
       .catch(function () {})
       .finally(function () {
@@ -349,6 +422,11 @@
     if (afskTx) afskTx.abort('session lost');
     closeAudio();
     sessionHeld = false;
+    // The radio's FSK settings were borrowed for as long as this palette was
+    // the one decoding. Handing the override back here, rather than leaving it
+    // to the next /state poll, is also what makes taking the session BACK
+    // re-read: the edge has to actually fall for the next one to rise.
+    fskSync.observe(radio.mode, false);
     if (open) scheduleSessionRetry();
     renderState(info && info.owner ? String(info.owner) : '');
   }
@@ -377,6 +455,7 @@
     if (sessionChannel) sessionChannel.postMessage({ type: 'released', id: pageId });
     sessionHeld = false;
     closeAudio();
+    fskSync.observe(radio.mode, false);   // same reasoning as loseSession()
     // keepalive so the release still goes out while the tab is being torn down
     try {
       fetch('/js8/session/release', {
@@ -435,8 +514,8 @@
 
   function buildEngine() {
     decoder = new RttyCodec.Decoder(RX_AUDIO_RATE, {
-      toneHz: settings.toneHz, reverse: settings.reverse,
-      squelchThreshold: settings.squelchThreshold
+      toneHz: effective.toneHz, reverse: effective.reverse,
+      squelchThreshold: effective.squelchThreshold
     });
 
     rxLog = RttyRxLog.create({
@@ -449,21 +528,31 @@
       onToken: onTokenClicked
     });
 
-    decoder.onChar(function (ch, meta) { rxLog.pushChar(ch, meta); });
-    decoder.onEvent(function (evt) {
-      if (evt.type !== 'squelch' || !evt.open || !settings.squelchNewlineEnabled) return;
-      rxLog.squelchBreak();
+    // The full page separates receptions on the squelch's close->open edge.
+    // With squelch permanently off here that edge never comes (threshold 0
+    // means rtty-codec.js's gate reads as open from the first evaluation and
+    // never closes), so the separator is driven by SILENCE instead: a gap with
+    // no decoded character at all, which is what a real pause in the audio
+    // produces. Independent of any setting, and it is the only break this
+    // palette can have. Honest about its limits: with the gate open, noise
+    // itself decodes into characters, so the gap mostly appears when the audio
+    // path is genuinely quiet (this station transmitting, or a dead band).
+    decoder.onChar(function (ch, meta) {
+      var now = Date.now();
+      if (lastCharMs && now - lastCharMs >= RX_GAP_BREAK_MS) rxLog.squelchBreak();
+      lastCharMs = now;
+      rxLog.pushChar(ch, meta);
     });
 
     afc = RttyAfc.createTracker({
-      settings: function () { return settings; },
+      settings: function () { return effective; },
       liveValues: function () { return scope.waterfall.state().liveValues; },
       window: function () {
         return { lowHz: scope.waterfall.lowHz, highHz: scope.waterfall.highHz };
       },
-      markSpace: function () { return RttyScope.expectedMarkSpaceHz(settings); },
+      markSpace: function () { return RttyScope.expectedMarkSpaceHz(effective); },
       squelchOpen: function () { return decoder.squelchOpen; },
-      onOffset: function (offsetHz) { decoder.setToneOffset(settings.toneHz + offsetHz); },
+      onOffset: function (offsetHz) { decoder.setToneOffset(effective.toneHz + offsetHz); },
       charDurationMs: RttyCodec.CHAR_DURATION_MS
     });
 
@@ -476,7 +565,7 @@
       overlayCanvas: document.getElementById('rttyPanelOverlay'),
       sampleRate: RX_AUDIO_RATE,
       baseLowHz: RttySettings.TONE_MIN_HZ, baseHighHz: RttySettings.TONE_MAX_HZ,
-      settings: function () { return settings; },
+      settings: function () { return effective; },
       afcOffsetHz: function () { return afc.offsetHz(); },
       radio: function () { return radio; },
       onFrame: function () { afc.tick(); },
@@ -486,18 +575,26 @@
     gainStore = new TxGainCal.TxGainStore();
     gainStore.load();
     modLevelClient = new TxGainModLevel.ModLevelClient({
+      // .json(), not the raw Response (found by the FSK-sync harness,
+      // 2026-09-10): read() takes the `seq` from this answer as the BASELINE
+      // it waits to see move. Handed a Response it read undefined, fell back
+      // to adopting whatever /civread happened to hold on the first poll --
+      // which, for a radio that answers within 250 ms, is already the reply --
+      // and then waited the full 2.5 s for a sequence that had already moved.
+      // Every other caller (mercury-worker.js, tx-gain-plan-ui.js) parses.
       send: function (payload) {
         return fetch('/cmd?radio=lan', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
-        });
+        }).then(function (response) { return response.json(); })
+          .catch(function () { return {}; });
       },
       model: function () { return radio.model; }
     });
 
     afskTx = RttyAfskTx.create({
       session: function () { return session; },
-      settings: function () { return settings; },
+      settings: function () { return effective; },
       gain: resolvedGain,
       sampleRate: TX_AUDIO_RATE,
       onEcho: function (text) { return rxLog.echoTx(text); },
@@ -532,7 +629,7 @@
   // update, so it writes the setting and redraws.
   function onScopeTune(lowHz) {
     if (radio.mode === 'RTTY' || radio.mode === 'RTTY-R') {
-      var referenceLowHz = settings.toneHz - RttyCodec.SHIFT_HZ / 2;
+      var referenceLowHz = effective.toneHz - RttyCodec.SHIFT_HZ / 2;
       var newDialHz = Math.round((radio.frequency || 0) + (referenceLowHz - lowHz));
       if (newDialHz <= 0) return;
       fetch('/cmd?radio=lan', {
@@ -544,13 +641,16 @@
     }
     var clamped = Math.max(RttySettings.TONE_MIN_HZ,
       Math.min(RttySettings.TONE_MAX_HZ, lowHz));
-    settings.toneHz = clamped + RttyCodec.SHIFT_HZ / 2;
+    stored.toneHz = clamped + RttyCodec.SHIFT_HZ / 2;
     // Take back what save() normalized, rather than keeping the raw value in
     // memory: otherwise a tone the store clamped would leave this palette and
     // the full RTTY page disagreeing about the same setting until a reload.
-    settings = RttySettings.save(localStorage, settings);
+    // The shared AFSK tone is the ONE stored value this palette writes -- it
+    // is the same click-to-tune the full page persists, not a setting of its
+    // own, and it is unreachable in real FSK (the branch above returns).
+    stored = RttySettings.save(localStorage, stored);
+    applyEffective();
     afc.reset();
-    scope.drawOverlay();
   }
 
   // ── handing a word to the log ─────────────────────────────────────────────
@@ -649,8 +749,20 @@
     var live = sessionHeld && session && session.hello;
     // The title line is the only status this palette shows. Without it a
     // silent waterfall is ambiguous: no signal, or no audio at all?
+    //
+    // In real FSK it also carries the MARK the decoder is sitting on -- the
+    // same number the operator can read straight off the radio's own RTTY
+    // menu, which is what makes "is it even listening in the right place?"
+    // answerable at a glance instead of being the invisible dead end it was.
+    // A trailing "?" means that number did NOT come from the radio: an
+    // unverified model, a timed-out read, or an answer still in flight.
+    // Deliberately shown while the socket is still connecting as well as
+    // once it is up: a palette sitting on "connecting…" is exactly when an
+    // operator wonders whether it is merely parked on the wrong tone.
+    var fskLabel = fskSync.active()
+      ? ' ' + fskSync.markHz() + (fskSync.fromRadio() ? '' : '?') : '';
     document.getElementById('rttyPanelState').textContent =
-      !sessionHeld ? 'no audio' : live ? (radio.mode || '') : 'connecting…';
+      !sessionHeld ? 'no audio' : (live ? (radio.mode || '') : 'connecting…') + fskLabel;
   }
 
   // ── build ─────────────────────────────────────────────────────────────────
@@ -840,10 +952,23 @@
     holdsSession: function () { return sessionHeld && !!session && !!session.hello; },
     txBusy: function () { return !!afskTx && afskTx.busy(); },
     send: send,
+    // Display only, for QRPLog's FSK-backend sends (true RTTY/RTTY-R mode):
+    // those key the radio straight from the firmware's own GPIO, so nothing
+    // about them passes through this palette -- and the BroadcastChannel
+    // mirror log.js posts for the full RTTY-ICOM page never comes back to its
+    // own tab, which is where this palette lives. Silent before the palette
+    // has ever been opened: there is no RX log to write into yet.
+    echoTx: function (text) { if (rxLog) rxLog.echoTx(text); },
     abort: function () { if (afskTx) afskTx.abort('operator'); },
     getState: function () {
       return { open: open, held: sessionHeld, height: height, radio: radio,
-               settings: settings, zoom: scope ? scope.zoom() : 100 };
+               // What it is actually listening on (the FSK override and the
+               // always-off squelch included), and separately what the shared
+               // store holds -- telling those two apart is the whole point.
+               settings: effective, stored: stored,
+               fsk: { active: fskSync.active(), markHz: fskSync.markHz(),
+                      fromRadio: fskSync.fromRadio(), reverse: fskSync.reverse() },
+               zoom: scope ? scope.zoom() : 100 };
     }
   };
 

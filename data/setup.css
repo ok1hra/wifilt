@@ -256,12 +256,20 @@ label.setup-label-missing {
 
 input,
 select,
+textarea,
 button {
   font: inherit;
 }
 
+/* textarea belongs here, not just in the layout rules below. Without it the one
+   multi-line field on the page -- the blocked-DXCC list -- kept the platform
+   default: white ground, black text and a monospace face, on a dark page whose
+   every other field is dark. It read as a foreign control that had failed to
+   load rather than as the same kind of input as the ones above it. The width is
+   overridden again for the ones inside .input-with-tip, which are flex items. */
 input,
-select {
+select,
+textarea {
   width: 100%;
   border-radius: 10px;
   border: 1px solid #51605a;
@@ -1289,3 +1297,145 @@ button.icom-scan-hit:hover {
 }
 
 #identityLocatorError[hidden] { display: none; }
+
+/* ── Pending changes ──────────────────────────────────────────────────────
+   Everything inside #setup-form reaches the device by exactly one route: the
+   Save & Restart button at the bottom of the card. Nothing on the page said so,
+   and nothing said which of the fields on screen had been touched since the
+   page loaded -- so a half-configured interface looked identical to a saved one.
+
+   Three colours, three meanings, and the page already spent two of them: green
+   is how a section states where it is stored, and red (RADIO CONFIG INCOMPLETE,
+   in these same summary rows) means "this is wrong". Work waiting to be sent is
+   neither, so it gets the amber -- and ONLY it does. A resting chip is green
+   like the badge it sits beside; amber appears when, and only when, the operator
+   has something to press. Pending work is not an error and never goes red. */
+
+/* At rest this is a statement of fact, not a request: it says where the section
+   is stored from, exactly like the eeprom/config badge it sits beside, and it
+   wears that badge's green to say so. Amber is spent on the one state that asks
+   the operator for something -- work typed but not yet sent -- and a chip that
+   was already amber while nothing was pending would have spent it for nothing. */
+.setup-pending-chip {
+  margin-left: 8px;
+  padding: 1px 5px;
+  border: 1px solid #005500;
+  border-radius: 3px;
+  background: rgba(0, 136, 0, 0.12);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+/* An open or hovered summary paints itself accent-green, and green-on-green is
+   nothing at all. The storage badge beside it already answers this by going dark
+   and light-lettered there; the resting chip is the same kind of label, so it
+   answers it the same way. The pending state deliberately does NOT: amber on
+   green is the one thing in that row that must still shout. */
+.setup-section-title:hover .setup-pending-chip:not(.is-pending),
+.setup-section[open] > .setup-section-title .setup-pending-chip:not(.is-pending) {
+  background: rgba(0, 0, 0, 0.25);
+  color: #eaf6ee;
+  border-color: transparent;
+}
+
+.setup-pending-chip.is-pending {
+  border-color: var(--warn);
+  background: rgba(255, 176, 98, 0.2);
+  color: var(--warn);
+}
+
+/* On a spine head the chip is not a permanent label -- the step's own CONTINUE
+   button already says how its fields are stored -- so it only ever appears to
+   report work in progress. */
+.spine-head > .setup-pending-chip:not(.is-pending) { display: none; }
+.spine-head > .setup-pending-chip { margin-left: auto; }
+
+.setup-pending-field {
+  border-color: var(--warn) !important;
+  box-shadow: 0 0 0 2px rgba(255, 176, 98, 0.22);
+}
+
+/* The colour has to survive the field being a checkbox, where border-color is
+   drawn by the platform and only the ring outside it is ours. */
+input[type="checkbox"].setup-pending-field {
+  outline: 2px solid var(--warn);
+  outline-offset: 1px;
+}
+
+.actions button.is-pending {
+  border-color: var(--warn);
+  color: var(--warn);
+  background: rgba(255, 176, 98, 0.12);
+}
+
+.actions button.is-pending:hover {
+  background: var(--warn);
+  color: #241300;
+}
+
+.setup-pending-count { font-weight: 800; }
+
+/* One shot per new change, not a loop: a button that pulses for as long as the
+   operator is reading the page stops being a signal and becomes wallpaper. */
+@keyframes setup-pending-flash {
+  0%   { box-shadow: 0 0 0 0 rgba(255, 176, 98, 0.55); }
+  70%  { box-shadow: 0 0 0 10px rgba(255, 176, 98, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 176, 98, 0); }
+}
+
+.actions button.is-flashing,
+.setup-pending-bar.is-flashing {
+  animation: setup-pending-flash 0.75s ease-out 2;
+}
+
+.setup-pending-discard {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.8rem;
+  text-decoration: underline;
+  cursor: pointer;
+  border-radius: 0;
+  font-weight: 400;
+}
+
+.setup-pending-discard:hover { background: none; color: var(--warn); border: 0; }
+
+/* Only ever on screen while the real button is not. Its click scrolls to that
+   button rather than saving: a bar under the thumb that reboots the interface
+   is one mis-scroll away from taking the radio off the air mid-configuration. */
+.setup-pending-bar {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 12px;
+  z-index: 40;
+  width: min(880px, calc(100vw - 24px));
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--warn);
+  border-radius: 10px;
+  background: rgba(43, 30, 12, 0.97);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.55);
+  color: var(--warn);
+  font-size: 0.86rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.setup-pending-bar[hidden] { display: none; }
+.setup-pending-bar-text { flex: 1; }
+.setup-pending-bar-go { white-space: nowrap; opacity: 0.85; }
+
+@media (prefers-reduced-motion: reduce) {
+  .actions button.is-flashing,
+  .setup-pending-bar.is-flashing { animation: none; }
+}

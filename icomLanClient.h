@@ -143,23 +143,38 @@ public:
     stopRxAudio();
     if (!sessionWasActive) return;
     if (streamOpened) sendCivOpenClose(true);
-#if defined(WIFILT_NATIVE)
     // The radio keeps per-endpoint CI-V conversation state keyed by our fixed
     // local ports, and a polite control-channel logout alone PARKS it: the
     // radio stops pinging, nothing ever expires the conversation, and the next
     // session from the same ports gets its control packets answered but never
     // any CI-V data ("civ: ready" then "timeout in state", verified against an
     // IC-705 2026-08-18). A disconnect on the civ channel itself is what
-    // releases it -- wfview sends one on every teardown. The box escapes this
-    // only because its reboot leaves the ports closed long enough for the
-    // radio's keepalives to fail and tear the whole session down; the native
-    // build restarts in under a second, so it must say goodbye properly.
-    if (civGotHere) sendCtrl(civUdp, civMyId, civRemoteId, 0x05, 0);
-#endif
+    // releases it -- wfview sends one on every teardown.
+    //
+    // This was native-only until 2026-09-12, on the reasoning that the box only
+    // ever ends a session by rebooting, and the reboot leaves the ports closed
+    // long enough for the radio's keepalives to fail and drop the whole
+    // session. lanClientLoop() disproves that: it stops and reconnects IN PLACE
+    // from the same ports -- on every failure, and on every SETUP radio scan,
+    // credential test, manual reconnect and config save. One such teardown
+    // parked the radio for good, and every retry afterwards died at "civ:
+    // ready" until the operator power-cycled the radio.
+    //
+    // civPort belongs in the guard, it is not decoration: begin() zeroes it
+    // while leaving civGotHere set from the previous session (only
+    // openCivChannel() clears that), and the ESP32 core's beginPacket() returns
+    // on port 0 BEFORE allocating its tx buffer while write() then dereferences
+    // that buffer unchecked -- a NULL store, i.e. a panic, roughly 15 s after
+    // the radio is switched off mid-session. The reset below closes the same
+    // hole from the other end.
+    if (civGotHere && civPort) sendCtrl(civUdp, civMyId, civRemoteId, 0x05, 0);
     if (token) sendToken(0x01);        // release
     sendCtrl(ctrlUdp, ctrlMyId, ctrlRemoteId, 0x05, 0);  // disconnect
     civUdp.stop();
     ctrlUdp.stop();
+    // Nothing may survive into the next begin() claiming a civ channel that is
+    // now closed; see the civPort note above.
+    civGotHere = civGotReady = civOpenSent = civGotData = false;
     state = LAN_IDLE;
     lastServiceMs = 0;
     clearCivCommands();

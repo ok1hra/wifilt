@@ -30,6 +30,15 @@ const mime = {".html": "text/html", ".css": "text/css", ".js": "application/java
 
 let finished = false, chrome = null, timer = null;
 const commands = [];              // every /cmd?radio=lan body, in order
+let radioMode = "USB-D";          // what /state reports, switchable mid-run
+
+// The firmware's civ.read as a fixture -- one armed slot plus a sequence the
+// caller polls until it moves (wifilt.ino's civReadArm/civReadSeq). An IC-705
+// with RTTY Mark Frequency 1615 Hz (01) and Keying Polarity Reverse (01):
+// deliberately NEITHER default, so a page that ignored the radio and used its
+// own stored values would show it.
+const civAnswers = {"1A050050": "01", "1A050052": "01"};
+let civSeq = 0, civReply = null, civCmd = null;
 
 function finish(result) {
   if (finished) return;
@@ -73,9 +82,16 @@ const server = http.createServer((request, response) => {
     trx1lanpass: "pass", trx1model: "IC-705",
   });
 
+  if (url.pathname === "/set-mode") { radioMode = url.searchParams.get("v") || "USB-D"; return json({ok: true}); }
+
   if (url.pathname === "/state") return json({
-    connected: true, power: true, frequency: 14085000, mode: "USB-D", filter: 1,
-    tx: false, rfPower: 128, rfPowerSeen: true, radioName: "IC-705",
+    connected: true, power: true, frequency: 14085000, mode: radioMode, filter: 1,
+    // radioNameSeen matters: IcomModels.liveRadioModel() refuses to name a
+    // model the radio has not actually confirmed, so without it every
+    // model-specific CI-V address (the RTTY mark/polarity reads below, MOD
+    // level, CAL) is skipped and the page silently falls back -- which is how
+    // this harness managed to never exercise the FSK sync at all.
+    tx: false, rfPower: 128, rfPowerSeen: true, radioName: "IC-705", radioNameSeen: true,
     transceiverType: "IC-705", lanStatus: "linked", catHealthy: true,
     audioReady: true, smeterRaw: 0, powerMeterRaw: 0, swr: 1.0,
   });
@@ -87,8 +103,15 @@ const server = http.createServer((request, response) => {
 
   if (url.pathname === "/cmd" && request.method === "POST")
     return readBody(body => {
-      try { commands.push(JSON.parse(body)); } catch (_) { commands.push({raw: body}); }
-      json({ok: true});
+      let parsed = null;
+      try { parsed = JSON.parse(body); commands.push(parsed); }
+      catch (_) { commands.push({raw: body}); }
+      if (!parsed || parsed.type !== "civ.read") return json({ok: true});
+      const before = civSeq;
+      const command = String(parsed.data || "").toUpperCase();
+      const answer = civAnswers[command];
+      if (answer) { civCmd = command; civReply = command + answer; civSeq++; }
+      return json({ok: true, seq: before});
     });
   if (url.pathname === "/commands") return json(commands);
   if (url.pathname === "/commands/clear") { commands.length = 0; return json({ok: true}); }
@@ -98,7 +121,7 @@ const server = http.createServer((request, response) => {
   if (url.pathname === "/txgain.json") return json({v: 1, entries: {}});
   if (url.pathname === "/txgain-plan.json") return json({});
   if (url.pathname === "/trxnet-peers.json") return json([]);
-  if (url.pathname === "/civread") return json({});
+  if (url.pathname === "/civread") return json({seq: civSeq, cmd: civCmd, reply: civReply});
   if (url.pathname === "/identity") return json({call: "OK1HRA", grid: "JO70"});
 
   // The firmware serves the MINIFIED companion (via .gz), never the readable
@@ -335,6 +358,56 @@ const PAGE_SCRIPT = `
     check("and the newest text survives the trim, oldest first out",
       scratch.textContent.trim().endsWith("TEST") && !scratch.textContent.includes("OK1HRA"),
       JSON.stringify(scratch.textContent.slice(-30)));
+
+    // ---- 8b. real FSK: the radio owns tone and polarity --------------------
+    // Nothing used to guard this on either surface. The palette shipped
+    // without the feature entirely (2026-09-10), and this page's own version
+    // was never covered here -- so the refactor that moved both onto
+    // rtty-fsk-sync.js would have been unguarded on the one page that is
+    // verified on air. The fixture answers 1615 Hz / polarity Reverse:
+    // neither is a default, so a page ignoring the radio cannot pass.
+    const toneField = $("rttyToneInput");
+    const storedToneBefore = Number(toneField.value);
+    await fetch("/set-mode?v=RTTY");
+    await sleep(2600);          // a 1 s state poll plus two civ.read round trips
+
+    check("in RTTY the tone field shows the radio's own mark, not the stored one",
+      Number(toneField.value) === 1615,
+      storedToneBefore + " -> " + toneField.value);
+    check("and it is read-only, because the radio owns it there",
+      toneField.disabled === true);
+    check("Keying Polarity Reverse flips the decoder back to NORMAL",
+      $("rttyReverse").textContent === "NORMAL", $("rttyReverse").textContent);
+    check("the radio's own SET menu was never written to",
+      (await (await fetch("/commands")).json())
+        .filter(c => c.type === "civ.raw").length === 0,
+      JSON.stringify((await (await fetch("/commands")).json()).map(c => c.type)));
+
+    // The per-contact REVERSE pill still works in RTTY -- "the station I am
+    // working transmits inverted" is a fact about the OTHER station, so it
+    // must stay reachable even while the radio owns the polarity default.
+    $("rttyReverse").click();
+    await sleep(120);
+    check("the REVERSE pill still overrides that, per contact",
+      $("rttyReverse").textContent === "REVERSE", $("rttyReverse").textContent);
+    check("and does it without writing the stored preference",
+      JSON.parse(localStorage.getItem("wifilt.data.rtty-settings")).reverse === false,
+      JSON.stringify(JSON.parse(localStorage.getItem("wifilt.data.rtty-settings")).reverse));
+
+    await fetch("/set-mode?v=USB-D");
+    await sleep(1500);
+    check("leaving RTTY gives the operator's own tone back",
+      Number(toneField.value) === storedToneBefore && toneField.disabled === false,
+      toneField.value + " disabled=" + toneField.disabled);
+    check("and the stored tone was never disturbed on the way through",
+      JSON.parse(localStorage.getItem("wifilt.data.rtty-settings")).toneHz ===
+        storedToneBefore + 85,
+      JSON.stringify(JSON.parse(localStorage.getItem("wifilt.data.rtty-settings")).toneHz));
+    check("the radio's answer was kept as the fallback for next time",
+      JSON.parse(localStorage.getItem("wifilt.data.rtty-settings")).fskMarkHz === 1615,
+      JSON.stringify(JSON.parse(localStorage.getItem("wifilt.data.rtty-settings")).fskMarkHz));
+    check("and the SETTINGS field shows it", $("rttyFskMark").value === "1615",
+      $("rttyFskMark").value);
 
     // ---- 9. squelch break: throttled, never a leading blank line ----------
     const scratch2 = document.createElement("div");

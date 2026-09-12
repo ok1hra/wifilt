@@ -237,12 +237,6 @@ body {
   color: var(--tab-active-tx);
 }
 
-/* The tab row measures ~491px (logo + five labels + gaps) and the firmware
-   version adds ~90px more. The right column's 600px floor holds the tabs, but
-   only once the version -- decorative, and repeated on every other page --
-   gets out of the way. Nothing here wraps: a wrapping tab row grows the topbar
-   and steals height from the journal, which is the one thing the split is
-   already short of. */
 /* Measured, not guessed: the input row needs 780px in one line, so a right
    column narrower than that used to CLIP it -- silently, because .log-shell
    is overflow:hidden. Letting it wrap is the same answer .kbd-open already
@@ -251,7 +245,37 @@ body {
    viewport and a 1024-wide tablet in landscape could never use it. */
 .log-split-on .log-input-row { flex-wrap: wrap; row-gap: 6px; }
 
-.log-split-on .topbar-fw { display: none; }
+/* The right end of the tab row -- GPS, signal strength, the OFFLINE badge and
+   the firmware version -- used to be hidden outright the moment the split
+   opened, on the grounds that it was decorative and the tabs needed the room.
+   Two thirds of that was wrong: `⚠ OFFLINE` is how this page reports that it
+   has lost the interface, and the GPS chip is the only way in to the radio's
+   position panel. Losing both on the one page an operator keeps open all day,
+   at a window width where they would have fit, is not a trade for tab labels.
+
+   So the block is hidden only when it genuinely does not fit, and it yields in
+   order of what an operator actually watches. log-dxc-split.js measures the
+   row -- scrollWidth against clientWidth, always with everything shown, so the
+   answer never depends on what a previous measurement hid -- and sets:
+
+     .log-split-fw-off      the firmware version goes. It is repeated on every
+                            other page and changes only after a flash.
+     .log-split-status-off  the whole block goes: below this the tab labels
+                            themselves are what is running out of room.
+
+   Neither is a media query, because the width that matters is the log column's
+   and the operator sets that with the divider. Nothing here wraps: a wrapping
+   tab row grows the topbar and steals height from the journal, which is the
+   one thing the split is already short of. */
+.log-split-fw-off .fw-version-link,
+.log-split-fw-off .fw-update-link { display: none; }
+/* The separator in front of the version, which nothing else can reach:
+   fw-version.js builds the block child by child and every separator is the
+   same span. A browser without :has() keeps one dangling "|" at the narrow
+   end -- cosmetic, and the two rules above still fire. */
+.log-split-fw-off .topbar-fw-sep:has(+ .fw-version-link) { display: none; }
+.log-split-status-off .topbar-fw { display: none; }
+
 .log-split-on .tabs      { overflow-x: auto; scrollbar-width: none; }
 .log-split-on .tabs::-webkit-scrollbar { display: none; }
 .log-split-on .tab       { flex: 0 0 auto; }

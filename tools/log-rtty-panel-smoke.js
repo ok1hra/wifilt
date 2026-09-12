@@ -21,9 +21,12 @@
 // the log actually holds, and on the recorded session POST bodies -- never on
 // internal state.
 //
-// Not covered here, on purpose: transmitting. That needs a real AUD1
-// WebSocket, and the AFSK path is the same rtty-afsk-tx.js the full page uses
-// (guarded by tools/rtty-page-smoke.js and by on-air testing).
+// Not covered here, on purpose: the transmission itself. That needs a real
+// AUD1 WebSocket, and the AFSK path is the same rtty-afsk-tx.js the full page
+// uses (guarded by tools/rtty-page-smoke.js and by on-air testing). What IS
+// covered (section 7d) is the routing decision in front of it -- which of the
+// two RTTY surfaces a send from the log is handed to -- because getting that
+// wrong refuses the send outright, and did.
 
 const http = require("http"), fs = require("fs"), path = require("path");
 const {spawn} = require("child_process");
@@ -36,6 +39,16 @@ let finished = false, chrome = null, timer = null;
 const sessionPosts = [];          // every /js8/session/* body, in order
 let lanConfigured = true;         // does the saved setup have ICOM-LAN?
 let claimRefused = false;         // make /js8/session/claim answer 409
+let radioMode = "USB-D";          // what /state reports, switchable mid-run
+
+// The firmware's civ.read, as a fixture: ONE armed slot and a sequence counter
+// the caller polls until it moves (wifilt.ino's civReadArm/civReadSeq). The
+// answers are an IC-705 with RTTY Mark Frequency 2125 Hz (02) and Keying
+// Polarity Normal (00); `civMute` makes the radio ignore both, which is the
+// unverified-model / timed-out-read case.
+let civAnswers = {"1A050050": "02", "1A050052": "00"};
+let civMute = false;
+let civSeq = 0, civReply = null, civCmd = null, civReads = 0;
 
 function finish(result) {
   if (finished) return;
@@ -72,6 +85,10 @@ const server = http.createServer((request, response) => {
 
   // Test control surface, so the page can steer its own fixture.
   if (url.pathname === "/set-lan") { lanConfigured = url.searchParams.get("v") === "1"; return json({ok: true}); }
+  if (url.pathname === "/set-mode") { radioMode = url.searchParams.get("v") || "USB-D"; return json({ok: true}); }
+  if (url.pathname === "/set-civ-mute") { civMute = url.searchParams.get("v") === "1"; return json({ok: true}); }
+  if (url.pathname === "/set-civ-mark") { civAnswers["1A050050"] = url.searchParams.get("v"); return json({ok: true}); }
+  if (url.pathname === "/civ-reads") return json({reads: civReads});
   if (url.pathname === "/set-claim-refused") { claimRefused = url.searchParams.get("v") === "1"; return json({ok: true}); }
   if (url.pathname === "/session-posts") return json(sessionPosts);
   if (url.pathname === "/session-posts/clear") { sessionPosts.length = 0; return json({ok: true}); }
@@ -101,7 +118,7 @@ const server = http.createServer((request, response) => {
     connected: true, catHealthy: true, audioReady: true, lanStatus: "linked",
     btStatus: "LAN linked", wifiStatus: "WiFi STA", radioTransport: "lan",
     fullCat: true, wifiRssi: -55, fwRev: "20260907", bdSupported: false,
-    power: true, frequency: 14085000, mode: "USB-D", filter: 1,
+    power: true, frequency: 14085000, mode: radioMode, filter: 1,
     radioAddress: "a4", transceiverType: "IC-705", radioName: "IC-705",
     tx: false, ritRaw: 0, smeterRaw: 0, powerMeterRaw: 0, afGain: 100,
     keySpeed: 20, rfPower: 128, rfPowerSeen: true, supplyVolts: 13.8, swr: 1.1,
@@ -109,8 +126,20 @@ const server = http.createServer((request, response) => {
   });
 
   if (url.pathname === "/cmd" && request.method === "POST")
-    return readBody(() => json({ok: true}));
-  if (url.pathname === "/civread") return json({});
+    return readBody(body => {
+      let parsed = {};
+      try { parsed = JSON.parse(body); } catch (_) {}
+      if (parsed.type !== "civ.read") return json({ok: true});
+      civReads++;
+      const before = civSeq;
+      const command = String(parsed.data || "").toUpperCase();
+      const answer = civMute ? null : civAnswers[command];
+      // No answer means the sequence never moves -- absence IS the answer for
+      // an address the radio does not have, exactly as the firmware documents.
+      if (answer) { civCmd = command; civReply = command + answer; civSeq++; }
+      return json({ok: true, seq: before});
+    });
+  if (url.pathname === "/civread") return json({seq: civSeq, cmd: civCmd, reply: civReply});
   if (url.pathname === "/txgain.json") return json({v: 1, entries: {}});
   if (url.pathname === "/txgain-plan.json") return json({});
   if (url.pathname === "/dxcinfo") return json({locator: "JO70", call: "OK1HRA"});
@@ -429,6 +458,135 @@ const PAGE_SCRIPT = `
     await sleep(150);
     check("and the new bottom edge is what the next window resize keeps",
       bottomGap() === gapAfterGrow, gapAfterGrow + " -> " + bottomGap());
+
+    // ---- 7d. QRPLog's own TX goes THROUGH the palette ---------------------
+    // The palette holds the shared AUD1 session, and a BroadcastChannel post
+    // never comes back to its own tab -- so log.js's hand-off to a separate
+    // rtty.html tab can only time out here. That is what the operator saw as a
+    // red "no RTTY-ICOM page is open -- open /rtty.html in another tab first"
+    // on every macro sent in USB-D with the palette open right in front of
+    // them. Both palette entry points are stubbed rather than driven for real:
+    // an actual send needs a live AUD1 socket (see the header), and what broke
+    // was purely the routing decision on log.js's side.
+    window.RttyPanel.setOpen(true);
+    await sleep(250);
+    const heldReal = window.RttyPanel.holdsSession;
+    const sendReal = window.RttyPanel.send;
+    const paletteSends = [];
+    window.RttyPanel.holdsSession = () => true;
+    window.RttyPanel.send = text => { paletteSends.push(text); return Promise.resolve(); };
+    $("logHint").textContent = "";
+    sendMacroText("CQ");
+    await sleep(500);
+    check("a macro sent in USB-D reaches the open palette", paletteSends.length === 1,
+      JSON.stringify(paletteSends));
+    check('with no "open /rtty.html first" refusal',
+      !/rtty\\.html/.test($("logHint").textContent),
+      JSON.stringify($("logHint").textContent));
+    sendRawText("TEST DE OK1HRA");
+    await sleep(300);
+    check("and so does free text sent from the log", paletteSends.length === 2,
+      JSON.stringify(paletteSends));
+
+    // The separate-tab setup is untouched: with nothing holding the session in
+    // this tab, the very same call still goes out over the BroadcastChannel --
+    // and still says so honestly when no rtty.html tab answers the probe.
+    window.RttyPanel.holdsSession = () => false;
+    $("logHint").textContent = "";
+    sendMacroText("CQ");
+    await sleep(700);
+    check("without the palette holding it, the separate-tab hand-off still runs",
+      paletteSends.length === 2 && /rtty\\.html/.test($("logHint").textContent),
+      JSON.stringify($("logHint").textContent));
+    window.RttyPanel.holdsSession = heldReal;
+    window.RttyPanel.send = sendReal;
+
+    // ---- 7e. real FSK: the radio owns the tone, the palette follows -------
+    // The bug this section exists for: in RTTY the full page read the radio's
+    // own RTTY Mark Frequency and retuned its decoder, and this palette did
+    // not -- it listened on the stored USB-D AFSK tone, decoded nothing, and
+    // (click-to-tune moves the DIAL in real FSK, and there is no tone field
+    // here by design) offered no way out from inside itself.
+    const civReads = async () => (await (await fetch("/civ-reads")).json()).reads;
+    const readsBefore = await civReads();
+    let readsAfter = readsBefore;
+    await fetch("/set-mode?v=RTTY");
+    const overlayEl = $("rttyPanelOverlay");
+    const overlayBefore = overlayEl.toDataURL();
+    const storedToneBefore = window.RttyPanel.getState().stored.toneHz;
+    await sleep(2200);          // one 1 s state poll + the civ.read round trip
+
+    let fsk = window.RttyPanel.getState().fsk;
+    check("in RTTY the palette reads the radio's own Mark Frequency",
+      fsk.active && fsk.markHz === 2125 && fsk.fromRadio === true, JSON.stringify(fsk));
+    check("and it actually asked the radio, rather than assuming",
+      (readsAfter = await civReads()) > readsBefore, readsBefore + " -> " + readsAfter);
+    check("the decoder is centred on that mark, not on the stored AFSK tone",
+      window.RttyPanel.getState().settings.toneHz === 2125 + 85,
+      String(window.RttyPanel.getState().settings.toneHz));
+    check("Keying Polarity Normal leaves the decoder reversed", fsk.reverse === true);
+    check("and the waterfall's own mark/space lines moved with it",
+      overlayEl.toDataURL() !== overlayBefore);
+    check("the shared stored tone is NOT touched -- it belongs to USB-D",
+      window.RttyPanel.getState().stored.toneHz === storedToneBefore,
+      storedToneBefore + " -> " + window.RttyPanel.getState().stored.toneHz);
+    check("the header says which mark it is sitting on",
+      / 2125$/.test($("rttyPanelState").textContent),
+      JSON.stringify($("rttyPanelState").textContent));
+
+    // THE regression this design was shaped around: the palette reloads the
+    // shared settings whenever another tab saves any of them. With the
+    // override living inside that object it was wiped silently, and the mode
+    // edge was long past, so nothing ever put it back.
+    window.dispatchEvent(new StorageEvent("storage", {key: "wifilt.data.rtty-settings"}));
+    await sleep(150);
+    check("a settings save in another tab does not wipe the FSK override",
+      window.RttyPanel.getState().settings.toneHz === 2125 + 85,
+      String(window.RttyPanel.getState().settings.toneHz));
+
+    // Squelch: always off HERE, never touched THERE.
+    check("squelch is off in the palette whatever the shared setting says",
+      window.RttyPanel.getState().settings.squelchThreshold === 0,
+      String(window.RttyPanel.getState().settings.squelchThreshold));
+    check("and the stored level the full page gates on is left alone",
+      window.RttyPanel.getState().stored.squelchThreshold > 0,
+      String(window.RttyPanel.getState().stored.squelchThreshold));
+
+    // A radio that cannot be asked (an unverified model, or a read that times
+    // out) must still land somewhere sane, and must SAY that it guessed.
+    await fetch("/set-civ-mute?v=1");
+    await fetch("/set-mode?v=USB-D");
+    await sleep(1400);
+    check("leaving RTTY hands the operator's own tone back",
+      window.RttyPanel.getState().settings.toneHz === storedToneBefore &&
+      window.RttyPanel.getState().fsk.active === false,
+      String(window.RttyPanel.getState().settings.toneHz));
+    await fetch("/set-mode?v=RTTY-R");
+    await sleep(2400);
+    fsk = window.RttyPanel.getState().fsk;
+    check("a mute radio falls back to the stored mark frequency",
+      fsk.active && fsk.markHz === 2125 && fsk.fromRadio === false, JSON.stringify(fsk));
+    check("and the header marks that value as not from the radio",
+      / 2125\\?$/.test($("rttyPanelState").textContent),
+      JSON.stringify($("rttyPanelState").textContent));
+
+    // Back to a radio that answers, with a DIFFERENT menu value, proving the
+    // fallback is not just sticky.
+    await fetch("/set-civ-mute?v=0");
+    await fetch("/set-civ-mark?v=00");
+    await fetch("/set-mode?v=USB-D");
+    await sleep(1300);
+    await fetch("/set-mode?v=RTTY");
+    await sleep(2400);
+    fsk = window.RttyPanel.getState().fsk;
+    check("a re-entry picks up the radio's new Mark Frequency",
+      fsk.markHz === 1275 && fsk.fromRadio === true, JSON.stringify(fsk));
+    check("and it was written back as the stored fallback for next time",
+      window.RttyPanel.getState().stored.fskMarkHz === 1275,
+      String(window.RttyPanel.getState().stored.fskMarkHz));
+    await fetch("/set-civ-mark?v=02");
+    await fetch("/set-mode?v=USB-D");
+    await sleep(1300);
 
     // ---- 8. held elsewhere: the card, and TAKE OVER ------------------------
     await fetch("/set-claim-refused?v=1");

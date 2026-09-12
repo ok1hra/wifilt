@@ -196,6 +196,7 @@ const dom = {
   sendLater:$("sendLaterButton"),
   armHours:$("armHours"), autoState:$("autoState"),
   resetSettings:$("resetSettings"), settingsSummary:$("settingsSummary"), settingsFlags:$("settingsFlags"),
+  settingsSection:document.querySelector('[data-section="settings"]'),
   diagnosticSummary:$("diagnosticSummary"), diagnostics:$("diagnostics"),
   decodeTelemetry:$("decodeTelemetry"),
   sessionBusy:$("sessionBusy"), sessionBusyWhere:$("sessionBusyWhere"),
@@ -2097,35 +2098,173 @@ function renderBinControls() {
   dom.binDownload.hidden=!(record.direction==="rx"&&record.state==="complete"&&record.fileBytes);
 }
 
-// Signal-only pills in the SETTINGS header. Only switches with an on-air
-// consequence are listed, so a closed panel still answers "what will this
-// station do by itself?". Reading a setting is all they do -- switching one
-// stays inside the section, which is why these are spans and not buttons.
+// State pills in the SETTINGS header. Only switches with an on-air consequence
+// are listed, so a closed panel still answers "what will this station do by
+// itself?". Grilled 2026-09-12: they are also the switches now -- the section is
+// long and a tablet operator should not have to unroll it to stop the station
+// transmitting. One rule holds the row together: a pill that cannot do its job
+// right now never toggles, it opens SETTINGS at the condition that is missing.
 // needsTx marks the switches that only reach the air through the txSafetyAccepted
 // gate (drainTxQueue / checkHeartbeat / checkCqRepeat all refuse without it). With
-// Radio TX off they are configured-but-silent, so the header must show them off.
+// Radio TX off they are configured-but-silent, so the header must show them off,
+// and clicking one leads to Radio TX rather than flipping a switch that could not
+// fire anyway.
 const SETTINGS_FLAGS=[
-  {key:"TX",   label:"Radio TX",                on:js8=>js8.txSafetyAccepted===true},
+  {key:"TX",   label:"Radio TX",                on:js8=>js8.txSafetyAccepted===true,
+    toggle:toggleTxSafety},
   {key:"AUTO", label:"Automatic query answers", on:js8=>js8.auto===true, needsTx:true,
-    detail:()=>autoRemainingLabel(), inline:true},
+    detail:()=>autoRemainingLabel(), inline:true, toggle:toggleAutoReply},
   {key:"CQ",   label:"Repeated CQ",             on:js8=>Number(js8.cqRepeatMin)>0, needsTx:true,
-    detail:js8=>`every ${Number(js8.cqRepeatMin)} min`},
+    detail:js8=>`every ${Number(js8.cqRepeatMin)} min`, toggle:toggleCqRepeat},
   {key:"HB",   label:"Heartbeat transmission",  on:js8=>js8.hb===true, needsTx:true,
-    detail:()=>hbNextLabel(), inline:true, tip:js8=>`every ${Number(js8.hbMinutes)} min`},
-  {key:"ACK",  label:"Heartbeat acknowledgements", on:js8=>js8.hbAck!==false, needsTx:true},
+    detail:()=>hbNextLabel(), inline:true, tip:js8=>`every ${Number(js8.hbMinutes)} min`,
+    toggle:toggleHeartbeat},
+  {key:"ACK",  label:"Heartbeat acknowledgements", on:js8=>js8.hbAck!==false, needsTx:true,
+    toggle:toggleHeartbeatAck},
   // Deliberately without needsTx: the gate carries other stations to the internet
-  // and never keys the transmitter, so Radio TX being off must not grey it out.
-  // The count is of VERIFIED packets against the hourly cap -- a gate delivering
-  // nothing because of a bad passcode has to read as 0, not as a busy station.
+  // and never keys the transmitter, so Radio TX being off must not grey it out --
+  // nor make its pill unswitchable. The count is of VERIFIED packets against the
+  // hourly cap -- a gate delivering nothing because of a bad passcode has to read
+  // as 0, not as a busy station.
   {key:"IGATE", label:"APRS-IS gate", on:()=>Js8AprsGate.readiness(aprsGateConfig()).ready,
     detail:()=>aprsGateCountLabel(), inline:true,
-    tip:()=>`${aprsGateConfig().call} at ${aprsGateConfig().host}`}
+    tip:()=>`${aprsGateConfig().call} at ${aprsGateConfig().host}`,
+    toggle:toggleAprsGate}
 ];
+
+// Radio TX is the one pill that arms before it fires: OFF is a single click
+// (stopping a transmitter must never need a dialog), ON asks twice, because
+// switching it on is the safety pledge the checkbox spells out and because the
+// pill is a small target on a tablet. The armed pill reads TX? and stands down
+// after three seconds, or at the next click anywhere else in the header.
+const TX_CONFIRM_MS=3000;
+let txConfirmArmed=false, txConfirmTimer=null;
+function armTxConfirm() {
+  txConfirmArmed=true;
+  clearTimeout(txConfirmTimer);
+  txConfirmTimer=setTimeout(()=>{txConfirmArmed=false;renderSettingsFlags(currentJs8());},TX_CONFIRM_MS);
+  renderSettingsFlags(currentJs8());
+}
+function cancelTxConfirm() {
+  if(!txConfirmArmed)return;
+  txConfirmArmed=false;
+  clearTimeout(txConfirmTimer);
+  renderSettingsFlags(currentJs8());
+}
+function toggleTxSafety(js8) {
+  if(js8.txSafetyAccepted===true){cancelTxConfirm();setJs8Setting("txSafetyAccepted",false);return;}
+  if(!txConfirmArmed){armTxConfirm();return;}
+  cancelTxConfirm();
+  setJs8Setting("txSafetyAccepted",true);
+}
+
+function toggleAutoReply(js8) {
+  const next=js8.auto!==true;
+  setJs8Setting("auto",next);
+  // The same call the checkbox makes. A refusal leaves the switch where the
+  // operator put it (armUnattended's own comment) and says so in #autoState --
+  // which is inside the section, invisible to whoever switched this from a closed
+  // header, so open it there.
+  const arming=armUnattended(next?"arm":"revoke");
+  if(arming&&arming.then)arming.then(()=>{if(autoStateError)revealSetting(dom.armHours);});
+}
+
+// CQ is not a boolean: the setting is an interval, 0 meaning off. The pill
+// switches between off and the interval last in force, the same shape RTTY's SQL
+// pill uses -- the remembered value lives in the page, not in stored settings, so
+// nothing has to migrate, and a reload with CQ off falls back to the default.
+const CQ_DEFAULT_MIN=10;
+let cqOnMinutes=0;
+function cqPillMinutes() {
+  if(cqOnMinutes>0)return cqOnMinutes;
+  const stored=Number(currentJs8().cqRepeatMin)||0;
+  return stored>0?stored:CQ_DEFAULT_MIN;
+}
+function toggleCqRepeat(js8) {
+  const next=Number(js8.cqRepeatMin)>0?0:cqPillMinutes();
+  if(next>0)cqOnMinutes=next;
+  setJs8Setting("cqRepeatMin",next);
+  renderCqState();
+}
+
+function toggleHeartbeat(js8) {
+  setJs8Setting("hb",js8.hb!==true);
+  applyHeartbeatSettings();
+}
+function toggleHeartbeatAck(js8) {
+  setJs8Setting("hbAck",js8.hbAck===false);
+  applyHeartbeatSettings();
+}
+
+// Which APRS-IS field readiness() is unhappy about, decided by asking it again
+// rather than by reading its sentence: the passcode complaint names the callsign
+// too, so matching on the text would send the operator to the wrong row.
+function aprsGateMissingField(config) {
+  const call=config.call;
+  // A passcode that matches by construction and a server that cannot be blank, so
+  // the only thing left to fail the first test is the callsign itself.
+  const server={host:config.host||"aprs.net", port:config.port||14580};
+  const proof=call?String(Js8AprsGate.passcode(call)):"";
+  if(!call||!Js8AprsGate.readiness({...config,...server,enabled:true,passcode:proof}).ready)
+    return dom.aprsGateCall;
+  if(!Js8AprsGate.readiness({...config,...server,enabled:true}).ready)
+    return dom.aprsGatePass;
+  return dom.aprsGateHost;
+}
+// Switching the gate off always works. Switching it on from the header only when
+// it can actually gate: an "on" gate with a wrong passcode looks identical to a
+// working one from out here (the pill follows readiness, not the enable flag), so
+// the click that cannot light the pill opens SETTINGS at the missing field
+// instead of storing a state nobody can see. The -10 proposal is not written
+// behind the operator's back -- the field carries it as its placeholder.
+function toggleAprsGate(js8) {
+  const config=aprsGateConfig();
+  if(config.enabled){setAprsGateSetting({enabled:false});return;}
+  const call=config.call||Js8AprsGate.suggestCall(js8.myCall);
+  if(Js8AprsGate.readiness({...config,enabled:true,call}).ready){
+    setAprsGateSetting({enabled:true,call});
+    return;
+  }
+  revealSetting(aprsGateMissingField({...config,call}));
+}
+
+// Opens SETTINGS at one row and says which one. Used wherever a pill refuses to
+// act: the missing Radio TX, an unfinished APRS-IS login, a refused arming. Text
+// fields take the focus (they are what has to be typed); a checkbox only gets the
+// highlight, because a focus ring on a 20px box is not an answer to "what is
+// missing".
+function revealSetting(field) {
+  if(!field||!dom.settingsSection)return;
+  dom.settingsSection.open=true;
+  const row=field.closest("label")||field;
+  row.scrollIntoView({behavior:"smooth",block:"center"});
+  row.classList.add("setting-reveal");
+  setTimeout(()=>row.classList.remove("setting-reveal"),2000);
+  if(field.tagName==="INPUT"&&field.type!=="checkbox")field.focus({preventScroll:true});
+}
+
+// Built once, then only ever updated. As <span> an innerHTML rebuild on the
+// 500 ms render path was free; as controls it is not -- a replaced node drops
+// keyboard focus, throws away the TX? confirmation mid-gesture, and can swallow a
+// click that landed between mousedown and mouseup.
+function buildSettingsFlags() {
+  if(!dom.settingsFlags)return;
+  dom.settingsFlags.replaceChildren(...SETTINGS_FLAGS.map(flag=>{
+    const button=document.createElement("button");
+    button.type="button";
+    button.className="summary-flag";
+    button.dataset.flag=flag.key;
+    return button;
+  }));
+}
 
 function renderSettingsFlags(js8) {
   if(!dom.settingsFlags)return;
+  if(!dom.settingsFlags.firstElementChild)buildSettingsFlags();
   const txOn=js8.txSafetyAccepted===true;
-  dom.settingsFlags.innerHTML=SETTINGS_FLAGS.map(flag=>{
+  SETTINGS_FLAGS.forEach((flag,index)=>{
+    const button=dom.settingsFlags.children[index];
+    if(!button)return;
     // A TX-dependent switch that is configured but blocked by Radio TX being off is
     // shown off (no pill, no countdown); the tooltip names the reason so it does not
     // read as "the operator turned it off".
@@ -2138,11 +2277,41 @@ function renderSettingsFlags(js8) {
     // inline so it is visible without hovering; the others keep the key alone and
     // carry any detail only in the tooltip. The tooltip always spells out the
     // full state, including the configured interval via `tip`.
-    const text=flag.key + (flag.inline && detailText ? ` · ${detailText}` : "");
+    const key=flag.key==="TX" && txConfirmArmed ? "TX?" : flag.key;
+    const text=key + (flag.inline && detailText ? ` · ${detailText}` : "");
     const stateWord=on ? "on" : (suppressed && configured ? "off · needs Radio TX" : "off");
     const tip=[stateWord, detailText, tipExtra].filter(Boolean).join(" · ");
-    return `<span class="summary-flag${on?" on":""}" title="${esc(flag.label)}: ${esc(tip)}">${esc(text)}</span>`;
-  }).join("");
+    const title=`${flag.label}: ${tip}`;
+    if(button.textContent!==text)button.textContent=text;
+    button.classList.toggle("on",on);
+    button.setAttribute("aria-pressed",String(on));
+    // Blocked by Radio TX: still clickable, because a `disabled` button is silent
+    // on a touch screen and this one has something to say -- it opens SETTINGS at
+    // Radio TX. aria-disabled is what that combination is called; the look stays
+    // the plain "off" pill, since a third appearance in a six-pill row is more
+    // than the header can explain.
+    if(suppressed)button.setAttribute("aria-disabled","true");
+    else button.removeAttribute("aria-disabled");
+    if(button.title!==title)button.title=title;
+  });
+}
+
+// One delegated handler for the row. stopPropagation is what keeps a pill click
+// from also toggling the <details> its <summary> lives in (same reason rtty.js's
+// zoom pills carry it).
+function onSettingsFlagClick(event) {
+  const button=event.target.closest("[data-flag]");
+  if(!button)return;
+  event.stopPropagation();
+  const flag=SETTINGS_FLAGS.find(item=>item.key===button.dataset.flag);
+  if(!flag)return;
+  // Any pill other than TX stands the confirmation down: an armed TX? must not
+  // survive the operator turning to something else and coming back.
+  if(flag.key!=="TX")cancelTxConfirm();
+  const js8=currentJs8();
+  if(flag.needsTx===true && js8.txSafetyAccepted!==true){revealSetting(dom.txSafety);return;}
+  flag.toggle(js8);
+  renderControls();
 }
 
 function renderControls() {
@@ -7744,7 +7913,12 @@ function bind() {
     renderInbox();
   });
   if(dom.inboxUndoButton)dom.inboxUndoButton.addEventListener("click",undoDeleteMsg);
-  dom.cqRepeat.addEventListener("change",()=>{setJs8Setting("cqRepeatMin",Number(dom.cqRepeat.value)||0);renderCqState();});
+  dom.cqRepeat.addEventListener("change",()=>{
+    // The menu is also where the header pill learns what "on" means: pick 5 min
+    // here and the pill switches back to 5 min, never to the default.
+    const minutes=Number(dom.cqRepeat.value)||0;
+    if(minutes>0)cqOnMinutes=minutes;
+    setJs8Setting("cqRepeatMin",minutes);renderCqState();});
   dom.hbEnabled.addEventListener("change",()=>{setJs8Setting("hb",dom.hbEnabled.checked);applyHeartbeatSettings();});
   dom.hbAck.addEventListener("change",()=>{setJs8Setting("hbAck",dom.hbAck.checked);applyHeartbeatSettings();});
   dom.hbMinutes.addEventListener("change",()=>{setJs8Setting("hbMinutes",Number(dom.hbMinutes.value)||60);applyHeartbeatSettings();});
@@ -7776,6 +7950,13 @@ function bind() {
   }
   dom.txGain.addEventListener("change",()=>{const value=state.settingsDraft.txGain===null?dom.txGain.value:state.settingsDraft.txGain;state.settingsDraft.txGain=null;setJs8Setting("txGain",Number(value)||.25);});
   dom.txSafety.addEventListener("change",()=>setJs8Setting("txSafetyAccepted",dom.txSafety.checked));
+  // The SETTINGS header pills, which are switches as well as readouts since
+  // 2026-09-12. The row handles its own clicks; the rest of the <summary> only
+  // has to stand the TX? confirmation down -- a pill click never reaches here,
+  // onSettingsFlagClick stops it so the section does not unroll under the finger.
+  if(dom.settingsFlags)dom.settingsFlags.addEventListener("click",onSettingsFlagClick);
+  const settingsHead=dom.settingsSection&&dom.settingsSection.querySelector("summary");
+  if(settingsHead)settingsHead.addEventListener("click",cancelTxConfirm);
   dom.resetSettings.addEventListener("click",()=>{const reset=Js8Settings.reset(localStorage);settings=reset.settings;state.settingsDraft={txGain:null};state.activeMode=settings.activeModem;dom.storageState.textContent=reset.label;applySettingsToRuntime();renderActivity();renderControls();closeTimetablePopover();if(!dom.freqTimetablePanel.hidden)renderTimetableGrid();reconcileTimetable();});
   if(dom.promoteSettings)dom.promoteSettings.addEventListener("click",async()=>{
     dom.promoteSettings.disabled=true;

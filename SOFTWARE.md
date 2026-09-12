@@ -185,8 +185,12 @@ plainly.
 
 **[ESP32 BT CAT for IC-705](https://github.com/ok1cdj/IC705-BT-CIV)** — Ondrej "OK1CDJ". WIFILT
 began as a derivative of this project — the header comment at the top of `wifilt.ino` still
-says so. The Bluetooth transport it started from is gone (LAN, CI-V and TrxNet only, since
-2026-07), but the origin is credited regardless of how much of the original code remains.
+says so. What that project was is a CI-V CAT engine on a Bluetooth SPP transport. The
+Bluetooth transport is gone (LAN, CI-V and TrxNet only, since 2026-07), but the CI-V engine
+underneath it stayed: `sendCatRequest()`, `processCatMessages()`, `printFrequency()`,
+`printMode()`, `searchRadio()` and the CI-V frame constants in `wifilt.ino` still descend
+from that code and still run every CI-V connection. This is a live dependency, not only a
+historical credit.
 
 **[wfview](https://gitlab.com/eliggett/wfview/)** — Elliott Liggett (W6EL), Phil Taylor
 (M0VSE) and contributors. Icom's network control protocol is undocumented. wfview worked it
@@ -828,23 +832,25 @@ its own FSK output as before, and the palette just mirrors what was sent.
 > on its own, not even when it reopens itself after a page reload. Closing the palette hands
 > the audio back.
 
-Every RTTY setting — tone, shift, polarity, squelch, AFC, NORMAL/REVERSE and the
+**In `RTTY`/`RTTY-R` the radio decides where the palette listens.** It reads the radio's own
+**RTTY Mark Frequency** and **RTTY Keying Polarity** from its SET menu ([section 6.7](#67-what-the-page-takes-from-the-radio)
+describes the same reading on the full page) and tunes the decoder to match, so the tone you
+set for `USB-D` audio is not used there and does not need to be. The title bar shows the mark
+it settled on — `RTTY 2125`. A **`?`** after that number means it could not be read from the
+radio and the **FSK mark frequency** setting on the full RTTY-ICOM page was used instead: that
+happens on models whose address is not verified (everything except the IC-705 and IC-7610
+today) and when the radio does not answer in time. Nothing is ever written to the radio's menu
+— the reading is one-way.
+
+**Squelch is always off in the palette**, whatever the full page is set to, so a level dialled
+in there can never quietly swallow a weak caller here. A gap of a few seconds with nothing
+decoded starts a new block of text, which is what separates one station from the next.
+
+Every other RTTY setting — tone, shift, polarity, squelch level, AFC, NORMAL/REVERSE and the
 transmit-gain calibration — lives on the full RTTY-ICOM page under the **DATA** tab
 ([section 6](#6-data--rtty-icom)). The palette follows whatever you set there, live, and
 changing a setting on that page reaches an open palette without a reload. The button is
 hidden unless ICOM-LAN is configured, since without it there is no audio to listen to.
-
-> **The palette does not read the radio's own RTTY menu.** The full page does
-> ([section 6.7](#67-what-the-page-takes-from-the-radio)); the palette simply decodes with
-> the tone and polarity as they stand in SETTINGS. Two things follow, and both matter the
-> first time you work real FSK from the log:
->
-> - **REVERSE.** Open the full RTTY-ICOM page once while the radio is in `RTTY`/`RTTY-R`. It
->   switches REVERSE on and *stores* it, and the palette picks it up from there.
-> - **The tone.** The page's own retune to the radio's Mark Frequency is deliberately never
->   stored, so the palette does not inherit it. If your radio's *RTTY Mark Frequency* is not
->   2125 Hz, set **Default TX/RX tone** on the full page to match it — that field is the same
->   lower tone the radio's menu names.
 
 ### 3.7 The status bar
 
@@ -911,6 +917,12 @@ The cluster pane keeps the **width** you gave it. Resize the browser window and 
 takes up the difference — the pane is sized to the spot columns you want to read, and those
 do not get wider just because the window did. Only a window too narrow to hold both halves
 makes the pane give ground, and it takes its width back as soon as there is room again.
+
+The row of tabs keeps its right-hand side — GPS, signal strength, `⚠ OFFLINE` and the
+firmware version — as long as the logbook half is wide enough for it. Drag the divider far
+enough to the right and that side gives way in one step at a time: first the firmware
+version, then the whole group, so the tab labels are never cut off. Give the logbook its
+room back and it all returns.
 
 ![DX cluster beside the log](img/qrplog-dxc-split.png)
 
@@ -2019,12 +2031,28 @@ Unattended operation can also be revoked remotely from SETUP — see
 
 ![Settings](img/js8call-settings.png)
 
-The collapsed header carries small non-clickable markers showing which functions are
-currently active, so you can see the station's posture without opening the section. All but
-one go grey when *Enable radio TX* is off, because none of them can reach the air without
-it; **IGATE** is the exception, since it publishes to the internet and never keys the
-transmitter. Its number is verified packets against the hourly ceiling —
+The collapsed header carries small pills showing which functions are currently active, so
+you can see the station's posture without opening the section — **and they are the switches
+as well.** This section is long, and stopping a station that is transmitting, or putting the
+heartbeat back on, should not need it unrolled.
+
+| Pill | What a tap does |
+|---|---|
+| **TX** | off at once; on only on a **second** tap. The first turns the pill into `TX?` for three seconds, and anything else touched in the header cancels it — switching transmission on is the pledge below, so it never happens by a stray finger. |
+| **AUTO** | arms or revokes unattended operation, exactly as the tickbox does. If the interface refuses the arming, SETTINGS opens at *Unattended for*, where the reason is written; the switch stays where you put it. |
+| **CQ** | repeated CQ on at the interval last in force — 10 minutes if none has been chosen since the page loaded. The interval itself is in the tooltip and in the menu. |
+| **HB**, **ACK** | heartbeat transmission and heartbeat acknowledgements, on and off. |
+| **IGATE** | switches the gate off at once, and on only when the login is complete: a tap with the passcode missing opens SETTINGS at the field that is missing, rather than storing a gate that could not gate. |
+
+All but one go grey when *Enable radio TX* is off, because none of them can reach the air
+without it — and while it is off they switch nothing either: a tap opens SETTINGS at
+*Enable radio TX*, the switch that has to come first. **IGATE** is the exception, since it
+publishes to the internet and never keys the transmitter; it stays live and switchable. Its
+number is verified packets against the hourly ceiling —
 [section 5.7](#57-aprs-is-gate-igate).
+
+One rule covers all of them: **a pill that cannot do its job right now never switches
+anything — it opens SETTINGS at whatever is missing.**
 
 | Setting | Meaning |
 |---|---|
@@ -2289,6 +2317,7 @@ macros build the whole exchange for you — [section 3.5](#35-cw-and-rtty-macros
 | **AFC rate** | Hz per Baudot character (165 ms), not Hz per second — the unit the operator actually reasons in |
 | **AFC max deviation** | Hz, up to 180. The cap keeps both tones inside the 400% view, and the fixed 170 Hz shift keeps the pair unambiguous beyond half a shift. |
 | **TRX RF power** | percent, with the watts beside it and a **SET** button. Written to the radio when the page opens and after the link returns; turning the knob on the radio stops that until the next SET — the same convention as JS8, WSPR and Mercury. |
+| **FSK mark frequency** | 1275 / 1615 / 2125 Hz — the radio's own *RTTY Mark Frequency*. Normally the last value the radio itself answered, since a successful read writes it back here, and it is only **used** when the radio cannot be asked: a model whose address is not verified, or a read that times out. On such a model it is the whole story, which is why it is an operator-facing setting at all. |
 | **FSK output** | `Internal (this device's own GPIO)` or `External (TrxNet device)`, and the peer's **NET_ID** when external, with the live peer list below it. **This is a station-wide setting** — QRPLog uses it too, from any computer — and it is stored in the interface, not in this browser. It only chooses *where* the FSK signal originates; whether FSK is used at all is always the radio's mode. |
 
 The shift is a fixed **170 Hz** at **45.45 baud** — the decoder is built around those and
@@ -2304,22 +2333,25 @@ items once:
 - **RTTY Mark Frequency** (1275 / 1615 / 2125 Hz) retunes the decoder to match — **in memory
   only.** It is never saved, and it is put back the moment the radio leaves real FSK, so it
   can never bleed into your own `USB-D`/`LSB-D` tone preference.
-- **RTTY Keying Polarity** is forced to *Normal* if the radio answers *Reverse*. Unlike the
-  network MOD level, this menu item has no legitimate reason to sit on Reverse, and the
-  header's REVERSE pill already covers "this one contact is inverted" at the decode layer.
+- **RTTY Keying Polarity** decides REVERSE. It is **read, never written** — a radio left on
+  *Reverse* on purpose decodes instead of being silently corrected, and nothing this page does
+  can change a menu item in your radio. (An older version did force it back to *Normal*:
+  one-way, with no undo, and once the palette could hold the session that write could have
+  come from a *logging* page.)
 
-**REVERSE is switched on automatically in `RTTY`/`RTTY-R`, every time, on every band.** This
-is not a band convention and not a fault: this application calls mark the *upper* tone, the
-radio's own FSK modem does not, and the two disagree regardless of what Keying Polarity says.
-Confirmed on the air on both 80 m and 20 m. It is re-derived only when the radio enters or
-leaves real FSK, so a manual override you set for one contact survives a link blip.
+**With the radio's polarity on *Normal*, REVERSE goes on** — on every band. This is not a band
+convention and not a fault: this application calls mark the *upper* tone, the radio's own FSK
+modem does not, and the two disagree. Confirmed on the air on both 80 m and 20 m. A radio
+answering *Reverse* is that finding inverted, so REVERSE stays off; the tones themselves never
+move either way. It is re-derived only when the radio enters or leaves real FSK, so a manual
+override you set for one contact survives a link blip.
 
 Every step of this fails silently: an unverified model, a read that times out, an answer that
 makes no sense — the sync is simply skipped and the settings stand as they are.
 
-> **On the palette in QRPLog this radio sync does not run** — the palette decodes with the
-> tone and polarity stored in SETTINGS. If your radio's Mark Frequency is not the stored
-> value, open this page once in the DATA tab to have it read and applied.
+> The **QRPLog palette runs exactly the same sync**, from the same shared implementation — see
+> [section 3.6](#36-the-rtty-palette) for the `RTTY 2125` read-out in its title bar and what a
+> trailing `?` there means.
 
 ---
 
@@ -2827,6 +2859,19 @@ already exists overwrites it. **Picking a configuration only fills the form**; i
 radio like any other edit, at the next *Save & Restart*. This is for a slot that swaps between
 physical radios — the borrowed set for a contest, the local-trx bridge, the club station —
 without retyping everything each time.
+
+The drop-down is also a **read-out**. It shows the saved configuration the fields currently
+hold, worked out by comparing them, so it is right after a reload and it goes back to
+**— new configuration —** the moment you change an address. That is why the placeholder cannot
+be picked: it is an answer the page works out, not a choice. To start a new configuration, just
+type a new name in the box beside it. The comparison is scoped to what the chosen connection
+actually writes, and it reads blank fields the way the interface reads them, so a configuration
+you just saved always reads back as the one in force.
+
+Two things deliberately stay out of that comparison. The **Label** is not part of it — the
+interface adopts a radio's own model as the label when it first answers, and a configuration
+should not lose its name because of that. Neither is **Active**: whether a slot is in use is a
+property of the slot, so loading a configuration onto a switched-off slot does not switch it on.
 
 > **ICOM-LAN may be used by only one slot.** The audio path and the single-operator lock
 > belong to one radio. The form enforces it: once a slot is on ICOM-LAN, the option

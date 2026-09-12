@@ -101,11 +101,25 @@
   const AFC_RATE_MIN_HZ_PER_CHAR = 5, AFC_RATE_MAX_HZ_PER_CHAR = 85;
   const AFC_MAX_DEVIATION_MIN_HZ = 10, AFC_MAX_DEVIATION_HARD_CAP_HZ = 180;
 
+  // The radio's RTTY Mark Frequency, as a FACT about this station's radio --
+  // not a listening preference (grilled 2026-09-10). rtty-fsk-sync.js reads
+  // the real value out of the radio over CI-V and writes the answer back
+  // here, so this is normally the last thing the operator's own radio said;
+  // it is only ever *used* when the radio cannot be asked -- a timed-out
+  // read, or one of the models with no verified rttyMarkFreqCmd
+  // (icom-models.js has it for IC-705 and IC-7610 only, so on an
+  // IC-7300MK2/IC-9700/IC-7760 this value is the whole story).
+  //
+  // Icom's own three menu choices, duplicated from that file's MARK_HZ table
+  // rather than imported: this store must stay load-order-independent of
+  // every other RTTY file, the same reason CENTER_SHIFT_HZ is a literal above.
+  const FSK_MARK_CHOICES_HZ = [1275, 1615, 2125];
+
   function defaults() {
     return {v: SCHEMA_VERSION, toneHz: 1500, reverse: false,
             squelchThreshold: 4, rfPercent: null, txPolarity: "normal",
             afcEnabled: false, afcRateHzPerChar: 60, afcMaxDeviationHz: 60,
-            squelchNewlineEnabled: false};
+            squelchNewlineEnabled: false, fskMarkHz: 2125};
   }
 
   function normalize(input) {
@@ -144,6 +158,12 @@
       // first trying it on) -- same `=== true` gate as reverse/afcEnabled
       // above: missing/malformed input reads as "off".
       squelchNewlineEnabled: source.squelchNewlineEnabled === true,
+      // Not a range check like the others: only Icom's own three values mean
+      // anything, and a fourth number would put the decoder somewhere the
+      // radio's FSK modem never transmits -- silently, which is the class of
+      // bug this whole field exists to end.
+      fskMarkHz: FSK_MARK_CHOICES_HZ.indexOf(Math.round(Number(source.fskMarkHz))) >= 0
+        ? Math.round(Number(source.fskMarkHz)) : d.fskMarkHz,
     };
   }
 
@@ -171,5 +191,6 @@
           squelchMagnitudeToDb, squelchDbToMagnitude,
           AFC_RATE_MIN_HZ_PER_CHAR, AFC_RATE_MAX_HZ_PER_CHAR,
           AFC_MAX_DEVIATION_MIN_HZ, AFC_MAX_DEVIATION_HARD_CAP_HZ,
+          FSK_MARK_CHOICES_HZ,
           defaults, normalize, load, save};
 });

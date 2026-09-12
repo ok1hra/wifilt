@@ -8,7 +8,7 @@
      gate-card) so the four cannot drift apart; rtty.css carries only what is
      genuinely RTTY's, same split as wspr.css/mercury.css.
      docs/rtty-implementace.md -- grilled 2026-08-27. -->
-<link rel="stylesheet" href="/data.css?v=14329f65">
+<link rel="stylesheet" href="/data.css?v=fc2e7bd1">
 <link rel="stylesheet" href="/rtty.css?v=4f045718">
 <!-- ?popup=1 strips this page down to the modem itself, hiding both nav
      bars. QRPLOG's RTTY button opened it that way until 2026-09-07, when it
@@ -290,6 +290,20 @@
            2026-08-29 (grilled): to the end of SETTINGS -- an operator sets
            this once per station, unlike Squelch/Tone/AFC/RF power above,
            which get touched every session. -->
+      <!-- The radio's own RTTY Mark Frequency (SET menu). Read straight out of
+           the radio over CI-V whenever it can be (IC-705/IC-7610 today), and
+           a successful read overwrites this field -- so it is normally the
+           last thing this station's radio said, and is only USED when the
+           radio cannot be asked. On a model with no verified address it is
+           the whole story, which is why it is here at all. -->
+      <label>FSK mark frequency
+        <select id="rttyFskMark" class="rtty-settings-narrow">
+          <option value="1275">1275 Hz</option>
+          <option value="1615">1615 Hz</option>
+          <option value="2125">2125 Hz</option>
+        </select>
+        <small>Follows the radio's own RTTY menu when it can be read.</small>
+      </label>
       <label>FSK output
         <select id="rttyFskOutputMode">
           <option value="internal">Internal (this device's own GPIO)</option>
@@ -324,7 +338,7 @@
 <script src="/rtty-codec.js?v=5e2d128c"></script>
 <script src="/rtty-afc.js?v=b1330905"></script>
 <script src="/rtty-presets.js?v=5ec21ec3"></script>
-<script src="/rtty-settings.js?v=5e1870b1"></script>
+<script src="/rtty-settings.js?v=482398e5"></script>
 <script src="/spectrum.js?v=7fafbbb5"></script>
 <!-- js8-aud1.js: the shared AUD1 RX+TX contract, unchanged, same file
      wspr.html loads directly (no Worker here, unlike Mercury). js8-tx.js is
@@ -361,9 +375,10 @@
      (log-rtty-panel.js) draws the same scope, shows the same RX log and
      transmits through the same AFSK path instead of carrying second,
      drifting copies of all three. Load order: rtty.js consumes them. -->
+<script src="/rtty-fsk-sync.js?v=49b392d8"></script>
 <script src="/rtty-scope.js?v=c2f2337f"></script>
 <script src="/rtty-rxlog.js?v=b8bfe16f"></script>
 <script src="/rtty-afsk-tx.js?v=121d6342"></script>
-<script src="/rtty.js?v=e6c53ab5"></script>
+<script src="/rtty.js?v=3132471e"></script>
 </body>
 </html>

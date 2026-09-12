@@ -318,8 +318,9 @@ launcher is a third, independent file that knows about both, exactly the boundar
 draws.
 
 `tools/native-integration-test.sh` runs the whole chain against a fake radio — RS-BA1
-handshake, CI-V reaching `/state`, and the `AUD1` audio WebSocket when the binary can bind
-port 83 — with no radio and nothing on the air. `.github/workflows/build.yml` builds all
+handshake, CI-V reaching `/state`, a teardown that hands the session back on *both* the
+control and the CI-V channel so an in-place reconnect still gets CAT, and the `AUD1` audio
+WebSocket when the binary can bind port 83 — with no radio and nothing on the air. `.github/workflows/build.yml` builds all
 four targets, ESP32, Linux, Linux ARM64 and Windows, on every push — the ARM64 job runs on a
 real GitHub-hosted ARM64 runner and exercises the same integration test natively, not the
 `arm64` cross-compile target above (which exists for `tools/release.sh`, run from an x86_64
@@ -383,8 +384,10 @@ Two more third-party dependencies come in with `local-trx`, vendored as single-h
 libraries under `local-trx/third_party/` rather than linked:
 [nlohmann/json](https://github.com/nlohmann/json) (MIT) for `config.json`, and
 [mackron/miniaudio](https://github.com/mackron/miniaudio) (public domain / MIT-0) for audio
-capture and playback. Together with `hamlib` (LGPL 2.1 or later) and `libserialport` (LGPL
-3.0 or later) linked above, the full license text for all four is in
+capture and playback. A third, [doctest](https://github.com/doctest/doctest) (MIT), sits
+beside them for `local-trx/tests/` only and is never linked into a shipped binary. Together
+with `hamlib` (LGPL 2.1 or later) and `libserialport` (LGPL 3.0 or later) linked above, the
+full license text for all five is in
 [data/THIRD-PARTY-NOTICES.txt](data/THIRD-PARTY-NOTICES.txt) — the same notice `wifilt`
 itself serves and links from its own SETUP page.
 

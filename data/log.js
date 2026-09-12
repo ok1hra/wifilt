@@ -1975,7 +1975,11 @@ function sendMacroText(macroType) {
     const text = LogMacros.buildMacro(macroType, ctx);
     if (!text) return;
     const gen = app.qsoGeneration;
-    sendViaRttyIcomPage(text).then(() => {
+    // sendAsRtty(), not sendViaRttyIcomPage() directly: with the in-page RTTY
+    // palette holding the session this used to post into a BroadcastChannel
+    // nobody in this tab receives and then refuse the send with "no RTTY-ICOM
+    // page is open" -- the very pop-up the palette replaced.
+    sendAsRtty(text).then(() => {
       if (!RST_BEARING_MACROS.includes(macroType)) return;
       if (gen !== app.qsoGeneration) return;
       app.rstSentTx = ctx.rstSent;
@@ -2001,11 +2005,9 @@ function sendMacroText(macroType) {
   // Mirror the built text into RTTY-ICOM's RX window for display -- same
   // fire-and-forget style, same message shape, not for isOi3 (external
   // keyer, no display for it in rtty.js).
-  if (mg === 'RTTY' && !isOi3 && rttyTxChannel) {
+  if (mg === 'RTTY' && !isOi3) {
     const echoText = LogMacros.buildMacro(macroType, ctx);
-    if (echoText) {
-      try { rttyTxChannel.postMessage({ type: 'rtty-tx-fsk-echo', text: echoText }); } catch (_error) {}
-    }
+    if (echoText) echoRttyFsk(echoText);
   }
   LogMacros.sendMacro(macroType, ctx).then(ok => {
     if (!ok) { showHint('Send failed'); return; }
@@ -2103,6 +2105,29 @@ async function sendViaRttyIcomPage(text) {
   await rttyTxWait(requestId, sendTimeoutMs, 'the RTTY-ICOM page did not confirm the send in time');
 }
 
+// The one delivery point for both callers (macro buttons and free text).
+// Two surfaces can hold the shared AUD1 session on RTTY's behalf: the in-page
+// palette on this very page, or a separate RTTY-ICOM tab. The palette is asked
+// first -- BroadcastChannel does NOT deliver to the posting context, so with
+// the palette open the hand-off above reaches nobody and can only fail. Every
+// other case (a separate tab, or nothing at all) falls through to the channel
+// exactly as it always did, timeout wording included.
+function sendAsRtty(text) {
+  const panel = window.RttyPanel;
+  return panel && panel.holdsSession() ? panel.send(text) : sendViaRttyIcomPage(text);
+}
+
+// The display-only counterpart, for the FSK-backend sends described at both
+// call sites. Both surfaces again, and for the same reason -- the palette is
+// in this very tab, which its own BroadcastChannel post never reaches.
+function echoRttyFsk(text) {
+  const panel = window.RttyPanel;
+  if (panel && panel.echoTx) panel.echoTx(text);
+  if (rttyTxChannel) {
+    try { rttyTxChannel.postMessage({ type: 'rtty-tx-fsk-echo', text: text }); } catch (_error) {}
+  }
+}
+
 function sendRawText(text) {
   if (!text || !window.LogMacros) return;
   const trxIdx = app.activeTrx - 1;
@@ -2117,17 +2142,7 @@ function sendRawText(text) {
   // through audio too). OI3 TRX (external keyer) ignore this entirely; AUD1
   // has no relationship to that keyer.
   if (mg === 'DATA' && app.aud1Role === 'rtty' && !isOi3) {
-    // The in-page palette first, when it is the one holding the session.
-    // BroadcastChannel does NOT deliver to the posting context, so with the
-    // palette open the hand-off below would reach nobody and simply time out
-    // after its full send timeout. Falls through to the channel whenever the
-    // holder is a separate RTTY-ICOM tab instead -- that setup still works
-    // exactly as it did.
-    const panel = window.RttyPanel;
-    const send = panel && panel.holdsSession()
-      ? panel.send(text)
-      : sendViaRttyIcomPage(text);
-    send.catch(error => showHint(String(error.message || error)));
+    sendAsRtty(text).catch(error => showHint(String(error.message || error)));
     return;
   }
   if (mg === 'NONE' || mg === 'DATA') { showHint(app.mode + ' cannot be keyed — send manually'); return; }
@@ -2144,9 +2159,7 @@ function sendRawText(text) {
   // succeeds or fails on the firmware side whether or not any RTTY-ICOM tab
   // is open to show it. Not for isOi3 (external K3NG keyer, a different
   // physical device rtty.js has no display for).
-  if (mg === 'RTTY' && !isOi3 && rttyTxChannel) {
-    try { rttyTxChannel.postMessage({type: 'rtty-tx-fsk-echo', text}); } catch (_error) {}
-  }
+  if (mg === 'RTTY' && !isOi3) echoRttyFsk(text);
   fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     .catch(() => {});
 }

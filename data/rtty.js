@@ -72,6 +72,7 @@
     // Item 5 (2nd session): FSK output mode/NET_ID, moved here from SETUP --
     // see loadFskConfig()/saveFskOutput() below.
     "rttyFskOutputMode", "rttyFskNetIdRow", "rttyFskNetId", "rttyTrxnetPeersFsk",
+    "rttyFskMark",
     "rttySettingsSection",
   ]) dom[id] = $(id);
 
@@ -102,7 +103,7 @@
   function setSquelchEnabled(enabled) {
     settings.squelchThreshold = enabled ? squelchOnMagnitude : 0;
     saveSettings();
-    decoder.setSquelchThreshold(settings.squelchThreshold);
+    applyEffective();
     dom.rttySquelchInput.value = String(Math.round(RttySettings.squelchMagnitudeToDb(squelchOnMagnitude)));
     dom.rttySquelchLive.textContent = formatSquelchDb(RttySettings.squelchMagnitudeToDb(squelchOnMagnitude));
     renderStatusPills();
@@ -136,189 +137,108 @@
   // palette draws its mark/space lines from the same definitions instead of a
   // second copy. They are pure functions of `settings`; these thin wrappers
   // keep every call site in this file reading exactly as it did.
-  const markToneHz = () => RttyScope.markToneHz(settings);
-  const dialToMarkHz = (dialHz, mode) => RttyScope.dialToMarkHz(settings, dialHz, mode);
-  const markToDialHz = (markTargetHz, mode) => RttyScope.markToDialHz(settings, markTargetHz, mode);
+  // `effective`, not `settings`: in real FSK the tone these draw and compute
+  // from is the radio's own Mark Frequency, not the operator's stored AFSK
+  // one (rtty-fsk-sync.js). Outside RTTY/RTTY-R the two are the same object.
+  const markToneHz = () => RttyScope.markToneHz(effective);
+  const dialToMarkHz = (dialHz, mode) => RttyScope.dialToMarkHz(effective, dialHz, mode);
+  const markToDialHz = (markTargetHz, mode) => RttyScope.markToDialHz(effective, markTargetHz, mode);
   // The pair the solid overlay lines sit on and afcTick() searches around --
   // spaceHz is just markHz's mirror image around settings.toneHz, whichever
   // physical tone markToneHz() currently calls mark.
-  const expectedMarkSpaceHz = () => RttyScope.expectedMarkSpaceHz(settings);
+  const expectedMarkSpaceHz = () => RttyScope.expectedMarkSpaceHz(effective);
 
-  // ---- reverse default (native RTTY/RTTY-R only) ---------------------------
+  // ---- radio-authoritative FSK decode settings (real RTTY/RTTY-R only) ----
   //
-  // USB-D/LSB-D always ride the same fixed audio sideband regardless of band
-  // (this file's own dialToMarkHz() convention above), so "normal" decodes
-  // there on every band -- confirmed on air 2026-08-29 on both 80m and 20m.
-  // Real FSK (RTTY/RTTY-R, dial==mark, no software sideband choice) needs
-  // reverse EVERY time, band-independent -- also confirmed on air the same
-  // session on both 80m and 20m. An earlier version of this function gated
-  // reverse below 10 MHz off a single 80m data point (the traditional ham
-  // RTTY LSB/USB sideband split); 20m needing it too disproved that -- this
-  // is not a band convention at all. What it actually is: this app's own
-  // mark/space convention (markToneHz()'s comment -- mark is the UPPER tone
-  // when not reversed) simply disagrees with what this radio's real FSK
-  // modem does, independent of band and independent of the radio's own
-  // Keying Polarity SET-menu item (forced to Normal by syncFskFromRadio()
-  // below; reverse is still needed regardless -- see that function's own
-  // comment, now confirmed rather than an open question).
-  function autoReverseFor(mode) {
-    return mode === "RTTY" || mode === "RTTY-R";
+  // Both halves -- the decoder's centre from the radio's RTTY Mark Frequency,
+  // and settings.reverse from its RTTY Keying Polarity -- moved into
+  // rtty-fsk-sync.js on 2026-09-10, because QRPlog's RTTY palette needs
+  // exactly the same policy and had none of it (that file's header carries
+  // the whole reasoning, including why the old one-way write to the radio's
+  // Keying Polarity menu is gone). What stays here is the wiring: which CI-V
+  // reader it uses, where its answers land, and what a change re-tones.
+  //
+  // The reader is TxGainModLevel.ModLevelClient, whose read(command) is
+  // already the generic "arm /cmd civ.read, poll /civread until the sequence
+  // moves" loop this page used to carry a private third copy of. Its capability
+  // getter is about the MOD level and is not consulted for an explicit command.
+  const civClient = new TxGainModLevel.ModLevelClient({
+    send: payload => commandJson(payload),
+    model: () => liveRadioModel(),
+  });
+
+  const fskSync = RttyFskSync.create({
+    read: command => civClient.read(command).then(answer => answer && answer.value),
+    model: () => liveRadioModel(),
+    fallbackMarkHz: () => settings.fskMarkHz,
+    // Self-healing: what the radio actually answered becomes the stored
+    // fallback, so a later timed-out read lands on this radio's own last
+    // truth instead of a guess.
+    onMarkRead: hz => {
+      if (settings.fskMarkHz === hz) return;
+      settings.fskMarkHz = hz;
+      saveSettings();
+      if (dom.rttyFskMark) dom.rttyFskMark.value = String(hz);
+    },
+    onChange: () => applyEffective(),
+  });
+
+  // The settings the decoder, the overlay and the AFC actually run on:
+  // `settings` as stored, with the FSK override laid over it while the radio
+  // is in RTTY/RTTY-R and this page holds the audio. Never written back --
+  // effective() hands back the stored object itself when nothing is
+  // overridden, so outside real FSK the two are literally the same object.
+  let effective = settings;
+
+  function applyEffective() {
+    const before = effective;
+    effective = fskSync.effective(settings);
+    // No boot guard, deliberately: `decoder` and `afcTracker` below are
+    // const-initialised while this module evaluates, and nothing can call
+    // this before that finishes -- every caller is an event handler, a fetch
+    // continuation or fskSync.observe(), none of which exist yet. (A
+    // `typeof decoder` guard would be worse than useless here: typeof throws
+    // on a const still in its temporal dead zone, so it would turn the case
+    // it claims to handle into an exception.)
+    decoder.setReverse(effective.reverse);
+    decoder.setSquelchThreshold(effective.squelchThreshold);
+    // afcReset() re-tones the decoder on its way out (its onOffset does), so
+    // a moved centre goes through it rather than being written twice -- and
+    // an AFC offset accumulated around the OLD centre is nonsense applied to
+    // this one.
+    if (effective.toneHz !== before.toneHz) afcReset();
+    else decoder.setToneOffset(effective.toneHz + afcTracker.offsetHz());
+    drawScopeOverlay();
+    renderStatusPills();
+    renderToneField();
   }
 
-  // Shared by the manual #rttyReverse pill and applyAutoReverseDefault()
-  // below, so both go through the same decoder/persist/render sequence.
+  // The tone field shows what is being listened on, which in real FSK is the
+  // radio's own Mark Frequency -- and is then READ-ONLY: the radio owns it,
+  // there is nothing here to type that would survive. Same rule the palette
+  // has by construction (no tone field at all).
+  function renderToneField() {
+    if (!dom.rttyToneInput) return;
+    dom.rttyToneInput.value = String(Math.round(effective.toneHz - RttyCodec.SHIFT_HZ / 2));
+    const held = fskSync.active();
+    dom.rttyToneInput.disabled = held;
+    dom.rttyToneInput.title = held
+      ? "The radio's own RTTY Mark Frequency is in force while it is in RTTY/RTTY-R" +
+        (fskSync.fromRadio() ? "" : " (not read from the radio -- FSK mark frequency setting)")
+      : "";
+  }
+
+  // Shared by the manual #rttyReverse pill and the FSK sync above, so both go
+  // through the same decoder/persist/render sequence.
   function setReverse(value) {
+    // While the radio's polarity is in force, the pill is the per-contact
+    // escape for a station that transmits inverted -- transient, like
+    // everything else the sync owns, and re-derived on the next edge. The
+    // stored preference (which belongs to USB-D/LSB-D AFSK) is left alone.
+    if (fskSync.setReverse(value)) return;
     settings.reverse = value;
     saveSettings();
-    decoder.setReverse(settings.reverse);
-    renderStatusPills();
-  }
-
-  // Re-evaluated only on the RTTY/RTTY-R <-> anything-else edge (band plays
-  // no part any more, so a band change while staying in RTTY/RTTY-R must not
-  // re-fire this) -- a LAN reconnect that lands back in the same mode family
-  // must not clobber a manual override the operator just set for the
-  // current contact (this pill is deliberately "RX-only decode compatibility
-  // with a station whose TX happens to be inverted", per rtty-settings.js's
-  // own comment, and that per-contact choice needs to survive a link blip).
-  let lastAutoReverseKey = null;
-  function applyAutoReverseDefault() {
-    if (!state.radio.connected) return;
-    const isRttyMode = state.radio.mode === "RTTY" || state.radio.mode === "RTTY-R";
-    const key = isRttyMode ? "rtty" : null;
-    if (key === lastAutoReverseKey) return;
-    lastAutoReverseKey = key;
-    setReverse(autoReverseFor(state.radio.mode));
-  }
-
-  // ---- radio-authoritative FSK tone/polarity sync (real RTTY/RTTY-R only) -
-  //
-  // Grilled 2026-08-29. Icom's "RTTY Keying Polarity" (00=Normal/01=Reverse)
-  // and "RTTY Mark Frequency" (00=1275/01=1615/02=2125 Hz) are the radio's
-  // OWN SET-menu items (1A 05, model-specific subaddresses -- icom-models.js)
-  // -- wholly independent of the CI-V mode byte that picks RTTY vs RTTY-R.
-  // On entering either real-FSK mode this reads both once and:
-  //  - forces Keying Polarity to Normal if the radio answers Reverse. A
-  //    one-way fix, no undo -- unlike the network MOD level (tx-gain-mod-
-  //    level.js), this menu item has no legitimate reason to sit on Reverse;
-  //    the operator-facing #rttyReverse pill above already covers "this one
-  //    contact's TX happens to be inverted" at the decode layer.
-  //  - retunes settings.toneHz to the radio's actual Mark Frequency, IN
-  //    MEMORY ONLY (never saveSettings()'d), reverted the moment the radio
-  //    leaves RTTY/RTTY-R -- so it can never bleed into the operator's own
-  //    USB-D/LSB-D tone preference, which is what settings.toneHz otherwise
-  //    persists (rtty-settings.js kap.1 decision 5: one shared RX/TX tone).
-  //    Shift Width (also readable, 00=170/01=200/02=425 Hz) is deliberately
-  //    NOT read: RttyCodec.SHIFT_HZ is a hardcoded 170 Hz this decoder could
-  //    not follow to a different value anyway, so reading it would only let
-  //    the centre be computed more precisely for a signal this app cannot
-  //    decode regardless.
-  //
-  // Deliberately does NOT touch settings.reverse. Icom parameterises Mark
-  // Frequency as the LOWER of each 170 Hz pair, suggesting Normal means
-  // "mark is the lower tone" -- but this app's own markToneHz()/Decoder
-  // convention calls mark the UPPER tone when not reversed. Confirmed on air
-  // 2026-08-29 (both 80m and 20m) that those two "Normal"s do NOT agree:
-  // reverse is still needed every time in RTTY/RTTY-R even with Keying
-  // Polarity forced to Normal here, band-independent -- see
-  // autoReverseFor()'s own comment above, which is what actually sets
-  // settings.reverse now.
-  //
-  // Every step fails silently: an unverified model (no rttyMarkFreqCmd/
-  // rttyKeyingPolarityCmd row), a read that times out, an unrecognised
-  // reply -- this sync is just skipped, exactly like the band-threshold
-  // default's own missing-band case. No UI surfaces the failure; the
-  // existing pills remain the fallback.
-  const CIV_READ_URL = "/civread";
-  const RTTY_MARK_FREQ_HZ = {"00": 1275, "01": 1615, "02": 2125};
-
-  async function civRead(hexCommand, timeoutMs = 2500) {
-    let armed;
-    try { armed = await commandJson({type: "civ.read", data: hexCommand}); }
-    catch (_error) { return null; }
-    const wanted = hexCommand.toUpperCase();
-    let baseline = Number.isFinite(Number(armed && armed.seq)) ? Number(armed.seq) : null;
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() <= deadline) {
-      await new Promise(resolve => setTimeout(resolve, 250));
-      let json;
-      try {
-        const response = await fetch(CIV_READ_URL, {cache: "no-store", signal: fetchDeadline()});
-        if (!response.ok) continue;
-        json = await response.json();
-      } catch (_error) { continue; }
-      const seq = Number(json.seq) || 0;
-      if (baseline === null) baseline = seq;
-      if (seq === baseline) continue;
-      const reply = String(json.reply || "").toUpperCase();
-      if (String(json.cmd || "").toUpperCase() !== wanted || !reply.startsWith(wanted)) continue;
-      return reply.slice(wanted.length) || null;
-    }
-    return null;
-  }
-
-  async function civWriteByte(hexCommand, byteHex) {
-    try { await command({type: "civ.raw", data: hexCommand + byteHex}); }
-    catch (_error) { /* silent -- see this section's own comment */ }
-  }
-
-  // settings.toneHz as it was before syncFskFromRadio() last overrode it, so
-  // restoreToneHzIfOverridden() (called the moment RTTY/RTTY-R is left) has
-  // the operator's own persisted value to put back -- null means "not
-  // currently overridden".
-  let toneHzBeforeFskSync = null;
-
-  function applyTransientToneHz(centreHz) {
-    if (toneHzBeforeFskSync === null) toneHzBeforeFskSync = settings.toneHz;
-    settings.toneHz = centreHz;
-    // Mirrors setToneFromSpaceHz()'s own reset -- an AFC offset accumulated
-    // around the OLD centre is nonsense applied to this one.
-    afcReset();
-    drawScopeOverlay();
-    dom.rttyToneInput.value = String(Math.round(centreHz - RttyCodec.SHIFT_HZ / 2));
-  }
-
-  function restoreToneHzIfOverridden() {
-    if (toneHzBeforeFskSync === null) return;
-    settings.toneHz = toneHzBeforeFskSync;
-    toneHzBeforeFskSync = null;
-    afcReset();
-    drawScopeOverlay();
-    dom.rttyToneInput.value = String(Math.round(settings.toneHz - RttyCodec.SHIFT_HZ / 2));
-  }
-
-  async function syncFskFromRadio() {
-    // liveRadioModel() is the radio's NAME string (see its own definition
-    // below) -- every other reader here (WsprCore.fullPowerWatts(),
-    // gainCal's calModel()) passes that straight into a resolver of its own,
-    // and findModel() is this codebase's own such resolver for the actual
-    // model row (icom-models.js).
-    const model = IcomModels.findModel(liveRadioModel());
-    const keyingCmd = model && model.rttyKeyingPolarityCmd;
-    const markCmd = model && model.rttyMarkFreqCmd;
-    if (keyingCmd) {
-      const polarity = await civRead(keyingCmd);
-      if (polarity === "01") await civWriteByte(keyingCmd, "00");
-    }
-    if (markCmd) {
-      const mark = await civRead(markCmd);
-      const markHz = mark && RTTY_MARK_FREQ_HZ[mark];
-      if (markHz) applyTransientToneHz(markHz + RttyCodec.SHIFT_HZ / 2);
-    }
-  }
-
-  // Re-evaluated only on the RTTY/RTTY-R <-> anything-else edge (unlike
-  // applyAutoReverseDefault() above, Keying Polarity/Mark Frequency have
-  // nothing to do with band, so a band change while staying in RTTY/RTTY-R
-  // must not re-fire this or re-arm an already-settled CI-V read).
-  let fskRadioSyncKey = null;
-  function applyFskRadioSync() {
-    const isRttyMode = state.radio.mode === "RTTY" || state.radio.mode === "RTTY-R";
-    const key = state.radio.connected && isRttyMode ? "rtty" : null;
-    if (key === fskRadioSyncKey) return;
-    fskRadioSyncKey = key;
-    if (isRttyMode) syncFskFromRadio();
-    else restoreToneHzIfOverridden();
+    applyEffective();
   }
 
   // ---- session lease (shared with JS8/WSPR, kap.1 decision 9) --------------
@@ -461,8 +381,14 @@
       // radio's link being judged, not the browser's. rfPowerAuto itself
       // tracks the up/down transition (data/rf-power-auto.js).
       rfPowerAuto.onPollSuccess();
-      applyAutoReverseDefault();
-      applyFskRadioSync();
+      // The lease is the second half of the sync's edge key, so TAKE OVER
+      // from another page (mode unchanged) re-reads, and a page that has lost
+      // the session stops reading -- which is what keeps the firmware's
+      // single civReadArm() slot free of two readers at once. The lease, not
+      // isSessionHolder(): a CI-V read needs no audio socket, and starting it
+      // while the socket is still coming up means the tone is already right
+      // when the first samples land.
+      fskSync.observe(state.radio.mode, sessionHeld);
     } catch (_error) {
       state.radio.connected = false;
     } finally { statePollInFlight = false; }
@@ -591,7 +517,7 @@
     overlayCanvas: dom.rttyScopeOverlay,
     sampleRate: RX_AUDIO_RATE,
     baseLowHz: BASE_LOW_HZ, baseHighHz: BASE_HIGH_HZ,
-    settings: () => settings,
+    settings: () => effective,
     afcOffsetHz: () => afcTracker.offsetHz(),
     radio: () => state.radio,
     formatFrequency: RttyPresets.formatFrequency,
@@ -636,7 +562,8 @@
   // ---- RX decode (RttyCodec.Decoder) --------------------------------------
 
   const decoder = new RttyCodec.Decoder(RX_AUDIO_RATE,
-    {toneHz: settings.toneHz, reverse: settings.reverse, squelchThreshold: settings.squelchThreshold});
+    {toneHz: effective.toneHz, reverse: effective.reverse,
+     squelchThreshold: effective.squelchThreshold});
 
   // kap.13/13.4 + item 6: the RX log itself -- word tokens, the per-character
   // SNR gradient, scrollback trimming, the squelch-open break and this
@@ -682,7 +609,7 @@
   // "skip while the log is still empty" rule (and why that skip must not
   // consume the throttle window) live in the module.
   decoder.onEvent(evt => {
-    if (evt.type !== "squelch" || !evt.open || !settings.squelchNewlineEnabled) return;
+    if (evt.type !== "squelch" || !evt.open || !effective.squelchNewlineEnabled) return;
     rxLog.squelchBreak();
   });
 
@@ -730,7 +657,7 @@
   // they wrap and shared with QRPlog's RTTY palette. What stays here is the
   // wiring: which spectrum tap it reads, which decoder it re-tones.
   const afcTracker = RttyAfc.createTracker({
-    settings: () => settings,
+    settings: () => effective,
     liveValues: () => waterfall.state().liveValues,
     window: () => ({lowHz: waterfall.lowHz, highHz: waterfall.highHz}),
     markSpace: () => expectedMarkSpaceHz(),
@@ -738,7 +665,7 @@
     // AFC nudges only the decoder's own runtime tone offset --
     // settings.toneHz itself, and therefore this station's own TX tone and the
     // solid mark/space overlay lines, never move.
-    onOffset: offsetHz => decoder.setToneOffset(settings.toneHz + offsetHz),
+    onOffset: offsetHz => decoder.setToneOffset(effective.toneHz + offsetHz),
     charDurationMs: RttyCodec.CHAR_DURATION_MS,
   });
 
@@ -768,9 +695,8 @@
     // Item 4e (grilled): a manual retune re-centres on purpose -- any
     // accumulated AFC offset was relative to the OLD centre and would be
     // nonsense applied to the new one, so it starts over from 0 here.
-    afcReset();
-    drawScopeOverlay();
-    dom.rttyToneInput.value = String(clamped);
+    // applyEffective() does that reset itself once the centre has moved.
+    applyEffective();
   }
 
   // Click-to-tune-the-RADIO, real FSK only (RTTY/RTTY-R -- grilled 2026-08-30,
@@ -792,7 +718,7 @@
   // So: however far off (in audio Hz) the clicked signal sits from the fixed
   // reference tone, the dial needs exactly that same signed shift.
   function retuneRadioForLowHz(clickedLowHz) {
-    const referenceLowHz = settings.toneHz - RttyCodec.SHIFT_HZ / 2;
+    const referenceLowHz = effective.toneHz - RttyCodec.SHIFT_HZ / 2;
     const deltaHz = referenceLowHz - clickedLowHz;
     const newDialHz = Math.round((state.radio.frequency || 0) + deltaHz);
     if (newDialHz <= 0) return;   // no radio frequency known yet -- nothing sane to compute
@@ -834,7 +760,7 @@
   // composer's own state pill, and the QRPlog hand-off's result message.
   const afskTx = RttyAfskTx.create({
     session: () => session,
-    settings: () => settings,
+    settings: () => effective,
     // Item 1 (grilled 2026-08-28): the shared /txgain.json table's resolved
     // level for the radio's CURRENT band+power, the same accessor
     // data.js/wspr.js use -- previously this page never read it at all, so
@@ -1087,8 +1013,8 @@
   }
 
   function renderStatusPills() {
-    dom.rttyReverse.textContent = settings.reverse ? "REVERSE" : "NORMAL";
-    dom.rttyReverse.classList.toggle("active", settings.reverse);
+    dom.rttyReverse.textContent = effective.reverse ? "REVERSE" : "NORMAL";
+    dom.rttyReverse.classList.toggle("active", effective.reverse);
     // Item 16: the configured level itself (SETTINGS' own dB number),
     // highlighted while squelch is engaged (threshold above 0 -- the normal
     // state). Replaces the old live open/closed reading. Grilled 2026-08-29:
@@ -1423,7 +1349,7 @@
     // canvas/overlay pair) -- resized alongside it so both stay in sync.
     window.addEventListener("resize", () => scope.resize());
 
-    dom.rttyReverse.addEventListener("click", () => setReverse(!settings.reverse));
+    dom.rttyReverse.addEventListener("click", () => setReverse(!effective.reverse));
     // Item 7: Enter sends, like js8call -- no SEND button, no RF-safety
     // checkbox left to gate on. preventDefault so Enter never inserts a
     // literal newline (the field is single-line; RTTY traffic is one line).
@@ -1458,7 +1384,7 @@
       squelchOnMagnitude = RttySettings.squelchDbToMagnitude(Number(dom.rttySquelchInput.value));
       settings.squelchThreshold = squelchOnMagnitude;
       saveSettings();
-      decoder.setSquelchThreshold(settings.squelchThreshold);
+      applyEffective();
       dom.rttySquelchLive.textContent = formatSquelchDb(RttySettings.squelchMagnitudeToDb(squelchOnMagnitude));
       renderStatusPills();   // item 16: the SQL pill mirrors this live
     });
@@ -1477,13 +1403,26 @@
     dom.rttyTxPolarity.addEventListener("change", () => {
       settings.txPolarity = dom.rttyTxPolarity.value === "reverse" ? "reverse" : "normal";
       saveSettings();
-      drawScopeOverlay();
+      applyEffective();
+    });
+
+    // The fallback mark frequency. Takes effect on the next RTTY/RTTY-R edge
+    // (or immediately, if the radio is in real FSK right now and the value it
+    // is running on did not come from the radio itself) -- a live re-derive
+    // rather than a stored value nobody acts on until a mode change.
+    dom.rttyFskMark.addEventListener("change", () => {
+      const hz = Math.round(Number(dom.rttyFskMark.value));
+      if (!RttySettings.FSK_MARK_CHOICES_HZ.includes(hz)) return;
+      settings.fskMarkHz = hz;
+      saveSettings();
+      if (fskSync.active() && !fskSync.fromRadio()) fskSync.setMarkHz(hz);
     });
 
     // kap.13.4 (grilled 2026-08-29): see decoder.onEvent() above for what this drives.
     dom.rttySquelchNewlineEnabled.addEventListener("change", () => {
       settings.squelchNewlineEnabled = dom.rttySquelchNewlineEnabled.checked;
       saveSettings();
+      applyEffective();
     });
 
     // AFC (grilled 2026-08-28, 3rd session). Turning it off resets the
@@ -1494,10 +1433,10 @@
     dom.rttyAfcEnabled.addEventListener("change", () => {
       settings.afcEnabled = dom.rttyAfcEnabled.checked;
       saveSettings();
+      applyEffective();
       dom.rttyAfcRateInput.disabled = !settings.afcEnabled;
       dom.rttyAfcMaxDeviationInput.disabled = !settings.afcEnabled;
       if (!settings.afcEnabled) afcReset();
-      drawScopeOverlay();
     });
     dom.rttyAfcRateInput.addEventListener("change", () => {
       const hz = Number(dom.rttyAfcRateInput.value);
@@ -1506,6 +1445,7 @@
         Math.min(RttySettings.AFC_RATE_MAX_HZ_PER_CHAR, hz));
       dom.rttyAfcRateInput.value = String(settings.afcRateHzPerChar);
       saveSettings();
+      applyEffective();
     });
     dom.rttyAfcMaxDeviationInput.addEventListener("change", () => {
       const hz = Number(dom.rttyAfcMaxDeviationInput.value);
@@ -1514,6 +1454,7 @@
         Math.min(RttySettings.AFC_MAX_DEVIATION_HARD_CAP_HZ, hz));
       dom.rttyAfcMaxDeviationInput.value = String(settings.afcMaxDeviationHz);
       saveSettings();
+      applyEffective();
     });
 
     // Item 5 (2nd session): FSK output mode/NET_ID, firmware/EEPROM-backed
@@ -1546,9 +1487,12 @@
     // Item 3: the field shows the lower physical tone, not the internal
     // centre settings.toneHz actually stores -- same conversion
     // setToneFromSpaceHz() uses on the way back in.
-    dom.rttyToneInput.value = String(settings.toneHz - RttyCodec.SHIFT_HZ / 2);
+    renderToneField();
     dom.rttyTxPolarity.value = settings.txPolarity;
     dom.rttySquelchNewlineEnabled.checked = settings.squelchNewlineEnabled;
+    // The radio's own Mark Frequency, for the models it cannot be read from
+    // (and as the fallback for a read that times out on the ones it can).
+    dom.rttyFskMark.value = String(settings.fskMarkHz);
 
     dom.rttyAfcEnabled.checked = settings.afcEnabled;
     dom.rttyAfcRateInput.min = String(RttySettings.AFC_RATE_MIN_HZ_PER_CHAR);

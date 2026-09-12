@@ -11,6 +11,209 @@ published.
 
 ## Working tree — not committed
 
+**QRPLog with the DX cluster open lost GPS and the firmware version again — the fix had been written and then never reached the tree.**
+
+* **`data/log.css`, `data/log-dxc-split.js`.** The second time this was reported.
+  A single `.log-split-on .topbar-fw { display:none }` hid the right-hand end of
+  the tab row — GPS, signal strength, `⚠ OFFLINE` and the firmware version —
+  the moment the split opened, at *any* window width. On 1920 it all fits with
+  room to spare, and two thirds of that block is not decoration: `⚠ OFFLINE` is
+  the page's only report that the interface is gone, and the GPS chip is the only
+  way into the radio's position panel.
+
+* **It is measured now, not declared.** `applyTopbar()` compares the tab row's
+  `scrollWidth` against its `clientWidth` — always with the whole block shown, so
+  the answer never depends on what a previous measurement hid, which is what
+  would make the row flap — and yields in two steps: `log-split-fw-off` drops the
+  firmware version (and the separator in front of it, via
+  `:has(+ .fw-version-link)`), then `log-split-status-off` drops the group. It
+  re-measures on divider drags and on a `MutationObserver` over `#topbarFw`,
+  because `fw-version.js` rebuilds that block every 5 s and its width moves with
+  what the radio reports.
+
+* **Why it had to be restored rather than written again:** the fix was built on
+  **2026-09-10**, then a `git stash` on 2026-09-11 07:33 took the whole working
+  tree with it and the following commit (`3ddb454`) was made without it. The
+  stash still holds it, and holds other work besides — see the note below.
+
+* Regression: `log-dxc-split-smoke` **70/70** (the eight topbar checks restored
+  alongside the eight the collapsing bar added in the meantime — the sweep
+  asserts the *order* the block yields in and the invariant that the tab row is
+  never left overflowing, never a pixel threshold), `log-rtty-panel-smoke`
+  48/48. Re-stamped, minified and gzipped; firmware diff still 0.
+
+---
+
+**Three more finished pieces of work recovered from the same stash — and the documentation that had started describing the regression as if it were the design.**
+
+* **TRX saved configurations, the read-out half** (`data/setup.html` +510,
+  `data/setup.css`, `tools/setup-spine-smoke.js`). The drop-down beside each
+  radio slot is worked out from the fields rather than remembered: it names the
+  saved configuration the form currently holds, scoped to what the chosen
+  transport actually writes, reading blank fields the way the sketch reads them
+  (`PRESET_BLANK_KEEPS`) and byte-round-tripping the hex ones (`a4` → `A4`).
+  **Label** and **Active** stay out of the comparison on purpose — the interface
+  adopts a radio's model as the label, and whether a slot is in use is a
+  property of the slot. `setup-spine-smoke` goes 97 → **124 checks**, the number
+  the session that wrote it signed off on.
+
+* **RTTY's radio-authoritative decode reaches the palette at last**
+  (`data/rtty.js`, `data/rtty-settings.js`, `data/rtty.html`,
+  `data/log-rtty-panel.js`, `data/log.html`, both harnesses). `data/rtty-fsk-sync.js`
+  has been committed since `3ddb454` with **no consumer whatsoever** — no page
+  loaded it and nothing referenced `RttyFskSync` — because `git stash` without
+  `-u` keeps untracked files and takes tracked ones, and the module was the new
+  file while every caller was an edit. Restored, both surfaces derive the
+  decoder's centre from the radio's own **RTTY Mark Frequency** and `reverse`
+  from its **Keying Polarity**, read-only; the palette's title bar shows
+  `RTTY 2125`, with a trailing `?` when the number did not come from the radio.
+  `log-rtty-panel-smoke` 48 → **67/67**, `rtty-page-smoke` **42/42**,
+  `rtty-fsk-sync-test` **36/36**.
+
+* **Macros from QRPLog reached nobody when the palette held the session.**
+  `data/log.js` lost `sendAsRtty()` / `echoRttyFsk()`, so a macro was posted
+  into a `BroadcastChannel` that does not deliver to the posting context and
+  then refused with *"no RTTY-ICOM page is open"* — the very pop-up the palette
+  replaced. Found at the radio on **2026-09-10**, fixed the same day, and live
+  again ever since the stash. The palette is asked first now, and only a real
+  separate tab goes through the channel.
+
+* **`data/THIRD-PARTY-NOTICES.txt` was making two false statements**, both
+  licence-relevant: that the Mercury ARQ engine is *unmodified* upstream code
+  (it is not — `third_party/mercury/wifilt-arq-changes.patch`, 28 kB, is part of
+  this project's Corresponding Source and is committed), and, by omission, that
+  the IC705-BT-CIV credit is only historical when `sendCatRequest()`,
+  `processCatMessages()` and the CI-V frame constants still descend from it.
+  `doctest` was missing from both this file and `BUILD.md` although
+  `local-trx/third_party/doctest/doctest.h` is tracked in the repository.
+
+* **`SOFTWARE.md` had documented the regression as intended behaviour.** § 3.6
+  told operators *"The palette does not read the radio's own RTTY menu"* and
+  offered a workaround for it, and § 6.7 said the sync *"does not run"* there —
+  written in good faith against a tree the stash had quietly rolled back. Both
+  now describe what the code does, along with two claims that had gone stale on
+  their own: Keying Polarity is **read, never written** (the one-way write was
+  deliberately removed, and after the session-holder rule it could have been
+  issued by a *logging* page), and REVERSE follows the radio's answer rather
+  than going on unconditionally. The SNR colour was checked against
+  `rtty-rxlog.js` rather than either document and left as **green** — the older
+  text's "sandy yellow" is what is out of date.
+
+* Regression: `setup-spine` 124, `log-rtty-panel` 67/67, `rtty-page` 42/42,
+  `rtty-fsk-sync` 36/36, `log-dxc-split` 70/70, `log-rst` 24/24, `log-hotkey`
+  29/29, `log-year-groups` 15/15, `rtty-afc` PASS, `setup-radio-contract` PASS,
+  `state-json-budget` 64/64, `check-page-scripts` 22/22, `fs-partition-audit`
+  PASS. Re-stamped, minified and gzipped. **Firmware diff is 0** — nothing here
+  touches the sketch.
+
+* **Deliberately NOT taken from the stash**, because the tree is newer there:
+  `BUILD.md`'s integration-test and `gh-pages.sh` paragraphs, § 3.5's
+  mode-by-mode macro table (it supersedes the prose the stash carried), the SNR
+  colour, and every section number the stash still counted the old way.
+
+---
+
+
+**The state pills in the JS8 SETTINGS header are the switches now, not just the report.**
+
+* **`data/data.js`, `data/data.css`.** The row of pills on the collapsed SETTINGS
+  header (`TX`, `AUTO`, `CQ`, `HB`, `ACK`, `IGATE`) has answered "what will this
+  station do by itself?" since it was added; what it could not do was change the
+  answer. Switching the heartbeat back on, or stopping a transmitting station,
+  meant unrolling a section with two dozen rows in it — on the tablet the page is
+  actually operated from. The pills are `<button>`s now, with `aria-pressed`, and
+  they grew vertically to a real touch target (~28 px inside the header's existing
+  38 px, so nothing about the layout moves).
+
+* **Radio TX asks twice on the way on, once on the way off.** Off is a single tap
+  — stopping a transmitter must never need a dialog. On arms the pill as `TX?` for
+  three seconds and takes a second tap; any other click in the header cancels it.
+  It is the one pill with a confirmation, deliberately: it is the pledge, and a
+  confirmation on every pill would only train the reflex that makes this one
+  worthless.
+
+* **One rule for everything that cannot act right now: open SETTINGS at what is
+  missing.** A pill whose function depends on Radio TX does not toggle while Radio
+  TX is off — it unrolls SETTINGS at *Enable radio TX* and marks the row. The
+  gate does the same when the APRS-IS login is incomplete (and focuses the field
+  in question), and so does a `POST /unattended` the interface refuses, which
+  opens at *Unattended for*, where the refusal has always been written — a line
+  nobody could see from a closed header before. `IGATE` keeps its exemption from
+  the Radio TX rule: it publishes to the internet and never keys the transmitter.
+
+* **`CQ` is an interval, not a boolean**, so the pill turns it on at the value
+  last in force and falls back to 10 minutes, the same shape RTTY's `SQL` pill
+  uses. The remembered value lives in the page, so no stored setting had to
+  change and nothing had to migrate.
+
+* **The row is built once and only updated afterwards.** As `<span>`s an
+  `innerHTML` rebuild on the 500 ms render path cost nothing; as controls it would
+  drop keyboard focus every half second, throw away the `TX?` confirmation
+  mid-gesture, and could swallow a click that landed between `mousedown` and
+  `mouseup`.
+
+* **`tools/data-browser-smoke.js`.** The old check asserted that nothing in that
+  header was clickable — that assertion is inverted, and eight behaviours are
+  checked by driving the real page: both plain toggles, the CQ fallback and the
+  remembered interval, the two-tap TX, the blocked pill that opens SETTINGS, the
+  gate that refuses to switch on without a passcode, and a refused arming. The
+  fixture gained a switch that makes `/unattended` answer with an error, which it
+  could not do before.
+
+**The radio stopped answering CAT until someone power-cycled it — a teardown that said goodbye on the wrong channel.**
+
+* **`FW 20260912`.** Reported symptom: the LAN link looped for ever on
+  `civ: ready` -> `timeout in state` -> `reconnect in 24s`, with the control
+  channel perfectly healthy the whole time — login, capabilities, auth and
+  stream all fine, only CI-V data never arriving. Restarting the box did not
+  help; restarting the IC-705 did.
+
+* **The radio keys its CI-V conversation to our fixed local port 50002, and a
+  polite control-channel logout PARKS that conversation instead of ending it**:
+  the radio stops pinging, so nothing ever expires it, and the next session from
+  the same port gets every control packet answered and no CI-V at all. Releasing
+  it takes a disconnect on the CI-V channel itself, which is what wfview sends on
+  every teardown. That was diagnosed against a real IC-705 on **2026-08-18**
+  (`2521448`) and the fix was written — then scoped `#if defined(WIFILT_NATIVE)`,
+  on the reasoning that the box only ever ends a session by rebooting and the
+  reboot leaves the ports closed long enough for the radio's keepalives to fail.
+
+* **`lanClientLoop()` disproves that reasoning.** It stops and reconnects *in
+  place*, from the same ports: on every link failure, and on every SETUP radio
+  scan, **Test & identify radio**, manual reconnect and radio-config save. Any
+  one of those parked the radio permanently — no failure required. The trap has
+  been reachable since the LAN transport landed on **2026-07-17** (`53a9ad4` +
+  `ddeab71`); what made it fire now is that SETUP -> Radio is where the recent
+  work has been (`dca5c60` trx save settings, the TRX preset palette).
+
+* **Deleting the `#if` alone would have crashed the box**, which is why the guard
+  reads `civGotHere && civPort` and the flags are cleared at the end of `stop()`.
+  `begin()` zeroes `civPort` but leaves `civGotHere` set from the previous
+  session — only `openCivChannel()` clears it — so switching the radio off
+  mid-session gave: teardown (fine) -> reconnect -> login fails before the CI-V
+  channel exists -> teardown again, now sending to **port 0**. The ESP32 core's
+  `beginPacket()` returns on port 0 *before* allocating its tx buffer and
+  `write()` then dereferences that buffer unchecked: a NULL store, i.e. a panic,
+  roughly 15 s after the radio goes off. The native build never showed it because
+  `native/net/WiFiUdp.cpp` reopens a closed socket and guards `write()`.
+  `sendCivOpenClose(true)` three lines above survives only because `begin()` does
+  reset `streamOpened`; the asymmetry between those two flags was the whole trap.
+
+* Verified: both board targets compile (`esp32:esp32:esp32` no_ota/DIO 49 %,
+  `m5stack-atom` 79 %), the native build is clean, `native-integration-test.sh`
+  grew a
+  teardown round (11 ok, 2 skipped for setcap, and the documented `TrxNet
+  registers a peer` red that is red on HEAD too): `POST /lan/reconnect` — the
+  same `stop()`-then-`begin()` on the same ports that SETUP performs — must emit
+  a **CI-V-channel** Disconnect, the following session must reach CI-V again, and
+  the binary must survive it. Confirmed to have teeth by breaking the guard on
+  purpose and watching the check go red. Its limit, stated plainly: the native
+  build compiles that branch either way, so it would *not* catch someone putting
+  an `#if defined(WIFILT_NATIVE)` back around it — only a source-level check
+  could. **Not verified on the radio** either: the fake radio does not model the
+  parking, so the tests prove the packet goes out, not that a real IC-705
+  un-parks.
+
 **Four operator reports: RTTY colour, the DX cluster's memory, its zoom, and the amplifier's temperature.**
 
 * **The DX cluster's bottom toolbar is one row now, with an arrow for the rest.**

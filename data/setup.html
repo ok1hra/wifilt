@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Setup — WIFILT</title>
-  <link rel="stylesheet" href="/setup.css?v=c7126fc9">
+  <link rel="stylesheet" href="/setup.css?v=373c8333">
 </head>
 <body>
   <header class="topbar">
@@ -43,7 +43,9 @@
              said the opposite of what an operator reads it for. They name the
              fate instead, and the fate is spelled out here once. -->
         <p class="meta setup-badge-legend"><b>eeprom</b> and <b>config</b> both survive a firmware
-          update — the installer writes neither. <b>live</b> is running state and is not stored.</p>
+          update — the installer writes neither. <b>live</b> is running state and is not stored.
+          A section marked <b>↻ Save & Restart</b> reaches the interface only through that button
+          at the bottom of this page; it counts what you have changed but not yet sent.</p>
       </header>
 
       <!-- The five steps, derived from the facts below rather than from a saved
@@ -956,15 +958,45 @@
         // field-by-field on the firmware side. Picking a preset only fills
         // the form; it takes effect on the radio like any other edit, at the
         // next Save & Restart.
+        //
+        // The dropdown is a READ-OUT as much as a picker. Which configuration
+        // it shows is WORKED OUT from the fields, never stored: a remembered
+        // "active preset" would start lying the moment an address was edited
+        // and saved, and it would have to be kept up to date in two places at
+        // once. A comparison cannot drift from what is in front of the
+        // operator. What it claims is the honest, narrow thing --
+        //
+        //     saving this preset would change nothing the firmware writes
+        //
+        // -- which is why the comparison is scoped by transport and why blank
+        // fields are read the way the sketch reads them. See
+        // presetMatchFields() below; it mirrors the setup save handler.
+        //
+        // Consequence worth knowing: the row describes the FORM, not the
+        // radio. Pick a preset and the name appears at once, while the radio
+        // still runs whatever it ran -- the change bar is what says how far
+        // apart they are, and the restart countdown is what confirms a save.
         var PRESET_FIELDS = ['label', 'transport', 'civaddr', 'netid', 'lanip', 'lanuser', 'lanpass', 'localtrx'];
         var radioPresets = { trx1: [], trx2: [], trx3: [] };
+        // Gate for the one-time name seeding below. /setup-data.json has landed
+        // by construction -- this whole block runs inside applySetupData() --
+        // but the preset list has its own fetch, and that one fails silently. A
+        // page whose presets never arrived has to look exactly like a page that
+        // has none, rather than seeding a name off an empty list.
+        var presetsLoaded = false;
+        var presetNameSeeded = false;
+
+        function presetFieldValue(name) {
+          var input = document.querySelector('[name="' + name + '"]');
+          if (!input) return '';
+          return input.type === 'checkbox' ? input.checked : input.value;
+        }
 
         function presetFromFields(prefix) {
           var preset = {};
           PRESET_FIELDS.forEach(function (suffix) {
-            var input = document.querySelector('[name="' + prefix + suffix + '"]');
-            if (!input) return;
-            preset[suffix] = input.type === 'checkbox' ? input.checked : input.value;
+            if (!document.querySelector('[name="' + prefix + suffix + '"]')) return;
+            preset[suffix] = presetFieldValue(prefix + suffix);
           });
           if (prefix === 'trx1') {
             var cwCheckbox = document.querySelector('[name="cwIpOnConnect"]');
@@ -983,6 +1015,118 @@
           refreshAllRadios();
         }
 
+        // Which fields the firmware actually writes for this transport. One for
+        // one with the if() blocks in the sketch's setup save handler: a field
+        // it does not write for this transport cannot make the running radio
+        // differ from the preset, so counting it would report a difference that
+        // has no effect -- a TrxNet slot still carries whatever IP was last
+        // typed, and a preset saved from one never matched anything. Change
+        // those blocks and this list has to follow; setup-spine-smoke pass B
+        // watches them and says so by name.
+        //
+        // `label` is deliberately absent. The sketch adopts the radio's own
+        // model as the label while it is still a bare TRXn, so a preset saved
+        // before the radio first answered would stop matching the moment it
+        // did -- with the operator having done nothing. The label is still
+        // saved and still applied; it just does not decide identity.
+        //
+        // So is the Active checkbox, for the other reason: whether a slot is in
+        // use is a property of the slot, not of the radio's connection
+        // settings, and a preset must never be able to switch a working radio
+        // off as a side effect of being chosen.
+        function presetMatchFields(prefix, transport) {
+          var fields = transport === 'lan'
+            ? ['lanip', 'lanuser', 'lanpass', 'localtrx', 'civaddr']
+            : transport === 'civ' ? ['civaddr']
+            : transport === 'trxnet' ? ['netid'] : [];
+          // TRX1 only, and not on TRXNET: there the row is disabled, so the
+          // checkbox is not posted and the sketch stores false whatever the
+          // preset holds.
+          if (prefix === 'trx1' && transport !== 'trxnet') fields = fields.concat(['cwIpOnConnect']);
+          return fields;
+        }
+
+        // Fields the sketch skips when the posted value is blank -- "blank
+        // keeps stored secret" for the password, and an unparseable address is
+        // simply not written. A blank in the preset would therefore change
+        // nothing, so it matches whatever the radio has. lanip/lanuser are NOT
+        // in here: those the sketch writes unconditionally, blank included.
+        var PRESET_BLANK_KEEPS = { lanpass: true, civaddr: true, netid: true };
+        // ...and the two that round-trip through a byte, so they come back as
+        // two upper-case hex digits however they were typed in.
+        var PRESET_HEX_FIELDS = { civaddr: true, netid: true };
+
+        function presetHexByte(value) {
+          var text = String(value === undefined || value === null ? '' : value).trim();
+          if (!/^[0-9a-fA-F]{1,2}$/.test(text)) return null;
+          return (text.length === 1 ? '0' + text : text).toUpperCase();
+        }
+
+        function presetValuesMatch(suffix, stored, live) {
+          if (typeof stored === 'boolean' || typeof live === 'boolean') return !!stored === !!live;
+          var a = String(stored === undefined || stored === null ? '' : stored).trim();
+          var b = String(live === undefined || live === null ? '' : live).trim();
+          if (PRESET_BLANK_KEEPS[suffix] && a === '') return true;
+          if (PRESET_HEX_FIELDS[suffix]) {
+            var storedHex = presetHexByte(a), liveHex = presetHexByte(b);
+            if (storedHex && liveHex) return storedHex === liveHex;
+          }
+          return a === b;
+        }
+
+        // True when saving this preset on this slot would change nothing the
+        // firmware writes -- the one claim the dropdown makes.
+        function presetMatchesForm(prefix, preset) {
+          if (!preset) return false;
+          var transport = String(presetFieldValue(prefix + 'transport') || '');
+          // A preset naming a different transport is a different radio, and it
+          // is the field that decides which of the others are even read.
+          if (String(preset.transport === undefined ? '' : preset.transport) !== transport) return false;
+          return presetMatchFields(prefix, transport).every(function (suffix) {
+            var name = suffix === 'cwIpOnConnect' ? suffix : prefix + suffix;
+            return presetValuesMatch(suffix, preset[suffix], presetFieldValue(name));
+          });
+        }
+
+        // The dropdown and the Delete button, worked out from the fields as
+        // they stand. On a timer rather than on events, for the same reason the
+        // change bar keeps its own 500 ms pass: presets are applied with
+        // setValue(), which fires nothing, and refreshRadio() changes which
+        // fields count by toggling `disabled` just as quietly.
+        function refreshPresetSelection() {
+          var seeding = presetsLoaded && !presetNameSeeded;
+          ['trx1', 'trx2', 'trx3'].forEach(function (prefix) {
+            var select = document.querySelector('[data-preset-select="' + prefix + '"]');
+            if (!select) return;
+            var list = radioPresets[prefix] || [];
+            // The current pick wins while it still matches. Without this, a
+            // slot holding two identically-configured presets would jump from
+            // the one just chosen to the first in the list half a second later,
+            // under the operator's hand.
+            var current = list.filter(function (p) { return p.name === select.value; })[0];
+            var match = current && presetMatchesForm(prefix, current)
+              ? current
+              : list.filter(function (p) { return presetMatchesForm(prefix, p); })[0];
+            var name = match ? match.name : '';
+            // Written only when it actually changes. That is also what keeps a
+            // pass from reaching into an open drop-down: while the operator
+            // holds it open the fields cannot move, so the answer cannot move
+            // either, and nothing is assigned underneath them.
+            if (select.value !== name) select.value = name;
+            var deleteBtn = document.querySelector('[data-preset-delete="' + prefix + '"]');
+            if (deleteBtn) deleteBtn.disabled = !name;
+            // The name field is an INPUT -- what the next Save will be called --
+            // not a second read-out, so nothing rewrites it while the operator
+            // is working. It gets one value, at load, into a field that is
+            // still empty, before there can be anything to destroy. After that
+            // it is theirs.
+            if (!seeding || !name) return;
+            var nameInput = document.querySelector('[data-preset-name="' + prefix + '"]');
+            if (nameInput && !nameInput.value) nameInput.value = name;
+          });
+          if (seeding) presetNameSeeded = true;
+        }
+
         function renderPresetDropdown(prefix) {
           var select = document.querySelector('[data-preset-select="' + prefix + '"]');
           if (!select) return;
@@ -991,6 +1135,12 @@
           var placeholder = document.createElement('option');
           placeholder.value = '';
           placeholder.textContent = '— new configuration —';
+          // Not a choice: a state. The row answers "which saved configuration
+          // is in these fields", and "none of them" is something it works out,
+          // not something the operator can assert -- picking it would be
+          // corrected by the next pass half a second later anyway. Starting a
+          // new configuration is done by typing a name in the field beside it.
+          placeholder.disabled = true;
           select.appendChild(placeholder);
           (radioPresets[prefix] || []).forEach(function (preset) {
             var option = document.createElement('option');
@@ -1000,8 +1150,7 @@
           });
           var stillThere = (radioPresets[prefix] || []).some(function (p) { return p.name === current; });
           select.value = stillThere ? current : '';
-          var deleteBtn = document.querySelector('[data-preset-delete="' + prefix + '"]');
-          if (deleteBtn) deleteBtn.disabled = !select.value;
+          refreshPresetSelection();
         }
 
         function savePresetsToServer(onSaved) {
@@ -1025,6 +1174,8 @@
                 radioPresets[prefix] = Array.isArray(data[prefix]) ? data[prefix] : [];
                 renderPresetDropdown(prefix);
               });
+              presetsLoaded = true;
+              refreshPresetSelection();
             })
             .catch(function () {});
         }
@@ -1032,19 +1183,16 @@
         document.querySelectorAll('[data-preset-select]').forEach(function (select) {
           var prefix = select.dataset.presetSelect;
           select.addEventListener('change', function () {
-            var name = select.value;
-            var nameInput = document.querySelector('[data-preset-name="' + prefix + '"]');
-            var deleteBtn = document.querySelector('[data-preset-delete="' + prefix + '"]');
-            if (!name) {
-              if (nameInput) nameInput.value = '';
-              if (deleteBtn) deleteBtn.disabled = true;
-              return;
-            }
-            var preset = (radioPresets[prefix] || []).find(function (p) { return p.name === name; });
+            // The placeholder is disabled, so an empty value cannot come from a
+            // click; a name with no preset behind it cannot either.
+            var preset = (radioPresets[prefix] || []).find(function (p) { return p.name === select.value; });
             if (!preset) return;
-            if (nameInput) nameInput.value = name;
-            if (deleteBtn) deleteBtn.disabled = false;
+            var nameInput = document.querySelector('[data-preset-name="' + prefix + '"]');
+            if (nameInput) nameInput.value = preset.name;
             applyPresetFields(prefix, preset);
+            // The pass would reach the same answer within half a second; doing
+            // it here keeps the Delete button from lagging behind the click.
+            refreshPresetSelection();
           });
         });
 
@@ -1067,9 +1215,10 @@
             savePresetsToServer(function () {
               renderPresetDropdown(prefix);
               var select = document.querySelector('[data-preset-select="' + prefix + '"]');
+              // Naming a configuration is an explicit act, so the row shows the
+              // name just saved even where an older preset would match too.
               if (select) select.value = name;
-              var deleteBtn = document.querySelector('[data-preset-delete="' + prefix + '"]');
-              if (deleteBtn) deleteBtn.disabled = false;
+              refreshPresetSelection();
             });
           });
         });
@@ -1091,6 +1240,31 @@
         });
 
         fetchRadioPresets();
+        setInterval(refreshPresetSelection, 500);
+
+        // The test seam. Pass C drives the real page, and the cases worth
+        // proving here -- a4 against A4, a blank password against a stored one,
+        // a TrxNet slot whose IP differs and must not count -- are far easier
+        // to put in front of the comparison directly than to arrange by
+        // clicking through the page for each one.
+        window.setupPresets = {
+          matches: presetMatchesForm,
+          matchFields: presetMatchFields,
+          valuesMatch: presetValuesMatch,
+          refresh: refreshPresetSelection,
+          state: function (prefix) {
+            var select = document.querySelector('[data-preset-select="' + prefix + '"]');
+            var nameInput = document.querySelector('[data-preset-name="' + prefix + '"]');
+            var deleteBtn = document.querySelector('[data-preset-delete="' + prefix + '"]');
+            return {
+              selected: select ? select.value : null,
+              options: select ? Array.prototype.map.call(select.options, function (o) { return o.value; }) : null,
+              placeholderDisabled: !!(select && select.options[0] && select.options[0].disabled),
+              name: nameInput ? nameInput.value : null,
+              deleteDisabled: deleteBtn ? deleteBtn.disabled : null
+            };
+          }
+        };
 
         document.querySelectorAll('[data-radio-select]').forEach(function (button) {
           button.addEventListener('click', function () { selectRadio(button.dataset.radioSelect); });
@@ -1148,6 +1322,11 @@
         })
         .then(function (data) {
           applySetupData(data);
+          // The values the firmware is RUNNING with, captured the moment the
+          // fields hold them and before anything else can write into them. The
+          // tracker stays dormant until this happens, so a failed fetch leaves
+          // it silent rather than reporting the empty form as 42 changes.
+          if (window.setupChanges) window.setupChanges.rebaseline();
           // The spine reads the same document rather than fetching it again:
           // every step of it is derived from facts already in this payload.
           if (window.setupSpine) window.setupSpine.setData(data);
@@ -1590,6 +1769,7 @@
         host.appendChild(box);
         qrInto(document.getElementById('wifiHandoffQr'), url);
         document.getElementById('wifiHandoffDone').addEventListener('click', function () {
+          if (window.setupChanges) window.setupChanges.leaving();
           fetch('/restart', { method: 'POST' }).catch(function () {});
           renderReconnect(box, d);
         });
@@ -1902,6 +2082,10 @@
           .then(function(result) {
             if (result.ok) {
               msg.textContent = "Uploaded. Restarting…";
+              // The uploaded file has just overwritten everything the form was
+              // holding, so there is no unsaved work left to guard -- and this
+              // path reloads too.
+              if (window.setupChanges) window.setupChanges.leaving();
               fetch('/restart', { method: 'POST' }).catch(function(){});
               var dots = 0;
               var dot = setInterval(function() {
@@ -1959,6 +2143,12 @@
         });
         return encoded.toString();
       }
+
+      // The pending-change tracker compares what this builds against what it
+      // built when the page loaded. It has to be the same function: a second
+      // idea of "what gets sent" would drift from this one and the indicator
+      // would start reporting changes that are not sent, or miss ones that are.
+      window.setupCollectFormBody = collectFormBody;
 
       function postSetup(body) {
         return fetch('/setup/save', {
@@ -2030,6 +2220,10 @@
           return;
         }
         if (radioGateBlocks()) return;
+        // Everything past this point is a deliberate departure -- the restart
+        // poll ends in location.reload() -- so the unsaved-work guard has to
+        // stand down or the page argues with itself about leaving.
+        if (window.setupChanges) window.setupChanges.leaving();
         var shell = document.querySelector('main.setup-shell') || form.parentNode;
         shell.style.display = 'none';
         var msg = document.createElement('p');
@@ -2080,6 +2274,9 @@
             }
             shell.style.display = '';
             msg.parentNode.removeChild(msg);
+            // Nothing was stored and nothing is leaving: the work is pending
+            // again, and so is the guard over it.
+            if (window.setupChanges) window.setupChanges.resume();
             alert('Save failed: ' + message + '\nCheck device connection and try again.');
           });
       };
@@ -2178,6 +2375,299 @@
           if (document.getElementById('unattendedSection').open) refresh();
         }, 3000);
       })();
+
+      // ── Pending changes ───────────────────────────────────────────────────
+      //
+      // Every field of #setup-form reaches the interface by exactly one route:
+      // the Save & Restart button at the bottom of the card. Nothing said so,
+      // and nothing distinguished a form still being typed into from one whose
+      // work is already running on the device -- so an operator who edited a
+      // section, scrolled away and got distracted had no way of telling.
+      //
+      // What is tracked is NOT "unsaved". It is "not in effect". The two come
+      // apart here, and the difference matters: setupSaveQuiet() posts with
+      // noRestart=1, so a spine step or a passing LAN test can store a value
+      // the running firmware has never seen. Measuring against the values the
+      // page was loaded with -- the ones the interface is running on -- is the
+      // only reading that cannot say "done" about work that is not.
+      //
+      // The chip therefore names the BUTTON, never the restart. `baud` reaches
+      // Serial.begin() inside handleSet(), and dxccall, dxclocator and
+      // blockedDxcc are assigned to their live globals there -- a chip reading
+      // "needs restart" would be plainly false on Identity and on LOG. What is
+      // true of all six sections is that this one button is how they get there.
+      window.setupChanges = (function () {
+        var form = document.getElementById('setup-form');
+        if (!form) return null;
+
+        var armed = false;          // a baseline exists
+        var leaving = false;        // a deliberate departure is under way
+        var baseline = {};
+        var lastCount = 0;
+        var chips = {};
+        var bar = null, barText = null, saveButton = null, saveCount = null;
+        var buttonVisible = true;
+        var current = {names: {}, count: 0};
+
+        // Field -> submission. Disabled fields are dropped by FormData, which is
+        // how a transport branch that is switched off stops being sent; the same
+        // test has to decide what counts as a change, or a half-typed LAN address
+        // on a radio since moved to CI-V would be reported as pending work that
+        // no save will ever carry.
+        function participates(el) {
+          if (!el.name || el.disabled) return false;
+          if (el.getAttribute('form') === 'setup-form') return true;
+          return form.contains(el);
+        }
+
+        function fields() {
+          var seen = [];
+          form.querySelectorAll('input,select,textarea').forEach(function (el) { seen.push(el); });
+          document.querySelectorAll('[form="setup-form"]').forEach(function (el) {
+            if (seen.indexOf(el) < 0 && el.name) seen.push(el);
+          });
+          return seen;
+        }
+
+        // The body as a name -> values map. Repeated names are real here (the
+        // checkbox handling in collectFormBody deletes and re-appends), so the
+        // comparison is over lists, not single values.
+        function snapshot() {
+          var out = {};
+          if (!window.setupCollectFormBody) return out;
+          var params = new URLSearchParams(window.setupCollectFormBody());
+          params.forEach(function (value, key) {
+            if (key === 'noRestart') return;   // added by every save, never a setting
+            (out[key] = out[key] || []).push(value);
+          });
+          return out;
+        }
+
+        function differs(a, b) {
+          if (!a && !b) return false;
+          if (!a || !b || a.length !== b.length) return true;
+          for (var i = 0; i < a.length; i++) if (a[i] !== b[i]) return true;
+          return false;
+        }
+
+        // The names whose submitted value has moved AND which some field on the
+        // page still owns. A name that vanished because its field was disabled
+        // has no owner and is not counted: the select that disabled it carries
+        // that change already, and counting both would report two edits for one.
+        function diff() {
+          var now = snapshot();
+          var names = {};
+          var owners = {};
+          fields().forEach(function (el) {
+            if (participates(el)) owners[el.name] = true;
+          });
+          Object.keys(now).forEach(function (name) {
+            if (owners[name] && differs(baseline[name], now[name])) names[name] = true;
+          });
+          Object.keys(baseline).forEach(function (name) {
+            if (owners[name] && differs(baseline[name], now[name])) names[name] = true;
+          });
+          return {names: names, count: Object.keys(names).length};
+        }
+
+        // Where a section's chip can be seen. A section adopted into a spine
+        // step has its own <summary> hidden by data-spine-bare, and the step it
+        // sits in is collapsible -- so without this a WiFi edit made in step 1
+        // would leave no mark anywhere the operator was looking.
+        function chipHost(section) {
+          if (section.hasAttribute('data-spine-bare')) {
+            var step = section.closest('.spine-step');
+            var head = step && step.querySelector('.spine-head');
+            if (head) return head;
+          }
+          return section.querySelector('.setup-section-title');
+        }
+
+        // Written only when it actually changes. These carry role="status", and
+        // the 500 ms pass would otherwise re-announce the same sentence to a
+        // screen reader twice a second for as long as the page is open.
+        function say(el, text) { if (el.textContent !== text) el.textContent = text; }
+
+        function chipFor(section) {
+          var host = chipHost(section);
+          if (!host) return null;
+          var chip = chips[section.id];
+          if (!chip) {
+            chip = document.createElement('span');
+            chip.className = 'setup-pending-chip';
+            chip.setAttribute('role', 'status');
+            // Which section it speaks for, kept on the element because the chip
+            // does not always sit inside that section: adoption into a spine
+            // step hides the summary and the chip follows the step's head.
+            chip.setAttribute('data-for', section.id);
+            chips[section.id] = chip;
+          }
+          // Adoption moves the section mid-life, so the chip follows on every
+          // pass rather than being placed once and trusted.
+          if (chip.parentNode !== host) host.appendChild(chip);
+          return chip;
+        }
+
+        // A section belongs to the form when it owns a field the form submits --
+        // derived, so TX audio gain (its own endpoint) and Unattended (running
+        // state, stored nowhere) stay unmarked without being named here.
+        function formSections() {
+          var out = [];
+          document.querySelectorAll('.setup-section').forEach(function (section) {
+            var owns = false;
+            section.querySelectorAll('input,select,textarea').forEach(function (el) {
+              if (el.name && (el.getAttribute('form') === 'setup-form' || form.contains(el))) owns = true;
+            });
+            if (owns) out.push(section);
+          });
+          return out;
+        }
+
+        function paint(state) {
+          fields().forEach(function (el) {
+            var pending = !!state.names[el.name] && participates(el);
+            el.classList.toggle('setup-pending-field', pending);
+          });
+
+          formSections().forEach(function (section) {
+            var chip = chipFor(section);
+            if (!chip) return;
+            var count = 0;
+            Object.keys(state.names).forEach(function (name) {
+              var owner = section.querySelector('[name="' + name + '"]');
+              if (owner) count++;
+            });
+            chip.classList.toggle('is-pending', count > 0);
+            say(chip, count > 0 ? (count + ' pending') : '↻ Save & Restart');
+            chip.title = count > 0
+              ? count + ' change' + (count === 1 ? '' : 's') + ' here are not on the interface yet'
+              : 'These settings reach the interface when you press Save & Restart';
+          });
+
+          if (saveButton) {
+            saveButton.classList.toggle('is-pending', state.count > 0);
+            if (saveCount) say(saveCount, state.count > 0 ? ' · ' + state.count : '');
+          }
+          updateBar(state);
+        }
+
+        function flash() {
+          [saveButton, bar].forEach(function (el) {
+            if (!el) return;
+            el.classList.remove('is-flashing');
+            void el.offsetWidth;              // restart the animation, not queue it
+            el.classList.add('is-flashing');
+          });
+        }
+
+        function updateBar(state) {
+          if (!bar) return;
+          var show = state.count > 0 && !buttonVisible && !leaving;
+          bar.hidden = !show;
+          if (!show) return;
+          say(barText, state.count + ' change' + (state.count === 1 ? '' : 's')
+            + ' not on the interface yet — needs Save & Restart');
+        }
+
+        function recompute() {
+          if (!armed) return;
+          var state = diff();
+          var changed = state.count !== current.count
+            || Object.keys(state.names).sort().join(',') !== Object.keys(current.names).sort().join(',');
+          current = state;
+          paint(state);
+          if (changed && state.count > lastCount) flash();
+          lastCount = state.count;
+        }
+
+        function buildChrome() {
+          saveButton = document.querySelector('.actions button[type="submit"]');
+          if (saveButton) {
+            // Appended, not written over the label: the smoke test and the
+            // operator both find this button by what it says.
+            saveCount = document.createElement('span');
+            saveCount.className = 'setup-pending-count';
+            saveButton.appendChild(saveCount);
+
+            var discard = document.createElement('button');
+            discard.type = 'button';
+            discard.className = 'setup-pending-discard';
+            discard.textContent = 'discard changes';
+            discard.addEventListener('click', discardChanges);
+            saveButton.parentNode.appendChild(discard);
+
+            // The bar exists to answer "where did that button go", so it is
+            // driven by the button's own visibility rather than by scroll
+            // arithmetic. The bottom margin is its own height: a button it
+            // covers is not a button the operator can press.
+            if (window.IntersectionObserver) {
+              new IntersectionObserver(function (entries) {
+                buttonVisible = entries[0].isIntersecting;
+                updateBar(current);
+              }, {rootMargin: '0px 0px -76px 0px'}).observe(saveButton);
+            }
+          }
+
+          bar = document.createElement('div');
+          bar.className = 'setup-pending-bar';
+          bar.hidden = true;
+          bar.setAttribute('role', 'status');
+          barText = document.createElement('span');
+          barText.className = 'setup-pending-bar-text';
+          bar.appendChild(barText);
+          var go = document.createElement('span');
+          go.className = 'setup-pending-bar-go';
+          go.textContent = 'go to it ↓';
+          bar.appendChild(go);
+          // It scrolls; it does not save. A bar sitting under the thumb that
+          // reboots the interface is one mis-scroll away from taking the radio
+          // off the air in the middle of being configured.
+          bar.addEventListener('click', function () {
+            if (!saveButton) return;
+            saveButton.scrollIntoView({behavior: 'smooth', block: 'center'});
+            saveButton.focus({preventScroll: true});
+            flash();
+          });
+          document.body.appendChild(bar);
+        }
+
+        // Reload rather than write the old values back: the device is asked
+        // again, so there is no second copy of "what it was" to get wrong, and
+        // nothing can be reverted only halfway.
+        function discardChanges() {
+          if (current.count > 0
+              && !window.confirm('Discard ' + current.count + ' change'
+                   + (current.count === 1 ? '' : 's') + ' and reload the saved settings?')) return;
+          leaving = true;
+          window.location.reload();
+        }
+
+        window.addEventListener('beforeunload', function (e) {
+          if (leaving || !armed || current.count === 0) return;
+          e.preventDefault();
+          e.returnValue = '';
+          return '';
+        });
+
+        buildChrome();
+        document.addEventListener('input', recompute, true);
+        document.addEventListener('change', recompute, true);
+        // Presets fill fields through setValue(), which fires nothing, and
+        // refreshRadio() changes what is submitted by toggling `disabled` --
+        // also silently. A pass on a timer needs no cooperation from either, and
+        // costs one pass over 46 fields; it also puts the chips back if a spine
+        // re-render moves a section out from under them.
+        setInterval(recompute, 500);
+
+        return {
+          rebaseline: function () { baseline = snapshot(); armed = true; lastCount = 0; recompute(); },
+          leaving: function () { leaving = true; if (bar) bar.hidden = true; },
+          resume: function () { leaving = false; recompute(); },
+          // The test seam. Pass C drives the real page, and the count it reads
+          // has to be the one the operator sees.
+          state: function () { return {count: current.count, names: Object.keys(current.names).sort()}; }
+        };
+      }());
 
     </script>
 </body>

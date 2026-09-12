@@ -141,6 +141,38 @@ check("CW IP announce is off until it is asked for",
 check("firmware no longer refuses a TrxNet slot that has no peer yet",
   /if \(nextSlots\[slot\]\.netId != 0x00\s*\n\s*&& \(TRXNET_ID == 0x00 \|\| nextSlots\[slot\]\.netId == TRXNET_ID\)\)/.test(sketch));
 
+// ---- the saved-configuration row agrees with the save handler ---------------
+// setup.html's preset dropdown claims "saving this configuration would change
+// nothing the firmware writes". That claim is only true while its comparison
+// mirrors these four decisions in the save handler -- which fields each
+// transport reads, and which blank values it skips. If one of these goes red,
+// presetMatchFields()/PRESET_BLANK_KEEPS in setup.html has to follow it.
+check("sketch: LAN credentials are written only for a LAN slot",
+  /if \(nextSlots\[slot\]\.transport == RADIO_LAN\) \{\s*\n\s*nextSlots\[slot\]\.lanIp =/.test(sketch));
+check("sketch: the CI-V address is written for LAN and CI-V slots",
+  /if \(nextSlots\[slot\]\.transport == RADIO_LAN\s*\n\s*\|\| nextSlots\[slot\]\.transport == RADIO_CIV\) \{\s*\n\s*String civ = requestArg/.test(sketch));
+check("sketch: the peer NET_ID is written only for a TrxNet slot",
+  /if \(nextSlots\[slot\]\.transport == RADIO_TRXNET\) \{\s*\n\s*String netid = requestArg/.test(sketch));
+// The two blanks the sketch skips, and the one field it writes blank and all.
+check("sketch: a blank password keeps the stored one, a blank address is not parsed",
+  /if \(password\.length\(\)\) nextSlots\[slot\]\.lanPass = password;/.test(sketch)
+  && /if \(civ\.length\(\) && parseHexByteString/.test(sketch)
+  && /if \(netid\.length\(\) && parseHexByteString/.test(sketch)
+  && /nextSlots\[slot\]\.lanIp =\s*\n\s*trimMemoryValue/.test(sketch));
+check("setup.html scopes its preset comparison by the same transports",
+  /function presetMatchFields/.test(html)
+  && /transport === 'lan'\s*\n?\s*\? \['lanip', 'lanuser', 'lanpass', 'localtrx', 'civaddr'\]/.test(html)
+  && /transport === 'civ' \? \['civaddr'\]/.test(html)
+  && /transport === 'trxnet' \? \['netid'\]/.test(html));
+check("setup.html treats a blank the way the sketch does, field by field",
+  /PRESET_BLANK_KEEPS = \{ lanpass: true, civaddr: true, netid: true \}/.test(html)
+  && /PRESET_HEX_FIELDS = \{ civaddr: true, netid: true \}/.test(html));
+// The dropdown must not be able to hold a stored answer: the moment it does, it
+// can disagree with the fields it is describing.
+check("setup.html works the selection out rather than storing it",
+  /function presetMatchesForm/.test(html) && /function refreshPresetSelection/.test(html)
+  && !/activePreset|presetActiveName/.test(html));
+
 // ---- the header: which build, and which network -----------------------------
 // SETUP names the build it is served from and the network the device is on.
 // Both are read off /setup-data.json, so the wording lives in the sketch and the
@@ -364,6 +396,280 @@ SCENARIOS.header = {
     mac: "24:6F:28:AA:BB:CC", fwRev: 20260817, hwRev: 3}),
   txgain: {}
 };
+
+// Pending changes. The page's own claim about which of its settings are not on
+// the interface yet, driven the way an operator drives it: type, undo, switch a
+// transport, save quietly. The seam is window.setupChanges.state(), which
+// returns the same count the button and the bar are drawn from -- a test that
+// read the DOM text instead could pass while the two disagreed.
+SCENARIOS.pending = {
+  data: device({dxccall: "OK1HRA", dxclocator: "JO70", dxchost: "ve7cc.net", dxcport: "7300",
+    trx1lanip: "192.168.1.60", trx1lanuser: "op", trx1lanpass: "pw", trx1model: "IC-705"}),
+  txgain: {}
+};
+
+const DRIVER_PENDING = `
+<script>
+(function () {
+  function waitFor(fn, ms) {
+    return new Promise(function (resolve) {
+      var started = Date.now();
+      (function poll() {
+        var value = fn();
+        if (value) return resolve(value);
+        if (Date.now() - started > (ms || 5000)) return resolve(null);
+        setTimeout(poll, 60);
+      }());
+    });
+  }
+  function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  function q(name) { return document.querySelector('[name="' + name + '"]'); }
+  function set(name, value) {
+    var f = q(name);
+    if (!f) return;
+    f.value = value;
+    f.dispatchEvent(new Event("input", {bubbles: true}));
+    f.dispatchEvent(new Event("change", {bubbles: true}));
+  }
+  function count() { return window.setupChanges.state().count; }
+  function names() { return window.setupChanges.state().names; }
+  function chipOwners() {
+    return [].slice.call(document.querySelectorAll(".setup-pending-chip"))
+      .map(function (c) { return c.getAttribute("data-for"); }).sort();
+  }
+  function chipFor(id) { return document.querySelector('.setup-pending-chip[data-for="' + id + '"]'); }
+
+  var out = {};
+  window.addEventListener("load", function () {
+    waitFor(function () { return window.setupChanges && chipFor("dxcSection"); }, 8000)
+      // The chips are placed the moment the fields are filled, and the spine
+      // adopts its two sections a beat later -- so the one on WiFi lands in the
+      // summary first and is carried to the step head by the next pass. Waiting
+      // for that is the test; it is the mechanism that keeps the chip visible
+      // through every later move the spine makes.
+      .then(function () {
+        return waitFor(function () {
+          var w = chipFor("wifiSection");
+          return w && w.parentNode && w.parentNode.classList.contains("spine-head");
+        }, 4000);
+      })
+      .then(function () {
+        // At rest the page must claim nothing: the fields hold what the device
+        // answered with, so a count here would be the tracker inventing work.
+        out.restCount = count();
+        out.chipOwners = chipOwners();
+        out.restChipText = chipFor("dxcSection").textContent;
+        out.restChipPending = chipFor("dxcSection").classList.contains("is-pending");
+        // Sections outside the form must not be claimed by it.
+        out.txGainChip = !!chipFor("txGainSection");
+        out.unattendedChip = !!chipFor("unattendedSection");
+        // Steps 1 and 2 adopt WiFi and Identity and hide their summaries; the
+        // chip has to be somewhere an operator can still see it.
+        var wifi = chipFor("wifiSection");
+        out.wifiChipOnSpineHead = !!(wifi && wifi.parentNode
+          && wifi.parentNode.classList.contains("spine-head"));
+
+        set("dxchost", "cluster.example.net");
+        return wait(120);
+      })
+      .then(function () {
+        out.afterEditCount = count();
+        out.afterEditNames = names();
+        out.fieldMarked = q("dxchost").classList.contains("setup-pending-field");
+        out.sectionChip = chipFor("dxcSection").textContent;
+        out.buttonPending = document.querySelector('.actions button[type="submit"]')
+          .classList.contains("is-pending");
+        // The button is far below the fold on this page, so the bar is the only
+        // thing carrying the state at the top of it.
+        window.scrollTo(0, 0);
+        return wait(400);
+      })
+      .then(function () {
+        var bar = document.querySelector(".setup-pending-bar");
+        out.barShownAtTop = !!bar && !bar.hidden;
+        out.barText = bar ? bar.textContent : "";
+        // The other half: at the button there is nothing to announce, and a bar
+        // left sitting over it would hide the thing it points at.
+        document.querySelector('.actions button[type="submit"]')
+          .scrollIntoView({block: "center"});
+        return wait(500);
+      })
+      .then(function () {
+        out.barHiddenAtButton = document.querySelector(".setup-pending-bar").hidden;
+        window.scrollTo(0, 0);
+        // Undo. A tracker that only latched "was touched" would stay lit here.
+        set("dxchost", "ve7cc.net");
+        return wait(300);
+      })
+      .then(function () {
+        out.afterUndoCount = count();
+        out.barAfterUndo = !document.querySelector(".setup-pending-bar").hidden;
+        // Switching TRX1 off ICOM-LAN disables its three LAN fields, which drops
+        // them from the submission. That is one change -- the select that did it
+        // -- not four.
+        set("trx1transport", "civ");
+        return wait(200);
+      })
+      .then(function () {
+        // Typing into a field that no longer gets sent must not be reported as
+        // work waiting to be sent.
+        var ip = q("trx1lanip");
+        out.lanIpDisabled = !!ip && ip.disabled;
+        if (ip) ip.value = "10.0.0.9";
+        return wait(700);
+      })
+      .then(function () {
+        out.afterTransportCount = count();
+        out.afterTransportNames = names();
+        // A quiet save stores the values but does not restart, so the interface
+        // is still running without them and the page must keep saying so.
+        return window.setupSaveQuiet ? window.setupSaveQuiet().catch(function () {}) : null;
+      })
+      .then(function () { return wait(300); })
+      .then(function () {
+        out.afterQuietSaveCount = count();
+        out.quietSaves = 1;
+        // A deliberate departure stands the warning down; nothing else does.
+        window.setupChanges.leaving();
+        return wait(120);
+      })
+      .then(function () {
+        out.barAfterLeaving = !document.querySelector(".setup-pending-bar").hidden;
+        out.scenario = location.search.replace("?", "");
+        return fetch("/result", {method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(out)});
+      });
+  });
+}());
+</script>`;
+
+// The saved-configuration row. What is being proved is that the dropdown is a
+// READ-OUT worked out from the fields -- it has no stored "active preset" to
+// consult -- and that it says the honest thing, which is "saving this preset
+// would change nothing the firmware writes". So the interesting cases are the
+// ones where a literal string comparison would get it wrong: a lower-case CI-V
+// address against the upper-case one the sketch hands back, a blank password
+// that means "keep the stored one", a TrxNet slot still carrying the IP
+// somebody typed two radios ago, and a label the firmware adopted by itself.
+SCENARIOS.presets = {
+  data: device({
+    dxccall: "OK1HRA", dxclocator: "JO70",
+    // The label is the model the radio reported, which is NOT what the preset
+    // below was saved with -- exactly the case that must still match.
+    trx1label: "IC-705", trx1transport: "lan", trx1lanip: "192.168.1.60",
+    trx1lanuser: "op", trx1lanpass: "pw", trx1civaddr: "A4", trx1model: "IC-705",
+    trx2enabled: true, trx2label: "PA", trx2transport: "trxnet", trx2netid: "0A",
+    // Left over from when this slot was on LAN. The sketch does not write it for
+    // a TrxNet slot, so it cannot make the radio differ from the preset.
+    trx2lanip: "192.168.1.99", trx2lanuser: "old", trx2lanpass: "old",
+    trx3enabled: true, trx3transport: "civ", trx3civaddr: "5C"
+  }),
+  txgain: {},
+  presets: {
+    trx1: [
+      // Matches: the label differs, the address is lower case, and the password
+      // is blank -- which the sketch reads as "keep the stored secret".
+      {name: "doma", label: "TRX1", transport: "lan", lanip: "192.168.1.60",
+       lanuser: "op", lanpass: "", civaddr: "a4", netid: "00", localtrx: false,
+       cwIpOnConnect: false},
+      // Same radio, different password. A password that is actually there is
+      // compared, so this one must not match.
+      {name: "chata", label: "TRX1", transport: "lan", lanip: "192.168.1.70",
+       lanuser: "op", lanpass: "jine", civaddr: "A4", netid: "00", localtrx: false,
+       cwIpOnConnect: false},
+      // A different transport is a different radio.
+      {name: "kabel", label: "TRX1", transport: "civ", civaddr: "A4", netid: "00",
+       lanip: "192.168.1.60", lanuser: "op", lanpass: "pw", localtrx: false,
+       cwIpOnConnect: false}
+    ],
+    trx2: [
+      // Only netid is read for a TrxNet slot, so the stale LAN fields and the
+      // label must not stop this matching.
+      {name: "pa", label: "jinak", transport: "trxnet", netid: "0a",
+       lanip: "10.9.9.9", lanuser: "x", lanpass: "y", localtrx: true, civaddr: "00"}
+    ],
+    trx3: [
+      {name: "prvni", label: "A", transport: "civ", civaddr: "5C", netid: "00"},
+      {name: "druhy", label: "B", transport: "civ", civaddr: "5c", netid: "00"}
+    ]
+  }
+};
+
+const DRIVER_PRESETS = `
+<script>
+(function () {
+  function q(name) { return document.querySelector('[name="' + name + '"]'); }
+  function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  // One pass of the derivation is 500 ms, so every step waits past one.
+  var STEP = 700;
+  window.addEventListener("load", function () {
+    // The row is built by applySetupData(), which runs off a fetch -- so the
+    // seam does not exist yet at load, only after the document has landed.
+    var P = null;
+    var out = {scenario: location.search.replace("?", "")};
+    wait(STEP)
+      .then(function () {
+        P = window.setupPresets;
+        if (!P) {
+          out.missing = true;
+          throw new Error("no seam");
+        }
+        out.trx1 = P.state("trx1");
+        out.trx2 = P.state("trx2");
+        out.trx3 = P.state("trx3");
+        // The comparison itself, put in front of the cases directly rather than
+        // arranged by clicking the page into each one.
+        out.lanFields = P.matchFields("trx1", "lan");
+        out.civFields = P.matchFields("trx1", "civ");
+        out.trxnetFields = P.matchFields("trx1", "trxnet");
+        out.secondaryLanFields = P.matchFields("trx2", "lan");
+        out.hexLooseCase = P.valuesMatch("civaddr", "a4", "A4");
+        out.hexShortForm = P.valuesMatch("netid", "a", "0A");
+        out.hexDiffers = P.valuesMatch("civaddr", "A4", "94");
+        out.blankPassKeeps = P.valuesMatch("lanpass", "", "secret");
+        out.blankCivKeeps = P.valuesMatch("civaddr", "", "A4");
+        out.blankUserIsStrict = P.valuesMatch("lanuser", "", "op");
+        out.blankIpIsStrict = P.valuesMatch("lanip", "", "192.168.1.60");
+        out.boolCompared = P.valuesMatch("localtrx", false, true);
+        // Editing an address is a different radio, and the row has to say so.
+        q("trx1lanip").value = "192.168.1.61";
+        return wait(STEP);
+      })
+      .then(function () {
+        out.afterEdit = P.state("trx1");
+        q("trx1lanip").value = "192.168.1.60";
+        return wait(STEP);
+      })
+      .then(function () {
+        out.afterRestore = P.state("trx1");
+        // The name field is an input, not a second read-out: a name being typed
+        // for a NEW configuration must survive every pass.
+        var nameInput = document.querySelector('[data-preset-name="trx1"]');
+        nameInput.value = "portable";
+        return wait(STEP);
+      })
+      .then(function () {
+        out.typedNameSurvives = document.querySelector('[data-preset-name="trx1"]').value;
+        // Choosing a configuration fills the form, and the row stays on the one
+        // chosen rather than sliding to another that would also match.
+        var select = document.querySelector('[data-preset-select="trx1"]');
+        select.value = "chata";
+        select.dispatchEvent(new Event("change", {bubbles: true}));
+        return wait(STEP);
+      })
+      .then(function () {
+        out.afterPick = P.state("trx1");
+        out.afterPickIp = q("trx1lanip").value;
+        out.afterPickPass = q("trx1lanpass").value;
+      })
+      .catch(function (e) { out.error = String(e && e.message || e); })
+      .then(function () {
+        return fetch("/result", {method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(out)});
+      });
+  });
+}());
+</script>`;
 
 const DRIVER_HEADER = `
 <script>
@@ -610,7 +916,109 @@ function report() {
   check("first run: AP mode hands over instead of rebooting into nowhere",
     first && first.handoverStarted === true && probe.wifiTries === 1 && probe.restarts === 0);
 
-  const total = 97;
+  // ---- pending changes ----
+  const pend = results.pending || {};
+  check("pending: a freshly loaded page claims no changes",
+    pend.restCount === 0 && pend.restChipPending === false
+    && /Save & Restart/.test(pend.restChipText || ""));
+  // Derived from which fields the form submits, not from a list of section ids:
+  // TX audio gain posts to its own endpoint and Unattended is running state, so
+  // neither may be claimed by the button at the bottom of the form.
+  check("pending: the chip marks exactly the sections the form submits",
+    JSON.stringify(pend.chipOwners) === JSON.stringify(
+      ["dxcSection", "identitySection", "logSettingsSection",
+       "radioSection", "trxnetSection", "wifiSection"])
+    && pend.txGainChip === false && pend.unattendedChip === false);
+  // Adoption into a spine step hides the section's own summary, which used to be
+  // the only place a chip could live.
+  check("pending: an adopted section's chip moves to the step head",
+    pend.wifiChipOnSpineHead === true);
+  check("pending: an edit marks the field, the section and the button",
+    pend.afterEditCount === 1 && JSON.stringify(pend.afterEditNames) === '["dxchost"]'
+    && pend.fieldMarked === true && /1 pending/.test(pend.sectionChip || "")
+    && pend.buttonPending === true);
+  check("pending: the bar appears where the button is not, and goes away at it",
+    pend.barShownAtTop === true && /needs Save & Restart/.test(pend.barText || "")
+    && pend.barHiddenAtButton === true);
+  check("pending: putting the value back clears it",
+    pend.afterUndoCount === 0 && pend.barAfterUndo === false);
+  // The three LAN fields leave the submission when the transport does. Counting
+  // them would report four changes for one decision, and marking a field that
+  // no save carries would be worse than saying nothing.
+  check("pending: a disabled transport branch is one change, not four",
+    pend.lanIpDisabled === true && pend.afterTransportCount === 1
+    && JSON.stringify(pend.afterTransportNames) === '["trx1transport"]');
+  // The whole reason the tracker measures against the loaded values: a quiet
+  // save stores them with noRestart=1, so the running firmware still has not
+  // got them.
+  check("pending: a quiet save does not clear it -- the interface is still without it",
+    pend.afterQuietSaveCount === 1);
+  check("pending: a deliberate departure stands the bar down",
+    pend.barAfterLeaving === false);
+
+  // ---- the saved-configuration row ------------------------------------------
+  // Nothing stores which preset a slot is running. The row works it out, which
+  // is the only way it cannot drift from the fields in front of the operator --
+  // and the claim it makes is "saving this would change nothing", not "these
+  // strings are equal". Every check below is a case where those two differ.
+  const pre = results.presets || {};
+  check("presets: the row names the saved configuration the fields hold",
+    pre.trx1 && pre.trx1.selected === "doma" && pre.trx2 && pre.trx2.selected === "pa"
+    && pre.trx1.deleteDisabled === false);
+  // A name arrives once, into a box that is still empty, so a reloaded page is
+  // in the same state as one where the operator picked the configuration.
+  check("presets: the name field is seeded once, at load, into an empty box",
+    pre.trx1 && pre.trx1.name === "doma" && pre.trx2 && pre.trx2.name === "pa");
+  // The placeholder is the answer "none of them", which the row works out. An
+  // operator asserting it would be corrected half a second later.
+  check("presets: \u2014 new configuration \u2014 is a state, not a choice",
+    pre.trx1 && pre.trx1.placeholderDisabled === true
+    && pre.trx3 && pre.trx3.placeholderDisabled === true
+    && JSON.stringify((pre.trx1 || {}).options) === '["","doma","chata","kabel"]');
+  // TRX2 is on TrxNet and still carries the IP from when it was on LAN. The
+  // sketch does not write those fields for a TrxNet slot, so they cannot make
+  // the radio differ from the preset -- and the label, which the firmware
+  // adopts from the radio's own model, never decides identity anywhere.
+  check("presets: only the fields the sketch writes for this transport count",
+    JSON.stringify(pre.lanFields) === '["lanip","lanuser","lanpass","localtrx","civaddr","cwIpOnConnect"]'
+    && JSON.stringify(pre.civFields) === '["civaddr","cwIpOnConnect"]'
+    && JSON.stringify(pre.trxnetFields) === '["netid"]'
+    && (pre.lanFields || []).indexOf("label") < 0);
+  // The CW announce is a TRX1 setting, and on TrxNet its row is disabled, so
+  // the sketch stores false whatever a preset holds.
+  check("presets: the CW announce counts only where its row is live",
+    JSON.stringify(pre.secondaryLanFields) === '["lanip","lanuser","lanpass","localtrx","civaddr"]'
+    && (pre.trxnetFields || []).indexOf("cwIpOnConnect") < 0);
+  // civaddr/netid round-trip through a byte, so they come back upper-case
+  // however they were typed; a literal comparison would drop every preset whose
+  // address was typed in lower case.
+  check("presets: addresses are compared as bytes, not as text",
+    pre.hexLooseCase === true && pre.hexShortForm === true && pre.hexDiffers === false);
+  // "blank keeps stored secret" in the sketch: a blank there would change
+  // nothing, so it matches whatever the radio has. lanip/lanuser are written
+  // blank and all, so a blank in those is a real difference.
+  check("presets: a blank means 'keep' only where the sketch skips it",
+    pre.blankPassKeeps === true && pre.blankCivKeeps === true
+    && pre.blankUserIsStrict === false && pre.blankIpIsStrict === false
+    && pre.boolCompared === false);
+  // Two configurations that are the same connection under different names. The
+  // row settles on one rather than claiming the fields match nothing.
+  check("presets: identical configurations settle on the first, not on neither",
+    pre.trx3 && pre.trx3.selected === "prvni");
+  check("presets: editing an address drops the name, putting it back brings it home",
+    pre.afterEdit && pre.afterEdit.selected === "" && pre.afterEdit.deleteDisabled === true
+    && pre.afterRestore && pre.afterRestore.selected === "doma");
+  // The row may move the dropdown under the operator's hand. It may never move
+  // the field they are typing a new name into.
+  check("presets: the derivation never writes into the name field",
+    pre.afterEdit && pre.afterEdit.name === "doma" && pre.typedNameSurvives === "portable");
+  // Choosing one fills the form, and the row stays where it was put instead of
+  // sliding to whichever preset the pass happens to reach first.
+  check("presets: choosing a configuration fills the form and the row stays on it",
+    pre.afterPick && pre.afterPick.selected === "chata" && pre.afterPick.name === "chata"
+    && pre.afterPickIp === "192.168.1.70" && pre.afterPickPass === "jine");
+
+  const total = 124;
   if (failures.length) {
     console.error("SETUP SPINE FAIL (" + failures.length + " of ~" + total + ")\n  " + failures.join("\n  "));
     process.exitCode = 1;
@@ -645,6 +1053,8 @@ const server = http.createServer((req, res) => {
     const radioWalk = currentScenario === "radio" || currentScenario === "noradio";
     const driver = currentScenario === "firstrun" ? DRIVER_FIRSTRUN
       : currentScenario === "header" ? DRIVER_HEADER
+      : currentScenario === "pending" ? DRIVER_PENDING
+      : currentScenario === "presets" ? DRIVER_PRESETS
       : radioWalk ? DRIVER_RADIO : DRIVER;
     const page = fs.readFileSync(path.join(ROOT, "data", "setup.html"), "utf8");
     return send("text/html; charset=utf-8", page.replace("</body>", driver + "</body>"));
@@ -707,6 +1117,17 @@ const server = http.createServer((req, res) => {
   if (url.startsWith("/setup.css")) return send("text/css",
     fs.readFileSync(path.join(ROOT, "data", "setup.css")));
   if (url === "/setup-data.json") return send("application/json", JSON.stringify(SCENARIOS[currentScenario].data));
+  // The same blob-store convention as the device: the browser owns the shape and
+  // rewrites the whole document, so the stub only has to hand it back.
+  if (url === "/radio-presets.json" && req.method === "POST") {
+    let body = "";
+    req.on("data", c => body += c);
+    req.on("end", () => { probe.presetBody = body;
+      res.writeHead(200, {"Content-Type": "application/json"}); res.end("{\"ok\":true}"); });
+    return;
+  }
+  if (url === "/radio-presets.json") return send("application/json",
+    JSON.stringify(SCENARIOS[currentScenario].presets || {}));
   if (url === "/txgain.json") return send("application/json", JSON.stringify(SCENARIOS[currentScenario].txgain));
   if (url === "/state") return send("application/json", JSON.stringify({connected: true}));
   // Everything else the page asks for is deliberately absent: the spine has to
@@ -749,7 +1170,11 @@ server.listen(0, "127.0.0.1", () => {
       runScenario(base, "radio", function () {
         runScenario(base, "noradio", function () {
           runScenario(base, "firstrun", function () {
-            runScenario(base, "header", report);
+            runScenario(base, "header", function () {
+              runScenario(base, "pending", function () {
+                runScenario(base, "presets", report);
+              });
+            });
           });
         });
       });

@@ -143,6 +143,10 @@ const server = http.createServer((request, response) => {
     tx: false, ritRaw: 0, smeterRaw: 0, powerMeterRaw: 0, afGain: 100,
     keySpeed: 20, rfPower: 128, rfPowerSeen: true, supplyVolts: 13.8, swr: 1.1,
     preamp: 0, vox: 0, dxcConnected: true,
+    // The topbar's status block is only as wide as what the radio reports, and
+    // it is the width that decides what section 8c below sees. A radio with a
+    // GPS fix is the widest ordinary case: `GPS JO70UC | -55 dBm | FW ...`.
+    gpsGrid: "JO70UC12", gpsFixAgeMs: 4000, gpsSel: 1,
   });
 
   if (url.pathname === "/oi3/state") return json({
@@ -155,6 +159,10 @@ const server = http.createServer((request, response) => {
   if (url.pathname === "/oi3/set-hz" && request.method === "POST")
     return readBody(() => json({ok: true}));
   if (url.pathname === "/civread") return json({});
+  if (url.pathname === "/gps") return json({
+    sel: 1, grid: "JO70UC12", lat: 49.9, lon: 14.3, altM: 320,
+    courseDeg: 0, speedKmh: 0, utc: "12:04:00", fixAgeMs: 4000,
+  });
   if (url.pathname === "/txgain.json") return json({v: 1, entries: {}});
   if (url.pathname === "/txgain-plan.json") return json({});
   if (url.pathname === "/dxcinfo")
@@ -303,8 +311,11 @@ const PAGE_SCRIPT = `
     check("the page does not scroll sideways with the split open",
       document.body.scrollWidth <= window.innerWidth + 1,
       document.body.scrollWidth + " vs " + window.innerWidth);
-    check("the firmware version is out of the tab row's way",
-      getComputedStyle($("topbarFw")).display === "none");
+    // The right end of that row -- GPS, signal strength, "⚠ OFFLINE", firmware
+    // -- used to be hidden outright the moment the split opened. See 8c.
+    check("the GPS / signal / firmware block is not hidden just because the split opened",
+      getComputedStyle($("topbarFw")).display !== "none",
+      getComputedStyle($("topbarFw")).display);
 
     const frame = $("logDxcFrame");
     await until(() => frame.contentWindow && frame.contentDocument
@@ -446,6 +457,69 @@ const PAGE_SCRIPT = `
       Math.round(left.getBoundingClientRect().width) === paneChosen,
       paneChosen + " -> " + Math.round(left.getBoundingClientRect().width));
 
+    // ---- 8c. the status block yields in ORDER, and only when it must -----
+    // The operator's report: "turn DXC on and the firmware version and the GPS
+    // info disappear from the top right". They did -- unconditionally, at any
+    // window width, on a page where that same block also carries "⚠ OFFLINE".
+    //
+    // What is asserted is the order things go in as the log column shrinks and
+    // the invariant that the row never ends up clipped, NOT the pixel each step
+    // happens at: the tab labels, the block's contents and the fonts all differ
+    // between platforms and radios, which is exactly why the production code
+    // measures instead of carrying a threshold.
+    const lvl = () => document.body.classList.contains("log-split-status-off") ? 2
+                    : document.body.classList.contains("log-split-fw-off") ? 1 : 0;
+    const rowFits = () => {
+      const row = document.querySelector(".tabs");
+      return row.scrollWidth <= row.clientWidth + 1;
+    };
+
+    const sweep = [];
+    for (let x = 260; x <= window.innerWidth - 40; x += 20) {
+      drag(x);                       // synchronous: applyTopbar() runs in onMove
+      sweep.push([x, lvl(), rowFits()]);
+    }
+    const levels = sweep.map(e => e[1]).join("");
+    check("the tab row is never left overflowing at any divider position",
+      sweep.every(e => e[2]), levels + " / " + sweep.filter(e => !e[2]).map(e => e[0]).join(","));
+    check("with the log column wide, everything is shown",
+      sweep[0][1] === 0, levels);
+    check("squeezed to the log's minimum, the block is out of the way",
+      sweep[sweep.length - 1][1] === 2, levels);
+    check("what goes first is the firmware version alone, never the whole block",
+      sweep.some(e => e[1] === 1) && sweep.every((e, i) => i === 0 || e[1] >= sweep[i - 1][1]),
+      levels);
+
+    // And the classes do what their names say -- including reaching the
+    // separator in front of the version, which needs :has(). A dangling "|"
+    // is what this looks like when that selector does not land.
+    // Falls back to a sane middle if a level never occurred -- the check above
+    // has already gone red in that case, and a NaN drag would only bury it.
+    const atLevel = want => { const hit = sweep.find(e => e[1] === want);
+      return hit ? hit[0] : 400; };
+    const tail = () => Array.prototype.slice.call($("topbarFw").children)
+      .filter(n => getComputedStyle(n).display !== "none").pop();
+    const displayOf = sel => { const n = document.querySelector(sel);
+      return n ? getComputedStyle(n).display : "(absent)"; };
+
+    drag(atLevel(0));
+    check("at that width the version, the signal and the GPS chip are all readable",
+      displayOf(".fw-version-link") !== "none" && displayOf(".topbar-wifi-rssi") !== "none"
+      && displayOf(".topbar-gps") !== "none",
+      [displayOf(".fw-version-link"), displayOf(".topbar-wifi-rssi"), displayOf(".topbar-gps")].join(" / "));
+
+    drag(atLevel(1));
+    check("one step in, the version is gone but GPS and signal stay",
+      displayOf(".fw-version-link") === "none" && displayOf(".topbar-gps") !== "none"
+      && displayOf(".topbar-wifi-rssi") !== "none",
+      [displayOf(".fw-version-link"), displayOf(".topbar-gps"), displayOf(".topbar-wifi-rssi")].join(" / "));
+    check("and no separator is left dangling where the version was",
+      !!tail() && !/topbar-fw-sep/.test(tail().className),
+      tail() ? tail().className : "(nothing visible)");
+
+    drag(400);                       // a sane width for everything below
+    await sleep(150);
+
     // ---- 9. the pane's settings are its own ------------------------------
     // Without a separate namespace two live instances are only two scroll
     // positions onto one setting, and each write fights the other.
@@ -531,6 +605,12 @@ const PAGE_SCRIPT = `
     await sleep(300);
     check("clicking DXC again closes the split", LogDxcSplit.isOpen() === false);
     check("and the iframe is gone, not merely hidden", !$("logDxcFrame"));
+    check("closing it restores the full topbar",
+      !document.body.classList.contains("log-split-fw-off")
+      && !document.body.classList.contains("log-split-status-off")
+      && getComputedStyle($("topbarFw")).display !== "none"
+      && displayOf(".fw-version-link") !== "none",
+      document.body.className + " / " + displayOf(".fw-version-link"));
     await until(async () => (await stats()).live === 1, 11000,
       "the surviving instance to be promoted").catch(() => {});
     s = await stats();

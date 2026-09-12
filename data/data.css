@@ -331,17 +331,32 @@ button { color: inherit; cursor: pointer; }
 .compact-section[open] > summary::before, .state-dump[open] > summary::before { content: "−"; }
 .compact-section[open] > summary, .state-dump[open] > summary { border-bottom: 1px solid var(--line); }
 .summary-status { margin-left: auto; color: var(--muted); font-size: 11px; font-weight: 500; letter-spacing: 0; text-transform: none; }
-/* Signal-only state pills on the right edge of the SETTINGS header. They borrow
-   the recent-traffic filter look, but are never clickable: the section itself is
-   where a function is switched, here it is only reported. */
+/* State pills on the right edge of the SETTINGS header. They borrow the
+   recent-traffic filter look, and since 2026-09-12 they are the switches as well
+   as the report: the section below is long, and stopping a station that is
+   transmitting must not require unrolling it. Grown vertically only -- ~28px of
+   touch target inside the header's existing 38px, because at 400px this row has
+   no width to spare (see the narrow-screen block further down). */
 .summary-flags { display: flex; flex-shrink: 0; gap: 4px; margin-left: 8px; }
 .summary-status + .summary-flags { margin-left: 8px; }
 .summary-flag {
-  padding: 2px 7px; border: 1px solid var(--line); border-radius: 999px;
-  color: var(--muted); font: 700 10px/1.4 ui-monospace, monospace;
-  letter-spacing: .04em; opacity: .5;
+  padding: 6px 7px; border: 1px solid var(--line); border-radius: 999px;
+  background: transparent; color: var(--muted); font: 700 10px/1.4 ui-monospace, monospace;
+  letter-spacing: .04em; opacity: .5; cursor: pointer;
 }
+.summary-flag:hover { border-color: var(--cyan); }
+.summary-flag:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
 .summary-flag.on { color: var(--cyan); border-color: var(--cyan); background: #123029; opacity: 1; }
+/* A pill blocked by Radio TX being off keeps the plain "off" look on purpose: a
+   third appearance in a six-pill row is more than the header can explain, and
+   the click is not dead -- it opens SETTINGS at Radio TX. */
+.summary-flag[aria-disabled="true"] { cursor: pointer; }
+/* The row a refusing pill pointed at. SETTINGS unrolls, the row scrolls into
+   view and is marked for two seconds: "nothing happened" is the one answer a
+   pill that declined to act must never give. */
+.settings label.setting-reveal, .settings .setting-reveal {
+  outline: 1px solid var(--cyan); outline-offset: 2px; border-radius: 3px;
+}
 .state-dump { color: var(--muted); }
 .state-dump pre { padding: 0 10px 10px; white-space: pre-wrap; font-size: 11px; }
 
@@ -990,7 +1005,9 @@ button { color: inherit; cursor: pointer; }
      the part that gives way, because the same values are inside the section. */
   .summary-status:has(+ .summary-flags) { max-width: 30%; }
   .summary-flags { gap: 3px; margin-left: 5px; }
-  .summary-flag { padding: 2px 4px; font-size: 9px; }
+  /* Narrower, not shorter: the touch target survives the narrow screen, which is
+     the screen it exists for. */
+  .summary-flag { padding: 6px 4px; font-size: 9px; }
   .station-country { max-width: 92px; }
   .settings label { grid-template-columns: 118px minmax(20px, 1fr) auto; }
   .settings-storage { align-items: flex-start; }
