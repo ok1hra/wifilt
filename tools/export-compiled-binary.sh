@@ -136,8 +136,26 @@ EXPORT_BIN="${SKETCH_DIR}/${PROJECT_NAME}.${VARIANT}.bin"
 mkdir -p "$SETTINGS_DIR"
 # Copy the operator's preferences so the sketchbook (and with it the TrxNet
 # library) is found, then point the isolated folder back at the real cores.
+#
+# custom_* is stripped on the way in, and that is not tidiness. Those lines hold
+# the IDE's per-board menu selections as "custom_<menu>=<boardid>_<option>", and
+# 1.8.x resolves an FQBN by removing the TARGET board id from the front of the
+# stored value. Our target is plain "esp32", so a selection left behind by any
+# board whose id merely STARTS with esp32 decays into nonsense:
+#
+#   custom_PartitionScheme=esp32-poe_default  ->  "-poe_default"
+#
+# which is not a PartitionScheme option, and the build dies before it compiles a
+# line with the near-useless "Error resolving FQBN: getting". Opening the IDE for
+# an ESP32-POE board -- the IP-rotator's -- is enough to poison every release
+# build afterwards. (esp32-gateway and m5stack_dial entries are harmless for the
+# same reason: esp32 is not a prefix of them.)
+#
+# Nothing is lost: the two menu options this build actually cares about travel in
+# the FQBN, the rest take the board defaults, and that is exactly what CI does
+# with no preferences file at all.
 if [[ -f "$ARDUINO15_DIR/preferences.txt" ]]; then
-  cp -f "$ARDUINO15_DIR/preferences.txt" "$SETTINGS_DIR/preferences.txt"
+  grep -v '^custom_' "$ARDUINO15_DIR/preferences.txt" > "$SETTINGS_DIR/preferences.txt"
 else
   : > "$SETTINGS_DIR/preferences.txt"
   echo "sketchbook.path=$HOME/Arduino" >> "$SETTINGS_DIR/preferences.txt"
@@ -156,7 +174,13 @@ echo "==> Sketch  : $SKETCH${REV:+  (REV $REV)}"
 echo "==> Board   : $FQBN"
 echo "==> Build   : $BUILD_DIR"
 
-LOG="${BUILD_DIR}/export.log"
+# NOT inside BUILD_DIR: a successful 1.8.x build wipes its build.path on the way
+# through, taking the log with it -- so the success path below used to grep a
+# file that no longer existed and the warning summary was silently lost. A failed
+# build dies before the wipe, which is why this only ever showed up when things
+# went RIGHT.
+LOG="${ROOT_DIR}/build/arduino-export.log"
+mkdir -p "$(dirname "$LOG")"
 set +e
 "$ARDUINO_BIN" --verify \
   --preferences-file "${SETTINGS_DIR}/preferences.txt" \

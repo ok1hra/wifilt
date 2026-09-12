@@ -160,7 +160,7 @@ volatile bool cwIpSendPending = false;
 #endif
 
 #include "EEPROM.h"
-#define EEPROM_SIZE 360
+#define EEPROM_SIZE 400
 /*
   0|Byte    1|128
   1|Char    1|A
@@ -211,6 +211,9 @@ volatile bool cwIpSendPending = false;
   267-287 BT_NAME (21B)
   288 TRXNET_PRIO flag (0xff=unprogrammed → default "OI3 ANT"; 0x01=user set → read string)
   289-359 TRXNET_PRIO priority prefixes string (space-separated, 71B; empty = priority off)
+  360-399 DXC map host (40B) — where dxc.html POSTs the spot snapshot for the
+          IP-rotator map; empty = feature off. 246-266 was the only free block
+          left and 20 chars is too tight for "ip-rotator.local:88".
 
   !! Increment EEPROM_SIZE #define !!
 */
@@ -743,6 +746,10 @@ int incomingByte = 0;   // for incoming serial data
   #define DXC_CONNECT_TIMEOUT_MS 1500
   String DxcCallsign = "";
   String DxcLocator = "";
+  // Host[:port] of the IP-rotator whose map is fed DX spots. The firmware never
+  // uses it -- dxc.html reads it out of /config and POSTs there from the browser,
+  // so the DXC relay keeps its single WebSocket slot. Empty = feature off.
+  String DxcMapHost = "";
 
   static const char* LOG_CONFIG_PATH = "/log-config.json";
   static const size_t LOG_CONFIG_MAX_BYTES = 2048;
@@ -1991,6 +1998,7 @@ void handleSetupData(){
   j += ",\"dxcport\":\""; j += DxcPort > 0 ? String(DxcPort) : ""; j += "\"";
   j += ",\"dxccall\":\""; j += configJsonEscape(DxcCallsign); j += "\"";
   j += ",\"dxclocator\":\""; j += configJsonEscape(DxcLocator); j += "\"";
+  j += ",\"dxcmaphost\":\""; j += configJsonEscape(DxcMapHost); j += "\"";
   j += ",\"blockedDxcc\":\""; j += configJsonEscape(g_lcBlockedDxcc); j += "\"";
   // fskOutputMode/fskNetId used to be serialized here too (this is a SEPARATE
   // g_lc* serialization from /log-config's own, feeding setup.html's
@@ -2866,6 +2874,21 @@ static void eepromWriteStr(const String &str, int addr, int maxLen) {
   }
 }
 
+// host[:port] of the IP-rotator that receives the DX spot snapshot. Deliberately
+// narrow: this string is pasted straight into a URL by dxc.html, so anything that
+// could carry a path, a query, credentials or whitespace is refused rather than
+// escaped. Empty is valid and means the feature is off.
+static bool dxcMapHostValid(const String &v) {
+  if (v.length() > 40) return false;
+  for (size_t i = 0; i < v.length(); i++) {
+    char c = v[i];
+    bool ok = (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') ||
+              (c >= 'a' && c <= 'z') || c == '.' || c == '-' || c == ':';
+    if (!ok) return false;
+  }
+  return true;
+}
+
 static String eepromReadStr(int addr, int maxLen) {
   String out;
   out.reserve(maxLen);
@@ -3382,6 +3405,7 @@ void handleConfigDownload() {
   j += ",\"dxcport\":";      j += DxcPort;
   j += ",\"dxccall\":\"";    j += configJsonEscape(DxcCallsign); j += "\"";
   j += ",\"dxclocator\":\""; j += configJsonEscape(DxcLocator);  j += "\"";
+  j += ",\"dxcmaphost\":\""; j += configJsonEscape(DxcMapHost);  j += "\"";
   j += ",\"btname\":\"";     j += configJsonEscape(BT_NAME);     j += "\"";
   if (cfgFS.exists(RADIO_CONFIG_PATH)) {
     File radioFile = cfgFS.open(RADIO_CONFIG_PATH, "r");
@@ -3606,6 +3630,10 @@ void handleConfigUpload() {
   if (body.indexOf("\"dxccall\"") >= 0) {
     String dxccall = extractJsonString(body, "dxccall");
     if(dxccall.length() <= 16){ DxcCallsign = dxccall; eepromWriteStr(DxcCallsign, 203, 16); }
+  }
+  if (body.indexOf("\"dxcmaphost\"") >= 0) {
+    String dxcmaphost = extractJsonString(body, "dxcmaphost");
+    if(dxcMapHostValid(dxcmaphost)){ DxcMapHost = dxcmaphost; eepromWriteStr(DxcMapHost, 360, 40); }
   }
   if (body.indexOf("\"dxclocator\"") >= 0) {
     String dxclocator = extractJsonString(body, "dxclocator");
@@ -5136,7 +5164,8 @@ void setupWebServer(void){
     // page; /oi3/set-hz now routes LAN/TRXNET/CI-V by the unified slot config.
     String j = "{\"locator\":\"" + DxcLocator + "\",\"callsign\":\"" + DxcCallsign
              + "\",\"trx2netid\":" + String(radioSlots[1].enabled ? 1 : 0)
-             + ",\"trx3netid\":" + String(radioSlots[2].enabled ? 1 : 0) + "}";
+             + ",\"trx3netid\":" + String(radioSlots[2].enabled ? 1 : 0)
+             + ",\"maphost\":\"" + DxcMapHost + "\"}";
     webServer.send(200, "application/json", j);
   });
 
@@ -5396,10 +5425,11 @@ void setup(){
     TRX2_CIV_ADDR = (EEPROM.read(48) == 0xff) ? 0x00 : EEPROM.readByte(48);
     // 49 TRX3_CIV_ADDR (CI-V address of TRX3; 0xff=unprogrammed → 0x00 unset)
     TRX3_CIV_ADDR = (EEPROM.read(49) == 0xff) ? 0x00 : EEPROM.readByte(49);
-    // 50-67   FREE (was MQTT_TOPIC)
-    // 115-135 FREE (was MQTT_TOPIC_RX)
-    // 225-245 FREE (was TRX2_MQTT_ROOT)
-    // 246-266 FREE (was TRX3_MQTT_ROOT)
+    // 50-68 / 115-131 / 225-241 are NOT free any more -- they hold
+    // TRX1_CONFIG_MARKER..TRX1_LAN_IP, TRX1_LAN_USER and TRX1_LAN_PASSWORD.
+    // Writing there on the strength of an old "FREE" note costs the operator
+    // the radio's LAN password. The canonical map is at the top of this file.
+    // Actually free: 70-71, 72-73, 132-135, 242-245, 246-266.
 
     // 267-287 BT_NAME (21B)
     if(EEPROM.read(267)!=0xff){
@@ -5456,6 +5486,9 @@ void setup(){
         if(EEPROM.read(i) != 0xff) DxcLocator += char(EEPROM.read(i));
       }
     }
+
+    // 360-399 DXC map host (40B)
+    DxcMapHost = eepromReadStr(360, 40);
 
   }
 //------------------------------------------
@@ -8872,10 +8905,9 @@ void handleSet() {
       String s = trx3en ? requestArg("trx3civaddr") : String("");
       if (s.length() == 0) { if (TRX3_CIV_ADDR != 0x00) { TRX3_CIV_ADDR = 0x00; EEPROM.writeByte(49, 0x00); } }
       else if (parseHexByteString(s, a)) { if (TRX3_CIV_ADDR != a) { TRX3_CIV_ADDR = a; EEPROM.writeByte(49, a); } } }
-    // 48-67 FREE (was MQTT_TOPIC)
-    // 115-135 FREE (was MQTT_TOPIC_RX)
-    // 225-245 FREE (was TRX2_MQTT_ROOT)
-    // 246-266 FREE (was TRX3_MQTT_ROOT)
+    // 50-68 / 115-131 / 225-241 are NOT free any more -- see the note in the
+    // EEPROM loader; they hold TRX1_LAN_IP, TRX1_LAN_USER, TRX1_LAN_PASSWORD.
+    // Actually free: 70-71, 72-73, 132-135, 242-245, 246-266.
 
     // 267-287 BT_NAME (21B)
     {
@@ -9006,6 +9038,8 @@ void handleSet() {
       if(dxccall.length() <= 16){ DxcCallsign = dxccall; eepromWriteStr(DxcCallsign, 203, 16); }
       String dxclocator = requestArg("dxclocator");
       if(dxclocator.length() <= 6){ DxcLocator = dxclocator; eepromWriteStr(DxcLocator, 219, 6); }
+      String dxcmaphost = requestArg("dxcmaphost");
+      if(dxcMapHostValid(dxcmaphost)){ DxcMapHost = dxcmaphost; eepromWriteStr(DxcMapHost, 360, 40); }
     }
 
     // TrxNet priority prefixes — takes effect after the restart that follows this save.

@@ -460,6 +460,12 @@
                 <span class="help-tip" data-tip="Telnet port of the DX cluster server. Common: 7300 or 23.">?</span>
               </div>
             </label>
+            <label>Rotator map host
+              <div class="input-with-tip">
+                <input type="text" name="dxcmaphost" maxlength="40" placeholder="ip-rotator.local" value="">
+                <span class="help-tip" data-tip="Host or host:port of an IP-rotator whose map should show these DX spots. The DXC page posts a snapshot there every 5 s, so the rotator never opens a second client on the cluster relay. Empty = off.">?</span>
+              </div>
+            </label>
             <p class="setup-note">Logs in as <b id="dxcLoginCall">—</b>, from the Identity section above.</p>
           </div>
         </details>
@@ -710,7 +716,7 @@
           'ssid', 'pswd', 'ssid2', 'pswd2', 'trxnetport', 'trxnetprio', 'panetid',
           'baud',
           'dxchost', 'dxcport',
-          'dxccall', 'dxclocator', 'blockedDxcc'
+          'dxccall', 'dxclocator', 'dxcmaphost', 'blockedDxcc'
         ];
         ['trx1', 'trx2', 'trx3'].forEach(function (prefix) {
           ['label', 'transport', 'civaddr', 'netid', 'lanip', 'lanuser', 'lanpass', 'localtrx'].forEach(function (suffix) {
