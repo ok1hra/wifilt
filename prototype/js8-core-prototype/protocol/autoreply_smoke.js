@@ -76,12 +76,33 @@ check(formatSnr(999) === "+31" && formatSnr(-999) === "-30" && formatSnr(NaN) ==
 {
   const e = engine();
   e.noteDirectedFrame(BASE.nowMs);           // a conversation is in progress
-  const locked = e.handle(frame(), BASE);
+  // A GROUP query is what the lock is for: every member would answer it into the
+  // same slot, so it waits for the band to go quiet.
+  const locked = e.handle(frame({to: "@HB"}), BASE);
   check(locked.reason === "qso-lock", "must stay quiet during a conversation");
   check(locked.detail.includes("s left"), "lock refusal must say how long");
   // One minute after the last directed frame the station is free again.
-  const after = e.handle(frame(), {...BASE, nowMs: BASE.nowMs + 60000});
+  const after = e.handle(frame({to: "@HB"}), {...BASE, nowMs: BASE.nowMs + 60000});
   check(after.action === "reply", "lock must release after a minute");
+}
+
+// --- a question put to us by name is not somebody else's conversation --------
+{
+  // Real sequence off the air: OH3SPN asks @ALLCALL a question (a directed frame,
+  // so the lock arms) and then asks US for a signal report half a minute later.
+  // The lock used to swallow the second one -- and since every arriving frame
+  // re-arms it, a station retrying inside the minute was never answered at all.
+  const e = engine();
+  e.noteDirectedFrame(BASE.nowMs);
+  const direct = e.handle(frame(), {...BASE, nowMs: BASE.nowMs + 30000});
+  check(direct.action === "reply", "a question addressed to us must beat the QSO lock");
+  // The repeat is still refused -- by the restriction window, which is the layer
+  // that exists for exactly that, not by the lock.
+  const e2 = new Js8AutoReply({restrictions: new Js8Restrictions()});
+  e2.noteDirectedFrame(BASE.nowMs);
+  check(e2.handle(frame(), BASE).action === "reply", "first direct question is answered");
+  check(e2.handle(frame(), BASE).reason === "window",
+    "an immediate repeat must be caught by the window, not by the lock");
 }
 
 // --- missing configuration refuses instead of sending an empty frame --------

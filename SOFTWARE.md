@@ -64,11 +64,12 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
  · [5.11 MSG BOX](#511-msg-box)
  · [5.12 Groups](#512-groups)
  · [5.13 Unattended operation](#513-unattended-operation)
- · [5.14 SETTINGS](#514-settings)
- · [5.15 Timing and diagnostics](#515-timing-and-diagnostics)
- · [5.16 Frequency timetable](#516-frequency-timetable)
- · [5.17 Logging JS8 QSOs](#517-logging-js8-qsos)
- · [5.18 Troubleshooting](#518-troubleshooting)
+ · [5.14 TELEMETRY](#514-telemetry)
+ · [5.15 SETTINGS](#515-settings)
+ · [5.16 Timing and diagnostics](#516-timing-and-diagnostics)
+ · [5.17 Frequency timetable](#517-frequency-timetable)
+ · [5.18 Logging JS8 QSOs](#518-logging-js8-qsos)
+ · [5.19 Troubleshooting](#519-troubleshooting)
 
 **[6. DATA — RTTY-ICOM](#6-data--rtty-icom)**
  · [6.1 What the page is](#61-what-the-page-is)
@@ -1203,7 +1204,7 @@ The bar across the top of the page, left to right:
 |---|---|
 | **`?`** | radio setup help for your model |
 | **TRX *n* · frequency** | which slot is on ICOM-LAN, and the dial frequency with a dot every three digits. A coloured dot shows whether the radio is answering. Click to open the dial-frequency menu. |
-| **TIMETABLE** | the 24-hour frequency schedule — [section 5.16](#516-frequency-timetable) |
+| **TIMETABLE** | the 24-hour frequency schedule — [section 5.17](#517-frequency-timetable) |
 | **CAL PLAN** | the band × power TX-gain calibration matrix — [section 7.8](#78-tx-audio-gain-and-cal-plan). It turns **red by itself** when nothing is calibrated, or when the radio is on a band that has never been measured. |
 | **mode** | the radio's mode, `---` when unknown |
 | **power** | RF power as a ten-segment bar and in watts |
@@ -1284,7 +1285,7 @@ The conversation with one station.
 The header names the selected station and the state of the exchange, and carries three
 controls:
 
-- **LOG QSO** — see [section 5.17](#517-logging-js8-qsos).
+- **LOG QSO** — see [section 5.18](#518-logging-js8-qsos).
 - a **transmit-queue indicator** while something is waiting to go out.
 - **ABORT** — stop the transmission in progress.
 
@@ -1547,7 +1548,7 @@ Two kinds of message are carried, the same two a gateway understands:
 #### Switching it on
 
 The gate is **off by default** and lives in JS8 **SETTINGS** — see
-[section 5.14](#514-settings) for where the section is.
+[section 5.15](#515-settings) for where the section is.
 
 ![APRS-IS gate settings](img/js8call-settings-aprs-igate.png)
 
@@ -1700,7 +1701,7 @@ anchor the feed is read by. Useful on a phone, where the meta columns squeeze th
 text. The setting is remembered.
 
 **A callsign you have already worked on this band is dimmer.** The test is the JS8CALL log's
-real content (see [section 5.17](#517-logging-js8-qsos)), so it survives a reload and a QSO
+real content (see [section 5.18](#518-logging-js8-qsos)), so it survives a reload and a QSO
 logged from another window. It never disables anything — answering a station a second time
 is perfectly legitimate — it only lets your eye skip to the stations still worth working.
 
@@ -1758,7 +1759,7 @@ marked; that happens constantly on a busy band.
 Nothing is transmitted in response. What happens next is yours: the station is one click
 away in the line, and TX SESSION is already open.
 
-**Beep on a call to me** in [SETTINGS](#514-settings) adds a short tone to that moment. It
+**Beep on a call to me** in [SETTINGS](#515-settings) adds a short tone to that moment. It
 is **off by default** — the page is meant to be left running for days beside a radio that is
 already making noise. Ticking the box sounds the tone once so you know it works. Browsers
 refuse to play sound until the page has been clicked at least once, so on a tab that has
@@ -2027,7 +2028,74 @@ The tooltip gives the reason and the time left — *"Auto replies paused 8 min (
 Unattended operation can also be revoked remotely from SETUP — see
 [section 9.8](#98-remote-management-of-js8-unattended-operation).
 
-### 5.14 SETTINGS
+### 5.14 TELEMETRY
+
+The station's own LAN usually carries more than the radio: a weather head, an amplifier, a
+rotator, whatever else is on the bench. TELEMETRY beacons readings from those TrxNet devices
+as ordinary JS8 messages, so somebody off the network can see them.
+
+A **job** answers four questions: what to send, to whom, how often, and how each value
+should read. Several jobs can run at once — weather to `@WX`, amplifier readings to a club
+member — each with its own recipient and its own schedule.
+
+| Field | Meaning |
+|---|---|
+| **Name** | up to six characters. It names the job's pill in the header, so keep it short. |
+| **Send to** | a callsign or a group. A group that is not one of JS8's built-in names — `@WX` is not — travels as a compound pair, which costs **one extra frame, about 15 s, on every message**. The panel says so under the field. |
+| **Every** | 60 minutes at the shortest. Telemetry is the one thing this page transmits that nobody is waiting for, so it gets the most conservative schedule here. The limit is per job: three hourly jobs are three messages an hour. |
+
+Values come from the **TrxNet sources** panel at the bottom: pick a device, then click the
+readings it publishes. Each becomes a row you can reorder, relabel, and give a unit and a
+number of decimals. The message is those rows joined with spaces, unit hard against the
+number:
+
+```
+TEMP 21.3C HUM 55% WIND 3.2M/S
+```
+
+**Type** and **Scale** say how to read the raw bytes. They are filled in from a catalogue of
+the topics this network is documented to publish, and they can be overridden — a home-built
+board publishing `/temp` in tenths is a two-click correction, not a reason the panel cannot
+be used. The **Now** column shows the decoded value as you change them, so a wrong type
+shows up as an absurd number long before it reaches the air.
+
+Under the table sits the message as it will be sent, with its cost in frames and seconds,
+and a **Send now** button that transmits it immediately. A **Delete job** button is beside it.
+
+**Two rules decide whether anything is actually transmitted**, and both are about not
+wasting a shared channel:
+
+- **A message that would read exactly like the last one is not sent.** The comparison is on
+  the finished text, not the raw numbers, which is what makes it right: a thermometer
+  wobbling between 21.34 and 21.31 under a one-decimal display has not said anything new.
+  The counter simply does not move, and the job waits out another period.
+- **A reading whose source has gone quiet drops out of the message** rather than travelling
+  frozen. "Quiet" means longer than the job's own period. When the thermometer dies but the
+  hygrometer lives, `HUM 55%` still goes and the dead temperature does not — and if every
+  reading has gone stale, nothing is sent at all. The panel lists what was left out and why.
+
+A message that cannot go at once — a QSO in progress, the link down, the radio keyed — waits
+in the transmit queue for up to ten minutes, behind everything else on the page. **Telemetry
+never keys ahead of a reply somebody is waiting for.** The counter and the "last sent" text
+move only when a transmission actually finishes, so a failed one does not consume the change
+that prompted it: the reading goes out again next period.
+
+#### Pills
+
+The collapsed header carries **TLM** — the switch for the whole function — and one pill per
+job, up to four. Each reads *messages sent* and *time to the next attempt*: `TLM · 4/00:32`.
+Tapping a job's pill switches that job; tapping **TLM** switches all of them. They follow the
+same rule the SETTINGS pills do: with *Enable radio TX* off they show off and a tap opens
+SETTINGS at the pledge, because nothing here can reach the air without it.
+
+The budget line above the job list adds up what the active jobs cost per hour, and how much
+of the stored station profile they occupy — the profile is capped on the interface, and a
+job list that outgrows it would quietly stop being shared between browsers.
+
+> Telemetry runs in this browser, like the heartbeat and repeated CQ. Close the page and it
+> stops.
+
+### 5.15 SETTINGS
 
 ![Settings](img/js8call-settings.png)
 
@@ -2126,7 +2194,7 @@ Roughly every fourteenth character buys another frame, and a frame is a whole sl
 why the presets are short — a chatty status is paid for on every single answer, at every
 speed, for as long as the station is on the air.
 
-### 5.15 Timing and diagnostics
+### 5.16 Timing and diagnostics
 
 ![Timing and diagnostics](img/js8call-timing-and-diagnostics.png)
 
@@ -2138,7 +2206,7 @@ The rest of the block reports the health of the modem, the audio channel and the
 counts, buffer state and the last errors. It is the first place to look when something is
 not working.
 
-### 5.16 Frequency timetable
+### 5.17 Frequency timetable
 
 ![Frequency timetable](img/js8call-timetable.png)
 
@@ -2157,7 +2225,7 @@ Click a cell to set the band for that half hour.
 > **A scheduled change never happens during a transmission.** The band change waits for the
 > transmission to finish.
 
-### 5.17 Logging JS8 QSOs
+### 5.18 Logging JS8 QSOs
 
 **LOG QSO** in the TX SESSION header writes the contact to the log.
 
@@ -2171,7 +2239,7 @@ The mode is logged as `JS8` — not the radio's `USB-D` — and no exchange is s
 
 After logging, the button turns into **VIEW LOG** and opens the logbook in a new window.
 
-### 5.18 Troubleshooting
+### 5.19 Troubleshooting
 
 | Symptom | Cause and fix |
 |---|---|
@@ -2673,7 +2741,7 @@ every band a station runs both on.
 
 **TIMETABLE** and **CAL PLAN** work exactly like their JS8-page counterparts
 ([section 5.2](#52-header-radio-frequency-power-session),
-[section 5.16](#516-frequency-timetable),
+[section 5.17](#517-frequency-timetable),
 [section 7.8](#78-tx-audio-gain-and-cal-plan)), with one behavioural difference and one
 mechanical one:
 

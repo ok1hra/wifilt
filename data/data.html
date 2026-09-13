@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>JS8Call-ICOM — WIFILT</title>
-  <link rel="stylesheet" href="/data.css?v=fc2e7bd1">
+  <link rel="stylesheet" href="/data.css?v=8e737d99">
 </head>
 <body class="startup-pending lan-gate-checking">
   <header class="site-topbar">
@@ -378,6 +378,44 @@
         <div id="stationMap" class="station-map"></div>
       </details>
 
+      <!-- Periodic telemetry: readings from the station's own TrxNet devices,
+           beaconed to a callsign or a group. Above SETTINGS because it is a thing
+           the operator builds, not a thing they configure once; its pills sit in
+           this summary rather than in the SETTINGS row for the same reason the
+           others sit there -- a pill belongs on the thing it switches. -->
+      <details class="compact-section" data-section="telemetry">
+        <summary><span>TELEMETRY</span><span id="telemetrySummary" class="summary-status"></span><span id="telemetryFlags" class="summary-flags" aria-label="Telemetry jobs"></span></summary>
+        <div class="telemetry">
+          <p class="telemetry-note">Sends measurements from this station's TrxNet
+            devices as ordinary JS8 messages. A job that would say exactly what it
+            said last time stays quiet, and a reading whose source has gone silent
+            drops out of the message rather than travelling frozen.</p>
+          <div id="telemetryBudget" class="telemetry-budget" aria-live="polite"></div>
+          <div id="telemetryJobs" class="telemetry-jobs"></div>
+          <p id="telemetryEmpty" class="telemetry-empty">No telemetry jobs yet.</p>
+          <div class="telemetry-actions">
+            <button id="telemetryAdd" type="button">+ Add job</button>
+          </div>
+
+          <!-- One source picker for the whole panel rather than one per job: the
+               device answers a single request at a time, and three expanded jobs
+               polling the peer list each would be three of those every 3 s. -->
+          <details id="telemetrySources" class="telemetry-sources">
+            <summary>TrxNet sources</summary>
+            <div class="trxnet-devices">
+              <div class="trxnet-devices-head">
+                <span>Devices heard on the network</span>
+                <span class="trxnet-devices-live">live</span>
+              </div>
+              <div id="telemetrySourcePeers" class="trxnet-peers-body">
+                <span class="trxnet-peers-empty">…</span>
+              </div>
+            </div>
+            <div id="telemetryTopicTree" class="telemetry-tree"></div>
+          </details>
+        </div>
+      </details>
+
       <details class="compact-section" data-section="settings">
         <summary><span>SETTINGS</span><span id="settingsSummary" class="summary-status"></span><span id="settingsFlags" class="summary-flags" aria-label="Active functions"></span></summary>
         <div class="settings">
@@ -512,7 +550,7 @@
   <script src="/lan-gate.js?v=e297f7ab"></script>
   <script src="/mgrs.js?v=6a363b6c"></script>
   <script src="/fw-version.js?v=b29c5317"></script>
-  <script src="/js8-settings.js?v=2ec502ca"></script>
+  <script src="/js8-settings.js?v=74f719a2"></script>
   <script src="/station-identity.js?v=a1a20249"></script>
   <script src="/station-profile.js?v=ecfd3023"></script>
 <script src="/setup-spine.js?v=f2f44550"></script>
@@ -554,9 +592,11 @@
   <script src="/js8-msgbox.js?v=9a48d5e1"></script>
   <script src="/js8-relay.js?v=9165b49d"></script>
   <script src="/js8-heartbeat.js?v=2fb0a1da"></script>
-  <script src="/js8-txqueue.js?v=0c0a15c4"></script>
+  <script src="/trxnet-peers.js?v=ba918aaf"></script>
+  <script src="/js8-telemetry.js?v=7abc369a"></script>
+  <script src="/js8-txqueue.js?v=32adfa2f"></script>
   <script src="/js8-restrictions.js?v=80c0585c"></script>
-  <script src="/js8-autoreply.js?v=f91dddcd"></script>
+  <script src="/js8-autoreply.js?v=a749b88f"></script>
   <script src="/js8-protocol.js?v=f9be082c"></script>
   <script src="/js8-timebase.js?v=9afbcab8"></script>
   <script src="/spectrum.js?v=7fafbbb5"></script>
@@ -593,7 +633,7 @@
        (rtty.html) -- code-review 2026-08-28, see the module's own header for
        why WSPR/Mercury are not callers. -->
   <script src="/rf-power-auto.js?v=86d35636"></script>
-  <script src="/data.js?v=26b306b1"></script>
+  <script src="/data.js?v=0f564c6d"></script>
   <script src="/compression.js?v=83837925"></script>
 </body>
 </html>

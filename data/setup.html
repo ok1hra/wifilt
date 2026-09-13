@@ -55,6 +55,10 @@
       <script src="/icom-models.js?v=ddc6caa5"></script>
       <script src="/icom-discovery.js?v=dc5654a5"></script>
       <script src="/setup-spine.js?v=f2f44550"></script>
+      <!-- The live TrxNet device list. Shared with the RTTY page's FSK output
+           picker and the JS8 TELEMETRY panel, which is why it is a module and
+           not a third hand-copied function. -->
+      <script src="/trxnet-peers.js?v=ba918aaf"></script>
       <!-- The identity fields on this page are the only editable copy in the
            product, so the validation they use has to be the same one every other
            page trusts. -->
@@ -1443,100 +1447,6 @@
     // (#trxnetPeersFsk, grilled 2026-08-28) -- moved to the RTTY-ICOM page's
     // own SETTINGS panel in a later grill the same day, along with the rest
     // of that picker.
-    function mountTrxnetPeerList(section, body, fillTarget) {
-      if (!section || !body) return;
-      var timer = null;
-
-      function fmtAge(s) {
-        s = Math.max(0, s | 0);
-        if (s < 60) return s + ' s';
-        if (s < 3600) return (s / 60 | 0) + ' m';
-        return (s / 3600 | 0) + ' h';
-      }
-      function esc(t) {
-        return String(t).replace(/[&<>"]/g, function (c) {
-          return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
-        });
-      }
-      function note(text) {
-        body.innerHTML = '<span class="trxnet-peers-empty">' + esc(text) + '</span>';
-      }
-      // The peer table (handleTrxNetPeers, wifilt.ino) reports each device's
-      // full self-chosen name (e.g. "705.42", "OI3.07"), not a bare NET_ID --
-      // every device on this network names itself "<prefix>.<2-hex-digit
-      // NET_ID>" (trxDeviceName's own convention), so the trailing pair is
-      // the id to fill. A name that doesn't fit still renders, just unclickable.
-      function netIdFromName(name) {
-        var m = /\.([0-9a-fA-F]{2})$/.exec(String(name || ''));
-        return m ? m[1].toUpperCase() : null;
-      }
-      function row(name, ip, age, cls, badge) {
-        var netId = netIdFromName(name);
-        var clickable = netId && cls !== 'trxnet-peer-self';
-        var tag = clickable ? 'button' : 'div';
-        var attrs = clickable
-          ? ' type="button" class="trxnet-peer trxnet-peer-pick ' + cls + '" data-netid="' + netId + '" title="Fill ' + netId + '"'
-          : ' class="trxnet-peer ' + cls + '"';
-        return '<' + tag + attrs + '>' +
-          '<span class="trxnet-peer-name">' + esc(name) + (badge || '') + '</span>' +
-          '<span class="trxnet-peer-ip">' + esc(ip) + '</span>' +
-          '<span class="trxnet-peer-age">' + esc(age) + '</span>' +
-          '</' + tag + '>';
-      }
-      function render(d) {
-        if (d.state === 'handoff') {
-          note('TrxNet starts on the next restart — the hotspot is still running');
-          return;
-        }
-        if (d.state === 'ap') { note('TrxNet not active in AP mode'); return; }
-        if (d.state === 'disabled') { note('TrxNet disabled'); return; }
-        var peers = (d.peers || []).slice();
-        peers.sort(function (a, b) {
-          if (!!b.prio !== !!a.prio) return b.prio - a.prio;   // priority first
-          return String(a.name).localeCompare(String(b.name)); // then alphabetical
-        });
-        var html = '';
-        if (d.self) html += row(d.self, 'this device', '', 'trxnet-peer-self', '');
-        if (!peers.length) {
-          html += '<span class="trxnet-peers-empty">No devices heard yet</span>';
-        } else {
-          peers.forEach(function (p) {
-            html += row(p.name, p.ip, fmtAge(p.age),
-              p.prio ? 'trxnet-peer-prio' : '',
-              p.prio ? ' <span class="trxnet-prio-badge">PRIO</span>' : '');
-          });
-        }
-        body.innerHTML = html;
-      }
-      function poll() {
-        fetch('/trxnet-peers.json', { cache: 'no-store' })
-          .then(function (r) { return r.json(); })
-          .then(render)
-          .catch(function () { note('Device list unavailable'); });
-      }
-      function start() {
-        if (timer) return;
-        poll();
-        timer = setInterval(poll, 3000);
-      }
-      function stop() {
-        if (timer) { clearInterval(timer); timer = null; }
-      }
-      section.addEventListener('toggle', function () {
-        if (section.open) start(); else stop();
-      });
-      if (section.open) start();
-
-      body.addEventListener('click', function (e) {
-        var btn = e.target.closest('.trxnet-peer-pick');
-        if (!btn) return;
-        var input = fillTarget();
-        if (!input) return;
-        input.value = btn.dataset.netid;
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-      });
-    }
-
     // TRX1/2/3 NET_ID: fills whichever of the three was most recently
     // focused, defaulting to TRX1 (the simplest guess) until any of them
     // ever has been.
@@ -1548,7 +1458,7 @@
       netIdInputs.forEach(function (input) {
         input.addEventListener('focus', function () { lastFocused = input; });
       });
-      mountTrxnetPeerList(
+      TrxnetPeers.mount(
         document.getElementById('trxnetSection'),
         document.getElementById('trxnetPeers'),
         function () { return lastFocused; }

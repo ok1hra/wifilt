@@ -142,7 +142,7 @@ volatile bool cwIpSendPending = false;
 #ifndef LOOP_WARN_MS
   #define LOOP_WARN_MS 200
 #endif
-#define REV 20260912
+#define REV 20260913
 #define WIFI
 #define FSK_KEYING  // RTTY by keying the FSK + PTT outputs (was UDP_TO_FSK, from when a UDP port fed it)
 #define WDT         // watchdog timer
@@ -615,6 +615,54 @@ volatile bool     trxModePending = false;
 #define PA_PEAK_WINDOW_MS  2000   // how long a peak stays worth showing
 #define PA_STALE_MS       15000   // 3 missed heartbeats -> telemetry is stale
 
+// ---- TrxNet topic store, for the JS8 TELEMETRY panel ------------------------
+//
+// TrxNet has no topic discovery on the wire: subscribe() is a purely local callback
+// table and dispatch is an exact strcmp with no wildcards, so nothing can ask a peer
+// "what do you publish?". But publish() sends a unicast copy to EVERY active peer,
+// which means this device already receives the whole network's traffic -- the local
+// dispatch is simply where most of it is thrown away. net.onAnyTopic() (library 1.07)
+// taps the packet path before that, so the table below fills itself without spending
+// one of the sixteen _subs slots, nine of which are already taken.
+//
+// What is NOT stored, and why:
+//  - "/s-*" set-points. INTEGRATION.md's naming rule makes those an order aimed at
+//    somebody else, not a reading this station owns. Telemetry must not beacon them.
+//  - payloads over 8 bytes. Every numeric topic on this network fits (the widest is
+//    uint32 /hz); "/cw" is ASCII text and has no business in a telemetry field.
+#define TRX_TOPIC_MAX      48
+#define TRX_TOPIC_VAL_MAX   8
+
+struct TrxTopicEntry {
+  char     peer[TRXNET_MAX_DEVICE_NAME];
+  char     topic[TRXNET_MAX_TOPIC_LEN];
+  uint8_t  value[TRX_TOPIC_VAL_MAX];
+  uint8_t  len;
+  uint32_t lastRxMs;
+  bool     used;
+};
+TrxTopicEntry trxTopics[TRX_TOPIC_MAX];
+// Latched, never cleared: once the table has overflowed, the tree the operator is
+// picking from is known to be incomplete, and saying so once is the honest answer.
+bool trxTopicsFull = false;
+
+// The callback that fills the table is NOT here but down beside onTrxHz/onTrxMode,
+// with the other TrxNet callbacks. That is not only tidiness: arduino-builder runs
+// ctags over the PREPROCESSED sketch and inserts its generated prototypes before the
+// first function definition it finds there. A definition this early in the file drags
+// that insertion point above the "typedef mbedtls_sha1_context SHA1_CTX" further down,
+// and the SHA1 prototypes then come out taking int* -- which fails the ESP32 build with
+// "conflicting declaration" while the native build, which never runs that step, is
+// perfectly happy.
+//
+// Which is also why the declaration below is written out by hand rather than left to
+// the builder: the native build compiles this file as plain C++ and generates no
+// prototypes at all, so setup() -- which registers the hook some two thousand lines
+// above the definition -- needs one it can see. The two builds fail in opposite
+// directions here, and only this pair of lines satisfies both.
+void onTrxAnyTopic(const char* from, const char* path,
+                   const uint8_t* data, size_t len);
+
 struct PaState {
   bool     seen;        // anything at all has arrived from the amplifier
   uint32_t lastRxMs;    // millis() of the last topic, for the stale check
@@ -798,7 +846,12 @@ int incomingByte = 0;   // for incoming serial data
   // with a different schedule and no heartbeat and nothing said so. Same design
   // as the calibration table -- a blob the firmware stores and never reads into.
   static const char* JS8_CONFIG_PATH = "/js8-config.json";
-  static const size_t JS8_CONFIG_MAX_BYTES = 4096;   // measured: 2041 B with a full 48-slot schedule
+  // 8 KB, not the 4 KB this held until TELEMETRY arrived: a full 48-slot band
+  // schedule measured 2041 B, but six telemetry jobs of eight fields each add
+  // roughly 5 KB of job definitions on top. Oversize is refused with a 409, and
+  // station-profile.js posts fire-and-forget -- so a ceiling the panel can reach
+  // is a config that stops being shared between browsers without saying so.
+  static const size_t JS8_CONFIG_MAX_BYTES = 8192;
 
   // QRPlog CW/RTTY macro templates (CQ/TXEXCH/TXEXCHSP/TXEXCHSP2/TU/CALLTU,
   // x2 for CW vs RTTY -- 12 short strings). Same blob-store convention as the
@@ -2053,6 +2106,53 @@ void handleTrxNetPeers(){
       j += ",\"ip\":\"";   j += p->ip.toString(); j += "\"";
       j += ",\"age\":";    j += age;
       j += ",\"prio\":";   j += trxIsPriorityName(p->name) ? "true" : "false";
+      j += "}";
+    }
+    j += "]";
+  }
+  j += "}";
+  webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  webServer.sendHeader("Connection", "close");
+  webServer.client().setNoDelay(true);
+  webServer.send(200, "application/json", j);
+}
+
+// Everything this device has heard published on the network, for the JS8 TELEMETRY
+// source tree. Its own endpoint, not fields on /state: that one is a single snprintf
+// into a fixed 1536-byte buffer that truncates silently, and this list is unbounded
+// in principle. Values go out as raw hex in wire order (little-endian as sent) --
+// the browser owns the decoding, because deciding that /temp is int16 hundredths of
+// a degree is a display question, and a custom board may disagree with the catalogue.
+void handleTrxTopics(){
+  String j;
+  j.reserve(2048);
+  j += "{";
+  if (APmode && WiFiStationReady()) {
+    j += "\"state\":\"handoff\",\"full\":false,\"topics\":[]";
+  } else if (APmode) {
+    j += "\"state\":\"ap\",\"full\":false,\"topics\":[]";
+  } else if (!trxNetEnabled) {
+    j += "\"state\":\"disabled\",\"full\":false,\"topics\":[]";
+  } else {
+    j += "\"state\":\"ok\",\"full\":";
+    j += trxTopicsFull ? "true" : "false";
+    j += ",\"topics\":[";
+    uint32_t now = millis();
+    bool first = true;
+    for (int i = 0; i < TRX_TOPIC_MAX; i++) {
+      if (!trxTopics[i].used) continue;
+      if (!first) j += ",";
+      first = false;
+      j += "{\"p\":\""; j += configJsonEscape(String(trxTopics[i].peer));  j += "\"";
+      j += ",\"t\":\""; j += configJsonEscape(String(trxTopics[i].topic)); j += "\"";
+      j += ",\"v\":\"";
+      for (uint8_t b = 0; b < trxTopics[i].len; b++) {
+        char hex[3];
+        snprintf(hex, sizeof(hex), "%02X", trxTopics[i].value[b]);
+        j += hex;
+      }
+      j += "\"";
+      j += ",\"a\":"; j += (now - trxTopics[i].lastRxMs) / 1000;
       j += "}";
     }
     j += "]";
@@ -5126,6 +5226,7 @@ void setupWebServer(void){
   webServer.on("/setup/wifi-try",      HTTP_POST, handleWifiTryStart);
   webServer.on("/setup/wifi-try.json", HTTP_GET,  handleWifiTryStatus);
   webServer.on("/trxnet-peers.json", HTTP_GET, handleTrxNetPeers);
+  webServer.on("/trxnet-topics.json", HTTP_GET, handleTrxTopics);
   webServer.on("/pa.json", HTTP_GET, handlePaJson);
   webServer.on("/pa/cmd", HTTP_POST, handlePaCmd);
   webServer.on("/restart", HTTP_POST, [](){
@@ -5671,6 +5772,7 @@ void setup(){
       net.setPort(TRXNET_PORT);
       net.setPriorityPrefixes(trxPrioCount ? trxPrioPtrs : NULL, trxPrioCount);  // before begin()
       net.begin(trxDeviceName);
+      net.onAnyTopic(onTrxAnyTopic);   // discovery tap; costs no _subs slot
       net.subscribe("/hz",   onTrxHz);
       net.subscribe("/mode", onTrxMode);
       net.subscribe("/s-hz", onTrxSetHz);
@@ -7410,6 +7512,7 @@ void TrxNetLoop(){
   if (wifiConnected && !prevWifiConnected) {
     // WiFi reconnected — re-announce to network
     net.begin(trxDeviceName);
+    net.onAnyTopic(onTrxAnyTopic);  // dropped by begin() exactly like subscriptions
     paSubscribeTopics();          // begin() does not carry subscriptions over
     trxNetEnabled = true;
     Serial.print("TRXNET| reconnect begin ");
@@ -7458,6 +7561,43 @@ static const char* trxnetModeToString(uint8_t civMode) {
 }
 
 // Receive /hz from a configured peer — update the matching TRX slot.
+// Runs inside net.loop()'s packet path. Copies and returns -- no publishing, no
+// allocation, no Serial. `from` is empty for a sender not yet in the peer table;
+// such a packet is dropped rather than filed under a nameless source.
+void onTrxAnyTopic(const char* from, const char* path,
+                   const uint8_t* data, size_t len) {
+  if (!from || !from[0] || !path || !path[0]) return;
+  if (path[0] == '/' && path[1] == 's' && path[2] == '-') return;
+  if (len > TRX_TOPIC_VAL_MAX) return;
+
+  uint32_t now = millis();
+  int free = -1, stalest = -1;
+  uint32_t stalestAge = 0;
+  for (int i = 0; i < TRX_TOPIC_MAX; i++) {
+    if (!trxTopics[i].used) { if (free < 0) free = i; continue; }
+    if (strcmp(trxTopics[i].peer, from) == 0 &&
+        strcmp(trxTopics[i].topic, path) == 0) {
+      memcpy(trxTopics[i].value, data, len);
+      trxTopics[i].len      = (uint8_t)len;
+      trxTopics[i].lastRxMs = now;
+      return;
+    }
+    uint32_t age = now - trxTopics[i].lastRxMs;
+    if (stalest < 0 || age > stalestAge) { stalest = i; stalestAge = age; }
+  }
+
+  int slot = free;
+  if (slot < 0) { slot = stalest; trxTopicsFull = true; }
+  if (slot < 0) return;
+  memset(&trxTopics[slot], 0, sizeof(trxTopics[slot]));
+  strncpy(trxTopics[slot].peer,  from, sizeof(trxTopics[slot].peer)  - 1);
+  strncpy(trxTopics[slot].topic, path, sizeof(trxTopics[slot].topic) - 1);
+  memcpy(trxTopics[slot].value, data, len);
+  trxTopics[slot].len      = (uint8_t)len;
+  trxTopics[slot].lastRxMs = now;
+  trxTopics[slot].used     = true;
+}
+
 void onTrxHz(const char* from, const uint8_t* data, size_t len) {
   if (len < sizeof(uint32_t)) return;
   uint32_t freq;

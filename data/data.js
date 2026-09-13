@@ -197,6 +197,12 @@ const dom = {
   armHours:$("armHours"), autoState:$("autoState"),
   resetSettings:$("resetSettings"), settingsSummary:$("settingsSummary"), settingsFlags:$("settingsFlags"),
   settingsSection:document.querySelector('[data-section="settings"]'),
+  telemetrySection:document.querySelector('[data-section="telemetry"]'),
+  telemetrySummary:$("telemetrySummary"), telemetryFlags:$("telemetryFlags"),
+  telemetryJobs:$("telemetryJobs"), telemetryEmpty:$("telemetryEmpty"),
+  telemetryAdd:$("telemetryAdd"), telemetryBudget:$("telemetryBudget"),
+  telemetrySources:$("telemetrySources"), telemetrySourcePeers:$("telemetrySourcePeers"),
+  telemetryTopicTree:$("telemetryTopicTree"),
   diagnosticSummary:$("diagnosticSummary"), diagnostics:$("diagnostics"),
   decodeTelemetry:$("decodeTelemetry"),
   sessionBusy:$("sessionBusy"), sessionBusyWhere:$("sessionBusyWhere"),
@@ -287,6 +293,9 @@ const inbox = new Js8Inbox.Js8Inbox({store: inboxStore,
 const relay = new Js8Relay.Js8Relay({
   onEvent: event => console.info("[js8-relay]", event.type,
     event.to || "", event.reason || "", event.detail || event.text || "")});
+// Periodic TrxNet telemetry. Like the heartbeat beside it this only decides; the
+// page below owns the fetching, the queueing and the pixels.
+const telemetry = new Js8Telemetry.Js8Telemetry({});
 const heartbeat = new Js8Heartbeat.Js8Heartbeat({restrictions,
   onEvent: event => console.info("[js8-heartbeat]", event.type, event.to || "", event.detail || "")});
 const txCaptured = [];
@@ -1018,6 +1027,637 @@ function renderHeartbeatState() {
   if (!currentJs8().auto) { dom.hbState.textContent = "waiting for unattended mode"; return; }
   dom.hbState.textContent = dueInMs <= 0 ? "due now"
     : `next in ${Math.max(1, Math.round(dueInMs / 60000))} min`;
+}
+
+// ---- TELEMETRY -------------------------------------------------------------
+//
+// Periodic beacons of the station's own TrxNet readings. Js8Telemetry decides
+// what and when; everything here is fetching, queueing and pixels.
+//
+// Readings are fetched ONCE, at the moment a job comes due -- an hourly job costs
+// one request an hour. The tree polls faster, but only while its panel is open,
+// because the interface answers one request at a time and a background poll of a
+// closed panel is somebody else's waterfall frame.
+
+// One browser's running state: counters, the schedule, and the text each job last
+// put on the air. Deliberately NOT in the station profile -- that is a LittleFS
+// file on the interface, and an hourly counter written into it would rewrite the
+// device's flash thousands of times a year to say something no other browser needs.
+const TELEMETRY_RT_KEY="wifilt.data.js8-telemetry-rt";
+// Must match JS8_CONFIG_MAX_BYTES in wifilt.ino. Oversize is refused with a 409 and
+// station-profile.js posts fire-and-forget, so the panel shows the budget rather
+// than letting the operator discover it by their jobs quietly not being shared.
+const TELEMETRY_PROFILE_LIMIT=8192;
+
+const telemetryUi={job:null,peer:null,topics:null,fetching:false,note:""};
+
+function tlmEsc(text) {
+  return String(text==null?"":text).replace(/[&<>"]/g,character=>
+    ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"})[character]);
+}
+
+function telemetryConfig() {
+  const stored=currentJs8().telemetry;
+  return stored&&typeof stored==="object"?stored:{enabled:false,jobs:[]};
+}
+function telemetryJobList() {
+  const jobs=telemetryConfig().jobs;
+  return Array.isArray(jobs)?jobs:[];
+}
+function telemetryJobById(id) { return telemetryJobList().find(job=>job.id===id)||null; }
+
+function setTelemetryConfig(next) {
+  setJs8Setting("telemetry",next);
+  applyTelemetrySettings();
+  renderTelemetryPanel();
+}
+function setTelemetryJobs(jobs) {
+  setTelemetryConfig({...telemetryConfig(),jobs});
+}
+function updateTelemetryJob(id,patch) {
+  setTelemetryJobs(telemetryJobList().map(job=>job.id===id?{...job,...patch}:job));
+}
+
+function loadTelemetryRuntime() {
+  try { return JSON.parse(localStorage.getItem(TELEMETRY_RT_KEY)||"null"); }
+  catch(_error) { return null; }
+}
+function saveTelemetryRuntime() {
+  try { localStorage.setItem(TELEMETRY_RT_KEY,JSON.stringify(telemetry.snapshotRuntime())); }
+  catch(_error) { /* private mode, quota -- the schedule just restarts on reload */ }
+}
+
+function applyTelemetrySettings() {
+  const config=telemetryConfig();
+  telemetry.setEnabled(config.enabled===true,js8Clock.now());
+  telemetry.configure(telemetryJobList(),js8Clock.now());
+  saveTelemetryRuntime();
+}
+
+// ---- the pills -------------------------------------------------------------
+
+// TLM is the master switch, then one pill per job. Both kinds carry needsTx: with
+// Radio TX off nothing here can reach the air, so the header must show them off and
+// a click must lead to the pledge rather than flipping a switch that cannot fire.
+function telemetryFlags() {
+  const flags=[{key:"TLM",label:"Telemetry",needsTx:true,
+    on:()=>telemetryConfig().enabled===true,
+    detail:()=>telemetryCountLabel(),inline:true,
+    tip:()=>{
+      const jobs=telemetryJobList();
+      const live=jobs.filter(job=>job.enabled).length;
+      return jobs.length?`${live} of ${jobs.length} jobs active`:"no jobs yet";
+    },
+    toggle:()=>setTelemetryConfig({...telemetryConfig(),enabled:telemetryConfig().enabled!==true})}];
+  const jobs=telemetryJobList();
+  const shown=jobs.slice(0,Js8Telemetry.MAX_JOB_PILLS);
+  const master=telemetryConfig().enabled===true;
+  for(const job of shown) {
+    flags.push({key:job.name||job.id,label:`Telemetry job ${job.name||job.id}`,needsTx:true,
+      // A job pill reads off only because the master is off, not because the job is:
+      // the tooltip says which, so turning TLM back on is the obvious next move.
+      on:()=>master&&job.enabled===true,
+      detail:()=>telemetryJobLabel(job.id),inline:true,
+      tip:()=>{
+        const parts=[`every ${Number(job.periodMin)||60} min`];
+        if(job.to)parts.push(`to ${job.to}`);
+        if(!master)parts.push("TLM is off");
+        return parts.join(" · ");
+      },
+      toggle:()=>updateTelemetryJob(job.id,{enabled:job.enabled!==true})});
+  }
+  if(jobs.length>shown.length)
+    flags.push({key:`+${jobs.length-shown.length}`,label:"More telemetry jobs",
+      mute:true,on:()=>false,
+      tip:()=>jobs.slice(shown.length).map(job=>job.name).join(", ")});
+  return flags;
+}
+
+// "4/00:32" -- what went out, and how long until the next attempt. The countdown is
+// to the next ATTEMPT, not the next transmission: a job that finds nothing changed
+// stays quiet and the counter simply does not move, which is the honest reading.
+function telemetryCountLabel() {
+  const snap=telemetry.snapshot(js8Clock.now());
+  if(snap.dueInMs===null)return String(snap.sent);
+  return `${snap.sent}/${formatHhMm(snap.dueInMs)}`;
+}
+function telemetryJobLabel(id) {
+  const snap=telemetry.snapshot(js8Clock.now()).jobs.find(job=>job.id===id);
+  if(!snap)return "";
+  if(snap.dueInMs===null)return String(snap.sent);
+  return `${snap.sent}/${formatHhMm(snap.dueInMs)}`;
+}
+
+function renderTelemetryFlags(js8) { renderFlagRow(dom.telemetryFlags,telemetryFlags(),js8); }
+
+function renderTelemetrySummary() {
+  if(!dom.telemetrySummary)return;
+  const jobs=telemetryJobList();
+  if(!jobs.length){dom.telemetrySummary.textContent="no jobs";return;}
+  const live=jobs.filter(job=>job.enabled).length;
+  dom.telemetrySummary.textContent=`${jobs.length} job${jobs.length===1?"":"s"}, ${live} active`;
+}
+
+// ---- what a job costs on the air -------------------------------------------
+
+// Frames and seconds, through the same two helpers the @APRSIS draft and the VIA
+// route already use, so all three quote the same number for the same message.
+function telemetryCost(text,to) {
+  const js8=currentJs8();
+  if(!text||!to||!js8.myCall)return null;
+  try {
+    const frames=Js8Protocol.buildReplyFrames(
+      {myCall:js8.myCall,toCall:to,text,grid:js8.grid,mode:selectedMode()}).length;
+    return {frames,seconds:Js8Aprs.airtimeSeconds(frames,selectedMode())};
+  } catch(_error) { return null; }
+}
+function telemetryCostText(text,to) {
+  const cost=telemetryCost(text,to);
+  if(!cost)return `${text.length} characters`;
+  const minutes=Math.floor(cost.seconds/60),seconds=Math.round(cost.seconds%60);
+  return `${text.length} characters · ${cost.frames} frame${cost.frames===1?"":"s"} · ` +
+    `${minutes}:${String(seconds).padStart(2,"0")}`;
+}
+
+// ---- readings --------------------------------------------------------------
+
+function fetchTelemetryTopics() {
+  return fetch("/trxnet-topics.json",{cache:"no-store",signal:AbortSignal.timeout(8000)})
+    .then(response=>response.ok?response.json():null)
+    .catch(()=>null);
+}
+
+// The tree polls only while BOTH its own panel and the section above it are open.
+// js8-scheduler owns every repeat on this page, so this is a task rather than an
+// interval -- which also means a reload or a clock correction cannot strand it.
+function telemetryTreeWanted() {
+  return Boolean(dom.telemetrySection&&dom.telemetrySection.open&&
+    dom.telemetrySources&&dom.telemetrySources.open);
+}
+function syncTelemetryTreePoll() {
+  if(telemetryTreeWanted()) {
+    if(!scheduler.has("telemetryTree")) {
+      scheduler.every("telemetryTree",3000,()=>{
+        fetchTelemetryTopics().then(snapshot=>{
+          if(!snapshot)return;
+          telemetryUi.topics=snapshot;
+          renderTelemetryTree();
+        });
+      });
+    }
+    if(telemetryPeerList)telemetryPeerList.start();
+  } else {
+    scheduler.cancel("telemetryTree");
+    if(telemetryPeerList)telemetryPeerList.stop();
+  }
+}
+
+function telemetryTopicRows(peer) {
+  const snapshot=telemetryUi.topics;
+  const rows=snapshot&&Array.isArray(snapshot.topics)?snapshot.topics:[];
+  return rows.filter(row=>row&&row.p===peer)
+    .sort((a,b)=>String(a.t).localeCompare(String(b.t)));
+}
+
+function renderTelemetryTree() {
+  if(!dom.telemetryTopicTree)return;
+  const snapshot=telemetryUi.topics;
+  if(!snapshot){dom.telemetryTopicTree.innerHTML=
+    '<p class="telemetry-tree-note">Reading the network…</p>';return;}
+  if(snapshot.state&&snapshot.state!=="ok"){
+    dom.telemetryTopicTree.innerHTML=
+      `<p class="telemetry-tree-note">TrxNet ${tlmEsc(snapshot.state)}</p>`;
+    return;
+  }
+  if(!telemetryUi.peer){
+    dom.telemetryTopicTree.innerHTML=
+      '<p class="telemetry-tree-note">Pick a device above to see what it publishes.</p>';
+    return;
+  }
+  const rows=telemetryTopicRows(telemetryUi.peer);
+  const job=telemetryUi.job?telemetryJobById(telemetryUi.job):null;
+  const taken=new Set((job&&Array.isArray(job.fields)?job.fields:[])
+    .map(field=>`${field.peer}${field.topic}`));
+  // The overflow flag is latched in the firmware and worth repeating here: the
+  // operator is choosing from a list that is known to be incomplete.
+  const full=snapshot.full
+    ? '<p class="telemetry-tree-note warn">The interface’s topic table overflowed — ' +
+      'this list may be missing devices.</p>' : "";
+  if(!rows.length){
+    dom.telemetryTopicTree.innerHTML=full+
+      `<p class="telemetry-tree-note">Nothing heard from ${tlmEsc(telemetryUi.peer)} yet.</p>`;
+    return;
+  }
+  const items=rows.map(row=>{
+    const cat=Js8Telemetry.catalogFor(row.t);
+    const shape=cat||{type:"uint16",div:1,dec:0,unit:""};
+    const value=Js8Telemetry.formatValue(row.v,shape);
+    const already=taken.has(`${row.p}${row.t}`);
+    const known=cat?"":' <span class="telemetry-topic-unknown">not in catalogue</span>';
+    return `<button type="button" class="telemetry-topic" data-topic="${tlmEsc(row.t)}"` +
+      `${already||!job?" disabled":""} title="${already?"Already in this job"
+        :(job?"Add to "+tlmEsc(job.name):"Open a job first")}">` +
+      `<span class="telemetry-topic-name">${tlmEsc(row.t)}</span>` +
+      `<span class="telemetry-topic-value">${value===null?tlmEsc(row.v):tlmEsc(value)}</span>` +
+      `<span class="telemetry-topic-age">${Number(row.a)|0} s</span>${known}</button>`;
+  }).join("");
+  dom.telemetryTopicTree.innerHTML=full+
+    `<div class="telemetry-tree-head">${tlmEsc(telemetryUi.peer)}</div>` +
+    `<div class="telemetry-topics">${items}</div>`;
+}
+
+// ---- the panel -------------------------------------------------------------
+
+function telemetryPreview(job) {
+  const rendered=Js8Telemetry.renderJob(job,telemetryUi.topics||{topics:[]});
+  return rendered;
+}
+
+function renderTelemetryBudget() {
+  if(!dom.telemetryBudget)return;
+  const jobs=telemetryJobList().filter(job=>job.enabled);
+  if(!jobs.length){dom.telemetryBudget.textContent="";return;}
+  let seconds=0;
+  for(const job of jobs){
+    const rendered=telemetryPreview(job);
+    const cost=telemetryCost(rendered.text,job.to);
+    if(cost)seconds+=cost.seconds*(60/(Number(job.periodMin)||60));
+  }
+  const minutes=Math.floor(seconds/60),rest=Math.round(seconds%60);
+  const duty=(seconds/3600*100).toFixed(1);
+  // The stored profile is capped on the device; showing how close it is beats
+  // discovering the ceiling when a save silently stops being shared.
+  let bytes=0;
+  try { bytes=JSON.stringify({v:1,js8:currentJs8()}).length; } catch(_error) { bytes=0; }
+  dom.telemetryBudget.textContent=
+    `${jobs.length} active · air time ${minutes}:${String(rest).padStart(2,"0")}/h = ${duty} % duty` +
+    (bytes?` · profile ${bytes}/${TELEMETRY_PROFILE_LIMIT} B`:"");
+  dom.telemetryBudget.classList.toggle("warn",bytes>TELEMETRY_PROFILE_LIMIT*0.85);
+}
+
+function telemetryFieldRow(job,field,index) {
+  const rowValue=(telemetryUi.topics&&Array.isArray(telemetryUi.topics.topics)
+    ? telemetryUi.topics.topics.find(row=>row.p===field.peer&&row.t===field.topic) : null);
+  const preview=rowValue?Js8Telemetry.formatValue(rowValue.v,field):null;
+  const types=Js8Telemetry.TYPES.map(type=>
+    `<option value="${type}"${type===field.type?" selected":""}>${type}</option>`).join("");
+  const divs=Js8Telemetry.DIVISORS.map(div=>
+    `<option value="${div}"${Number(div)===Number(field.div)?" selected":""}>÷${div}</option>`).join("");
+  const decs=[0,1,2,3].map(dec=>
+    `<option value="${dec}"${Number(dec)===Number(field.dec)?" selected":""}>${dec}</option>`).join("");
+  return `<tr data-field="${index}">` +
+    `<td><input class="tlm-label" value="${tlmEsc(field.label)}" maxlength="8" ` +
+      `aria-label="Label"></td>` +
+    `<td class="tlm-topic" title="${tlmEsc(field.peer)} ${tlmEsc(field.topic)}">` +
+      `${tlmEsc(field.peer)}<span>${tlmEsc(field.topic)}</span></td>` +
+    `<td><select class="tlm-type" aria-label="Type">${types}</select></td>` +
+    `<td><select class="tlm-div" aria-label="Divisor">${divs}</select></td>` +
+    `<td><select class="tlm-dec" aria-label="Decimals">${decs}</select></td>` +
+    `<td><input class="tlm-unit" value="${tlmEsc(field.unit)}" maxlength="4" ` +
+      `aria-label="Unit"></td>` +
+    `<td class="tlm-preview">${preview===null?"—":tlmEsc(preview)}</td>` +
+    `<td class="tlm-order"><button type="button" data-move="up"` +
+      `${index===0?" disabled":""} aria-label="Move up">↑</button>` +
+      `<button type="button" data-move="down"` +
+      `${index===job.fields.length-1?" disabled":""} aria-label="Move down">↓</button>` +
+      `<button type="button" data-remove aria-label="Remove">✕</button></td></tr>`;
+}
+
+function telemetryEditorHtml(job) {
+  const periods=Js8Telemetry.PERIOD_CHOICES_MIN.map(min=>{
+    const label=min<120?`${min} min`:`${min/60} h`;
+    return `<option value="${min}"${Number(min)===Number(job.periodMin)?" selected":""}>${label}</option>`;
+  }).join("");
+  const fields=(job.fields||[]).map((field,index)=>telemetryFieldRow(job,field,index)).join("");
+  const rendered=telemetryPreview(job);
+  const dropped=rendered.dropped.length
+    ? `<p class="telemetry-dropped">Left out: ` +
+      rendered.dropped.map(field=>
+        `${tlmEsc(field.label||field.topic)} (${tlmEsc(field.reason)})`).join(", ") + `</p>`
+    : "";
+  // A custom group travels as a compound pair, which replaces the ordinary directed
+  // frame with two -- one extra keying on EVERY message. Said here rather than
+  // discovered from the frame count.
+  const group=String(job.to||"").startsWith("@");
+  const builtin=group&&Js8Protocol.SPECIAL_CALLS.includes(String(job.to).toUpperCase());
+  const groupNote=group&&!builtin
+    ? `<p class="telemetry-hint">${tlmEsc(job.to)} is not one of JS8's built-in group ` +
+      `names, so every message costs one extra frame (about 15 s).</p>` : "";
+  return `<div class="telemetry-editor">
+    <div class="telemetry-editor-grid">
+      <label>Name <input class="tlm-name" value="${tlmEsc(job.name)}" maxlength="6"></label>
+      <label>Send to <input class="tlm-to" value="${tlmEsc(job.to)}" maxlength="12"
+        placeholder="OK1ABC or @WX"></label>
+      <label>Every <select class="tlm-period">${periods}</select></label>
+    </div>
+    ${groupNote}
+    ${job.fields&&job.fields.length?`<div class="table-scroll"><table class="telemetry-fields">
+      <thead><tr><th>Label</th><th>Source</th><th>Type</th><th>Scale</th><th>Dec.</th>
+      <th>Unit</th><th>Now</th><th></th></tr></thead><tbody>${fields}</tbody></table></div>`
+      :`<p class="telemetry-hint">No values yet — open TrxNet sources below, pick a
+        device, then click the readings to add.</p>`}
+    ${dropped}
+    <div class="telemetry-preview">
+      <span class="telemetry-preview-label">On the air</span>
+      <output class="telemetry-preview-text">${rendered.text?tlmEsc(rendered.text)
+        :"nothing to send"}</output>
+      <span class="telemetry-preview-cost">${rendered.text
+        ? tlmEsc(telemetryCostText(rendered.text,job.to)) : ""}</span>
+    </div>
+    <div class="telemetry-editor-actions">
+      <button type="button" class="tlm-send">Send now</button>
+      <button type="button" class="tlm-delete">Delete job</button>
+      <span class="telemetry-note-line">${tlmEsc(telemetryUi.note)}</span>
+    </div>
+  </div>`;
+}
+
+function renderTelemetryPanel() {
+  // The pills too: adding, renaming or removing a job changes the header row, and
+  // waiting for the next 500 ms radio poll to show it reads as a dropped click.
+  renderTelemetryFlags(currentJs8());
+  renderTelemetrySummary();
+  renderTelemetryBudget();
+  if(!dom.telemetryJobs)return;
+  const jobs=telemetryJobList();
+  if(dom.telemetryEmpty)dom.telemetryEmpty.hidden=jobs.length>0;
+  if(dom.telemetryAdd)dom.telemetryAdd.disabled=jobs.length>=Js8Telemetry.MAX_JOBS;
+  const snap=telemetry.snapshot(js8Clock.now());
+  dom.telemetryJobs.innerHTML=jobs.map(job=>{
+    const open=telemetryUi.job===job.id;
+    const stats=snap.jobs.find(entry=>entry.id===job.id);
+    const due=stats&&stats.dueInMs!==null?formatHhMm(stats.dueInMs):"—";
+    const period=Number(job.periodMin)||60;
+    return `<div class="telemetry-job${open?" open":""}" data-job="${tlmEsc(job.id)}">
+      <div class="telemetry-job-head">
+        <button type="button" class="tlm-enable${job.enabled?" on":""}"
+          aria-pressed="${job.enabled?"true":"false"}"
+          title="${job.enabled?"Active":"Inactive"}">${job.enabled?"ON":"OFF"}</button>
+        <button type="button" class="tlm-open">
+          <span class="telemetry-job-name">${tlmEsc(job.name)}</span>
+          <span class="telemetry-job-to">→ ${tlmEsc(job.to||"nobody")}</span>
+          <span class="telemetry-job-period">${period<120?period+" min":(period/60)+" h"}</span>
+          <span class="telemetry-job-count">${(job.fields||[]).length} value${
+            (job.fields||[]).length===1?"":"s"}</span>
+          <span class="telemetry-job-due">${tlmEsc(due)}</span>
+        </button>
+      </div>
+      ${open?telemetryEditorHtml(job):""}</div>`;
+  }).join("");
+  renderTelemetryTree();
+}
+
+// ---- sending ---------------------------------------------------------------
+
+// One place both the scheduler and SEND NOW go through, so the two cannot drift on
+// what "may this transmit" means.
+function sendTelemetryJob(job,snapshot,{force=false}={}) {
+  const now=js8Clock.now();
+  const verdict=telemetry.evaluate(job,snapshot,{force});
+  if(!verdict.send){
+    // Nothing was said and no air time was spent, so the period is re-armed without
+    // making the other jobs wait out the gap.
+    telemetry.noteSkipped(job.id,now);
+    saveTelemetryRuntime();
+    telemetryUi.note=`${job.name}: ${verdict.reason}`;
+    return verdict;
+  }
+  const queued=txQueue.push({source:"telemetry",text:verdict.text,to:verdict.to,
+    nowMs:now,submode:selectedMode(),
+    meta:{telemetryJobId:job.id,telemetryText:verdict.text}});
+  if(!queued.queued){
+    telemetry.noteSkipped(job.id,now);
+    saveTelemetryRuntime();
+    telemetryUi.note=`${job.name}: queue ${queued.reason}`;
+    return {send:false,reason:queued.reason};
+  }
+  // Re-armed on QUEUING, not on completion: a message waiting behind a long QSO must
+  // not come due a second time and queue twice. The counter and the comparison text
+  // move later, in updateOutgoingTxProgress, and only if the air time really happened.
+  telemetry.noteQueued(job.id,now);
+  saveTelemetryRuntime();
+  telemetryUi.note=`${job.name}: queued`;
+  drainTxQueue();
+  return verdict;
+}
+
+function checkTelemetry() {
+  if(!telemetryConfig().enabled)return;
+  const js8=currentJs8();
+  if(!js8.txSafetyAccepted||!activeEncoder)return;
+  if(telemetryUi.fetching)return;
+  const job=telemetry.dueJob(js8Clock.now());
+  if(!job)return;
+  const stored=telemetryJobById(job.id);
+  if(!stored)return;
+  telemetryUi.fetching=true;
+  fetchTelemetryTopics().then(snapshot=>{
+    telemetryUi.fetching=false;
+    if(!snapshot){
+      // The readings could not be read at all, so nothing can be said about them.
+      // Re-arm rather than retry every five seconds against an interface that is busy.
+      telemetry.noteSkipped(job.id,js8Clock.now());
+      saveTelemetryRuntime();
+      return;
+    }
+    telemetryUi.topics=snapshot;
+    sendTelemetryJob(stored,snapshot,{force:false});
+    renderTelemetryPanel();
+  }).catch(()=>{telemetryUi.fetching=false;});
+}
+
+function telemetrySendNow(jobId) {
+  const job=telemetryJobById(jobId);
+  if(!job)return;
+  const blocks=txBlockReasons(false);
+  if(blocks.length){
+    telemetryUi.note=`Cannot transmit now: ${blocks.join("; ")}`;
+    renderTelemetryPanel();
+    return;
+  }
+  telemetryUi.fetching=true;
+  fetchTelemetryTopics().then(snapshot=>{
+    telemetryUi.fetching=false;
+    if(!snapshot){telemetryUi.note="Readings unavailable";renderTelemetryPanel();return;}
+    telemetryUi.topics=snapshot;
+    sendTelemetryJob(job,snapshot,{force:true});
+    renderTelemetryPanel();
+  }).catch(()=>{telemetryUi.fetching=false;});
+}
+
+// ---- wiring ----------------------------------------------------------------
+
+let telemetryPeerList=null;
+
+function telemetryAddJob() {
+  const jobs=telemetryJobList();
+  if(jobs.length>=Js8Telemetry.MAX_JOBS)return;
+  let index=jobs.length+1;
+  while(jobs.some(job=>job.id===`tlm${index}`))index+=1;
+  const job={id:`tlm${index}`,name:`TLM${index}`,enabled:false,to:"",
+    periodMin:Js8Telemetry.DEFAULT_PERIOD_MIN,fields:[]};
+  telemetryUi.job=job.id;
+  setTelemetryJobs([...jobs,job]);
+}
+
+function telemetryAddField(topic) {
+  const job=telemetryUi.job?telemetryJobById(telemetryUi.job):null;
+  if(!job||!telemetryUi.peer)return;
+  const fields=Array.isArray(job.fields)?job.fields:[];
+  if(fields.length>=8)return;
+  if(fields.some(field=>field.peer===telemetryUi.peer&&field.topic===topic))return;
+  // normalizeField fills label, unit, type and divisor from the catalogue when it
+  // knows the topic, and leaves sane defaults when it does not.
+  const field=Js8Telemetry.normalizeField({peer:telemetryUi.peer,topic});
+  updateTelemetryJob(job.id,{fields:[...fields,field]});
+}
+
+function telemetryFieldEdit(jobId,index,patch) {
+  const job=telemetryJobById(jobId);
+  if(!job)return;
+  const fields=(job.fields||[]).map((field,at)=>at===index?{...field,...patch}:field);
+  updateTelemetryJob(jobId,{fields});
+}
+
+function wireTelemetry() {
+  if(!dom.telemetrySection)return;
+  if(dom.telemetryFlags)
+    dom.telemetryFlags.addEventListener("click",event=>{
+      onFlagRowClick(event,telemetryFlags());
+      renderControls();
+      renderTelemetryPanel();
+    });
+  if(dom.telemetryAdd)dom.telemetryAdd.addEventListener("click",telemetryAddJob);
+
+  dom.telemetrySection.addEventListener("toggle",syncTelemetryTreePoll);
+  if(dom.telemetrySources)
+    dom.telemetrySources.addEventListener("toggle",syncTelemetryTreePoll);
+
+  telemetryPeerList=TrxnetPeers.mount(dom.telemetrySources,dom.telemetrySourcePeers,{
+    onPick:name=>{telemetryUi.peer=name;renderTelemetryTree();},
+    selected:()=>telemetryUi.peer
+  });
+
+  if(dom.telemetryTopicTree)
+    dom.telemetryTopicTree.addEventListener("click",event=>{
+      const button=event.target.closest("[data-topic]");
+      if(!button||button.disabled)return;
+      telemetryAddField(button.dataset.topic);
+    });
+
+  // One delegated handler for the whole job list: the list is rebuilt on every
+  // change, so per-node listeners would have to be re-attached each time.
+  dom.telemetryJobs.addEventListener("click",event=>{
+    const host=event.target.closest("[data-job]");
+    if(!host)return;
+    const id=host.dataset.job;
+    if(event.target.closest(".tlm-open")){
+      telemetryUi.job=telemetryUi.job===id?null:id;
+      telemetryUi.note="";
+      renderTelemetryPanel();
+      return;
+    }
+    if(event.target.closest(".tlm-enable")){
+      const job=telemetryJobById(id);
+      if(job)updateTelemetryJob(id,{enabled:job.enabled!==true});
+      return;
+    }
+    if(event.target.closest(".tlm-send")){telemetrySendNow(id);return;}
+    if(event.target.closest(".tlm-delete")){
+      if(telemetryUi.job===id)telemetryUi.job=null;
+      setTelemetryJobs(telemetryJobList().filter(job=>job.id!==id));
+      return;
+    }
+    const row=event.target.closest("[data-field]");
+    if(!row)return;
+    const index=Number(row.dataset.field);
+    const job=telemetryJobById(id);
+    if(!job)return;
+    const fields=(job.fields||[]).slice();
+    if(event.target.closest("[data-remove]")){
+      fields.splice(index,1);
+      updateTelemetryJob(id,{fields});
+      return;
+    }
+    const move=event.target.closest("[data-move]");
+    if(!move)return;
+    const to=move.dataset.move==="up"?index-1:index+1;
+    if(to<0||to>=fields.length)return;
+    [fields[index],fields[to]]=[fields[to],fields[index]];
+    updateTelemetryJob(id,{fields});
+  });
+
+  // Text fields save as they are typed but must NOT re-render the editor -- that
+  // would replace the input under the cursor. Only the preview line is refreshed.
+  dom.telemetryJobs.addEventListener("input",event=>{
+    const host=event.target.closest("[data-job]");
+    if(!host)return;
+    const id=host.dataset.job;
+    const row=event.target.closest("[data-field]");
+    const value=event.target.value;
+    if(event.target.classList.contains("tlm-name")){
+      updateTelemetryJobQuiet(id,{name:String(value).toUpperCase()
+        .replace(/[^A-Z0-9]/g,"").slice(0,6)});
+    } else if(event.target.classList.contains("tlm-to")){
+      updateTelemetryJobQuiet(id,{to:String(value).toUpperCase()
+        .replace(/[^A-Z0-9/@]/g,"").slice(0,12)});
+    } else if(row&&event.target.classList.contains("tlm-label")){
+      telemetryFieldEditQuiet(id,Number(row.dataset.field),
+        {label:String(value).toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,8)});
+    } else if(row&&event.target.classList.contains("tlm-unit")){
+      const unit=String(value).toUpperCase().slice(0,4);
+      // A unit JS8 cannot carry is refused at the keystroke, not at the transmitter:
+      // "°" would truncate the message from that character on.
+      event.target.classList.toggle("invalid",!Js8Telemetry.validateText(unit));
+      telemetryFieldEditQuiet(id,Number(row.dataset.field),
+        {unit:Js8Telemetry.validateText(unit)?unit:""});
+    } else return;
+    refreshTelemetryPreview(id);
+  });
+
+  // Selects and the blur of a text field are safe moments to redraw in full.
+  dom.telemetryJobs.addEventListener("change",event=>{
+    const host=event.target.closest("[data-job]");
+    if(!host)return;
+    const id=host.dataset.job;
+    const row=event.target.closest("[data-field]");
+    if(event.target.classList.contains("tlm-period")){
+      updateTelemetryJob(id,{periodMin:Number(event.target.value)});
+    } else if(row&&event.target.classList.contains("tlm-type")){
+      telemetryFieldEdit(id,Number(row.dataset.field),{type:event.target.value});
+    } else if(row&&event.target.classList.contains("tlm-div")){
+      telemetryFieldEdit(id,Number(row.dataset.field),{div:Number(event.target.value)});
+    } else if(row&&event.target.classList.contains("tlm-dec")){
+      telemetryFieldEdit(id,Number(row.dataset.field),{dec:Number(event.target.value)});
+    }
+  });
+}
+
+// The quiet pair: same write, no repaint of the editor the operator is typing into.
+function updateTelemetryJobQuiet(id,patch) {
+  setJs8Setting("telemetry",{...telemetryConfig(),
+    jobs:telemetryJobList().map(job=>job.id===id?{...job,...patch}:job)});
+  applyTelemetrySettings();
+  renderTelemetrySummary();
+  renderTelemetryBudget();
+}
+function telemetryFieldEditQuiet(id,index,patch) {
+  const job=telemetryJobById(id);
+  if(!job)return;
+  updateTelemetryJobQuiet(id,
+    {fields:(job.fields||[]).map((field,at)=>at===index?{...field,...patch}:field)});
+}
+
+function refreshTelemetryPreview(id) {
+  const job=telemetryJobById(id);
+  if(!job||!dom.telemetryJobs)return;
+  const host=dom.telemetryJobs.querySelector(`[data-job="${CSS.escape(id)}"]`);
+  if(!host)return;
+  const rendered=telemetryPreview(job);
+  const text=host.querySelector(".telemetry-preview-text");
+  const cost=host.querySelector(".telemetry-preview-cost");
+  if(text)text.textContent=rendered.text||"nothing to send";
+  if(cost)cost.textContent=rendered.text?telemetryCostText(rendered.text,job.to):"";
 }
 
 function applySettingsToRuntime() {
@@ -2233,13 +2873,28 @@ function toggleAprsGate(js8) {
 // fields take the focus (they are what has to be typed); a checkbox only gets the
 // highlight, because a focus ring on a 20px box is not an answer to "what is
 // missing".
+let revealedRow=null,revealTimer=null;
 function revealSetting(field) {
   if(!field||!dom.settingsSection)return;
   dom.settingsSection.open=true;
   const row=field.closest("label")||field;
+  // Only one row is ever revealed at a time, and revealing the same one twice has
+  // to restart its two seconds rather than inherit the first reveal's expiry: the
+  // earlier timer would otherwise fire and strip the highlight the second click had
+  // just put back, so a blocked pill pressed twice answered the second press with
+  // nothing. Only the cancel was missing -- this stays on wall time rather than
+  // moving to js8-scheduler, whose clock is deliberately swapped to media time once
+  // audio is running. Protocol timing wants that clock; a two-second highlight does
+  // not, and would blink whenever the media clock stepped.
+  if(revealedRow&&revealedRow!==row)revealedRow.classList.remove("setting-reveal");
+  revealedRow=row;
   row.scrollIntoView({behavior:"smooth",block:"center"});
   row.classList.add("setting-reveal");
-  setTimeout(()=>row.classList.remove("setting-reveal"),2000);
+  clearTimeout(revealTimer);
+  revealTimer=setTimeout(()=>{
+    row.classList.remove("setting-reveal");
+    if(revealedRow===row)revealedRow=null;
+  },2000);
   if(field.tagName==="INPUT"&&field.type!=="checkbox")field.focus({preventScroll:true});
 }
 
@@ -2247,9 +2902,13 @@ function revealSetting(field) {
 // 500 ms render path was free; as controls it is not -- a replaced node drops
 // keyboard focus, throws away the TX? confirmation mid-gesture, and can swallow a
 // click that landed between mousedown and mouseup.
-function buildSettingsFlags() {
-  if(!dom.settingsFlags)return;
-  dom.settingsFlags.replaceChildren(...SETTINGS_FLAGS.map(flag=>{
+// Rebuilt only when the ROW ITSELF changed -- a different set of keys, which for
+// SETTINGS never happens and for TELEMETRY happens whenever a job is added, renamed
+// or removed. Everything else is a text update on existing nodes, for the reason
+// above: the 500 ms render path must not replace a control the finger is on.
+function buildFlagRow(container,flags) {
+  if(!container)return;
+  container.replaceChildren(...flags.map(flag=>{
     const button=document.createElement("button");
     button.type="button";
     button.className="summary-flag";
@@ -2258,12 +2917,17 @@ function buildSettingsFlags() {
   }));
 }
 
-function renderSettingsFlags(js8) {
-  if(!dom.settingsFlags)return;
-  if(!dom.settingsFlags.firstElementChild)buildSettingsFlags();
+function flagRowMatches(container,flags) {
+  if(!container||container.children.length!==flags.length)return false;
+  return flags.every((flag,index)=>container.children[index].dataset.flag===flag.key);
+}
+
+function renderFlagRow(container,flags,js8) {
+  if(!container)return;
+  if(!flagRowMatches(container,flags))buildFlagRow(container,flags);
   const txOn=js8.txSafetyAccepted===true;
-  SETTINGS_FLAGS.forEach((flag,index)=>{
-    const button=dom.settingsFlags.children[index];
+  flags.forEach((flag,index)=>{
+    const button=container.children[index];
     if(!button)return;
     // A TX-dependent switch that is configured but blocked by Radio TX being off is
     // shown off (no pill, no countdown); the tooltip names the reason so it does not
@@ -2278,6 +2942,8 @@ function renderSettingsFlags(js8) {
     // carry any detail only in the tooltip. The tooltip always spells out the
     // full state, including the configured interval via `tip`.
     const key=flag.key==="TX" && txConfirmArmed ? "TX?" : flag.key;
+    // A pill may declare itself inert (the "+2 more" tail): it renders, it explains
+    // itself in the tooltip, and clicking it does nothing.
     const text=key + (flag.inline && detailText ? ` · ${detailText}` : "");
     const stateWord=on ? "on" : (suppressed && configured ? "off · needs Radio TX" : "off");
     const tip=[stateWord, detailText, tipExtra].filter(Boolean).join(" · ");
@@ -2293,18 +2959,24 @@ function renderSettingsFlags(js8) {
     if(suppressed)button.setAttribute("aria-disabled","true");
     else button.removeAttribute("aria-disabled");
     if(button.title!==title)button.title=title;
+    button.classList.toggle("summary-flag-mute",flag.mute===true);
   });
 }
+
+function buildSettingsFlags() { buildFlagRow(dom.settingsFlags,SETTINGS_FLAGS); }
+function renderSettingsFlags(js8) { renderFlagRow(dom.settingsFlags,SETTINGS_FLAGS,js8); }
 
 // One delegated handler for the row. stopPropagation is what keeps a pill click
 // from also toggling the <details> its <summary> lives in (same reason rtty.js's
 // zoom pills carry it).
-function onSettingsFlagClick(event) {
+function onSettingsFlagClick(event) { onFlagRowClick(event,SETTINGS_FLAGS); }
+
+function onFlagRowClick(event,flags) {
   const button=event.target.closest("[data-flag]");
   if(!button)return;
   event.stopPropagation();
-  const flag=SETTINGS_FLAGS.find(item=>item.key===button.dataset.flag);
-  if(!flag)return;
+  const flag=flags.find(item=>item.key===button.dataset.flag);
+  if(!flag||!flag.toggle)return;
   // Any pill other than TX stands the confirmation down: an armed TX? must not
   // survive the operator turning to something else and coming back.
   if(flag.key!=="TX")cancelTxConfirm();
@@ -2363,6 +3035,8 @@ function renderControls() {
   renderHeartbeatState();
   dom.settingsSummary.textContent=`${js8.myCall} · ${js8.grid} · ${js8.speed}`;
   renderSettingsFlags(js8);
+  renderTelemetryFlags(js8);
+  renderTelemetrySummary();
   const busy=!["idle","completed","aborted","fault"].includes(state.txStatus);
   // CQ carries its own recipient in the frame and an @APRSIS command carries its
   // own group call, so neither needs a station selected in the composer.
@@ -3105,6 +3779,42 @@ function onTunedBand(frequencyHz,tunedHz){
   return !band || !tuned || Math.abs(band-tuned)<=ACTIVITY_FREQUENCY_TOLERANCE_HZ;
 }
 
+// Why an answer never went out, in words the operator can act on. Keyed by the reason
+// the engine that refused already returns (decision 13) -- this is only the wording, and
+// an unknown reason falls back to its own name rather than disappearing.
+const NO_REPLY_LABELS = {
+  "qso-lock": "60 s QSO lock",
+  "window": "the same question was answered recently",
+  "banned": "the station is rate limited",
+  "hourly-cap": "hourly auto reply cap reached",
+  "not-configured": "nothing configured to answer with",
+  "nothing-to-repeat": "nothing to repeat",
+  "group-query": "asked of a group",
+  "blocked": "blocked DXCC",
+  "tx-not-enabled": "radio TX is not enabled",
+  "auto-off": "AUTO is off, the answer is in the composer",
+  "not-armed": "AUTO is off",
+  "not-heard": "the station asked about was not heard here",
+  "malformed": "the request could not be read",
+  "empty": "the message carried no text",
+  "too-long": "the message is longer than the inbox accepts",
+  "full": "the inbox is full",
+  "store-quota": "holding as much third party mail as allowed",
+  "sender-quota": "this station already has its share of the inbox",
+};
+// A refusal nobody can see is indistinguishable from a station that never considered
+// answering -- and "why did it not answer THAT one?" is the question this feed gets
+// asked. Every engine that decides not to answer stamps its reason on the reception
+// (noteNoReply); the row carries it next to the text it belongs to.
+function renderNoReply(message) {
+  const info = message && message.noReply;
+  if (!info || !info.reason) return "";
+  const label = NO_REPLY_LABELS[info.reason] || info.reason;
+  const detail = info.detail && info.detail !== label ? ` \u2014 ${info.detail}` : "";
+  return `<span class="noreply-badge" title="No automatic answer was sent (${esc(info.reason)})">`
+    + `NO REPLY \u00b7 ${esc(label)}${esc(detail)}</span>`;
+}
+
 function renderActivity() {
   const bannedCalls = new Map(restrictions.activeBans(js8Clock.now()).map(ban => [ban.call, ban]));
   // Blocked DXCC entities are hidden everywhere: heard traffic, the stations table
@@ -3207,7 +3917,7 @@ function renderActivity() {
       +(reply&&reply.enabled?" has-reply":"")
       +(message.partial&&message.live?" message-receiving":"")
       +(status==="incomplete"?" message-incomplete":"")+(status==="bad crc"?" message-badcrc":"");
-    return divider+`<article class="${classes}"${status?` data-rx-state="${esc(status)}"`:""}><span class="message-meta"><span class="meta-time">${when}</span><span class="meta-speed">${MODE_TO_SPEED[message.submode]||"?"}</span><span class="meta-hz">${Math.round(message.offsetHz)} Hz</span>${snrText?`<span class="meta-snr" title="Signal report this row was decoded at">${snrText} dB</span>`:""}${status?`<span class="rx-state">${esc(status)}</span>`:""}</span><strong${sender.clickable?` data-call="${esc(call)}"`:""}${senderClass?` class="${senderClass}"`:""}${ownCall?' data-own-call="true"':""}${workedHere?` title="${esc(call)} already logged on ${esc(workedBand||"this band")}"`:""}>${esc(call || "JS8")}</strong><span class="message-text">${forMe?'<span class="forme-badge" title="Addressed to your callsign">TO YOU</span>':""}${aprsReply}${igate}${renderReceivedText(message,currentJs8().myCall)}${ended?'<span class="rx-eot" title="End of message confirmed">♢</span>':""}</span>${replyButton}${renderSignalStripe(message)}</article>`;
+    return divider+`<article class="${classes}"${status?` data-rx-state="${esc(status)}"`:""}><span class="message-meta"><span class="meta-time">${when}</span><span class="meta-speed">${MODE_TO_SPEED[message.submode]||"?"}</span><span class="meta-hz">${Math.round(message.offsetHz)} Hz</span>${snrText?`<span class="meta-snr" title="Signal report this row was decoded at">${snrText} dB</span>`:""}${status?`<span class="rx-state">${esc(status)}</span>`:""}</span><strong${sender.clickable?` data-call="${esc(call)}"`:""}${senderClass?` class="${senderClass}"`:""}${ownCall?' data-own-call="true"':""}${workedHere?` title="${esc(call)} already logged on ${esc(workedBand||"this band")}"`:""}>${esc(call || "JS8")}</strong><span class="message-text">${forMe?'<span class="forme-badge" title="Addressed to your callsign">TO YOU</span>':""}${aprsReply}${igate}${renderReceivedText(message,currentJs8().myCall)}${ended?'<span class="rx-eot" title="End of message confirmed">♢</span>':""}${renderNoReply(message)}</span>${replyButton}${renderSignalStripe(message)}</article>`;
   }).join("") : '<div class="empty-row">Waiting for JS8 activity…</div>';
   // Built from `recent`, the rows actually on screen, so the histogram and the list can
   // never disagree -- change the filter and the strip follows.
@@ -6113,6 +6823,9 @@ function handleInboxAssembled(directed, norm, now, relayCtx = null) {
      hearing: heard});
 
   if (outcome.action === "skip") {
+    // Same rule as the auto-reply path: a refusal the operator cannot see looks
+    // exactly like a station that never considered answering.
+    noteNoReply(directed, outcome.reason, outcome.detail);
     if (outcome.nack && js8.txSafetyAccepted && activeEncoder) {
       const nack = routeReplyVia(outcome.nack, relayCtx);
       txQueue.push({source: "inbox", text: nack.text, to: nack.to,
@@ -6128,6 +6841,7 @@ function handleInboxAssembled(directed, norm, now, relayCtx = null) {
   if (!send) return;
   if (!js8.txSafetyAccepted || !activeEncoder) {
     console.info("[js8-inbox] cannot answer: tx-not-enabled");
+    noteNoReply(directed, "tx-not-enabled", `${norm.command} would have answered`);
     return;
   }
   const routed = routeReplyVia(send, relayCtx);
@@ -6307,9 +7021,51 @@ function checkHeartbeat() {
   startHeartbeat(verdict.offsetHz, true);
 }
 
+// Refusals that mean "this reception was never ours to answer". There is nothing to
+// explain on the row, and a badge on every third-party frame -- or on every ordinary
+// message somebody types at us, which is what "unsupported" is -- would bury the ones
+// that carry a real decision.
+const NO_REPLY_SILENT = new Set(["not-addressed", "self", "invalid", "unsupported",
+  "incomplete", "duplicate", "allcall"]);
+
+// The reception a decoded frame belongs to. Matched newest-first on the directed
+// header rather than on the raw bits: a multi-frame reception carries the header in
+// its first frame only, and a frame fed by the test harness never had bits at all.
+// No match (an expired or superseded channel) simply means nothing is stamped.
+function receptionForFrame(frame) {
+  const messages = state.activity.messages || [];
+  const command = String(frame && frame.command || "").trim().toUpperCase();
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const item = messages[index];
+    if (!item || item.outgoing || !item.directed) continue;
+    if (!sameCall(item.directed.from, frame.from)) continue;
+    if (!sameCall(item.directed.to, frame.to)) continue;
+    if (String(item.directed.command || "").trim().toUpperCase() !== command) continue;
+    return item;
+  }
+  return null;
+}
+
+// Stamp the reason an answer never went out onto the reception itself, so the feed can
+// show it where the question is asked. Only receptions an answer was conceivable for:
+// addressed to this station, or to a group it is in.
+function noteNoReply(frame, reason, detail) {
+  if (!frame || !reason || NO_REPLY_SILENT.has(reason)) return;
+  const to = String(frame.to || "").toUpperCase();
+  if (!sameCall(frame.to, currentJs8().myCall) && !myGroups().includes(to)) return;
+  const reception = receptionForFrame(frame);
+  if (!reception) return;
+  reception.noReply = {reason, detail: String(detail || "")};
+  // The frame path repaints nothing by itself -- the row was drawn from the activity
+  // event that arrived before this decision was made.
+  renderActivity();
+  persistSession();
+}
+
 // Feeds decoded directed frames to the auto-reply engine. Any directed frame --
 // ours or not -- arms the QSO lock, so the station does not talk over a
-// conversation already in progress.
+// conversation already in progress. The engine exempts questions addressed to us
+// by callsign from that lock: those ARE our conversation (js8-autoreply.js).
 function handleDirectedFrame(decoded) {
   if (!decoded || decoded.kind !== "directed") return;
   const now = js8Clock.now();
@@ -6320,6 +7076,7 @@ function handleDirectedFrame(decoded) {
   const blockedCountry = blockedCountryForCall(decoded.from);
   if (blockedCountry) {
     console.info("[js8-autoreply] skip: blocked", blockedCountry, decoded.from);
+    noteNoReply(decoded, "blocked", `${decoded.from} is in ${blockedCountry}`);
     autoReply.noteDirectedFrame(now);
     return;
   }
@@ -6346,10 +7103,12 @@ function handleDirectedFrame(decoded) {
      // comes out empty is refused instead of being transmitted as a bare STATUS.
      statusText: effectiveStatusText(), hearing: heard});
   autoReply.noteDirectedFrame(now);
+  if (outcome.action === "skip") noteNoReply(decoded, outcome.reason, outcome.detail);
 
   if (outcome.action === "buffer") {
     // AUTO off: hand the answer to the operator instead of transmitting it.
     dom.message.value = `${outcome.to} ${outcome.text}`;
+    noteNoReply(decoded, "auto-off", `${outcome.to} ${outcome.text}`);
     renderControls(); persistSession();
     return;
   }
@@ -6357,6 +7116,7 @@ function handleDirectedFrame(decoded) {
 
   if (!js8.txSafetyAccepted || !activeEncoder) {
     console.info("[js8-autoreply] skip: tx-not-enabled", outcome.to, outcome.command);
+    noteNoReply(decoded, "tx-not-enabled", `${outcome.command} would have answered`);
     return;
   }
   // Queue rather than transmit directly: the radio may be mid-transfer. The
@@ -7345,6 +8105,17 @@ function updateOutgoingTxProgress(txState) {
     }
     // A CQ that got out re-arms the one rollback its schedule is allowed.
     if(item.recipe&&item.recipe.kind==="cq")cqRetryPending=false;
+    // Telemetry counts its message here and nowhere else. The schedule was re-armed
+    // when the message was queued, but the counter and the text the next period is
+    // compared against move only now -- so a faulted transmission does not consume
+    // the change that prompted it, and the reading goes out again next hour.
+    const telemetryJobId=item.txMeta&&item.txMeta.telemetryJobId;
+    if(telemetryJobId){
+      item.txMeta.telemetryJobId=null;  // completion may be reported more than once
+      telemetry.noteSent(telemetryJobId,item.txMeta.telemetryText||item.text,js8Clock.now());
+      saveTelemetryRuntime();
+      renderTelemetryPanel();
+    }
   }
   item.sentChars=Math.max(0,Math.min(item.text.length,sent));
   item.activeFraction=["aborted","fault","completed"].includes(txState.status)?0:activeFraction;
@@ -7955,6 +8726,7 @@ function bind() {
   // has to stand the TX? confirmation down -- a pill click never reaches here,
   // onSettingsFlagClick stops it so the section does not unroll under the finger.
   if(dom.settingsFlags)dom.settingsFlags.addEventListener("click",onSettingsFlagClick);
+  wireTelemetry();
   const settingsHead=dom.settingsSection&&dom.settingsSection.querySelector("summary");
   if(settingsHead)settingsHead.addEventListener("click",cancelTxConfirm);
   dom.resetSettings.addEventListener("click",()=>{const reset=Js8Settings.reset(localStorage);settings=reset.settings;state.settingsDraft={txGain:null};state.activeMode=settings.activeModem;dom.storageState.textContent=reset.label;applySettingsToRuntime();renderActivity();renderControls();closeTimetablePopover();if(!dom.freqTimetablePanel.hidden)renderTimetableGrid();reconcileTimetable();});
@@ -8162,6 +8934,12 @@ async function init() {
     if (Object.prototype.hasOwnProperty.call(settings.ui.disclosures,details.dataset.section)) details.open=settings.ui.disclosures[details.dataset.section];
   dom.storageState.textContent=loaded.label;
   if(!TEST_MODE)restoreSession(); // tests drive restore explicitly through __dataTest
+  // Order matters: restore() brings back counters and schedules, applyTelemetrySettings()
+  // then decides what is actually armed from the profile that was just adopted.
+  telemetry.restore(loadTelemetryRuntime(),js8Clock.now());
+  applyTelemetrySettings();
+  renderTelemetryPanel();
+  syncTelemetryTreePoll();
   renderStartup(); selectMode(state.activeMode); resizeWaterfall(); renderActivity(); renderDiagnostics();
   if(sessionRestored){renderConversation();if(state.selectedCall)dom.reply.open=true;}
   restoreFileTransfers();
@@ -8226,6 +9004,7 @@ async function init() {
     if(inbox.expireGroupMail(js8Clock.now())){renderInbox();syncInbox();}
   });
   scheduler.every("cqRepeat",5000,checkCqRepeat);
+  scheduler.every("telemetry",5000,checkTelemetry);
   pollUnattended().then(()=>reconcileUnattended("page load")); scheduler.every("unattended",5000,pollUnattended);
   renderTimetableButton(); scheduler.every("freqTimetable",5000,reconcileTimetable); reconcileTimetable();
   applyHeartbeatSettings();
@@ -8237,6 +9016,24 @@ async function init() {
     // Read-only views the RF-power checks need: the stored choice and what
     // the poll last read back, neither of which is reachable from the DOM.
     js8Settings(){return currentJs8();},
+    // TELEMETRY. The readings are normally fetched from the interface, so the
+    // harness hands them in directly -- what has to be assertable is the decision
+    // (what text, or which refusal), not the plumbing that carried the bytes.
+    telemetryState(){return telemetry.snapshot(js8Clock.now());},
+    telemetryJobs(){return telemetryJobList();},
+    telemetryConfigure(config){setTelemetryConfig(config);},
+    telemetryFeed(snapshot){telemetryUi.topics=snapshot;renderTelemetryPanel();},
+    telemetryRender(id){const job=telemetryJobById(id);
+      return job?Js8Telemetry.renderJob(job,telemetryUi.topics||{topics:[]}):null;},
+    telemetryEvaluate(id,force=false){const job=telemetryJobById(id);
+      return job?telemetry.evaluate(job,telemetryUi.topics||{topics:[]},{force}):null;},
+    telemetryDue(id){telemetry.state.get(id).dueMs=js8Clock.now();},
+    telemetryNoteSent(id,text){telemetry.noteSent(id,text,js8Clock.now());
+      saveTelemetryRuntime();renderTelemetryPanel();},
+    telemetrySend(id){const job=telemetryJobById(id);
+      return job?sendTelemetryJob(job,telemetryUi.topics||{topics:[]},{}):null;},
+    telemetryFlagText(){return [...(dom.telemetryFlags?dom.telemetryFlags.children:[])]
+      .map(button=>button.textContent);},
     radioState(){return {...state.radio};},
     setActivity(activity){state.testActivityLocked=true;applyDecoderActivity(activity);renderActivity();},
     setRadioFrequency(frequency){state.radio.frequency=Number(frequency)||0;if(selectActivityFrequency(state.radio.frequency))renderActivity();renderHeader();renderControls();},

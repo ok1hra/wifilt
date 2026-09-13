@@ -59,6 +59,21 @@ const checks = {
     Js8TxQueue.TTL_MS.inbox === 30 * 60000 &&
     survivesRelay(29 * 60000) && !survivesRelay(31 * 60000),
 
+  // Telemetry sits below everything that is either the operator talking or this
+  // station answering a question: an hourly beacon of sensor readings must never
+  // key ahead of a reply somebody is waiting for.
+  telemetryIsLowestPriority: Js8TxQueue.PRIORITY.telemetry === 5 &&
+    Object.entries(Js8TxQueue.PRIORITY)
+      .every(([source, value]) => source === "telemetry" || value < 5),
+  // Unlike the heartbeat (rejected outright, it reschedules instead), telemetry IS
+  // allowed to wait -- it is one message that can afford to sit out a QSO.
+  telemetryQueuesUnlikeHeartbeat: Js8TxQueue.TTL_MS.telemetry === 10 * 60000 &&
+    (() => {
+      const local = new Js8TxQueue.Js8TxQueue({});
+      const push = local.push({source: "telemetry", text: "TEMP 21.3C", to: "@WX", nowMs: 0});
+      return push.queued === true && local.size(9 * 60000) === 1 && local.size(11 * 60000) === 0;
+    })(),
+
   // Expiry is announced, never silent -- the row and the composer both hang off this.
   expiryIsAnnounced: events.some(event => event.type === "expired" && event.source === "operator")
 };

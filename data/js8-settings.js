@@ -15,7 +15,7 @@
   const MODEMS = ["js8call", "rtty45", "psk31", "ft8", "ft4", "cw"];
   const SPEEDS = ["AUTO", "A", "B", "C", "E", "I"];
   const DISCLOSURES = ["spectrum", "reply", "traffic", "stations", "inbox",
-    "settings", "timing"];
+    "telemetry", "settings", "timing"];
   // Must match UNATTENDED_ARM_CHOICES_H in unattended_guard.h.
   const ARM_HOURS = [1, 6, 12, 24, 168];
   // Must match INTERVAL_CHOICES_MS in js8-heartbeat.js.
@@ -35,6 +35,9 @@
   const APRSIS_FALLBACK = {enabled: false, call: "", passcode: "",
     host: "czech.aprs2.net", port: 14580, maxPerHour: 30, dedupMinutes: 10};
   const MAX_GROUPS = 8;
+  // Must match PERIOD_CHOICES_MIN in js8-telemetry.js. An hour is the floor: nothing
+  // on this page transmits unattended with less conversational purpose than telemetry.
+  const TELEMETRY_PERIOD_MIN = [60, 120, 180, 360, 720, 1440];
   // Minutes between repeated CQ calls; 0 means the repeat is off.
   const CQ_REPEAT_MIN = [0, 2, 5, 10, 15];
   // What this station answers to STATUS?. A menu rather than a bare field: the page
@@ -118,9 +121,19 @@
         // that is what keeps the page from writing power to a radio nobody
         // asked it to touch -- unlike WSPR there is no naturally safe value
         // to propose, because a QSO mode has no beacon-sized opening bid.
-        rfPercent:null}},
+        rfPercent:null,
+        // Periodic TrxNet telemetry. Definitions only -- what to send, to whom, how
+        // often. The counters and the schedule are one browser's running state and
+        // live in their own localStorage key, out of the shared station profile:
+        // an hourly counter pushed into /js8-config.json would rewrite the device's
+        // flash 8800 times a year to say nothing anyone else needs.
+        //
+        // An absent key normalises to {jobs: []}, so no schema bump -- same as
+        // alertBeep and statusAuto above.
+        telemetry:{enabled: false, jobs: []}}},
       ui: {disclosures: {spectrum: true, reply: true, traffic: false,
-        stations: false, inbox: false, settings: false, timing: false}},
+        stations: false, inbox: false, telemetry: false, settings: false,
+        timing: false}},
       // The APRS-IS gate. It lives in the profile and not in SETUP because it is
       // a JS8 function: it only ever acts on @APRSIS traffic this modem decoded.
       // The profile is SHARED -- it is pushed to the interface and read back by
@@ -172,6 +185,46 @@
     return input && typeof input === "object" ? {...input} : {...fallback};
   }
 
+  // Job definitions for the TELEMETRY panel. Validated HERE rather than trusted from
+  // the profile, because the profile is shared: a browser running an older build must
+  // not be able to write a job this one would beacon wrongly. Js8Telemetry owns the
+  // detailed rules and re-normalises anyway; this keeps the stored shape sane and
+  // bounded so a corrupt profile cannot grow without limit.
+  function normalizeTelemetry(input) {
+    const source = input && typeof input === "object" ? input : {};
+    const jobs = (Array.isArray(source.jobs) ? source.jobs : []).slice(0, 6)
+      .map((job, index) => {
+        const entry = job && typeof job === "object" ? job : {};
+        const fields = (Array.isArray(entry.fields) ? entry.fields : []).slice(0, 8)
+          .map(field => {
+            const row = field && typeof field === "object" ? field : {};
+            return {peer: String(row.peer || "").slice(0, 32),
+              topic: String(row.topic || "").slice(0, 32),
+              label: String(row.label || "").toUpperCase()
+                .replace(/[^A-Z0-9]/g, "").slice(0, 8),
+              unit: String(row.unit || "").toUpperCase().slice(0, 4),
+              type: String(row.type || "uint16").slice(0, 8),
+              div: Number(row.div) || 1,
+              dec: clamp(row.dec, 0, 3, 0)};
+          })
+          .filter(field => field.peer && field.topic);
+        return {id: String(entry.id || `tlm${index + 1}`).slice(0, 16),
+          name: String(entry.name || "").toUpperCase()
+            .replace(/[^A-Z0-9]/g, "").slice(0, 6) || `TLM${index + 1}`,
+          enabled: entry.enabled === true,
+          // A recipient is either a callsign or a group; both are uppercase and
+          // neither may carry anything the directed header cannot pack.
+          to: String(entry.to || "").toUpperCase().replace(/[^A-Z0-9/@]/g, "").slice(0, 12),
+          periodMin: TELEMETRY_PERIOD_MIN.includes(Number(entry.periodMin))
+            ? Number(entry.periodMin) : 60,
+          fields};
+      });
+    // The master switch lives with the definitions, not with the counters: "does
+    // this station beacon telemetry" is a property of the station, the same way
+    // `hb` is, and belongs in the profile every browser reads.
+    return {enabled: source.enabled === true, jobs};
+  }
+
   function normalize(input) {
     const fallback = defaults();
     const source = input && typeof input === "object" ? input : {};
@@ -221,7 +274,8 @@
         // Only 1..100 is settable: the radio's step is one percent, so a
         // stored 0.5 would be written as something else entirely.
         rfPercent:Number.isFinite(Number(js8.rfPercent)) && Number(js8.rfPercent) >= 1
-          ? Math.min(100, Math.round(Number(js8.rfPercent))) : null}},
+          ? Math.min(100, Math.round(Number(js8.rfPercent))) : null,
+        telemetry:normalizeTelemetry(js8.telemetry)}},
       ui: {disclosures},
       aprsis: normalizeAprsis(source.aprsis, fallback.aprsis),
       freqTimetable: normalizeTimetable(source.freqTimetable)};

@@ -907,10 +907,11 @@ f.onload=()=>{
       // A query for somebody else must be ignored outright.
       f.contentWindow.__dataTest.feedDirected({from:'K0OG',to:'OK2XYZ',command:' GRID?'});
       const autoState=f.contentWindow.__dataTest.autoReplyState();
-      // The immediate repeat is caught by the QSO lock, not the restriction
-      // window: two directed frames in a row mean a conversation is running,
-      // and the station stays quiet. The window itself is covered by
-      // protocol/restrictions_smoke.js, which can control time.
+      // The immediate repeat is caught by the restriction window: both questions
+      // ask for the same signal report, so they share one window. The QSO lock no
+      // longer swallows it -- a question addressed to this station by name is our
+      // own conversation, not one to stay out of. The window's own arithmetic is
+      // covered by protocol/restrictions_smoke.js, which can control time.
       checks.autoReplyWiring=bufferedAnswer==='K0OG SNR -12'&&afterRepeat===''&&
         autoState.restrictions.granted===1&&autoState.skipped===2&&
         autoState.lockUntilMs>Date.now();
@@ -1204,6 +1205,123 @@ f.onload=()=>{
       dt.clearTxCaptured();
       d.querySelector('#abortButton').click();
       await new Promise(resolve=>setTimeout(resolve,120));
+
+      // ---- TELEMETRY ----------------------------------------------------
+      // The readings normally come from /trxnet-topics.json; here they are handed
+      // in, because what has to be assertable is the decision the panel makes, not
+      // the fetch that carried the bytes. Values are raw little-endian hex exactly
+      // as TrxNet puts them on the wire.
+      // Handed out with the report so a red telemetry check says WHY in one run.
+      const tlmSection=d.querySelector('[data-section="telemetry"]');
+      const settingsNode=d.querySelector('[data-section="settings"]');
+      // "Above SETTINGS" is the placement the panel was asked for, and it is the
+      // only thing here that a later refactor could silently undo.
+      checks.telemetrySectionAboveSettings=Boolean(tlmSection)&&Boolean(settingsNode)&&
+        (tlmSection.compareDocumentPosition(settingsNode)&Node.DOCUMENT_POSITION_FOLLOWING)!==0;
+
+      const tlmTxBox=d.querySelector('#txSafety');
+      const tlmTxWas=tlmTxBox.checked;
+      // Every flip of the pledge is a chance to leave the encoder part-way through a
+      // frame, and the heartbeat TX check further down is already marginal. So: on
+      // once for the pill assertions, off once for everything else (the evaluate()
+      // checks are pure and do not care), and one restore at the end.
+      // Every wait here is short on purpose. renderTelemetryPanel() paints the pills
+      // synchronously, so none of this has to sit out the 500 ms radio poll -- and the
+      // seconds this block spends are seconds of drift for the heartbeat TX check
+      // further down, which is timing-sensitive enough to flap on them.
+      const tlmSetTx=async want=>{
+        if(tlmTxBox.checked!==want)tlmTxBox.click();
+        await new Promise(resolve=>setTimeout(resolve,60));
+      };
+      const tlmFeed=(tempHex,humAge)=>dt.telemetryFeed({state:'ok',full:false,topics:[
+        {p:'WX.11',t:'/temp',v:tempHex,a:5},
+        {p:'WX.11',t:'/hum',v:'7C15',a:humAge}]});
+      // Radio TX on first: every pill here carries needsTx, so with the pledge off
+      // they all read plain "TLM"/"WX" with no countdown at all -- which is correct
+      // behaviour, and would make the countdown assertions meaningless.
+      await tlmSetTx(true);
+      dt.telemetryConfigure({enabled:true,jobs:[{id:'wx',name:'WX',enabled:true,
+        to:'OK1ABC',periodMin:60,fields:[
+          {peer:'WX.11',topic:'/temp',label:'TEMP',unit:'C',type:'int16',div:100,dec:1},
+          {peer:'WX.11',topic:'/hum',label:'HUM',unit:'%',type:'uint16',div:100,dec:0}]}]});
+      tlmFeed('5608',5);            // 0x0856 = 2134 -> 21.3 C ; 0x157C = 5500 -> 55 %
+      await new Promise(resolve=>setTimeout(resolve,60));
+
+      const tlmNodes=()=>[...d.querySelectorAll('#telemetryFlags .summary-flag')];
+      const tlmKeys=()=>tlmNodes().map(node=>(node.textContent.trim().match(/^[A-Z0-9+]+/)||[''])[0]).join(',');
+      const tlmText=key=>tlmNodes().find(node=>node.textContent.trim().startsWith(key))?.textContent.trim()||'';
+      // Master pill plus one per job, same button contract the SETTINGS row keeps.
+      checks.telemetryPills=tlmKeys()==='TLM,WX'&&
+        tlmNodes().every(node=>node.tagName==='BUTTON'&&node.type==='button'&&
+          node.getAttribute('aria-pressed')===String(node.classList.contains('on')));
+      // "0/01:00" -- sent count, then hh:mm to the next attempt.
+      checks.telemetryCountdown=hhMmTail(tlmText('TLM'))&&hhMmTail(tlmText('WX'))&&
+        tlmText('TLM').indexOf('0/')>0;
+
+      checks.telemetryRendersMessage=dt.telemetryRender('wx').text==='TEMP 21.3C HUM 55%';
+      // A field whose source has gone quiet longer than the job's own period drops
+      // out; the rest of the message still goes.
+      tlmFeed('5608',4000);
+      checks.telemetryStaleFieldDropsOut=dt.telemetryRender('wx').text==='TEMP 21.3C'&&
+        dt.telemetryRender('wx').dropped.length===1;
+      tlmFeed('5608',5);
+
+      // Queueing, with Radio TX off so the drain refuses and the entry stays put --
+      // which is the behaviour worth asserting anyway: telemetry WAITS rather than
+      // being dropped when the transmitter is busy or unavailable.
+      await tlmSetTx(false);
+      const tlmFirst=dt.telemetrySend('wx');
+      const tlmQueued=dt.txQueueState();
+      checks.telemetryQueuesMessage=tlmFirst.send===true&&
+        tlmQueued.items.some(entry=>entry.source==='telemetry'&&entry.to==='OK1ABC'&&
+          entry.text==='TEMP 21.3C HUM 55%');
+      dt.clearTxQueue();
+      // Nothing has been ON THE AIR yet (no completion), so the comparison text is
+      // still empty and the same reading is still worth sending.
+      checks.telemetryUnqueuedStillSendable=dt.telemetryEvaluate('wx').send===true;
+
+      // Radio TX off must stand the whole row down, and a click must lead to the
+      // pledge rather than flipping a switch that could not fire anyway.
+      checks.telemetryTxGate=tlmNodes().length===2&&
+        tlmNodes().every(node=>node.classList.contains('on')===false)&&
+        tlmNodes()[0].getAttribute('aria-disabled')==='true';
+      settingsNode.open=false;
+      tlmNodes()[0].click();
+      await new Promise(resolve=>setTimeout(resolve,80));
+      checks.telemetryPillOpensPledge=settingsNode.open===true&&
+        dt.telemetryJobs().length===1&&revealed('#txSafety');
+
+      // Now pretend it really transmitted, which is the only thing that moves the
+      // counter and the text the next period is compared against. Radio TX stays off
+      // through all of this: these are decisions, not transmissions.
+      dt.telemetryNoteSent('wx','TEMP 21.3C HUM 55%');
+      await new Promise(resolve=>setTimeout(resolve,60));
+      checks.telemetryUnchangedStaysQuiet=dt.telemetryEvaluate('wx').send===false&&
+        dt.telemetryEvaluate('wx').reason==='unchanged';
+      // ...but SEND NOW must still get through, or a new job could never be tried.
+      checks.telemetryForceBeatsUnchanged=dt.telemetryEvaluate('wx',true).send===true;
+      // Jitter under the displayed resolution is not a change: 0x0853 = 2131 = 21.31,
+      // which still reads 21.3 at one decimal.
+      tlmFeed('5308',5);
+      checks.telemetryJitterStaysQuiet=dt.telemetryEvaluate('wx').send===false;
+      // A real change is.
+      tlmFeed('6708',5);            // 0x0867 = 2151 -> 21.5 C
+      checks.telemetryRealChangeSends=dt.telemetryEvaluate('wx').send===true;
+      checks.telemetryCounted=dt.telemetryState().sent===1;
+      self.__telemetryDebug={keys:tlmKeys(),tlm:tlmText('TLM'),wx:tlmText('WX'),
+        jobs:dt.telemetryJobs().length,state:dt.telemetryState(),
+        first:tlmFirst,queued:tlmQueued.items.map(item=>item.source)};
+
+      // Leave nothing armed behind. Same hygiene the block above keeps, and for a
+      // sharper reason: this one toggles the TX pledge four times, and an encoder
+      // left part-way through a frame makes the heartbeat TX check further down
+      // miss its slot -- which is exactly how heartbeatTx was seen to flap here.
+      dt.telemetryConfigure({enabled:false,jobs:[]});
+      await tlmSetTx(tlmTxWas);
+      dt.clearTxQueue();
+      dt.clearTxCaptured();
+      d.querySelector('#abortButton').click();
+      await new Promise(resolve=>setTimeout(resolve,150));
 
       // Multi-frame reassembly: a fully assembled, checksum-verified MSG message
       // must be stored; a checksum-failed one must be dropped. This is the real
@@ -1829,6 +1947,31 @@ f.onload=()=>{
       f.contentWindow.__dataTest.resetAutoReplyLock();
       f.contentWindow.__dataTest.feedDirected({from:'OK6GRP',to:'@NOTMINE',command:' SNR?'});
       const strangerGroup=composerG.value;
+      // The QSO lock guards OTHER people's conversations. A question addressed to this
+      // station BY NAME is not one of those: OH3SPN asking @ALLCALL something and then
+      // asking us for a report half a minute later used to get silence, because the
+      // first frame armed the lock -- and since every arriving frame re-arms it, a
+      // station that retried inside the minute was never answered at all.
+      composerG.value='';
+      f.contentWindow.__dataTest.resetAutoReplyLock();
+      f.contentWindow.__dataTest.feedDirected({from:'OK8LOCK',to:'@ALLCALL',command:' QUERY CALL'});
+      f.contentWindow.__dataTest.feedDirected({from:'OK8LOCK',to:'OK1HRA',command:' SNR?'});
+      const lockedDirect=composerG.value;
+      // A GROUP query still waits for the band to go quiet -- and the row it arrived on
+      // now says why nothing went out, instead of leaving the operator to guess.
+      const lockSlot=Date.now();
+      composerG.value='';
+      f.contentWindow.__dataTest.setActivity({calls:[],frames:[],messages:[{
+        directed:{from:'OK9LOCK',to:'@NET',command:' SNR?'},text:'OK9LOCK: @NET SNR?',payload:'',
+        submode:0,offsetHz:1500,snr:-9,firstSlotUtcMs:lockSlot,lastSlotUtcMs:lockSlot,
+        raw:['noreplyrow'],kinds:['directed'],callsigns:['OK9LOCK'],complete:true,
+        incomplete:false,checksumOk:true}]});
+      f.contentWindow.__dataTest.feedDirected({from:'OK9LOCK',to:'@NET',command:' SNR?'});
+      const lockedGroup=composerG.value;
+      const noReplyRow=[...d.querySelectorAll('#traffic .noreply-badge')]
+        .some(node=>node.textContent.includes('60 s QSO lock'));
+      checks.directQuestionBeatsQsoLock=lockedDirect==='OK8LOCK SNR +00'&&lockedGroup==='';
+      checks.noReplyReasonOnRow=noReplyRow;
       // Since stage 2 a custom name joins like any other and is marked as the two-frame
       // target it is, so the extra air time is visible where the choice is made.
       addGroup('@ARESGA');
@@ -2988,7 +3131,7 @@ f.onload=()=>{
                     !d.querySelector('#startupRetry').hidden&&
                     d.querySelector('#modemState').className.includes('error');
                   const pass=Object.values(checks).every(Boolean);
-                  fetch('/result',{method:'POST',body:JSON.stringify({pass,text:'DATA BROWSER '+(pass?'PASS ':'FAIL ')+JSON.stringify(checks)+' station='+JSON.stringify(stationObserved)+' sort='+JSON.stringify({sortAscObserved,sortDescObserved})+' gate='+gate+' tx='+d.querySelector('#txSummary').textContent+' modem='+d.querySelector('#modemState').textContent+' diag='+diag})});
+                  fetch('/result',{method:'POST',body:JSON.stringify({pass,text:'DATA BROWSER '+(pass?'PASS ':'FAIL ')+JSON.stringify(checks)+' station='+JSON.stringify(stationObserved)+' sort='+JSON.stringify({sortAscObserved,sortDescObserved})+' gate='+gate+' tx='+d.querySelector('#txSummary').textContent+' modem='+d.querySelector('#modemState').textContent+' tlm='+JSON.stringify(self.__telemetryDebug||null)+' diag='+diag})});
                 }
               },100);
             }

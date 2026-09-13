@@ -11,6 +11,115 @@ published.
 
 ## Working tree — not committed
 
+**TELEMETRY: readings from the station's own TrxNet devices, beaconed over JS8.**
+
+* **New section above SETTINGS on `/data`.** A job says what to send, to whom, how
+  often, and how each value should read; several can run at once. Its header carries
+  `TLM` for the whole function plus one pill per job, each reading messages sent and
+  time to the next attempt (`TLM · 4/00:32`). Period floor is 60 minutes per job, with
+  a two-minute floor between any two telemetry messages so jobs falling due together
+  do not key back to back.
+* **Two rules decide whether anything is transmitted.** A message that would read
+  exactly like the last one is not sent — the comparison is on the *finished text*,
+  not the raw numbers, so a thermometer wobbling 21.34 → 21.31 under a one-decimal
+  display says nothing new and costs no air time. And a reading whose source has been
+  quiet longer than the job's own period drops out of the message instead of
+  travelling frozen; when every reading is stale, nothing goes at all.
+* **`TrxNet` 1.06 → 1.07: `onAnyTopic()`.** The feature needed a list of what the
+  network publishes, and there was none to have: `subscribe()` is a purely local
+  callback table, dispatch is an exact `strcmp` with no wildcards, and wifilt had
+  nine of sixteen slots spoken for. But `publish()` unicasts a copy to *every* active
+  peer — so the interface already received the whole network's traffic and the local
+  dispatch was simply where it was thrown away. The new catch-all observer taps the
+  packet path ahead of that and costs no subscribe slot. Additive, wire format
+  untouched.
+* **`wifilt.ino`: a 48-entry `(peer, topic) → value` table and `GET /trxnet-topics.json`.**
+  Values go out as raw hex in wire order; the browser owns the decoding, because
+  deciding that `/temp` is hundredths of a degree is a display question and a
+  home-built board may disagree. Set-points (`/s-*`) are filtered out — by
+  INTEGRATION.md §6 those are an order aimed at another device, not a reading this
+  station owns — and payloads over 8 bytes are dropped. Its own endpoint, not fields
+  on `/state`, which is a fixed 1536-byte buffer that truncates silently.
+* **`JS8_CONFIG_MAX_BYTES` 4096 → 8192.** Six jobs of eight fields add roughly 5 kB of
+  definitions to the shared profile. Oversize is refused with a 409 and
+  `station-profile.js` posts fire-and-forget, so a ceiling the panel could reach is a
+  configuration that stops being shared between browsers without saying so. The panel
+  also shows how much of the budget it occupies.
+* **`data/trxnet-peers.js`: the device list is now one module.** It had been copied by
+  hand into `setup.html` and `rtty.js`, with the CSS copied alongside both times;
+  TELEMETRY would have been the third. Both callers now use it, and it gained a
+  `selected`/`onPick` mode for picking a whole device rather than filling a NET_ID.
+* **Fixed while testing: `revealSetting()` could strip the highlight it had just put
+  back.** Revealing the same row twice within two seconds left the first reveal's
+  timer running, so a blocked pill pressed twice answered the second press with
+  nothing visible. The timer is now cancelled and restarted. It deliberately stays on
+  wall time rather than moving to `js8-scheduler`, whose clock is swapped to media
+  time once audio is running — protocol timing wants that clock, a two-second
+  highlight does not.
+* **Tests.** New `tools/js8-telemetry-smoke.js` (32 checks: decoding, the `°`-is-not-in-
+  JS8 trap, staleness, the unchanged rule, the schedule, surviving a reload) and
+  `tools/trxnet-fake-peer.js`, a pretend device for exercising the source tree without
+  hardware. Fourteen new checks in `tools/data-browser-smoke.js`; two more in
+  `tools/js8-txqueue-smoke.js` for the new `telemetry` queue source (priority 5, below
+  the heartbeat — telemetry never keys ahead of a reply somebody is waiting for).
+* **`onTrxAnyTopic()` is defined low in `wifilt.ino` with a hand-written forward
+  declaration, and both halves of that are load-bearing.** Put the definition early
+  (it started beside the table it fills) and the ESP32 build dies on `SHA1_CTX was not
+  declared in this scope` at lines nothing touched: arduino-builder runs ctags over the
+  *preprocessed* sketch and inserts its generated prototypes before the first function
+  definition surviving there, which dragged them above `typedef mbedtls_sha1_context
+  SHA1_CTX`. Put it low without the declaration and the *native* build dies instead —
+  it compiles the `.ino` as plain C++ and generates no prototypes, so `setup()` cannot
+  see a definition two thousand lines below it. `make -C native` is green either way for
+  the first failure, so firmware work needs `tools/export-compiled-binary.sh` before it
+  counts as building.
+* **Verified against the native build** with a fake peer: topics nothing is subscribed
+  to reach the table and the endpoint, `/s-*` is filtered, an oversized payload is
+  dropped. **Not yet verified on a radio.**
+
+
+**JS8 answered a station's `QUERY CALL` and then ignored its `SNR?` thirty seconds later — the 60 s QSO lock was swallowing questions addressed to this station.**
+
+* **`data/js8-autoreply.js`.** Seen on the air: `OH3SPN: @ALLCALL QUERY CALL F4JWP/P`
+  was answered (`OK1HRA: OH3SPN YES -02 (30S)`), and the `OH3SPN: OK1HRA SNR?` that
+  followed got nothing. Two engines, one of which knew about the lock: `QUERY CALL`
+  is dispatched from the assembled message into `js8-inbox.js`, which never consults
+  it, while `SNR?` goes through the auto-reply engine, which does. The asker's own
+  previous frame had armed the lock — `handleDirectedFrame()` arms it on **every**
+  directed frame decoded, including traffic to `@ALLCALL` this station never answers
+  anyway — so the question arrived 30 s into a 60 s refusal.
+
+* **Worse than one lost answer:** arming happens after the decision, on skipped
+  frames too, so a station asking again inside the minute pushed the lock out by
+  another minute each time. A normal JS8 retry cadence silenced the answer for good.
+
+* **The fix is what the lock is actually for.** It keeps this station out of
+  conversations that are not its own; a frame addressed to us *by callsign* is not
+  one of those — it is our conversation, and somebody is waiting for the answer. Those
+  now pass the lock. Group queries still wait behind it: those are the ones every
+  member would answer into the same slot. Repeats remain the restriction engine's job
+  (`js8-restrictions.js`), which is the layer built for them — an immediate repeat is
+  still refused, now with `window` instead of `qso-lock`.
+
+* **`data/data.js`, `data/data.css` — the row now says why nothing went out.** A
+  refusal nobody can see is indistinguishable from a station that never considered
+  answering, which is exactly the question this feed gets asked. Every engine that
+  decides not to answer stamps its reason on the reception (`noteNoReply()`, matched
+  to the row by its directed header), and the traffic row carries it beside the text:
+  `NO REPLY · 60 s QSO lock — conversation in progress, 30 s left`. Also fed by the
+  restriction window and bans, a missing GRID/INFO/STATUS, a blocked DXCC, `AUTO` off
+  (which says where the answer went), TX not enabled, and every `js8-inbox.js` refusal
+  — `QUERY CALL requires AUTO`, "the station asked about was not heard here", the
+  inbox quotas. Deliberately silent for receptions that were never ours to answer:
+  somebody else's traffic, `@ALLCALL`, and ordinary typed messages, which have no
+  automatic answer by design and would otherwise badge every chat line.
+
+* Regression: `protocol/autoreply_smoke` **PASS** (the lock case rewritten around a
+  group query, plus a new case reproducing the on-air sequence: an `@ALLCALL` frame
+  arms the lock, the direct `SNR?` 30 s later is answered, the immediate repeat is
+  refused by the window). `data-browser-smoke` gains `directQuestionBeatsQsoLock` and
+  `noReplyReasonOnRow`, both green; the six known reds are unchanged.
+
 **QRPLog with the DX cluster open lost GPS and the firmware version again — the fix had been written and then never reached the tree.**
 
 * **`data/log.css`, `data/log-dxc-split.js`.** The second time this was reported.

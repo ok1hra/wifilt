@@ -1247,71 +1247,6 @@
     } catch (_error) { /* transient network failure -- the field just did not take */ }
   }
 
-  // Trimmed, single-target copy of setup.html's own mountTrxnetPeerList()
-  // (that file's own comment: "FSK output device: one target, no
-  // ambiguity" -- no lastFocused-of-three tracking needed here, unlike its
-  // TRX1/2/3 NET_ID picker). Kept as its own small copy rather than a shared
-  // module, matching this codebase's usual convention for page-local widgets
-  // (see rtty.js's own file-header note on calibration/plan files).
-  function mountFskPeerList() {
-    const section = dom.rttySettingsSection, body = dom.rttyTrxnetPeersFsk;
-    if (!section || !body) return;
-    let timer = null;
-
-    const fmtAge = s => {
-      s = Math.max(0, s | 0);
-      if (s < 60) return `${s} s`;
-      if (s < 3600) return `${(s / 60) | 0} m`;
-      return `${(s / 3600) | 0} h`;
-    };
-    const esc = t => String(t).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
-    const note = text => { body.innerHTML = `<span class="trxnet-peers-empty">${esc(text)}</span>`; };
-    // Every device names itself "<prefix>.<2-hex-digit NET_ID>" (trxDeviceName's
-    // own convention, wifilt.ino) -- the trailing pair is the id to fill.
-    const netIdFromName = name => {
-      const m = /\.([0-9a-fA-F]{2})$/.exec(String(name || ""));
-      return m ? m[1].toUpperCase() : null;
-    };
-    const row = (name, ip, age, cls, badge) => {
-      const netId = netIdFromName(name);
-      const clickable = netId && cls !== "trxnet-peer-self";
-      const tag = clickable ? "button" : "div";
-      const attrs = clickable
-        ? ` type="button" class="trxnet-peer trxnet-peer-pick ${cls}" data-netid="${netId}" title="Fill ${netId}"`
-        : ` class="trxnet-peer ${cls}"`;
-      return `<${tag}${attrs}><span class="trxnet-peer-name">${esc(name)}${badge || ""}</span>` +
-        `<span class="trxnet-peer-ip">${esc(ip)}</span><span class="trxnet-peer-age">${esc(age)}</span></${tag}>`;
-    };
-    const render = d => {
-      if (d.state === "handoff") { note("TrxNet starts on the next restart — the hotspot is still running"); return; }
-      if (d.state === "ap") { note("TrxNet not active in AP mode"); return; }
-      if (d.state === "disabled") { note("TrxNet disabled"); return; }
-      const peers = (d.peers || []).slice().sort((a, b) => {
-        if (Boolean(b.prio) !== Boolean(a.prio)) return b.prio - a.prio;
-        return String(a.name).localeCompare(String(b.name));
-      });
-      let html = d.self ? row(d.self, "this device", "", "trxnet-peer-self", "") : "";
-      html += peers.length
-        ? peers.map(p => row(p.name, p.ip, fmtAge(p.age), p.prio ? "trxnet-peer-prio" : "",
-            p.prio ? ' <span class="trxnet-prio-badge">PRIO</span>' : "")).join("")
-        : '<span class="trxnet-peers-empty">No devices heard yet</span>';
-      body.innerHTML = html;
-    };
-    const poll = () => fetch("/trxnet-peers.json", {cache: "no-store"})
-      .then(r => r.json()).then(render).catch(() => note("Device list unavailable"));
-    const start = () => { if (timer) return; poll(); timer = setInterval(poll, 3000); };
-    const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
-    section.addEventListener("toggle", () => { if (section.open) start(); else stop(); });
-    if (section.open) start();
-
-    body.addEventListener("click", event => {
-      const button = event.target.closest(".trxnet-peer-pick");
-      if (!button) return;
-      dom.rttyFskNetId.value = button.dataset.netid;
-      saveFskOutput();
-    });
-  }
-
   // ---- boot -------------------------------------------------------------
 
   function wire() {
@@ -1513,7 +1448,10 @@
     // fetch rather than with rtty-settings.js's own localStorage load above
     // -- same one-time-at-boot convention log.js's own /log-config read uses.
     loadFskConfig();
-    mountFskPeerList();
+    // FSK output device: one target, no ambiguity -- the shared picker fills the
+    // NET_ID field and the 'change' it dispatches is what saves it.
+    TrxnetPeers.mount(dom.rttySettingsSection, dom.rttyTrxnetPeersFsk,
+      () => dom.rttyFskNetId);
 
     // The station-wide plan is shared with JS8Call-ICOM/WSPR-Beacon through
     // /txgain-plan.json; their single-tone knees remain in /txgain.json.

@@ -794,6 +794,13 @@ button { color: inherit; cursor: pointer; }
 .message-receiving .rx-state { color: var(--cyan); }
 /* ♢ = the end of the message was confirmed, the same meaning as on a TX row. */
 .rx-eot { margin-left: 5px; color: var(--muted); }
+/* Why nothing was transmitted in answer. Muted and dashed, deliberately quieter than the
+   amber TO YOU badge in the same row: this is an explanation, not something to act on --
+   and it has to be readable without hovering, because the question it answers ("why did
+   it not reply to THAT one?") is asked while looking at the feed. */
+.noreply-badge { display:inline-block; margin-left:6px; padding:0 5px; border:1px dashed var(--muted);
+  border-radius:3px; color:var(--muted); font:700 9px/1.6 ui-monospace,monospace;
+  letter-spacing:.06em; vertical-align:1px; cursor:help; }
 /* A reception in progress gets a cursor, not a colour: it reads as "more is coming"
    without knowing what any palette means. */
 .message-receiving .message-text::after { content: "▌"; margin-left: 1px; color: var(--cyan);
@@ -1162,3 +1169,320 @@ label > .cal-resolved, label > .cal-hint { grid-column: 1 / -1; width: 100%; }
   background:#352311;color:#ffd49a;font:inherit;font-size:11px;font-weight:850;cursor:pointer}
 .settings-promote button:hover:not(:disabled){border-color:#e0a020;color:#fff}
 .settings-promote button:disabled{opacity:.5;cursor:default}
+
+/* ---- TELEMETRY -------------------------------------------------------------
+   Periodic TrxNet readings beaconed over JS8. The device-list rules below are
+   the same ones SETUP and the RTTY page use -- one shared trxnet-peers.js draws
+   all three, and the three stylesheets carry a copy each because the pages do
+   not share a stylesheet. Only .trxnet-peer-on is new: SETUP fills a field and
+   forgets, this panel keeps the chosen device marked. */
+
+.trxnet-devices {
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0f1312;
+  overflow: hidden;
+}
+.trxnet-devices-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+.trxnet-devices-live {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 6px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+.trxnet-peers-body {
+  padding: 4px 0;
+}
+.trxnet-peers-empty {
+  display: block;
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.trxnet-peer {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 6px 12px;
+  font-size: 13px;
+  border-left: 3px solid transparent;
+}
+.trxnet-peer + .trxnet-peer {
+  border-top: 1px solid rgba(59, 69, 65, 0.5);
+}
+.trxnet-peer-name {
+  font-family: monospace;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.trxnet-peer-ip {
+  font-family: monospace;
+  color: var(--muted);
+}
+.trxnet-peer-age {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 40px;
+  text-align: right;
+}
+.trxnet-peer-prio {
+  border-left-color: var(--accent);
+}
+.trxnet-peer-prio .trxnet-peer-name {
+  color: var(--accent);
+}
+.trxnet-prio-badge {
+  font-size: 10px;
+  font-family: inherit;
+  letter-spacing: 0.06em;
+  padding: 1px 6px;
+  border-radius: 6px;
+  color: #eaf6ee;
+  background: rgba(0, 136, 0, 0.35);
+  border: 1px solid #507163;
+}
+.trxnet-peer-self {
+  border-left-color: var(--muted);
+  background: rgba(255, 255, 255, 0.03);
+}
+.trxnet-peer-self .trxnet-peer-ip {
+  font-style: italic;
+}
+/* A clickable peer row (grilled 2026-08-28: click-to-fill a NET_ID field
+   instead of hand-typing only) is a <button>, not the plain <div> every
+   other row is -- reset its button chrome back to matching the row look,
+   then add the affordance a plain row never needed. */
+.trxnet-peer-pick {
+  width: 100%;
+  border: none;
+  border-left: 3px solid transparent;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.trxnet-peer-pick:hover,
+.trxnet-peer-pick:focus-visible {
+  background: rgba(255, 255, 255, 0.06);
+}
+.trxnet-peer-pick.trxnet-peer-prio {
+  border-left-color: var(--accent);
+}
+
+/* The picked device stays marked, because everything below the list is about
+   that one device and a list with no current row leaves the topics unexplained. */
+.trxnet-peer-on {
+  background: rgba(0, 136, 0, 0.18);
+  border-left-color: var(--accent);
+}
+.trxnet-peer-on .trxnet-peer-name {
+  color: var(--accent);
+}
+
+.telemetry { display: flex; flex-direction: column; gap: 10px; }
+.telemetry-note, .telemetry-hint, .telemetry-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.telemetry-budget {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.telemetry-budget.warn { color: #f0b429; }
+
+.telemetry-jobs { display: flex; flex-direction: column; gap: 6px; }
+.telemetry-job {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0f1312;
+  overflow: hidden;
+}
+.telemetry-job.open { border-color: var(--accent); }
+.telemetry-job-head { display: flex; align-items: stretch; }
+/* The per-job switch is a real button rather than a checkbox: it is the same
+   gesture as the pill in the header, and the two must not look like different
+   kinds of control for the same thing. */
+.tlm-enable {
+  flex: 0 0 auto;
+  width: 48px;
+  border: none;
+  border-right: 1px solid var(--line);
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+.tlm-enable.on { color: #eaf6ee; background: rgba(0, 136, 0, 0.35); }
+.tlm-open {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: auto 1fr auto auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 12px;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.tlm-open:hover, .tlm-open:focus-visible { background: rgba(255, 255, 255, 0.06); }
+.telemetry-job-name { font-family: monospace; color: var(--text); }
+.telemetry-job-to, .telemetry-job-period, .telemetry-job-count {
+  color: var(--muted);
+  font-size: 12px;
+}
+.telemetry-job-due {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 44px;
+  text-align: right;
+}
+
+.telemetry-editor {
+  border-top: 1px solid var(--line);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.telemetry-editor-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.telemetry-editor-grid label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.telemetry-editor-grid input { width: 120px; }
+
+.telemetry-fields { width: 100%; border-collapse: collapse; font-size: 12px; }
+.telemetry-fields th {
+  text-align: left;
+  color: var(--muted);
+  font-weight: 400;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.telemetry-fields td { padding: 3px 6px; vertical-align: middle; }
+.telemetry-fields input { width: 72px; }
+.telemetry-fields select { font-size: 12px; }
+.telemetry-fields input.invalid { border-color: #e05252; }
+.tlm-topic { font-family: monospace; color: var(--muted); white-space: nowrap; }
+.tlm-topic span { color: var(--text); }
+/* The live reading next to the type and divisor that produced it. This column is
+   the whole reason a custom board can be used at all: a wrong type shows up here
+   as an absurd number before it ever reaches the air. */
+.tlm-preview { font-variant-numeric: tabular-nums; color: var(--accent); white-space: nowrap; }
+.tlm-order { white-space: nowrap; }
+.tlm-order button {
+  border: 1px solid var(--line);
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  padding: 0 5px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.tlm-order button:disabled { opacity: 0.35; cursor: default; }
+
+.telemetry-dropped { margin: 0; font-size: 12px; color: #f0b429; }
+.telemetry-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.telemetry-preview-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.telemetry-preview-text { font-family: monospace; color: var(--text); word-break: break-word; }
+.telemetry-preview-cost { font-size: 12px; color: var(--muted); }
+.telemetry-editor-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.telemetry-note-line { font-size: 12px; color: var(--muted); }
+.telemetry-actions { display: flex; gap: 8px; }
+
+.telemetry-sources { margin-top: 4px; }
+.telemetry-sources > summary {
+  cursor: pointer;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 4px 0;
+}
+.telemetry-tree { margin-top: 10px; }
+.telemetry-tree-note { margin: 0; font-size: 12px; color: var(--muted); }
+.telemetry-tree-note.warn { color: #f0b429; }
+.telemetry-tree-head {
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--accent);
+  padding: 4px 0;
+}
+.telemetry-topics { display: flex; flex-direction: column; }
+.telemetry-topic {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 5px 8px;
+  border: none;
+  border-top: 1px solid rgba(59, 69, 65, 0.5);
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.telemetry-topic:hover:not(:disabled), .telemetry-topic:focus-visible {
+  background: rgba(255, 255, 255, 0.06);
+}
+.telemetry-topic:disabled { opacity: 0.45; cursor: default; }
+.telemetry-topic-name { font-family: monospace; color: var(--text); }
+.telemetry-topic-value { font-variant-numeric: tabular-nums; color: var(--accent); }
+.telemetry-topic-age { color: var(--muted); font-variant-numeric: tabular-nums; }
+.telemetry-topic-unknown { font-size: 10px; color: #f0b429; }
+
+/* The "+2 more" tail of the pill row: it is a pill so the row reads evenly, but
+   it switches nothing, so it must not offer the hover a switch does. */
+.summary-flag-mute { cursor: default; opacity: 0.6; }
+
+@media (max-width: 640px) {
+  .tlm-open { grid-template-columns: 1fr auto; row-gap: 2px; }
+  .telemetry-editor-grid input { width: 100%; }
+}

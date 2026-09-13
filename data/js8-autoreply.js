@@ -42,7 +42,9 @@
 
   const QSO_LOCK_MS = 60000;      // upstream: no auto replies while a directed
                                   // message is still arriving, or for a minute
-                                  // after its last frame
+                                  // after its last frame. It guards OTHER people's
+                                  // conversations -- a question addressed to this
+                                  // station by callsign is exempt, see handle()
   const HEARING_MAX = 4;          // keep the answer inside one frame
 
   function formatSnr(snr) {
@@ -140,8 +142,18 @@
       if (frame.complete === false)
         return this._skip("incomplete", `${command} still arriving`);
 
+      // The lock keeps this station out of conversations that are not its own. A
+      // question addressed to us BY CALLSIGN is not one of those: it IS our
+      // conversation, and the station that asked is sitting there waiting. Holding
+      // those back meant ANY directed frame -- including the asker's own previous
+      // one, and including traffic to @ALLCALL we never answer anyway -- silenced
+      // the next minute of questions put to us directly; and since every arriving
+      // frame re-arms the lock, a station that retried inside that minute was never
+      // answered at all. Repeats are the restriction engine's job, not the lock's.
+      // Group queries stay behind it: those are the ones every member would answer
+      // into the same slot, which is exactly what the lock is for.
       const lockMs = this.qsoLockRemainingMs(nowMs);
-      if (lockMs > 0 && frame.armsLock !== false)
+      if (lockMs > 0 && to !== myCall && frame.armsLock !== false)
         return this._skip("qso-lock", `conversation in progress, ${Math.ceil(lockMs / 1000)} s left`);
 
       // Build the answer before spending the restriction budget, so a refusal

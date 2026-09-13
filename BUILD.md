@@ -460,7 +460,8 @@ There are around forty more in `tools/`, covering the same ground the pages do:
 
 | Area | Harnesses |
 |---|---|
-| JS8 | `js8-aprs-`, `js8-data-frames-`, `js8-email-`, `js8-file-transfer-`, `js8-groups-`, `js8-modem-failure-`, `js8-session-browser-`, `js8-settings-`, `js8-txqueue-` |
+| JS8 | `js8-aprs-`, `js8-data-frames-`, `js8-email-`, `js8-file-transfer-`, `js8-groups-`, `js8-modem-failure-`, `js8-session-browser-`, `js8-settings-`, `js8-telemetry-`, `js8-txqueue-` |
+| TrxNet | `trxnet-fake-peer.js` — a pretend device that announces itself and publishes drifting topics, so the TELEMETRY source tree can be exercised without a real weather head. Use `--target HOST:PORT` rather than the broadcast default: it aims at one instance, keeps the test off the real network, and is the only way two nodes can share a host (both want the same well-known UDP port) |
 | WSPR | `wspr-audio-`, `wspr-browser-`, `wspr-encoder-`, `wspr-log-`, `wspr-schedule-`, `wspr-settings-`, `wspr-tx-pacing-` |
 | TX gain | `tx-gain-cal-`, `tx-gain-mod-level-`, `tx-gain-plan-`, `txgain-store-` |
 | Setup and identity | `setup-radio-contract-`, `setup-spine-`, `station-identity-`, `station-profile-`, `check-identity-consistency.sh` |

@@ -19,7 +19,11 @@
   if (typeof module === "object" && module.exports) module.exports = value;
   else root.Js8TxQueue = value;
 })(typeof globalThis !== "undefined" ? globalThis : self, function () {
-  const PRIORITY = {operator: 1, relay: 2, inbox: 2, msgbox: 2, autoreply: 3, heartbeat: 4};
+  // Telemetry sits BELOW the heartbeat on purpose. Everything above it is either the
+  // operator talking or this station answering a question somebody asked; an hourly
+  // beacon of sensor readings must never key ahead of any of that.
+  const PRIORITY = {operator: 1, relay: 2, inbox: 2, msgbox: 2, autoreply: 3,
+    heartbeat: 4, telemetry: 5};
 
   // How long an entry stays worth sending. `null` = never expires.
   //
@@ -29,7 +33,11 @@
   // at nobody. Four slot periods is the opportunity; the MSG BOX owns the retry.
   const TTL_MS = {operator: null, relay: 30 * 60000, inbox: 30 * 60000,
     msgbox: null /* computed from the submode period, like autoreply */,
-    autoreply: null /* computed from the submode period */, heartbeat: 0};
+    autoreply: null /* computed from the submode period */, heartbeat: 0,
+    // Ten minutes, then the reading it carries is stale enough that waiting for the
+    // next period's message is the better answer. Unlike the heartbeat, telemetry
+    // IS allowed to queue: it is a single message that can afford to wait out a QSO.
+    telemetry: 10 * 60000};
 
   // JS8 slot periods per submode, used to express the auto-reply TTL as
   // "two periods" rather than a wall-clock guess.
