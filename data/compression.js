@@ -834,6 +834,15 @@
       const bar = el("div", { style: "height:4px;background:#0003;border-radius:2px;overflow:hidden;margin:.5em 0;display:none;" });
       const fill = el("div", { style: "height:100%;width:0;background:#4a90d9;transition:width .1s;" });
       bar.append(fill);
+      // A passphrase nobody remembers is, by construction, a locked door with no
+      // key cut for it: openVault() has nothing to fall back on. The only way
+      // back to a usable keyring is to throw the old one away, so the offer to do
+      // that appears the moment a passphrase is refused -- the delete itself sits
+      // behind the day code, so there is nothing to gain by making the operator
+      // fail three times first.
+      const forgot = returning ? el("button", {
+        type: "button", style: BTN_SMALL + "margin-top:.6em;display:none;", onclick: openResetDialog,
+      }, "Forgot passphrase?") : null;
       const go = el("button", {
         type: "button", style: BTN_PRIMARY, onclick: async () => {
           const value = input.value;
@@ -844,7 +853,11 @@
           }
           go.disabled = true; bar.style.display = "block"; note(returning ? "Opening profile…" : "Creating profile…");
           try { await unlock(value, f => { fill.style.width = Math.round(f * 100) + "%"; }); }
-          catch (e) { note("Could not open: " + e.message); go.disabled = false; return; }
+          catch (e) {
+            note("Could not open: " + e.message); go.disabled = false;
+            if (forgot) forgot.style.display = "inline-block";
+            return;
+          }
           input.value = ""; if (confirm) confirm.value = "";
         }
       }, returning ? "Unlock" : "Create");
@@ -854,9 +867,63 @@
         returning
           ? "Unlock the keys held in this browser."
           : "Create a passphrase for this browser's keyring. It is never sent anywhere and cannot be recovered — remember it and keep a backup (Export).");
-      const kids = [intro, input, confirm, bar, go].filter(Boolean);
+      const kids = [intro, input, confirm, bar, go, forgot].filter(Boolean);
       for (const kid of kids) body.append(kid);
       input.focus();
+    }
+
+    // Deleting the keyring is guarded by the day code that revealed this panel in
+    // the first place, not by the passphrase (which is the thing that is gone):
+    // whoever got this far already typed it once, so it costs the operator one
+    // deliberate act, while a stray click on a page someone left open cannot wipe
+    // the keys on its own.
+    function openResetDialog() {
+      if (document.getElementById("__cmp_reset")) return;
+      const backdrop = el("div", { id: "__cmp_reset", style: BACKDROP });
+      const card = el("div", { style: CARD });
+      const code = el("input", {
+        type: "text", inputmode: "numeric", maxlength: "4",
+        placeholder: "Today's code", style: FIELD, autocomplete: "off",
+      });
+      const problem = el("div", { style: "font-size:.8em;min-height:1.2em;color:#e0b050;" });
+      card.append(
+        el("h3", { text: "Start a new keyring", style: "margin:0 0 .5em;font-size:1.05em;" }),
+        el("p", { style: "margin:.3em 0;font-size:.9em;line-height:1.4;" },
+          "The passphrase cannot be recovered. Deleting the keyring held in this browser is the only way past it, and every key in it is lost for good — the stations you share them with will no longer read you."),
+        el("p", { style: "margin:.3em 0;font-size:.9em;line-height:1.4;" },
+          "An exported copy still opens with the passphrase it was sealed under: cancel and use Import instead if you kept one."),
+        el("p", { style: "margin:.7em 0 0;font-size:.9em;" }, "Type today's code to confirm:"),
+        code, problem,
+      );
+      const del = el("button", {
+        type: "button", style: BTN_DANGER, onclick: () => {
+          if (code.value.replace(/[^0-9]/g, "") !== dayCode()) {
+            problem.textContent = "That is not today's code.";
+            code.value = ""; code.focus();
+            return;
+          }
+          backdrop.remove();
+          resetVault();
+        }
+      }, "DELETE KEYRING");
+      const row = el("div", { style: "display:flex;gap:.6em;margin-top:1em;justify-content:flex-end;" },
+        el("button", { type: "button", style: BTN, onclick: () => { backdrop.remove(); } }, "CANCEL"), del);
+      code.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); del.click(); } });
+      card.append(row);
+      backdrop.append(card);
+      document.body.append(backdrop);
+      code.focus();
+    }
+
+    // Drop the stored image and every derived scrap of it, then fall back into
+    // the same panel: hasVault() now reads false, so renderUnlock() comes up as
+    // the CREATE form and the operator can go straight on.
+    function resetVault() {
+      try { localStorage.removeItem(STORE_KEY); } catch (_e) { /* storage may be denied */ }
+      runtime.profiles = null; runtime.master = null; runtime.salt = null;
+      runtime.iters = STORE_ITERS;
+      renderUnlock();
+      note("Keyring deleted. Create a new passphrase.");
     }
 
     async function unlock(passphrase, onProgress) {
@@ -1276,6 +1343,7 @@
   const PANEL_STATUS_OFF = "display:block;margin:0 0 .6em;padding:.4em .6em;border-radius:5px;font-size:.85em;background:#8881;color:inherit;opacity:.85;";
   const BTN = "padding:.45em .9em;border:1px solid #8886;border-radius:5px;background:#8881;color:inherit;cursor:pointer;";
   const BTN_PRIMARY = BTN + "background:#4a90d9;border-color:#4a90d9;color:#fff;";
+  const BTN_DANGER = BTN + "background:#a33;border-color:#a33;color:#fff;";
   const BTN_SMALL = "padding:.2em .5em;border:1px solid #8886;border-radius:4px;background:#8881;color:inherit;cursor:pointer;font-size:.8em;";
   const FIELD = "display:block;width:100%;box-sizing:border-box;margin:.25em 0;padding:.5em;border:1px solid #8886;border-radius:5px;background:#0002;color:inherit;";
 

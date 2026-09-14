@@ -1,14 +1,13 @@
 name: build
 
-# One source, four targets. The point of running all of them on every commit is
-# that the shared sources rot the moment one target stops being compiled: an
-# ESP-only API slips into wifilt.ino and the PC build breaks silently, or a
-# POSIX-ism lands and Windows breaks. Neither is noticed by anyone until much
-# later, which is exactly the divergence the port exists to avoid.
+# One source, four targets. The point of running all of them is that the
+# shared sources rot the moment one target stops being compiled: an ESP-only
+# API slips into wifilt.ino and the PC build breaks silently, or a POSIX-ism
+# lands and Windows breaks. Runs on release tags and on demand rather than
+# every commit to main, since there is no PR flow here to gate on.
 
 on:
   push:
-    branches: [main]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
