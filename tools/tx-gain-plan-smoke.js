@@ -379,6 +379,109 @@ check("percent columns are whole, sorted, deduplicated and capped at four",
     log.some(step => step.type === "measure" && !step.survey));
 }
 
+// ---- unmeasured bands go first ---------------------------------------------
+//
+// The order is an ordering, never a filter: every selected cell and every band is
+// still visited, because the survey that picks the station's MOD level has to rank
+// all of them. What changes is which end of the table the run starts at.
+
+{
+  // 160 m and 40 m are calibrated at today's MOD level; 20 m is the "measure" row.
+  // MOD 84 is the level this fixture's worst band already wants at 14 %, so nothing
+  // is written and the matrix keeps the entries it was handed.
+  const plan = Plan.normalizePlan({powers: [1, 14],
+    rows: [{band: "160m", hz: 1838000, cells: [1, 1]},
+           {band: "40m", hz: 7040000, cells: [1, 1]},
+           {band: "20m", hz: 14100000, cells: [1, 1]}]});
+  const stored = {
+    "160m|1": {gain: 0.02, knee: 0.02, modLevel: 84},
+    "160m|14": {gain: 0.56, knee: 0.56, modLevel: 84},
+    "40m|1": {gain: 0.05, knee: 0.05, modLevel: 84},
+    "40m|14": {gain: 0.70, knee: 0.70, modLevel: 84},
+  };
+  const run = new Plan.TxGainPlanRun({plan, modLevel: 84,
+    resolve: cell => stored[`${cell.band}|${cell.percent}`] || null});
+  check("the band with unmeasured cells is ordered first",
+    run.orderedCells().map(cell => `${cell.band}@${cell.percent}`).join(" ") ===
+    "20m@1 20m@14 160m@1 160m@14 40m@1 40m@14",
+    run.orderedCells().map(cell => `${cell.band}@${cell.percent}`).join(" "));
+
+  const radio = makeRadio(84);
+  run.begin();
+  const log = drive(run, radio);
+  const surveys = log.filter(step => step.type === "measure" && step.survey);
+  check("the survey starts on that band too, so both passes ask in one order",
+    surveys.length && surveys[0].band === "20m",
+    surveys.map(step => step.band).join(","));
+  check("and it still ranks every band, including the calibrated ones",
+    new Set(surveys.map(step => step.band)).size === 3,
+    surveys.map(step => step.band).join(","));
+  const firstRetune = log.find(step => step.type === "retune");
+  check("the first retune of the run is to the band that needs measuring",
+    firstRetune && firstRetune.band === "20m",
+    firstRetune ? firstRetune.band : "none");
+  const clean = log.filter(step => step.type === "measure" && !step.survey);
+  check("only the unmeasured band is keyed in the clean pass",
+    clean.length === 2 && clean.every(step => step.band === "20m"),
+    clean.map(step => `${step.band}@${step.percent}`).join(","));
+  check("ascending power inside the band survives the reordering",
+    clean.map(step => step.percent).join(",") === "1,14",
+    clean.map(step => step.percent).join(","));
+}
+
+{
+  // Half a band is enough: the band moves as a whole, with its cells still
+  // ascending, and the cell that is already valid is skipped inside it.
+  const plan = Plan.normalizePlan({powers: [1, 14],
+    rows: [{band: "160m", hz: 1838000, cells: [1, 1]},
+           {band: "20m", hz: 14100000, cells: [1, 1]}]});
+  const stored = {
+    "160m|1": {gain: 0.02, knee: 0.02, modLevel: 84},
+    "160m|14": {gain: 0.56, knee: 0.56, modLevel: 84},
+    "20m|1": {gain: 0.04, knee: 0.04, modLevel: 84},
+  };
+  const run = new Plan.TxGainPlanRun({plan, modLevel: 84,
+    resolve: cell => stored[`${cell.band}|${cell.percent}`] || null});
+  check("a partly measured band counts as needing work, whole",
+    run.orderedCells().map(cell => `${cell.band}@${cell.percent}`).join(" ") ===
+    "20m@1 20m@14 160m@1 160m@14",
+    run.orderedCells().map(cell => `${cell.band}@${cell.percent}`).join(" "));
+}
+
+{
+  // Nothing measured yet: the run must be byte-for-byte the order it always was.
+  const plan = Plan.normalizePlan({powers: [1, 14],
+    rows: [{band: "160m", hz: 1838000, cells: [1, 1]},
+           {band: "40m", hz: 7040000, cells: [1, 1]},
+           {band: "20m", hz: 14100000, cells: [1, 1]}]});
+  const fresh = new Plan.TxGainPlanRun({plan, modLevel: 84, resolve: () => null});
+  check("with nothing measured the plan's own order is kept",
+    JSON.stringify(fresh.orderedCells()) === JSON.stringify(Plan.cellsOf(plan)));
+  // And so must a run that was asked for every cell regardless of status.
+  const stored = {"160m|1": {gain: 0.02, knee: 0.02, modLevel: 84},
+                  "160m|14": {gain: 0.56, knee: 0.56, modLevel: 84},
+                  "40m|1": {gain: 0.05, knee: 0.05, modLevel: 84},
+                  "40m|14": {gain: 0.70, knee: 0.70, modLevel: 84},
+                  "20m|1": {gain: 0.04, knee: 0.04, modLevel: 84},
+                  "20m|14": {gain: 0.50, knee: 0.50, modLevel: 84}};
+  const all = new Plan.TxGainPlanRun({plan, modLevel: 84, measureAll: true,
+    resolve: cell => stored[`${cell.band}|${cell.percent}`] || null});
+  check("RE-MEASURE ALL keeps the plan's order as well",
+    JSON.stringify(all.orderedCells()) === JSON.stringify(Plan.cellsOf(plan)));
+  // Everything already valid: there is no half to move, so nothing moves.
+  const none = new Plan.TxGainPlanRun({plan, modLevel: 84,
+    resolve: cell => stored[`${cell.band}|${cell.percent}`] || null});
+  check("a fully calibrated plan keeps its order too",
+    JSON.stringify(none.orderedCells()) === JSON.stringify(Plan.cellsOf(plan)));
+  // A MOD level the entries were not measured at makes every cell stale, so every
+  // band needs work again and the order is the plan's -- the state a run lands in
+  // right after a global MOD write.
+  const moved = new Plan.TxGainPlanRun({plan, modLevel: 128,
+    resolve: cell => stored[`${cell.band}|${cell.percent}`] || null});
+  check("after the MOD level moves every band needs work, so nothing is reordered",
+    JSON.stringify(moved.orderedCells()) === JSON.stringify(Plan.cellsOf(plan)));
+}
+
 // ---- the MOD level loop ---------------------------------------------------
 
 {

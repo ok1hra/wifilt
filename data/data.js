@@ -758,8 +758,20 @@ function createGainPlan() {
     // txBlockReasons; refusing to START while unattended operation is armed is here,
     // because switching it off for the operator is a promise this page cannot keep
     // if the tab dies mid-run.
+    //
+    // The sentence names the switch, both places it lives, and what it would do.
+    // "turn unattended operation off" named nothing the operator can see: the
+    // setting is called AUTO on the pill and "Answer queries automatically" in
+    // SETTINGS, and neither phrase is "unattended operation". Both places are
+    // named on purpose -- with Radio TX off the AUTO pill renders as off and a
+    // click on it opens SETTINGS instead of toggling (needsTx in renderFlagRow),
+    // so the checkbox is the path that always works.
     planBlockingReason:() => (currentJs8().auto
-      ? "turn unattended operation off first — the plan keys on other bands" : ""),
+      ? "AUTO is on — switch the AUTO pill off in the header, or untick " +
+        "“Answer queries automatically” in SETTINGS. The plan retunes to other " +
+        "bands and keys carriers there, so an automatic reply would transmit on " +
+        "the plan's band, at the plan's power, into the antenna the plan is " +
+        "asking you about." : ""),
     // The plan UI's own requests inherit the deadline too; both result and plan
     // documents land on flash, so they get the longer one. A caller-supplied
     // signal still wins.

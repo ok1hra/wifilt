@@ -49,6 +49,7 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
  · [4.3 Filters](#43-filters)
  · [4.4 Working a spot](#44-working-a-spot)
  · [4.5 Views, columns and the toolbar](#45-views-columns-and-the-toolbar)
+ · [4.6 Feeding the spots to a rotator's map](#46-feeding-the-spots-to-a-rotators-map)
 
 **[5. DATA — JS8Call over ICOM-LAN](#5-data--js8call-over-icom-lan)**
  · [5.1 What the page is](#51-what-the-page-is)
@@ -1042,12 +1043,13 @@ describes both; they are the same page.
 ### 4.1 Connecting
 
 The cluster host and port are set in SETUP → *DX Cluster*; the client logs in with your
-callsign from *Identity*. Three status chips sit in the toolbar:
+callsign from *Identity*. Four status chips sit in the toolbar:
 
 | Chip | Meaning |
 |---|---|
 | **WS** | the WebSocket between this page and the interface. `WS↗` means another DXC instance is holding it and relaying to this one — see below |
 | **Telnet** | the interface's connection to the cluster server |
+| **MAP** | the spot feed to a rotator's map — [section 4.6](#46-feeding-the-spots-to-a-rotators-map). Grey when no rotator is configured, or when another DXC instance is the one feeding it; green while this instance is feeding. |
 | **count** | `visible/total` spots — how many rows the filters are letting through |
 
 **Reconnect Telnet** forces a fresh login to the cluster.
@@ -1141,6 +1143,33 @@ frozen list with no visible reason is easy to mistake for a dead cluster.
 
 The command box is a full telnet prompt — `sh/dx`, `set/filter`, `dx 14025 DL1XYZ` and
 anything else your cluster understands.
+
+---
+
+### 4.6 Feeding the spots to a rotator's map
+
+An **IP-rotator** on the same network can show these DX spots on its own map. Give SETUP →
+*DX Cluster* the rotator's address in **Rotator map host** ([section 9.4](#94-dx-cluster))
+and the DXC page posts a snapshot of the spots to it every **5 seconds**. Leave the field
+empty and nothing is sent.
+
+What goes is **what you can see**: the rows the filters are currently letting through, newest
+first, up to 120 of them — so a band filter or a distance filter on this page shapes the
+rotator's map too. Each spot carries the callsign, the frequency, the type and the time.
+
+Only the instance holding the cluster connection feeds the map, so the split pane and the
+external window never send two copies. The **MAP** chip says which case you are in, and its
+tooltip names the rotator it is feeding.
+
+> It is deliberately send-and-forget. Nothing comes back, and nothing on this page depends on
+> the rotator being there — a rotator that is switched off, or one whose firmware is older
+> than this feature, simply does not receive anything. The chip reports that this page is
+> *sending*, not that anything is listening.
+
+**Why it is not the other way round.** The rotator's map used to open its own connection to
+the interface, which accepts exactly one — so the map and this page evicted each other, and
+every eviction also dropped the cluster login. Pushing the spots into the rotator instead
+leaves that single slot for your own windows.
 
 ---
 
@@ -1700,6 +1729,9 @@ shows where in the passband the signal sat, and the timestamp goes last because 
 anchor the feed is read by. Useful on a phone, where the meta columns squeeze the message
 text. The setting is remembered.
 
+**A line addressed to you that got no automatic answer says so**, with a `NO REPLY · …` badge
+giving the reason — [section 5.13](#513-unattended-operation).
+
 **A callsign you have already worked on this band is dimmer.** The test is the JS8CALL log's
 real content (see [section 5.18](#518-logging-js8-qsos)), so it survives a reload and a QSO
 logged from another window. It never disables anything — answering a station a second time
@@ -2004,6 +2036,39 @@ does not know about them will think something has broken:
 
 A station currently serving a ban is marked **⏸** in the Stations table, and its row dims.
 The tooltip gives the reason and the time left — *"Auto replies paused 8 min (level 3)"*.
+
+On top of those there is a **60-second QSO lock**: every directed frame decoded on the
+channel, whoever it was for, holds automatic replies back for a minute so the station does
+not transmit across a conversation already under way.
+
+> **A question addressed to you by callsign is exempt from that lock.** It is not somebody
+> else's conversation — it is yours, and the station that asked is sitting there waiting.
+> Questions asked *of a group* stay behind the lock, because those are the ones every member
+> would answer into the same slot.
+>
+> This used to work the other way round, and the effect was worse than one lost answer: the
+> lock was re-armed by every directed frame including the asker's own, so a station retrying
+> at a normal JS8 cadence was never answered at all. Repeats are the rate limits' job above,
+> not the lock's.
+
+#### The row says why nothing went out
+
+A refusal you cannot see looks exactly like a station that never considered answering, so
+every engine that decides against a reply stamps its reason on the reception, and the line in
+Recent traffic carries it beside the text:
+
+```
+NO REPLY · 60 s QSO lock — conversation in progress, 30 s left
+```
+
+The same badge reports the rate-limit window and bans, a missing GRID/INFO/STATUS answer, a
+blocked DXCC entity, TX not being enabled, `AUTO` being off — which also says where the answer
+went instead — and every refusal from the message inbox, such as *QUERY CALL requires AUTO*,
+*the station asked about was not heard here*, or the inbox quotas.
+
+It is deliberately silent for receptions that were never yours to answer: somebody else's
+traffic, `@ALLCALL`, and ordinary typed messages, which have no automatic answer by design
+and would otherwise carry a badge on every line of a chat.
 
 > **Unattended operation is bound to a live browser.** There is deliberately no hard air-time
 > cap — an automatic station has to be able to send long messages without being cut off
@@ -2964,6 +3029,7 @@ to hear it.
 |---|---|
 | **DXC host** | hostname or IP of the telnet server, e.g. `ve7cc.net` |
 | **DXC port** | telnet port; commonly `7300` or `23` |
+| **Rotator map host** | host, or `host:port`, of an IP-rotator whose map should show these spots — `ip-rotator.local`. **Empty turns the feed off**, which is the default. What it does is [section 4.6](#46-feeding-the-spots-to-a-rotators-map); the interface itself never talks to the rotator, the DXC page in your browser does. |
 
 The section says which callsign it will log in with, taken from Identity. There is nothing
 to type here — a second copy of the callsign is a second thing to get wrong.

@@ -165,14 +165,19 @@
   // those maxima needs no normalisation -- which matters, because normalising
   // would drag the unverified `knee ∝ percent` assumption into the one decision
   // that must not rest on it.
-  function surveyCells(plan) {
+  function surveyFrom(cells) {
     const best = new Map();
-    for (const cell of cellsOf(plan)) {
+    for (const cell of cells) {
       const found = best.get(cell.band);
       if (!found || cell.percent > found.percent) best.set(cell.band, cell);
     }
+    // A Map keeps insertion order, so the survey visits the bands in the same
+    // order the caller handed them over -- which is how the survey and the clean
+    // pass ask about antennas in the SAME sequence rather than two different ones.
     return [...best.values()].map(cell => ({...cell, survey: true}));
   }
+
+  function surveyCells(plan) { return surveyFrom(cellsOf(plan)); }
 
   // ---- the run ---------------------------------------------------------------
   //
@@ -243,11 +248,11 @@
         // metadata existed: stale entries prove the global MOD changed. Measure
         // the matrix at what the radio reports now, without another blind write.
         this.state = "matrix";
-        this.queue = cellsOf(this.plan);
+        this.queue = this.orderedCells();
         this.index = 0;
         return this.snapshot();
       }
-      this.queue = surveyCells(this.plan);
+      this.queue = surveyFrom(this.orderedCells());
       this.index = 0;
       this.state = "survey";
       this.pendingRestore = true;
@@ -350,6 +355,42 @@
       return Boolean(Number(entry.modLevel));
     }
 
+    // The plan's cells, with the bands that still have something to measure first.
+    //
+    // cellsOf() is the matrix exactly as the operator wrote it, top row down, and a
+    // run used to follow that literally. Nothing was ever measured twice -- a cell
+    // already calibrated for today's MOD level is skipped without a carrier -- but
+    // the retunes and the antenna questions of every band ABOVE the missing ones
+    // were still spent first. A plan whose only "measure" cells sit on the last row
+    // therefore began as far from them as it is possible to begin, and a run stopped
+    // part-way stopped before the work instead of after it.
+    //
+    // The reordering moves WHOLE BANDS and never touches the order inside one,
+    // because both of those orders are safety rules: band-major is what keeps the
+    // antenna question at one per band per pass, and ascending power inside a band
+    // is what makes the hottest carrier the last one before a retune -- the only
+    // cooling a plan with no pauses has. It is a stable partition, so the bands keep
+    // their relative order within each half and a plan with nothing measured yet
+    // runs in exactly the order it always did.
+    //
+    // Deliberately NOT a filter: a band with no work left is still surveyed. The
+    // survey is what ranks the bands to pick the one that owns the station's MOD
+    // level, and dropping a calibrated band from that ranking could hand the MOD
+    // level to a lesser band -- which would move it, and make the very entries that
+    // band was calibrated with stale. Cheaper to measure is not cheaper to redo.
+    orderedCells() {
+      const cells = cellsOf(this.plan);
+      // measureAll means the operator asked for every cell regardless of status, so
+      // there is no "already measured" half to move behind anything.
+      if (this.measureAll) return cells;
+      const pending = new Set();
+      for (const cell of cells) if (!this.isValid(cell)) pending.add(cell.band);
+      if (!pending.size) return cells;
+      const done = cells.filter(cell => !pending.has(cell.band));
+      if (!done.length) return cells;
+      return [...cells.filter(cell => pending.has(cell.band)), ...done];
+    }
+
     // Returns an INTENT, never a snapshot. fail() and stop() answer with a
     // snapshot because they are notes; routing their return value out of here put
     // an object with no `type` into `step`, and the host -- which switches on
@@ -413,7 +454,7 @@
         .filter(row => row.status === "ok" || row.reachedCeiling ||
                        row.reason === "already calibrated for this MOD level")
         .map(row => `${row.band}|${row.percent}`));
-      return cellsOf(this.plan).filter(cell => !measured.has(`${cell.band}|${cell.percent}`));
+      return this.orderedCells().filter(cell => !measured.has(`${cell.band}|${cell.percent}`));
     }
 
     // ---- the MOD level, once ------------------------------------------------
@@ -530,7 +571,7 @@
     enterMatrix(extra = {}) {
       this.state = "matrix";
       this.modAdvice = extra.advice || null;
-      this.queue = cellsOf(this.plan);
+      this.queue = this.orderedCells();
       this.index = 0;
       return this.next();
     }
