@@ -1634,10 +1634,16 @@ body {
 .pa-val-fw  .pa-val-v { color: var(--pa-fw); }
 .pa-val-rev .pa-val-v { color: var(--pa-rev); }
 
-/* Two bars, touching, no scale and no frame. Forward power grows from the left,
-   reflected from the right, so the two never read as one continuous quantity --
-   and the gap between them closing is itself the thing worth noticing. The
-   unlit ground stays visible so full scale is always readable. */
+/* Two bars, touching, unlabelled and without a frame. Forward power grows from
+   the left, reflected from the right, so the two never read as one continuous
+   quantity -- and the gap between them closing is itself the thing worth
+   noticing. The unlit ground stays visible so full scale is always readable.
+
+   The scale below them belongs to neither: it is a FREQUENCY scale, and the
+   extra gap above it is there to say so. Without that gap its dot would read as
+   a third bargraph marker, which is the one misreading that would matter -- a
+   dot near the right-hand end meaning "near the top of the band" must not look
+   like "nearly full power". */
 .pa-bars { display: flex; flex-direction: column; gap: 0; margin: 1px 0 2px; }
 .pa-bar  { position: relative; height: 5px; background: #171b22; overflow: hidden; }
 .pa-bar i {
@@ -1647,6 +1653,61 @@ body {
 .pa-bar-fw  { left: 0;  background: var(--pa-fw); }
 .pa-bar-ref { right: 0; background: var(--pa-rev); }
 .pa-panel.pa-stale .pa-bar i { background: #3a424e; }
+
+/* The tuner's segments of the band the radio is on. A blind scale on purpose:
+   at ~27 px a segment there is no room for numbers, and what is being read off
+   it is "which box am I in, and how far to the edge" -- a shape, not a value.
+   The frequency itself is on the log's own status bar a few centimetres away.
+
+   Six segments at a time, paged. The arrows retune the radio to the neighbouring
+   segment's centre, which is the only place worth pressing TUNE, so they sit at
+   the ends of the scale where the next segment would be. */
+.pa-seg-row {
+  display: flex; align-items: center; gap: 3px;
+  margin: 5px 0 1px;      /* the larger top gap separates this from the bargraphs */
+}
+.pa-seg-arrow {
+  flex: 0 0 auto;
+  background: none; border: none; padding: 0 1px;
+  font-family: inherit; font-size: 9px; line-height: 1;
+  color: var(--pa-dim); cursor: pointer;
+}
+.pa-seg-arrow:hover:not(:disabled) { color: #dfe6ef; }
+.pa-seg-arrow:disabled { color: #3a424e; cursor: default; }
+
+.pa-seg-scale {
+  position: relative; flex: 1 1 auto;
+  height: 11px; background: #171b22;
+  cursor: pointer; overflow: hidden;
+}
+.pa-seg-track { position: absolute; inset: 0; }
+/* Dividers rather than gaps: the segments touch, because between two of them
+   there IS no gap -- the tuner switches from one straight to the next. */
+.pa-seg {
+  position: absolute; top: 0; bottom: 0;
+  border-right: 1px solid #454f63;
+}
+.pa-seg:last-child { border-right: none; }
+/* Lighter than the dividers, not the same weight: at this size a fill that only
+   just beats the grid reads as another divider, and "which box am I in" was the
+   whole point. Still grey -- it is a position, not a state, and the panel's
+   colours are all spoken for. */
+.pa-seg-on { background: #3d4a61; }
+
+/* The radio's own frequency. White, not the alarm red the DXC band map uses for
+   its VFO line: in this panel red means the amplifier is on the wrong band, and
+   that meaning must not be spent on something that is always there. The ring
+   keeps it visible over a filled segment as well as over the unlit ground. */
+.pa-seg-dot {
+  position: absolute; top: 50%; left: 0;
+  width: 5px; height: 5px; margin-left: -2.5px;
+  border-radius: 50%;
+  background: #ffffff; box-shadow: 0 0 0 1px #0d1117;
+  transform: translateY(-50%);
+  transition: left 0.12s linear;
+  pointer-events: none;   /* a click belongs to the segment under it */
+}
+.pa-panel.pa-stale .pa-seg-dot { background: #8b97a8; }
 
 .pa-sub { display: flex; align-items: baseline; gap: 8px; font-size: 11px; }
 .pa-swr { color: var(--pa-rev); font-weight: 700; }

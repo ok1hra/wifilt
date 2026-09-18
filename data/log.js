@@ -1300,6 +1300,13 @@ function startClock() {
 // what makes the caret land in Call -- so it needs the mode switch as a
 // separate call rather than as a side effect of delivering a word. It stays a
 // command named for what it does, not a door onto `app`.
+//
+// tuneTo() joined them 2026-09-18 for the PA palette's tuning-segment scale,
+// whose arrows retune the radio to the centre of the neighbouring segment. It
+// deliberately carries NO side effects -- no run-mode change, no caret move --
+// because tuning the amplifier is not working a spot. It is the same command
+// the DXC band map below issues, which is why that one now calls it too rather
+// than keeping its own copy of the two endpoints.
 window.LogRadio = {
   frequency: () => (app.connected ? app.frequency : 0),
   tx:        () => !!app.tx,
@@ -1308,7 +1315,41 @@ window.LogRadio = {
   focusedField: () => focusedLogField(),
   insertWord: (word, trx, field) => insertWordIntoLog(word, trx, field),
   setRunMode: (m) => setRunMode(m),
+  tuneTo:     (hz, reqId) => tuneActiveTrx(hz, reqId),
 };
+
+// Put the selected TRX on a frequency. Two endpoints, because TRX1 is this
+// box's own radio and TRX2/3 are peers reached over TrxNet -- the split every
+// command in this file has to make.
+//
+// Returns whether anything was sent, so a caller can tell "refused" from
+// "done": an unconfigured OI3 slot has no route at all, and a caller that
+// assumed success would leave its own UI claiming a retune that never left.
+function tuneActiveTrx(hz, reqId) {
+  const trxNum = app.activeTrx;
+  const freqHz = Math.round(Number(hz) || 0);
+  if (!freqHz) return false;
+
+  if (trxNum === 2 && !app.trxOi3[1]) return false;   // TRX2 not configured
+  if (trxNum === 3 && !app.trxOi3[2]) return false;   // TRX3 not configured
+
+  if (trxNum === 1) {
+    fetch('/cmd', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        type: 'setFrequency', reqId: reqId || 'log-tune', frequency: freqHz
+      })
+    }).catch(() => {});
+  } else {
+    fetch('/oi3/set-hz', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ trx: trxNum, hz: freqHz })
+    }).catch(() => {});
+  }
+  return true;
+}
 
 // ── /state polling ────────────────────────────────────────────────────────────
 
@@ -3759,29 +3800,11 @@ function _renderDxcSpots() {
     outer.appendChild(grp);
 
     outer.addEventListener('click', () => {
-      // Send frequency to the currently selected TRX
-      const trxNum = app.activeTrx;
-      const freqHz = Math.round(f * 1000);
-
-      // Check if the selected TRX is configured
-      if (trxNum === 2 && !app.trxOi3[1]) return;  // TRX2 not configured
-      if (trxNum === 3 && !app.trxOi3[2]) return;  // TRX3 not configured
-
-      if (trxNum === 1) {
-        // TRX1: send via /cmd
-        fetch('/cmd', {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ type: 'setFrequency', reqId: 'dxc-band', frequency: freqHz })
-        }).catch(() => {});
-      } else {
-        // TRX2/3: send via /oi3/set-hz
-        fetch('/oi3/set-hz', {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ trx: trxNum, hz: freqHz })
-        }).catch(() => {});
-      }
+      // Send frequency to the currently selected TRX. Refused when that slot has
+      // no route (unconfigured OI3) -- and then the spot is not handed over
+      // either, because the operator would be typing a call against a radio that
+      // never moved.
+      if (!tuneActiveTrx(Math.round(f * 1000), 'dxc-band')) return;
 
       setRunMode('SP');
       if (call) {

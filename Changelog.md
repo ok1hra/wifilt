@@ -11,6 +11,60 @@ published.
 
 ## Working tree — not committed
 
+**PA palette: a scale of the amplifier's tuning segments, with arrows onto their centres.**
+
+* **The gap this fills.** The EXPERT 1K-FA's tuner keeps one setting per sub-band, so it
+  has to be tuned in each of them, and the only place worth pressing TUNE is a segment's
+  centre — from there the stored setting covers the whole of it. Nothing showed this
+  anywhere: the amplifier's own display reads out a frequency, not which of its 127
+  divisions that frequency falls in. A new row under the FW/REV bars draws the segments of
+  the band the radio is on, fills the one it is standing in, and puts a dot on the exact
+  frequency.
+* **Blind on purpose.** No numbers on the scale: at ~27 px a segment there is no room, and
+  what is read off it is a shape — which box, how far to its edge — while the frequency
+  itself is already in the log's status bar a few centimetres away. Hovering a segment
+  gives its centre.
+* **Six segments a page, and the last page is pinned.** A whole band would put 80 m's 29
+  segments under 6 px each. It pages rather than scrolls, so the picture holds still while
+  the operator tunes about inside a page instead of crawling under a hand on the VFO. The
+  last page of a band is clamped to its end (on 80 m, 23..28 and not 24..28) — a page
+  showing one lonely segment says nothing about where in the band it is.
+* **Arrows go to the nearest centre *strictly* below/above, not one segment along.**
+  That is what lets one press finish the job: standing 2 kHz off a centre, the arrow
+  pointing at it lands on it. Clicking a segment jumps straight to its centre, which on
+  80 m is one click instead of twenty-eight. Neither does anything else — no auto-TUNE (it
+  would key a carrier as a side effect of an arrow) and no run-mode change (tuning the
+  amplifier is not working a spot).
+* **The segment table is the manual's, at third hand and checked.** `PA_SUB_KHZ` in
+  `pa-panel.js` carries all 127 centres from the user's manual §19 (p. 70), by way of
+  `SUB_CENTER_KHZ` in `expert_console.py`, where `test/subband_test.py` verifies it against
+  that table band by band. The lookup is the daemon's own nearest-centre rule, which matters
+  because the daemon is what actually moves the amplifier — and it keeps the daemon's outer
+  edge test too, without which 60 m would draw as the top of 80 m and 2 m as the top of 6 m.
+  Steps are regular within a band except 17 m (50 then 40) and 12 m (72 then 75); deriving
+  edges as half way between centres gets both right with no special case.
+* **Two things it refuses.** Both arrows die while the radio is transmitting — retuning out
+  from under a keyed amplifier is the expensive mistake this panel exists to catch — and the
+  row empties when there is nothing to draw (no frequency, or a band with no segments: 60 m,
+  4 m, 2 m, 70 cm). It never changes height or disappears, the same discipline as the LED row
+  above it, and the tooltips say which of the reasons applies.
+* **`LogRadio.tuneTo()`, and one fewer copy of the retune.** The palette needed a way to move
+  the radio, and log.js already had that code inline inside the DXC band map's click handler
+  — a third copy (after `dxc.html`'s own) was not worth having. It is now `tuneActiveTrx()`,
+  exported narrowly as `LogRadio.tuneTo(hz, reqId)` and returning whether anything was sent,
+  so a caller can tell "refused" from "done"; the band map calls it too.
+* **The mousedown guard had to widen, and that is the one real trap here.** The palette's
+  whole usability rests on every clickable thing cancelling its own mousedown so the caret
+  never leaves *Call* — but the guard matched `button` only, and the scale is a `div`. Left
+  as it was, clicking the scale would have broken the log's Enter flow without breaking
+  anything visible. `tools/pa-panel-smoke.js` now asserts on `defaultPrevented` for the row,
+  the scale and both arrows, because a synthetic mousedown never moves focus and the
+  activeElement check alone would pass either way.
+* `tools/pa-panel-smoke.js` 84 → 114 checks: paging and the pinned last page, the dot's
+  position against the page's own span, both arrow semantics against the recorded `/cmd`
+  body, dead arrows at both band edges and under TX, and the two empty states. The fixture
+  grew a settable radio frequency and now records `/cmd` separately from `/pa/cmd`.
+
 **TELEMETRY: readings from the station's own TrxNet devices, beaconed over JS8.**
 
 * **New section above SETTINGS on `/data`.** A job says what to send, to whom, how

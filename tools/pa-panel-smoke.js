@@ -33,6 +33,11 @@ const commands = [];              // every /pa/cmd body, in order
 let paJson = null;                // what /pa.json answers right now
 let paCmdError = null;            // when set, /pa/cmd refuses with this code
 let radioTx = false;              // the RADIO's own TX state, from /state
+let radioFreq = 14025000;         // the RADIO's own frequency, from /state
+const catCommands = [];           // every /cmd body, in order -- the RADIO's
+                                  // commands, kept apart from the amplifier's so
+                                  // the assertions above cannot be confused by a
+                                  // retune landing in the same list
 let paCmd404 = false;             // simulate a firmware without the route
 
 function finish(result) {
@@ -109,12 +114,25 @@ const server = http.createServer((request, response) => {
     return json({ok: true});
   }
   if (url.pathname === "/set-tx") { radioTx = url.searchParams.get("v") === "1"; return json({ok: true}); }
+  if (url.pathname === "/set-freq") {
+    radioFreq = Number(url.searchParams.get("v") || 0) || 0;
+    return json({ok: true});
+  }
   if (url.pathname === "/commands") return json(commands);
   if (url.pathname === "/commands/clear") { commands.length = 0; return json({ok: true}); }
+  if (url.pathname === "/cat-commands") return json(catCommands);
+  if (url.pathname === "/cat-commands/clear") { catCommands.length = 0; return json({ok: true}); }
 
+  // The radio's own command route. Recorded now, not just swallowed: the segment
+  // scale's arrows are judged on the frequency that actually went out, which is
+  // the only thing that says the arithmetic picked the right segment centre.
   if (url.pathname === "/cmd" && request.method === "POST") {
-    request.on("data", () => {});
-    request.on("end", () => json({ok: true}));
+    let body = "";
+    request.on("data", c => { body += c; });
+    request.on("end", () => {
+      try { catCommands.push(JSON.parse(body)); } catch (_) { catCommands.push({raw: body}); }
+      json({ok: true});
+    });
     return;
   }
   if (url.pathname === "/state") {
@@ -122,7 +140,7 @@ const server = http.createServer((request, response) => {
       connected: true, catHealthy: true, audioReady: false, lanStatus: "linked",
       btStatus: "LAN linked", wifiStatus: "WiFi STA", radioTransport: "lan",
       fullCat: true, wifiRssi: -55, fwRev: "20260810", bdSupported: false,
-      power: true, frequency: 14025000, mode: "CW", filter: 1,
+      power: true, frequency: radioFreq, mode: "CW", filter: 1,
       radioAddress: "a4", transceiverType: "IC-705", radioName: "IC-705",
       tx: radioTx, ritRaw: 0, smeterRaw: 0, powerMeterRaw: 0, afGain: 100,
       keySpeed: 20, rfPower: 128, rfPowerSeen: true, supplyVolts: 13.8, swr: 1.1,
@@ -178,6 +196,17 @@ const PAGE_SCRIPT = `
     return await (await fetch("/commands")).json();
   }
   async function clearCommands() { await fetch("/commands/clear"); }
+  async function catSince() { return await (await fetch("/cat-commands")).json(); }
+  async function clearCat() { await fetch("/cat-commands/clear"); }
+
+  // Move the radio and wait for the page to believe it. Deliberately the long way
+  // round: log.js polls /state twice a second and the palette reads log.js, so
+  // this is the real path a real retune takes -- and the only one that proves the
+  // bridge between the two files is intact.
+  async function setFreq(hz) {
+    await fetch("/set-freq?v=" + hz);
+    await sleep(1300);
+  }
 
   const base = over => Object.assign({
     state:"ok", name:"PA.01", present:true, ageMs:120,
@@ -611,6 +640,143 @@ const PAGE_SCRIPT = `
     check("but its buttons go dead", $("paBtnOperate").disabled && $("paBtnTune").disabled);
     check("and say the amplifier is gone, not that something is wrong here",
       /not on the network/.test($("paBtnOperate").title), $("paBtnOperate").title);
+
+    // ---- 15. the tuning-segment scale -------------------------------------
+    // The tuner holds one setting per sub-band, so what this row has to get right
+    // is which sub-band the radio is in and where its centre is -- everything
+    // else about it is decoration. The assertions therefore land on the filled
+    // segment, on the dot's position, and on the frequency that actually went out
+    // on /cmd.
+    await setPa(base({flags:F.ON|F.LINK}));
+    await setFreq(14025000);          // 20 m, exactly the centre of index 1 of 9
+
+    const segs   = () => Array.from($("paSegTrack").children);
+    const onIdx  = () => segs().findIndex(s => s.classList.contains("pa-seg-on"));
+    const dotPct = () => parseFloat($("paSegDot").style.left);
+
+    check("a nine-segment band is drawn one page of six at a time",
+      segs().length === 6, String(segs().length));
+    check("the segment the radio is standing in is the filled one",
+      onIdx() === 1, "filled index " + onIdx());
+    // The page spans 13950..14250 kHz -- its top edge is half way between the
+    // sixth and seventh centres, not half a step past the sixth -- so 14025
+    // belongs at (14025-13950)/300 = 25 %.
+    check("the dot sits at the frequency, not at the segment's edge",
+      Math.abs(dotPct() - 25) < 0.1, $("paSegDot").style.left);
+    check("and it is visible", !$("paSegDot").hidden);
+
+    // Strictly below / above -- which is what lets an arrow finish the job.
+    await setFreq(14027000);
+    await clearCat();
+    $("paSegDown").click();
+    await sleep(80);
+    let cat = await catSince();
+    check("standing 2 kHz above a centre, the left arrow lands ON that centre",
+      cat.length === 1 && cat[0].frequency === 14025000, JSON.stringify(cat));
+    check("and it says so before being pressed",
+      /14025 kHz/.test($("paSegDown").title), $("paSegDown").title);
+
+    await clearCat();
+    $("paSegUp").click();
+    await sleep(80);
+    cat = await catSince();
+    check("the right arrow goes to the next centre up",
+      cat.length === 1 && cat[0].frequency === 14075000, JSON.stringify(cat));
+
+    // Paging, and the reason the last page is stuck to the end of the band.
+    await setFreq(14275000);           // index 6 of 9
+    check("leaving the page moves the window a whole page",
+      segs().length === 6, String(segs().length));
+    check("the last page is pinned to the band's end, so it never runs short",
+      onIdx() === 3, "filled index " + onIdx());
+
+    await setFreq(4030000);            // the very last centre on 80 m, 29 of them
+    check("80 m's last page holds six segments, not the one left over",
+      segs().length === 6, String(segs().length));
+    check("with the radio in the last of them", onIdx() === 5, "filled index " + onIdx());
+    check("at the top of the band the right arrow has nowhere to go",
+      $("paSegUp").disabled);
+    check("and says that, rather than just going quiet",
+      /No further tuning segment/.test($("paSegUp").title), $("paSegUp").title);
+
+    await setFreq(1785000);            // the first centre on 160 m
+    check("at the bottom of the band the left arrow is the dead one",
+      $("paSegDown").disabled && !$("paSegUp").disabled);
+
+    // A click straight onto a segment -- crossing 80 m on the arrows is 28 presses.
+    await setFreq(3750000);
+    await clearCat();
+    const wantCentre = Number(segs()[0].dataset.centre) * 1000;
+    segs()[0].click();
+    await sleep(80);
+    cat = await catSince();
+    check("clicking a segment tunes to that segment's own centre",
+      cat.length === 1 && cat[0].frequency === wantCentre,
+      JSON.stringify(cat) + " want " + wantCentre);
+    check("and every segment offers its centre on hover, so the scale stays blind"
+      + " without being unreadable",
+      segs()[0].title === segs()[0].dataset.centre + " kHz", segs()[0].title);
+
+    // Bands the amplifier has no segments for at all. Answering with the nearest
+    // centre regardless would draw 2 m as the top of 6 m and 60 m as the top of
+    // 80 m -- a scale confidently pointing at a band that is not there.
+    await setFreq(144300000);
+    check("on a band the amplifier cannot tune, the scale empties",
+      segs().length === 0 && $("paSegDot").hidden, String(segs().length));
+    check("and both arrows go dead", $("paSegDown").disabled && $("paSegUp").disabled);
+    check("and say which of the two reasons it is",
+      /no tuning segments on this band/.test($("paSegUp").title), $("paSegUp").title);
+
+    await setFreq(5300000);
+    check("60 m is not drawn as the top of 80 m", segs().length === 0, String(segs().length));
+
+    // Transmitting. Retuning the radio out from under a keyed amplifier is the
+    // expensive mistake this whole panel exists to prevent.
+    await setFreq(14075000);
+    await fetch("/set-tx?v=1");
+    await sleep(1300);
+    check("both arrows go dead while the radio is transmitting",
+      $("paSegDown").disabled && $("paSegUp").disabled);
+    check("and say that is why", /transmitting/.test($("paSegDown").title),
+      $("paSegDown").title);
+    await clearCat();
+    segs()[0].click();
+    await sleep(80);
+    check("and a click on the scale itself sends nothing either",
+      (await catSince()).length === 0, JSON.stringify(await catSince()));
+    await fetch("/set-tx?v=0");
+    await sleep(1300);
+
+    // With nothing coming from the radio there is no frequency to place.
+    await setFreq(0);
+    check("with no frequency from the radio the scale is empty and dead",
+      segs().length === 0 && $("paSegDown").disabled && $("paSegUp").disabled,
+      String(segs().length));
+    check("and says the radio is not connected",
+      /not connected/.test($("paSegDown").title), $("paSegDown").title);
+    await setFreq(14075000);
+
+    // ---- 16. the scale must not steal the caret either ---------------------
+    // The scale is a DIV, not a button, so it slips straight past a mousedown
+    // guard that only looks for buttons -- and then a click on it takes the caret
+    // out of Call and breaks the log's whole Enter flow. Asserted on
+    // defaultPrevented rather than on activeElement, because a synthetic
+    // mousedown never moves focus anyway: this checks the guard itself fired.
+    for (const id of ["paSegDown", "paSegUp", "paSegScale", "paSegRow"]) {
+      const ev = new MouseEvent("mousedown", {bubbles:true, cancelable:true});
+      $(id).dispatchEvent(ev);
+      check("mousedown on " + id + " is cancelled, so the caret cannot leave Call",
+        ev.defaultPrevented);
+    }
+    for (const id of ["paSegDown", "paSegUp"]) {
+      call.focus();
+      $(id).dispatchEvent(new MouseEvent("mousedown", {bubbles:true, cancelable:true}));
+      $(id).click();
+      await sleep(30);
+      check("focus stays in Call across a click on " + id,
+        document.activeElement === call,
+        document.activeElement ? document.activeElement.id || document.activeElement.tagName : "none");
+    }
   } catch (error) {
     check("the test script ran to the end", false, String(error && error.stack || error));
   }

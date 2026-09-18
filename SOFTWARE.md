@@ -1004,6 +1004,41 @@ The button only exists once the amplifier's NET_ID is set in
 | **ALARM · TX · TUNE · CONTEST · BEEP** | every flag TrxNet carries, lit or dark. The dark ones stay in place so the row never moves under your eye. |
 | The status line | three things that are easy to confuse, told apart: `OFFLINE` (the amplifier's daemon is not on the network), `NO DATA` with an age (it is, but nothing is arriving), `NO LINK` (it is there but has no serial link to the amplifier), `OFF`, or `ON` — plus the amplifier's `REV 1.0` / `REV 2.0`. |
 
+#### The tuning-segment scale
+
+Under the two bars is a scale of the amplifier's **tuning segments** with a dot where the
+radio is. The tuner keeps one setting per segment, so it has to be tuned in each of them
+separately — and the only place worth pressing TUNE is a segment's **centre**, because from
+there the stored setting covers the whole of it. Nothing else shows you this: the amplifier's
+own display gives a frequency, not which of its 127 divisions of the bands that frequency
+falls in.
+
+The scale is deliberately blind — no numbers. What is read off it is *which box am I in and
+how far to its edge*, and the frequency itself is already in the log's status bar. The filled
+segment is the one the radio is standing in; hovering any segment gives its centre.
+
+| | |
+|---|---|
+| **◀ ▶** | retune the **selected TRX** to the nearest segment centre below or above. Standing a couple of kHz off a centre, the arrow pointing at it lands *on* it — so one press is usually all it takes before TUNE. At the band's first or last segment the arrow greys out. |
+| Clicking a segment | retunes straight to that segment's centre. On 80 m, with 29 segments, this is the difference between one click and twenty-eight. |
+
+Six segments are shown at a time and the scale pages when the dot leaves — it holds still
+while you tune about inside a page, so it never crawls under your hand on the VFO. The last
+page of a band is pinned to its end, so it never shrinks to one lonely segment.
+
+The arrows go dead **while the radio is transmitting** — retuning out from under a keyed
+amplifier is exactly the mistake this panel is here to prevent — and also when there is
+nothing to draw: no frequency from the radio, or a band the amplifier has no segments for
+(60 m, 4 m, 2 m, 70 cm). The row stays where it is in all those cases, empty, and the arrows'
+tooltips say which it is.
+
+> The segments are the ones in the amplifier's **user manual §19**, and they are wider than
+> the band: 160 m starts at 1785 kHz and 10 m at 27950 kHz, because the amplifier will tune
+> there. They also carry no notion of *which* radio the amplifier is following — the
+> interface publishes the frequency of **TRX1** only, so on TRX2/TRX3 the scale shows where
+> that radio is, which need not be where the amplifier went. The band reading above turns
+> amber when the two disagree.
+
 Four buttons, each showing the state it is in rather than the state it would move to:
 
 | Button | |

@@ -80,6 +80,47 @@
       6: [50000000, 54000000]
   };
 
+  // The tuner's sub-bands: the CENTRE of each, in kHz, keyed by band in metres --
+  // the same key as BAND_HZ and as what the amplifier publishes on /band. From
+  // the user's manual section 19 (p. 70), by way of SUB_CENTER_KHZ in
+  // expert_console.py, where test/subband_test.py checks it against that table
+  // band by band. 127 entries in total.
+  //
+  // Written out rather than generated, for the same reason the daemon writes it
+  // out: it is the one piece of data here with no other source to check it
+  // against, so it has to be readable against the manual line by line. The steps
+  // are regular within a band EXCEPT 17 m (50 then 40) and 12 m (72 then 75),
+  // which is exactly what a generator would get wrong.
+  //
+  // This is a second band table beside BAND_HZ and deliberately not a
+  // replacement: BAND_HZ is the IARU span, used only to notice that the
+  // amplifier and the radio disagree, and is kept generous on purpose. These are
+  // the tuner's own divisions and reach FURTHER than the band -- 160 m starts at
+  // 1785 and 10 m at 27950 -- because the amplifier will tune there.
+  var PA_SUB_KHZ = {
+    160: [1785, 1795, 1805, 1815, 1825, 1835, 1845, 1855, 1865, 1875, 1885, 1895,
+          1905, 1915, 1925, 1935, 1945, 1955, 1965, 1975, 1985, 1995, 2005, 2015],
+     80: [3470, 3490, 3510, 3530, 3550, 3570, 3590, 3610, 3630, 3650, 3670, 3690,
+          3710, 3730, 3750, 3770, 3790, 3810, 3830, 3850, 3870, 3890, 3910, 3930,
+          3950, 3970, 3990, 4010, 4030],
+     40: [6963, 6988, 7013, 7038, 7063, 7088, 7113, 7138,
+          7163, 7188, 7213, 7238, 7263, 7288, 7313, 7338],
+     30: [10075, 10125, 10175],
+     20: [13975, 14025, 14075, 14125, 14175, 14225, 14275, 14325, 14375],
+     17: [18075, 18125, 18165],
+     15: [20975, 21025, 21075, 21125, 21175, 21225, 21275, 21325, 21375,
+          21425, 21475],
+     12: [24891, 24963, 25038],
+     10: [27950, 28050, 28150, 28250, 28350, 28450, 28550, 28650, 28750, 28850,
+          28950, 29050, 29150, 29250, 29350, 29450, 29550, 29650, 29750],
+      6: [49750, 50250, 50750, 51250, 51750, 52250, 52750, 53250, 53750, 54250]
+  };
+
+  // Segments shown at once. The scale is 218 px wide, so a whole band would put
+  // 80 m's 29 segments at under 6 px each -- unreadable and unclickable. Six
+  // leaves about 27 px per segment, and on 160 m the window comes out at 60 kHz.
+  var PA_SEG_PAGE = 6;
+
   var state   = null;    // last /pa.json
   var open    = false;
   var pos     = null;    // {x, y}, null until placed
@@ -93,6 +134,10 @@
   var pending   = {};    // what -> {want, until, from}
   var settledAt = {};    // what -> when the amplifier last CONFIRMED it
   var note    = '';      // one line of trouble, shown under the buttons
+  var segKey  = '';      // band + first shown segment, so the scale's dividers
+                         // are rebuilt only when the window actually moves
+  var segView = null;    // {list, start, end, lo, hi} of what is drawn right now,
+                         // so a click can be mapped back to a frequency
 
   // ── persistence ───────────────────────────────────────────────────────────
   // Wrapped both ways: a private window refuses localStorage outright, and a
@@ -200,6 +245,19 @@
           '<div class="pa-bar"><i id="paBarFw" class="pa-bar-fw"></i></div>' +
           '<div class="pa-bar"><i id="paBarRef" class="pa-bar-ref"></i></div>' +
         '</div>' +
+        // The tuner's divisions of the band the radio is on, with the dot where
+        // the radio actually is. Deliberately blind -- no numbers: at 27 px a
+        // segment there is no room for any, and what the operator needs from it is
+        // "which box am I in and how far to the next one", not a reading. The
+        // frequency itself is already on the log's own status bar.
+        '<div class="pa-seg-row" id="paSegRow">' +
+          '<button class="pa-seg-arrow" id="paSegDown" type="button" data-seg="-1">&#9664;</button>' +
+          '<div class="pa-seg-scale" id="paSegScale">' +
+            '<span class="pa-seg-track" id="paSegTrack"></span>' +
+            '<i class="pa-seg-dot" id="paSegDot" hidden></i>' +
+          '</div>' +
+          '<button class="pa-seg-arrow" id="paSegUp" type="button" data-seg="1">&#9654;</button>' +
+        '</div>' +
         '<div class="pa-sub">' +
           '<span class="pa-swr" id="paSwr">SWR &mdash;</span>' +
           '<span class="pa-band" id="paBand">&mdash;</span>' +
@@ -222,12 +280,16 @@
     // THE rule: cancel mousedown on everything clickable, so the click still
     // happens but the caret never leaves Call or Exch. Without this the panel
     // would break the log's keyboard flow on every single press.
+    // The segment scale is a DIV, not a button, so it would slip past a guard
+    // that only looked for buttons -- and a click on it would take the caret out
+    // of Call, which is the one thing this panel must never do.
     el.addEventListener('mousedown', function (e) {
-      if (e.target.closest('button')) e.preventDefault();
+      if (e.target.closest('button, .pa-seg-row')) e.preventDefault();
     });
 
     document.getElementById('paClose').addEventListener('click', function () { setOpen(false); });
     el.addEventListener('click', onButtonClick);
+    el.addEventListener('click', onSegClick);
     mountDrag(document.getElementById('paHead'));
     place();
     render();
@@ -478,6 +540,8 @@
     setBarWidth('paBarFw',  fw, fwMax);
     setBarWidth('paBarRef', rf, PA_REF_MAX);
 
+    renderSegScale();
+
     // SWR: 0 means the amplifier did not answer, 65535 means infinite. Neither
     // is a number to print.
     var swrEl = document.getElementById('paSwr'), swr = state ? state.swr : null;
@@ -584,6 +648,200 @@
     if (!hz) return false;
     var r = BAND_HZ[band];
     return hz < r[0] || hz > r[1];
+  }
+
+  // ── the tuning-segment scale ──────────────────────────────────────────────
+  //
+  // The tuner holds one setting per sub-band, so tuning the amplifier means
+  // tuning it in each one, and the only sensible place to do that is the CENTRE
+  // of a segment: from there the stored setting covers the whole of it. None of
+  // that is visible anywhere -- the amplifier's own display shows a frequency,
+  // not which division of the band it falls in, so the operator has no way to
+  // know which segment they are in, where it ends, or how to get to its middle.
+  // This row is that missing picture, and its arrows are the shortest way to the
+  // place worth pressing TUNE.
+
+  // Where a frequency falls in the tuner's divisions, or null when it falls
+  // outside all of them.
+  //
+  // Nearest centre rather than computed edges -- that handles 17 m (steps 50 then
+  // 40) and 12 m (72 then 75) with no special case, because between two centres
+  // the nearer one wins by definition. This is the daemon's own sub_band_for()
+  // logic, and the two being the same matters: the daemon is what actually moves
+  // the amplifier, so a scale that divided the band differently would point at
+  // the wrong thing.
+  //
+  // Only the outer edges need a test, and they need it badly. Answering with the
+  // nearest centre regardless would put 60 m at the top of 80 m and 2 m at the
+  // top of 6 m -- bands the amplifier does not have, drawn as if it did.
+  function segLocate(hz) {
+    var khz = (Number(hz) || 0) / 1000;
+    if (!khz) return null;
+    var bestBand = null, bestIdx = -1, bestGap = Infinity, b, list, i, gap, last;
+    for (b in PA_SUB_KHZ) {
+      list = PA_SUB_KHZ[b];
+      for (i = 0; i < list.length; i++) {
+        gap = Math.abs(list[i] - khz);
+        if (gap < bestGap) { bestGap = gap; bestBand = b; bestIdx = i; }
+      }
+    }
+    if (bestIdx < 0) return null;
+    list = PA_SUB_KHZ[bestBand];
+    last = list.length - 1;
+    if (last > 0) {
+      if (bestIdx === 0 && khz < list[0] &&
+          list[0] - khz > (list[1] - list[0]) / 2) return null;
+      if (bestIdx === last && khz > list[last] &&
+          khz - list[last] > (list[last] - list[last - 1]) / 2) return null;
+    }
+    return { band: Number(bestBand), list: list, idx: bestIdx };
+  }
+
+  // The lower edge of segment i in kHz; i === list.length gives the top edge of
+  // the last one. Half-way between two centres IS the edge, because that is where
+  // the nearest-centre rule flips -- so the irregular bands come out right
+  // without knowing they are irregular.
+  function segEdge(list, i) {
+    var n = list.length;
+    if (n < 2) return i <= 0 ? list[0] - 0.5 : list[0] + 0.5;
+    if (i <= 0) return list[0] - (list[1] - list[0]) / 2;
+    if (i >= n)  return list[n - 1] + (list[n - 1] - list[n - 2]) / 2;
+    return (list[i - 1] + list[i]) / 2;
+  }
+
+  // Which run of segments to draw. Paged rather than scrolled: the window holds
+  // still while the operator tunes about inside it and moves a whole page when
+  // the dot leaves, so the picture never crawls under a hand on the VFO.
+  //
+  // The min() keeps the last page full. On 80 m -- 29 segments -- the last page
+  // is 23..28 and not 24..28: a page showing one lonely segment would say nothing
+  // at all about where in the band it sits.
+  function segWindow(idx, n) {
+    if (n <= PA_SEG_PAGE) return { start: 0, end: n };
+    var start = Math.min(Math.floor(idx / PA_SEG_PAGE) * PA_SEG_PAGE, n - PA_SEG_PAGE);
+    return { start: start, end: start + PA_SEG_PAGE };
+  }
+
+  // The next segment centre below (dir < 0) or above (dir > 0) a frequency, or
+  // null when this band has none left that way.
+  //
+  // STRICTLY below/above, and that is the whole trick: standing 2 kHz off a
+  // centre, the arrow pointing at it lands ON it instead of skipping past to the
+  // next one -- which is what an operator about to press TUNE actually wants.
+  // Standing exactly on a centre, it moves one segment along.
+  function segNeighbour(list, khz, dir) {
+    var i;
+    if (dir < 0) {
+      for (i = list.length - 1; i >= 0; i--) if (list[i] < khz) return list[i];
+    } else {
+      for (i = 0; i < list.length; i++) if (list[i] > khz) return list[i];
+    }
+    return null;
+  }
+
+  // A greyed arrow has to say why, the same rule the command buttons follow: one
+  // that just stops working is indistinguishable from a broken one.
+  function setSegArrow(id, targetKhz, why) {
+    var b = document.getElementById(id);
+    if (!b) return;
+    b.disabled = !!why || targetKhz === null;
+    b.title = why ? why
+            : targetKhz === null ? 'No further tuning segment on this band'
+            : ('Tune to ' + Math.round(targetKhz) + ' kHz — the centre of the next segment');
+  }
+
+  function renderSegScale() {
+    var track = document.getElementById('paSegTrack');
+    var dot   = document.getElementById('paSegDot');
+    if (!track || !dot) return;
+
+    var hz = radioHz();
+    var at = segLocate(hz);
+    // The row never goes away and never changes height, the same discipline as
+    // the LED row and the numbers above it: the panel floats over a contest log,
+    // and something that appears and disappears would move everything under it.
+    // An empty scale with dead arrows is the honest version of "nothing to show".
+    var why = !hz ? 'The radio is not connected, so there is no frequency to place'
+            : !at ? 'The amplifier has no tuning segments on this band'
+            : '';
+    if (why) {
+      if (segKey) { track.innerHTML = ''; segKey = ''; segView = null; }
+      dot.hidden = true;
+      setSegArrow('paSegDown', null, why);
+      setSegArrow('paSegUp',   null, why);
+      return;
+    }
+
+    var win  = segWindow(at.idx, at.list.length);
+    var lo   = segEdge(at.list, win.start);
+    var hi   = segEdge(at.list, win.end);
+    var span = hi - lo;
+    var key  = at.band + ':' + win.start + ':' + win.end;
+
+    // Rebuild the dividers only when the window has actually moved. render() runs
+    // twice a second for the whole contest; rewriting six elements each time
+    // would be six thousand pointless rebuilds an hour, and would also kill the
+    // dot's own transition every time it landed mid-move.
+    if (key !== segKey) {
+      var html = '', i, a, z;
+      for (i = win.start; i < win.end; i++) {
+        a = segEdge(at.list, i);
+        z = segEdge(at.list, i + 1);
+        html += '<i class="pa-seg" data-centre="' + at.list[i] +
+                '" title="' + at.list[i] + ' kHz" style="left:' +
+                ((a - lo) / span * 100).toFixed(3) + '%;width:' +
+                ((z - a) / span * 100).toFixed(3) + '%"></i>';
+      }
+      track.innerHTML = html;
+      segKey = key;
+    }
+    segView = { list: at.list, lo: lo, hi: hi };
+
+    // The segment the dot is in gets filled. Without it the operator has to judge
+    // which side of a divider a 5 px dot is sitting on, which at 27 px a segment
+    // is exactly the decision this row exists to save them.
+    var segs = track.children, j;
+    for (j = 0; j < segs.length; j++) {
+      segs[j].classList.toggle('pa-seg-on', win.start + j === at.idx);
+    }
+
+    var khz = hz / 1000;
+    dot.hidden = false;
+    dot.style.left =
+      Math.max(0, Math.min(100, (khz - lo) / span * 100)).toFixed(3) + '%';
+
+    // Retuning the radio out from under a keyed amplifier is precisely the
+    // expensive mistake this panel is here to prevent, so TX kills both arrows --
+    // the same reason TUNE is held while the radio is transmitting.
+    var txWhy = radioTx() ? 'The radio is transmitting' : '';
+    setSegArrow('paSegDown', segNeighbour(at.list, khz, -1), txWhy);
+    setSegArrow('paSegUp',   segNeighbour(at.list, khz,  1), txWhy);
+  }
+
+  // Two ways to move, and the click is the one that makes a 29-segment band
+  // usable: crossing 80 m on the arrows alone would be 28 presses.
+  //
+  // Deliberately NOT part of onButtonClick. That one belongs to the amplifier's
+  // commands and to their pending/settled machinery, which exists because the
+  // daemon never answers. A retune needs none of it: /state comes back with the
+  // new frequency half a second later and the dot moves, which is the
+  // confirmation.
+  function onSegClick(e) {
+    var arrow = e.target.closest('.pa-seg-arrow');
+    var seg   = e.target.closest('.pa-seg');
+    var khz   = null;
+
+    if (arrow) {
+      if (arrow.disabled || !segView) return;
+      khz = segNeighbour(segView.list, radioHz() / 1000, Number(arrow.dataset.seg));
+    } else if (seg) {
+      if (radioTx() || !segView) return;
+      khz = Number(seg.dataset.centre);
+    }
+    if (!khz) return;
+    if (global.LogRadio && global.LogRadio.tuneTo) {
+      global.LogRadio.tuneTo(Math.round(khz * 1000), 'pa-seg');
+    }
   }
 
   // ── the button in the bottom bar ──────────────────────────────────────────
