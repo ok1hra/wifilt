@@ -31,8 +31,28 @@
 
   // ── Activate a log ─────────────────────────────────────────────────────────
 
-  function activateLog(log) {
+  // opts.restored marks the startup path (restoreActiveLog below), which runs
+  // through here exactly like a deliberate log switch does. The TX serial offset
+  // has to tell the two apart: it is always tied to one specific log, so
+  // switching logs must drop it -- but an F5 mid-contest must not, or the next
+  // macro would silently go out with the log's own running number again.
+  function activateLog(log, opts) {
+    const previous = _activeLog;
+    const switched = !(opts && opts.restored) &&
+                     (!previous || !log || previous.id !== log.id);
     _activeLog = log;
+    // Clearing both sides keeps one invariant true: no log record anywhere
+    // carries an enabled offset unless it is the open log and it was switched on
+    // during this sitting. Clearing only the incoming log would leave the one
+    // just left claiming an offset it is no longer operating under -- invisible
+    // until an export or a second tab reads that record. The base is left alone
+    // either way, so reopening the log offers it prefilled.
+    [previous, log].forEach(rec => {
+      if (switched && rec && rec.txSerialEnabled) {
+        rec.txSerialEnabled = false;
+        LogDB.updateLog(rec).catch(() => {});
+      }
+    });
     LogDB.setSetting('activeLogId', log ? log.id : null).catch(() => {});
     _notifyChange();
   }
@@ -44,7 +64,7 @@
       const id = cfg.activeLogId;
       if (!id) return null;
       return LogDB.getLog(id).then(log => {
-        if (log) activateLog(log);
+        if (log) activateLog(log, { restored: true });
         return log;
       });
     });
@@ -1916,12 +1936,30 @@ function clearForm() {
   setPrevExchVisible(false);
 }
 
+// ── TX serial offset ─────────────────────────────────────────────────────────
+// Shifts only what goes on the air. The log keeps its own unbroken run -- the
+// stored qsoNumber, the journal's Nr column and every export still carry the
+// log's own number, so a contest log needs reconciling by hand (documented in
+// SOFTWARE.md). Applied in exactly one place, macroCtx() below, which is the
+// only path the real nextQsoNumber takes to the macro engine.
+//
+// The clamp at 1 is a runtime backstop for the case where the log's state moves
+// after the base was set (a deleted QSO): 000 or a negative number must never
+// reach the key.
+function txSerial(log, n) {
+  if (!log || !log.txSerialEnabled) return n;
+  const base = Number(log.txSerialBase);
+  if (!Number.isFinite(base) || base < 1) return n;
+  return Math.max(1, n - base + 1);
+}
+
 // ── Macro context builder ─────────────────────────────────────────────────────
 
 function macroCtx(overrides) {
   const log    = LogManager.getActiveLog() || {};
   const trxIdx = app.activeTrx - 1;
   const de     = log.defaultExchange || '';
+  const nr     = txSerial(log, log.nextQsoNumber || 1);
   return Object.assign({
     mode:         app.mode,
     freqHz:       app.frequency,
@@ -1933,8 +1971,8 @@ function macroCtx(overrides) {
     // cannot be read is still a mode nothing gets keyed in, so the value is only
     // ever a placeholder for the preview.
     rstSent:      validRst(inpRst.value) || rstDefault(app.mode) || '599',
-    qsoNumber:    log.nextQsoNumber    || 1,
-    prevQsoNumber:(log.nextQsoNumber   || 1) - 1,
+    qsoNumber:    nr,
+    prevQsoNumber:Math.max(1, nr - 1),
     myLocator:    log.myLocator        || '',
     cwAbbrev:     log.cwAbbrev !== false,
     _oi3:         app.trxOi3[trxIdx] && trxIdx > 0,
@@ -2519,6 +2557,7 @@ function logQso(call, exch, options) {
   LogDB.addQso(qso)
     .then(saved => {
       LogManager.bumpQsoNumber();
+      refreshExchLabel();
       appendJournalRow(saved);
       _onQsoBackupHook();
       // Phase 5: send TU macro + reset RIT
@@ -2906,6 +2945,7 @@ const btnOpenLog = document.getElementById('btnOpenLog');
 btnOpenLog.addEventListener('click', () => LogManager.openModal());
 
 function onActiveLogChanged(log) {
+  refreshExchLabel();
   if (!log) {
     btnOpenLog.textContent = 'LOG';
     btnOpenLog.classList.remove('btn-trx-active');
@@ -3018,6 +3058,21 @@ function buildMacroEditorModal() {
           <div class="lm-section-title">Placeholders</div>
           <div class="mx-help">${helpHtml}</div>
         </section>
+        <section class="lm-section">
+          <div class="lm-section-title">TX serial offset<span class="mx-tab-dot" id="mxSerialDot" hidden></span></div>
+          <div class="lm-row lm-row-check">
+            <span>Offset</span>
+            <label class="lm-check-wrap">
+              <input type="checkbox" id="mxSerialEnable">
+              <span class="lm-check-text">Send my own numbering from 001</span>
+            </label>
+          </div>
+          <label class="lm-row">
+            <span>Log QSO# = 001</span>
+            <input id="mxSerialBase" type="number" min="1" step="1">
+          </label>
+          <div class="mx-serial-note" id="mxSerialNote"></div>
+        </section>
         <div class="mx-tabs" role="tablist">
           <button type="button" class="lm-btn mx-tab" id="mxTabCw" data-mode="cw" role="tab">CW<span class="mx-tab-dot" hidden></span></button>
           <button type="button" class="lm-btn mx-tab" id="mxTabRtty" data-mode="rtty" role="tab">RTTY<span class="mx-tab-dot" hidden></span></button>
@@ -3042,6 +3097,13 @@ function buildMacroEditorModal() {
   document.getElementById('mxClose').addEventListener('click', closeMacroEditor);
   document.getElementById('mxCancel').addEventListener('click', closeMacroEditor);
   document.getElementById('mxSave').addEventListener('click', onMacroEditorSave);
+
+  ['mxSerialEnable', 'mxSerialBase'].forEach(id => {
+    const inp = document.getElementById(id);
+    if (!inp) return;
+    inp.addEventListener('input',  _mxSerialRefresh);
+    inp.addEventListener('change', _mxSerialRefresh);
+  });
 
   el.querySelectorAll('.mx-tab').forEach(tab => {
     tab.addEventListener('click', () => _macroEditorShowTab(tab.dataset.mode));
@@ -3115,6 +3177,91 @@ function _macroEditorUpdateTabDot(mode) {
   if (dot) dot.hidden = !anyDiffers;
 }
 
+// ── Macro editor: TX serial offset ───────────────────────────────────────────
+// The offset is mode-independent, so it sits above the CW/RTTY tabs and outside
+// the per-tab dirty machinery. It also lives somewhere else entirely: the macro
+// templates are a station-wide blob on the ESP32, while the offset belongs to
+// one log record in IndexedDB. Only the Save button ties them together.
+
+function _mxSerialRead() {
+  const chk = document.getElementById('mxSerialEnable');
+  const inp = document.getElementById('mxSerialBase');
+  return {
+    enabled: !!(chk && chk.checked),
+    raw:     inp ? inp.value.trim() : '',
+    base:    inp ? Number(inp.value) : NaN,
+  };
+}
+
+// Single source of truth for "may this be saved". Returns the reason on failure
+// so the note line and the Save handler cannot drift apart.
+function _mxSerialValidate() {
+  const log = LogManager.getActiveLog();
+  const st  = _mxSerialRead();
+  if (!log)        return { ok: false, noLog: true, msg: 'No log open' };
+  if (!st.enabled) return { ok: true, enabled: false, log: log };
+  if (!st.raw || !Number.isInteger(st.base) || st.base < 1) {
+    return { ok: false, msg: 'Enter a whole QSO number (1 or higher)' };
+  }
+  const next = log.nextQsoNumber || 1;
+  if (st.base > next) {
+    return { ok: false, msg: '\u25b2 the log only has ' + (next - 1) + ' QSO so far' };
+  }
+  return { ok: true, enabled: true, base: st.base, log: log };
+}
+
+function _mxSerialRefresh() {
+  const note = document.getElementById('mxSerialNote');
+  const chk  = document.getElementById('mxSerialEnable');
+  const inp  = document.getElementById('mxSerialBase');
+  const dot  = document.getElementById('mxSerialDot');
+  if (!note || !chk || !inp) return;
+
+  const log = LogManager.getActiveLog();
+  const v   = _mxSerialValidate();
+
+  chk.disabled = !log;
+  inp.disabled = !log || !chk.checked;
+
+  if (!log) {
+    note.textContent = 'No log open';
+  } else if (!chk.checked) {
+    note.textContent = 'Log sends its own numbers (now ' + (log.nextQsoNumber || 1) + ')';
+  } else if (!v.ok) {
+    note.textContent = v.msg;
+  } else {
+    note.textContent = 'log #' + (log.nextQsoNumber || 1) + ' \u2192 sends ' +
+                       String(txSerial({ txSerialEnabled: true, txSerialBase: v.base },
+                                       log.nextQsoNumber || 1)).padStart(3, '0');
+  }
+  note.classList.toggle('mx-serial-bad', !!log && chk.checked && !v.ok);
+  inp.classList.toggle('mx-serial-bad',  !!log && chk.checked && !v.ok);
+
+  // Dirty against the log's *saved* state, not against a default -- a log's own
+  // QSO number has no default to compare with.
+  if (dot) {
+    const st      = _mxSerialRead();
+    const savedOn = !!(log && log.txSerialEnabled);
+    const savedNr = log && log.txSerialBase != null ? Number(log.txSerialBase) : null;
+    const differs = !!log && (st.enabled !== savedOn ||
+                              (st.enabled && st.base !== savedNr));
+    dot.hidden = !differs;
+  }
+}
+
+// Prefill with the log's current nextQsoNumber when nothing is stored yet: for a
+// log of 720 QSO that is exactly 721, the number the operator would otherwise
+// have to work out by hand.
+function _mxSerialPopulate() {
+  const chk = document.getElementById('mxSerialEnable');
+  const inp = document.getElementById('mxSerialBase');
+  if (!chk || !inp) return;
+  const log = LogManager.getActiveLog();
+  chk.checked = !!(log && log.txSerialEnabled);
+  inp.value   = log ? String(log.txSerialBase || log.nextQsoNumber || 1) : '';
+  _mxSerialRefresh();
+}
+
 function _macroEditorPopulate() {
   if (!window.LogMacros) return;
   const store = LogMacros.getStore();
@@ -3126,6 +3273,7 @@ function _macroEditorPopulate() {
       _macroEditorOnFieldChange(mode, t.key);
     });
   });
+  _mxSerialPopulate();
   const status = document.getElementById('mxStatus');
   if (status) status.textContent = '';
 }
@@ -3154,6 +3302,17 @@ function closeMacroEditor() {
 
 function onMacroEditorSave() {
   if (!window.LogMacros) return;
+  const status = document.getElementById('mxStatus');
+
+  // Validate the offset before anything is written. A rejected offset saves
+  // nothing at all -- not the macros either -- so the dialog never half-applies.
+  const serial = _mxSerialValidate();
+  if (!serial.ok && !serial.noLog) {
+    if (status) status.textContent = serial.msg;
+    _mxSerialRefresh();
+    return;
+  }
+
   const newStore = { cw: {}, rtty: {} };
   ['cw', 'rtty'].forEach(mode => {
     MACRO_EDITOR_TYPES.forEach(t => {
@@ -3161,16 +3320,24 @@ function onMacroEditorSave() {
       newStore[mode][t.key] = inp ? _mxUnescapeCtrl(inp.value) : '';
     });
   });
-  const status = document.getElementById('mxStatus');
   if (status) status.textContent = 'Saving…';
+  // The POST to the ESP32 is the half that can fail on the network, so it goes
+  // first: if it does, the offset stays unwritten and the dialog is still whole.
   LogMacros.save(newStore).then(ok => {
-    if (!status) return;
-    if (ok) {
-      status.textContent = 'Saved';
-      setTimeout(closeMacroEditor, 600);
-    } else {
-      status.textContent = 'Save failed — try again';
+    if (!ok) {
+      if (status) status.textContent = 'Save failed — try again';
+      return;
     }
+    const log = serial.log;
+    if (log) {
+      log.txSerialEnabled = !!serial.enabled;
+      if (serial.enabled) log.txSerialBase = serial.base;
+      LogDB.updateLog(log).catch(() => {});
+    }
+    refreshExchLabel();
+    updateMacroPreview();
+    if (status) status.textContent = 'Saved';
+    setTimeout(closeMacroEditor, 600);
   });
 }
 
@@ -3404,6 +3571,28 @@ function updateMacroPreview() {
   }
 
   macroPreview.textContent = text;
+}
+
+// ── EXCH label: the standing "offset is on" signal ───────────────────────────
+// With the offset on, the whole log carries one run of numbers while a different
+// one goes on the air. The widened label is the only permanent sign of that, so
+// it must never be left stale -- it is refreshed on log change, after every
+// logged QSO, and right after the macro editor saves.
+//
+// Digits, never the CW abbreviation: "TT1|EXCH" is unreadable at a glance, and
+// what actually goes to the key is already visible in #macroPreview.
+function refreshExchLabel() {
+  const el = document.getElementById('lblExch');
+  if (!el) return;
+  const log = LogManager.getActiveLog();
+  if (!log || !log.txSerialEnabled) {
+    el.textContent = 'EXCH';
+    el.classList.remove('log-field-lbl-serial');
+    return;
+  }
+  const n = txSerial(log, log.nextQsoNumber || 1);
+  el.textContent = String(n).padStart(3, '0') + '|EXCH';
+  el.classList.add('log-field-lbl-serial');
 }
 
 function _alignMacroPreview() {

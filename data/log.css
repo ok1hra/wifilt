@@ -1250,6 +1250,30 @@ body {
   color: var(--dark-muted);
 }
 
+/* ── TX serial offset (macro editor) ── */
+
+.mx-serial-note {
+  margin: -2px 0 2px 112px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--btn-on-tx);
+  letter-spacing: 0.03em;
+  min-height: 1.2em;
+}
+
+/* --conn-fail is the palette's failure red at :root; --red exists only inside
+   the RTTY panel's own scope further down, so it is not usable here. */
+.mx-serial-note.mx-serial-bad { color: var(--conn-fail); }
+input.mx-serial-bad           { border-color: var(--conn-fail); }
+
+/* The widened EXCH label is the only standing sign that the log is sending a
+   different run of numbers than it stores -- amber is the project's "differs
+   from stock" token, same as the macro editor's own dirty markers. */
+.log-field-lbl-serial {
+  color: var(--amber);
+  font-weight: 700;
+}
+
 /* ── Help button ── */
 
 .btn-help {

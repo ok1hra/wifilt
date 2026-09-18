@@ -800,6 +800,37 @@ control characters.
 computer, tablet and phone pointed at this station sends the same wording. Saving takes effect
 in the tab you saved from immediately, with no reload.
 
+#### Sending serial numbers from 001 — the TX serial offset
+
+A log's serial number can only be set when the log is created (**Start QSO#**,
+[section 3.1](#31-logs-open-create-activate)). If you keep one continuous log and then enter a
+contest, `{NR}` would go on the air as `721` rather than the `001` the contest expects.
+
+The **TX serial offset** at the top of the macro editor fixes that without starting a new log.
+Tick **Send my own numbering from 001** and enter, in **Log QSO# = 001**, which of the log's
+QSO numbers should go out as serial 001. For a log holding 720 QSOs that is `721` — the number
+the field offers you already, so normally you only tick the box and press **Save**.
+
+From then on the log's QSO 721 keys `001`, 722 keys `002`, and so on. It applies to `{NR}`,
+`{PREVNR}` and to the serial inside `{EXCH}`, on CW and on RTTY alike, so every macro shifts
+together. The line under the field spells out the result — `log #721 → sends 001` — before you
+save, and the field refuses a number past the end of the log rather than keying `000`.
+
+While the offset is on, the **EXCH** label changes to `001|EXCH` and shows the serial that will
+go out next. That is deliberate: it is the standing reminder that the log and the air are
+carrying different numbers, and it counts up with each QSO you log.
+
+The offset is remembered per log. Reloading the page keeps it — an accidental F5 in the middle
+of a contest will not silently put you back on `721`. **Opening a different log always switches
+it off**, so a log can never inherit another log's numbering; the number you typed is kept, so
+coming back to that log offers it filled in and you only need to tick the box again.
+
+> **The offset changes what you transmit, not what you store.** The log keeps its own unbroken
+> numbering: the journal's **Nr** column, the `DUPE:` panel, the CSV, ADIF `STX` and Cabrillo
+> all still show `721` for the QSO you sent `001` for. This is what lets one continuous log
+> carry a contest in the middle of it — but it does mean **a log submitted for that contest
+> needs its serials adjusted before you send it in**.
+
 ### 3.6 The RTTY palette
 
 In `RTTY`, `RTTY-R`, `USB-D` and `LSB-D` a **RTTY** button appears in the bottom bar, next to
