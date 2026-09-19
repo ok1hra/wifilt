@@ -574,13 +574,14 @@ storage exception, or back up regularly.
 **LOG** opens the log manager.
 
 *Saved logs* lists every log in this browser with its QSO count, filtered by the search box.
-Each row has four actions:
+Each row has five actions:
 
 | Action | Effect |
 |---|---|
 | **Open** | make this the active log — everything you log from now on goes here. The log that is already active shows an `active` tag here instead of a button. |
 | **CSV** | download the log as CSV |
 | **ADIF** | download the log as ADIF |
+| **Edit** | change the log's name, exchange or locator — see below |
 | **Del** | delete this log, after a confirmation |
 
 **Delete all** wipes every log in the browser. It is deliberately a two-press action.
@@ -598,6 +599,43 @@ Each row has four actions:
 | **CW numbers** | when ticked, CW abbreviations are used: `0→T`, `9→N`, so `001` is sent as `TT1` and `599` as `5NN` |
 
 A live **Preview** shows exactly what the exchange will look like before you create the log.
+
+#### Editing a log — the Edit button
+
+**Edit** on any row turns the *New log* form into *Edit log*, filled in with that log's
+settings. Four fields can be changed, on a log that already holds QSOs as well:
+
+| Field | Note on changing it later |
+|---|---|
+| **Contest** | renames the log everywhere, including the CSV and ADIF filenames |
+| **Exchange** / **Exch value** | applies from the next QSO on; already-logged QSOs keep the format they were worked with |
+| **My locator** | applies from the next QSO on — see the warning below |
+| **CW numbers** | applies from the next macro sent |
+
+**My call** and **Start QSO#** are deliberately not editable. The callsign is what every
+already-logged QSO was worked under, and the running number has its own, safer control — the
+TX serial offset in [section 3.5](#35-cw-and-rtty-macros), which shifts what you transmit
+without disturbing the log itself.
+
+**Save changes** writes and closes; **Cancel**, the ✕ and clicking outside all discard the
+edit and put the form back to creating a new log.
+
+Changing the exchange on a log that already has QSOs shows a note with how many are affected.
+It does not stop you — correcting an exchange picked wrongly at the start is exactly what this
+is for — it only makes sure the split is a decision rather than a surprise at export time.
+
+> **Renaming a log to or from `JS8CALL` needs a second click.** JS8 finds its own log by that
+> name, so renaming it away makes JS8 start a fresh log at its next QSO, and renaming another
+> log *to* `JS8CALL` hands it that traffic instead. Both are useful — renaming to
+> `JS8CALL 2026` is the tidy way to close off a season — so the interface warns rather than
+> refuses.
+
+> **A changed locator does not rewrite history.** QRB and azimuth stored with each QSO stay as
+> they were computed, so a log worked from two locations keeps an honest record of both. The
+> consequence is that the ADIF `MY_GRIDSQUARE` field, which is built from the log at export
+> time, will show the *new* locator for those older QSOs while the distances in the CSV still
+> come from the old one. If you are correcting a typo rather than moving, the cleanest fix is
+> to export, correct and reimport.
 
 ### 3.2 Exchange types
 

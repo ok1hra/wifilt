@@ -93,6 +93,10 @@
       myLocator:       opts.myLocator,
       createdAtUtc:    now,
       updatedAtUtc:    now,
+      // Absent means on, matching how every reader tests it (cwAbbrev !== false).
+      // This used to be dropped on the floor here, which made the dialog's own
+      // checkbox a no-op for every log ever created.
+      cwAbbrev:        opts.cwAbbrev !== false,
       nextQsoNumber:   opts.startQsoNumber || 1,
       active:          true,
     };

@@ -331,7 +331,7 @@
         </section>
 
         <section class="lm-section">
-          <div class="lm-section-title">New log</div>
+          <div class="lm-section-title" id="lmFormTitle">New log</div>
           <form id="lmNewForm" class="lm-form" autocomplete="off">
             <label class="lm-row">
               <span>Contest</span>
@@ -351,6 +351,7 @@
                 <option value="STATIC">STATIC</option>
               </select>
             </div>
+            <div class="lm-exch-note" id="lmExchNote" hidden></div>
             <div class="lm-row" id="lmStaticRow" style="display:none">
               <span>Exch value</span>
               <input id="lmExchStatic" maxlength="20" placeholder="e.g. SK1, 14, A">
@@ -375,7 +376,9 @@
               </label>
             </div>
             <div class="lm-actions">
-              <button type="submit" class="lm-btn lm-btn-primary">Create &amp; activate</button>
+              <span id="lmFormStatus" class="lm-form-status"></span>
+              <button type="button" class="lm-btn" id="lmEditCancel" hidden>Cancel</button>
+              <button type="submit" class="lm-btn lm-btn-primary" id="lmFormSubmit">Create &amp; activate</button>
             </div>
           </form>
         </section>
@@ -417,8 +420,12 @@
       }).catch(() => {});
     }
 
+    document.getElementById('lmEditCancel').addEventListener('click', () => _setFormMode(null));
     document.getElementById('lmExchType').addEventListener('change', _onExchTypeChange);
-    document.getElementById('lmExchStatic').addEventListener('input', _updateExchPreview);
+    document.getElementById('lmExchStatic').addEventListener('input', () => {
+      _updateExchPreview();
+      _updateExchNote();
+    });
     document.getElementById('lmLoc').addEventListener('input', _updateExchPreview);
     document.getElementById('lmCwAbbrev').addEventListener('change', _updateExchPreview);
     document.getElementById('lmExchHelpBtn').addEventListener('click', e => {
@@ -430,6 +437,98 @@
     _updateExchPreview();
 
     return el;
+  }
+
+  // ── Edit mode ──────────────────────────────────────────────────────────────
+  // The "New log" form doubles as the editor: the exchange select, its STATIC
+  // row, the help popup and the live preview are fiddly enough that a second
+  // copy would be two things to keep in step forever. Only four fields are
+  // editable -- the call and the running number deliberately are not -- so the
+  // rest of the form is hidden while editing.
+
+  let _editingLogId = null;   // null = the form creates a new log
+
+  function _formRowOf(id) {
+    const el = document.getElementById(id);
+    return el ? el.closest('.lm-row') : null;
+  }
+
+  function _setFormMode(log) {
+    _editingLogId = log ? log.id : null;
+    const editing = !!log;
+
+    const title  = document.getElementById('lmFormTitle');
+    const submit = document.getElementById('lmFormSubmit');
+    const cancel = document.getElementById('lmEditCancel');
+    const call   = document.getElementById('lmMyCall');
+    const status = document.getElementById('lmFormStatus');
+
+    if (title)  title.textContent  = editing ? 'Edit log' : 'New log';
+    if (submit) submit.textContent = editing ? 'Save changes' : 'Create & activate';
+    if (cancel) cancel.hidden      = !editing;
+    if (status) status.textContent = '';
+    _disarmRenameConfirm();
+
+    // My call and the running number stay out of the editor. Hiding a field that
+    // carries `required` is not enough: the browser refuses to submit a form
+    // whose invalid control cannot be focused, and does it silently from the
+    // page's point of view -- Save would simply stop working. The attribute has
+    // to come off with the row and go back on with it.
+    [_formRowOf('lmMyCall'), _formRowOf('lmStartNr')].forEach(row => {
+      if (row) row.style.display = editing ? 'none' : '';
+    });
+    if (call) {
+      if (editing) call.removeAttribute('required');
+      else         call.setAttribute('required', '');
+    }
+
+    if (editing) {
+      document.getElementById('lmContest').value = log.contestName || '';
+      document.getElementById('lmLoc').value     = log.myLocator   || '';
+      // undefined counts as on, the same rule the macro engine applies
+      document.getElementById('lmCwAbbrev').checked = log.cwAbbrev !== false;
+
+      // Inverse of the submit handler: the record holds either a type name or
+      // the static text itself -- 'STATIC' is never stored.
+      const de    = log.defaultExchange || '';
+      const known = ['NR', 'NRUTC', 'NRLOC'].includes(de);
+      document.getElementById('lmExchType').value   = de === '' ? '' : (known ? de : 'STATIC');
+      document.getElementById('lmExchStatic').value = (de === '' || known) ? '' : de;
+      _onExchTypeChange();          // unfolds the STATIC row and redraws the preview
+      document.getElementById('lmContest').focus();
+    } else {
+      const form = document.getElementById('lmNewForm');
+      if (form) form.reset();
+      _onExchTypeChange();
+    }
+    _updateExchNote();
+  }
+
+  // How many QSOs the log being edited already holds. renderLogList() has
+  // counted them already, so this costs no database round trip.
+  function _editingQsoCount() {
+    const i = _allLogs.findIndex(l => l && l.id === _editingLogId);
+    return i < 0 ? 0 : (_allCounts[i] || 0);
+  }
+
+  // Changing the exchange on a log that already has QSOs leaves it carrying two
+  // formats. That is usually the whole point of the edit, so this only says so
+  // -- it never blocks the save.
+  function _updateExchNote() {
+    const note = document.getElementById('lmExchNote');
+    if (!note) return;
+    const log = _editingLogId ? _allLogs.find(l => l && l.id === _editingLogId) : null;
+    if (!log) { note.hidden = true; return; }
+
+    const typeEl   = document.getElementById('lmExchType');
+    const staticEl = document.getElementById('lmExchStatic');
+    const next     = typeEl.value === 'STATIC' ? staticEl.value.trim() : typeEl.value;
+    const count    = _editingQsoCount();
+
+    if (next === (log.defaultExchange || '') || count === 0) { note.hidden = true; return; }
+    note.textContent = '\u25b2 ' + count + ' QSO already logged with the old format (' +
+                       _exchDisplayLabel(log.defaultExchange) + ')';
+    note.hidden = false;
   }
 
   // ── Exchange type helpers ──────────────────────────────────────────────────
@@ -447,6 +546,7 @@
     const row  = document.getElementById('lmStaticRow');
     if (row) row.style.display = (type === 'STATIC') ? '' : 'none';
     _updateExchPreview();
+    _updateExchNote();
   }
 
   function _cwNum(n, abbrev) {
@@ -562,6 +662,7 @@
           ${!isActive ? `<button class="lm-btn lm-btn-sm" data-act="open" data-id="${_esc(log.id)}">Open</button>` : '<span class="lm-active-tag">active</span>'}
           <button class="lm-btn lm-btn-sm lm-btn-export" data-act="csv"  data-id="${_esc(log.id)}">CSV</button>
           <button class="lm-btn lm-btn-sm lm-btn-export" data-act="adif" data-id="${_esc(log.id)}">ADIF</button>
+          <button class="lm-btn lm-btn-sm"               data-act="edit" data-id="${_esc(log.id)}">Edit</button>
           <button class="lm-btn lm-btn-sm lm-btn-del"    data-act="del"  data-id="${_esc(log.id)}">Del</button>
         </div>
       `;
@@ -670,6 +771,13 @@
       LogDB.getLog(id).then(log => { if (log) downloadCsv(log); });
     } else if (act === 'adif') {
       LogDB.getLog(id).then(log => { if (log) downloadAdif(log); });
+    } else if (act === 'edit') {
+      LogDB.getLog(id).then(log => {
+        if (!log) return;
+        _setFormMode(log);
+        const form = document.getElementById('lmNewForm');
+        if (form) form.scrollIntoView({ block: 'nearest' });
+      });
     } else if (act === 'del') {
       if (!confirm('Delete log ' + id + ' and all its QSOs?')) return;
       LogDB.getQsosForLog(id)
@@ -722,8 +830,33 @@
     });
   }
 
+  // ── JS8 rename guard ───────────────────────────────────────────────────────
+  // JS8 auto-logging resolves its log by contest NAME, not by id (data.js,
+  // findJs8Log). Renaming JS8CALL away therefore detaches it -- JS8 will start a
+  // fresh log at the next QSO -- and renaming some other log TO JS8CALL hands it
+  // that traffic instead. Both are legitimate (renaming to "JS8CALL 2026" is the
+  // clean way to archive a season), so this warns on a first click and commits
+  // on a second, the same arm/confirm shape as Delete all.
+
+  const JS8_LOG_NAME = 'JS8CALL';
+  let _renameConfirmTimer = null;
+
+  function _disarmRenameConfirm() {
+    const btn = document.getElementById('lmFormSubmit');
+    clearTimeout(_renameConfirmTimer);
+    if (!btn) return;
+    btn.dataset.renameConfirm = '';
+    if (_editingLogId) btn.textContent = 'Save changes';
+  }
+
+  function _needsRenameConfirm(oldName, newName) {
+    if (oldName === newName) return false;
+    return oldName === JS8_LOG_NAME || newName === JS8_LOG_NAME;
+  }
+
   function onNewFormSubmit(e) {
     e.preventDefault();
+    if (_editingLogId) return onEditFormSubmit();
     const contestName    = document.getElementById('lmContest').value.trim();
     const stationCall    = document.getElementById('lmMyCall').value.trim();
     const myLocator      = document.getElementById('lmLoc').value.trim();
@@ -744,6 +877,59 @@
       });
   }
 
+  function onEditFormSubmit() {
+    const contestName = document.getElementById('lmContest').value.trim();
+    const myLocator   = document.getElementById('lmLoc').value.trim();
+    const cwAbbrev    = document.getElementById('lmCwAbbrev').checked;
+    const exchType    = document.getElementById('lmExchType').value;
+    const defaultExchange = exchType === 'STATIC'
+      ? document.getElementById('lmExchStatic').value.trim()
+      : exchType;
+    if (!contestName) return;
+
+    const id     = _editingLogId;
+    const status = document.getElementById('lmFormStatus');
+    const btn    = document.getElementById('lmFormSubmit');
+    const known  = _allLogs.find(l => l && l.id === id);
+
+    if (known && _needsRenameConfirm(known.contestName, contestName) &&
+        btn && btn.dataset.renameConfirm !== '1') {
+      btn.dataset.renameConfirm = '1';
+      btn.textContent = '\u26a0 Rename anyway?';
+      if (status) {
+        status.textContent = contestName === JS8_LOG_NAME
+          ? 'JS8 will start logging into this log.'
+          : 'JS8 finds its log by the name ' + JS8_LOG_NAME + ' — it will start a new one.';
+      }
+      clearTimeout(_renameConfirmTimer);
+      _renameConfirmTimer = setTimeout(_disarmRenameConfirm, 4000);
+      return;
+    }
+
+    // The active log is a live object: bumpQsoNumber() raises nextQsoNumber in
+    // memory and writes afterwards. Re-reading it from the database here and
+    // writing that back would roll the counter back to whatever it was when the
+    // dialog opened, quietly costing a QSO logged in the meantime its number.
+    const resolve = (_activeLog && _activeLog.id === id)
+      ? Promise.resolve(_activeLog)
+      : LogDB.getLog(id);
+
+    resolve.then(log => {
+      if (!log) return;
+      log.contestName     = contestName;
+      log.defaultExchange = defaultExchange;
+      log.myLocator       = myLocator;
+      log.cwAbbrev        = cwAbbrev;
+      return LogDB.updateLog(log).then(() => {
+        if (log === _activeLog) _notifyChange();
+        _setFormMode(null);
+        renderLogList();
+      });
+    }).catch(err => {
+      if (status) status.textContent = 'Save failed: ' + (err.message || err);
+    });
+  }
+
   function _esc(s) {
     return String(s || '')
       .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -756,13 +942,14 @@
     if (!modal) modal = buildModal();
     modal.classList.remove('lm-hidden');
     const inp = document.getElementById('lmContest');
-    if (inp && !inp.value) inp.value = todayYyyymmdd() + '-';
+    if (inp && !inp.value && !_editingLogId) inp.value = todayYyyymmdd() + '-';
     renderLogList();
   }
 
   function closeModal() {
     const modal = document.getElementById('logMgrModal');
     if (modal) modal.classList.add('lm-hidden');
+    if (_editingLogId) _setFormMode(null);
   }
 
   // ── Export ─────────────────────────────────────────────────────────────────
@@ -1712,6 +1899,69 @@ document.getElementById('helpModal').addEventListener('click', e => {
   if (e.target === e.currentTarget) closeHelpModal();
 });
 
+// ── Journal: the last QSO stays visible ──────────────────────────────────────
+//
+// The journal is a flex:1 scroller with everything else -- dupe panel, band
+// map, status bar, inputs, macro preview, button bar -- stacked BELOW it and
+// flex-shrink:0, and its rows are pinned to the bottom by .log-journal-spacer.
+// So when any of that chrome grows, the journal's viewport shrinks from the
+// bottom while the browser keeps scrollTop, which is measured from the TOP. The
+// newest QSO -- the one being worked -- slides out of sight by exactly the
+// number of pixels the chrome gained. It looks like something covered it;
+// nothing did, the scroll position simply came loose.
+//
+// The contract: a journal that was at the bottom is put back there after any
+// height change. A journal the operator had scrolled UP is left alone -- the
+// last QSO may only be hidden by their own scrolling.
+//
+// Three things make this less obvious than it sounds:
+//
+//   * `stuck` cannot be measured inside the ResizeObserver. RO runs after
+//     layout, so by then clientHeight is already the new (smaller) one while
+//     scrollTop is still the old one: the formula returns the size of the
+//     shrink, which is indistinguishable from "the operator scrolled up by that
+//     much". The flag therefore has to be kept continuously, from `scroll`.
+//
+//   * scroll events are delivered BEFORE ResizeObserver callbacks in a frame.
+//     That is what normally makes this work -- growing chrome does not clamp
+//     scrollTop, so no scroll event fires and the flag survives to be read. But
+//     it also means a wheel turn landing in the same frame as an arriving dupe
+//     panel would compute stuck=false from post-shrink geometry. Hence the
+//     guard: a sample taken while the height no longer matches what RO last
+//     recorded is dropped, and that frame's decision is left to RO.
+//
+//   * scrollTop, not scrollIntoView(). The body scrolls horizontally too on
+//     narrow screens (see syncJournalHScroll below); scrollIntoView would
+//     rewrite scrollLeft and slide the columns out from under the header.
+const JournalBottom = (function () {
+  const body = document.getElementById('logJournalBody');
+  let stuck = true;               // a fresh journal is at its own bottom
+  // The height the observer last acted on. Seeded from the real one rather
+  // than 0 so the scroll handler is live before the observer's first callback,
+  // and so a browser without ResizeObserver still tracks the flag correctly --
+  // it just loses the automatic re-pin, which is where it started.
+  let h = body ? body.clientHeight : 0;
+
+  function pin() { if (body) body.scrollTop = body.scrollHeight; }
+
+  if (body) {
+    body.addEventListener('scroll', () => {
+      if (body.clientHeight !== h) return;   // a resize is in flight -- RO owns it
+      stuck = body.scrollHeight - body.scrollTop - body.clientHeight < 4;
+    });
+
+    if (window.ResizeObserver) {
+      new ResizeObserver(() => {
+        if (body.clientHeight === h) return; // width-only change: not ours
+        h = body.clientHeight;
+        if (stuck) pin();
+      }).observe(body);
+    }
+  }
+
+  return { isStuck: () => stuck, pin };
+})();
+
 // ── Journal text size ─────────────────────────────────────────────────────────
 //
 // Alt+ and Alt- scale the logged QSOs, exactly as the DX cluster's own + / -
@@ -1742,13 +1992,19 @@ function applyJournalZoom(persist) {
 // The newest QSO is the one being worked, and it lives at the BOTTOM of the
 // journal. Rows that grow under a scroll position measured from the top would
 // push it out of sight, so a journal that was at the bottom is put back there.
+//
+// This one place still has to pin by hand, because JournalBottom's observer
+// will not catch it: the zoom changes the journal's CONTENT -- every row gets
+// taller -- and an observer watches a BOX. The header does scale with it, but
+// between 1.0 and 1.1 that is 1.4px against an integer clientHeight, so the
+// rounding can swallow the whole signal while scrollHeight moves by tens of
+// pixels. The flag is read before the change and acted on after it, so what
+// "at the bottom" means is still defined in exactly one place.
 function stepJournalZoom(delta) {
-  const body = document.getElementById('logJournalBody');
-  const wasAtBottom = !body ||
-    body.scrollHeight - body.scrollTop - body.clientHeight < 4;
+  const stuck = JournalBottom.isStuck();
   journalZoom = Math.round((journalZoom + delta) * 10) / 10;
   applyJournalZoom(true);
-  if (body && wasAtBottom) body.scrollTop = body.scrollHeight;
+  if (stuck) JournalBottom.pin();
 }
 
 (function loadJournalZoom() {
@@ -2681,7 +2937,19 @@ function appendJournalRow(qso, displayNr) {
   if (!qso.deleted) row.title = 'Click to edit';
 
   body.appendChild(row);
-  row.scrollIntoView({ block: 'end' });
+  // A logged QSO always brings the journal to it -- that is the operator's own
+  // action, not a resize, and the form has already cleared, so this is the only
+  // confirmation the QSO landed at all.
+  //
+  // Through JournalBottom and not scrollIntoView({block:'end'}), on two counts.
+  // scrollIntoView aligns the row's bottom edge with the scrollport's, which
+  // stops 4px short of the true bottom because .log-journal-body carries that
+  // much bottom padding -- close enough to look right, far enough that the
+  // "is the journal at its bottom" test read false after every page load, and
+  // the first band map toggle would then drop the newest QSO. It also scrolls
+  // horizontally, which would slide the columns out from under the header on a
+  // narrow screen.
+  JournalBottom.pin();
 }
 
 // ── QSO row click → edit dialog ───────────────────────────────────────────────

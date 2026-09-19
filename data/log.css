@@ -509,7 +509,19 @@ body {
   font-family: var(--font-mono);
   font-weight: bold;
   overflow-y: auto;
-  max-height: 8em;
+  /* 8em is what the list wants; a fifth of the app's height is what the window
+     can spare. This panel is the only elastic piece of chrome under the journal
+     -- everything else down there is a fixed height the operator switched on
+     deliberately -- and it is the biggest, at up to 129px. On a short window
+     those 129px are the difference between a journal showing the last QSO and
+     one showing no rows at all, which no amount of scroll-pinning can fix.
+     Nothing is lost by capping it: the panel already scrolls inside itself.
+
+     Against --app-h and not 22vh, for the same reason --app-h exists at all:
+     vh is the LAYOUT viewport, so with an on-screen keyboard up it measures a
+     fifth of a screen the operator cannot see, and the cap does nothing in
+     exactly the situation with the least room to spare. */
+  max-height: min(8em, calc(var(--app-h, 100dvh) * 0.22));
 }
 
 .dupe-panel-hidden { display: none; }
@@ -1065,7 +1077,7 @@ body {
   box-shadow: 0 0 0 2px rgba(34,187,68,0.3);
 }
 
-.lm-actions { display: flex; justify-content: flex-end; margin-top: 5px; }
+.lm-actions { display: flex; justify-content: flex-end; margin-top: 5px; gap: 6px; align-items: center; }
 
 .lm-btn {
   padding: 5px 13px;
@@ -1248,6 +1260,25 @@ body {
   margin-right: auto;
   font-size: 13px;
   color: var(--dark-muted);
+}
+
+/* ── Log editor (New log form in edit mode) ── */
+
+/* Sits directly under the exchange select, so the count of already-logged QSOs
+   is read together with the field that is about to change their format. */
+.lm-exch-note {
+  margin: -4px 0 4px 112px;
+  font-size: 13px;
+  color: var(--amber);
+  line-height: 1.3;
+}
+
+.lm-exch-note[hidden] { display: none; }
+
+.lm-form-status {
+  margin-right: auto;
+  font-size: 13px;
+  color: var(--amber);
 }
 
 /* ── TX serial offset (macro editor) ── */
@@ -1688,11 +1719,12 @@ body {
   border-right: 1px solid #454f63;
 }
 .pa-seg:last-child { border-right: none; }
-/* Lighter than the dividers, not the same weight: at this size a fill that only
-   just beats the grid reads as another divider, and "which box am I in" was the
-   whole point. Still grey -- it is a position, not a state, and the panel's
-   colours are all spoken for. */
-.pa-seg-on { background: #3d4a61; }
+/* A dark grey wash, deliberately quieter than the dividers above it. The dot is
+   what the eye goes to; this only has to answer "which box is it in" once the eye
+   is already there, so anything brighter competes with the reading itself. Grey
+   rather than tinted -- it is a position, not a state, and this panel's colours
+   all already mean something. */
+.pa-seg-on { background: #262c36; }
 
 /* The radio's own frequency. White, not the alarm red the DXC band map uses for
    its VFO line: in this panel red means the amplifier is on the wrong band, and
