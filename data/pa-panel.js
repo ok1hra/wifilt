@@ -798,7 +798,7 @@
     segView = { list: at.list, lo: lo, hi: hi };
 
     // The segment the dot is in gets filled. Without it the operator has to judge
-    // which side of a divider a 5 px dot is sitting on, which at 27 px a segment
+    // which side of a divider a 4 px dot is sitting on, which at 27 px a segment
     // is exactly the decision this row exists to save them.
     var segs = track.children, j;
     for (j = 0; j < segs.length; j++) {

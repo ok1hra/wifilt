@@ -2059,6 +2059,15 @@ document.addEventListener('keydown', e => {
       closeQsoEdit();
       return;
     }
+    // The call search gets Esc only while nothing is going out. Aborting a
+    // transmission has to stay ONE keystroke away -- an operator who hears
+    // themselves sending the wrong thing must not have to notice a palette is
+    // open first. txLikelyRunning() is deliberately pessimistic about that:
+    // see its own comment for the half-second /state hole it closes.
+    if (_searchArmed && !txLikelyRunning()) {
+      disarmCallSearch();
+      return;
+    }
     abortTransmission();
     return;
   }
@@ -2155,10 +2164,11 @@ inpCall.addEventListener('input', () => {
   // otherwise be logged, silently, for whoever comes next. The reset sits here
   // and not on the first character of a new call on purpose — that would wipe a
   // report deliberately set before the call was typed.
-  if (!inpCall.value.trim()) {
-    clearDupePanel();
-    resetReportsForNewQso();
-  }
+  if (!inpCall.value.trim()) resetReportsForNewQso();
+  // The search, while armed, is a live view of this field: every keystroke
+  // re-runs it, and an emptied field simply matches nothing. It is NOT
+  // disarmed here -- see the header of the call-search section for why.
+  refreshCallSearch();
 });
 
 function updateDxccFromCall() {
@@ -2200,16 +2210,6 @@ function blockedCountryForCall(call) {
   return app.blockedDxccList.some(b => country.includes(b)) ? dxcc.country : null;
 }
 
-// ── Dupe panel reference (needed by clearForm below) ─────────────────────────
-
-const dupePanel = document.getElementById('dupePanel');
-
-function clearDupePanel() {
-  dupePanel.textContent = '';
-  dupePanel.classList.add('dupe-panel-hidden');
-  document.querySelectorAll('.qso-row.qso-dupe').forEach(r => r.classList.remove('qso-dupe'));
-}
-
 // ── Form state machine helpers ────────────────────────────────────────────────
 
 function formStateOf() {
@@ -2229,7 +2229,9 @@ function clearForm() {
   app.formState    = 'IDLE';
   renderDxccStatus(null);
   sbExchLocGroup.style.display = 'none';
-  clearDupePanel();
+  // Not a disarm: an emptied Call matches nothing, so both surfaces go away on
+  // their own and come back as soon as the next call does.
+  refreshCallSearch();
   setPrevExchVisible(false);
 }
 
@@ -2314,6 +2316,7 @@ function sendMacroText(macroType) {
     // palette holding the session this used to post into a BroadcastChannel
     // nobody in this tab receives and then refuse the send with "no RTTY-ICOM
     // page is open" -- the very pop-up the palette replaced.
+    noteTxStarted();
     sendAsRtty(text).then(() => {
       if (!RST_BEARING_MACROS.includes(macroType)) return;
       if (gen !== app.qsoGeneration) return;
@@ -2344,6 +2347,7 @@ function sendMacroText(macroType) {
     const echoText = LogMacros.buildMacro(macroType, ctx);
     if (echoText) echoRttyFsk(echoText);
   }
+  noteTxStarted();
   LogMacros.sendMacro(macroType, ctx).then(ok => {
     if (!ok) { showHint('Send failed'); return; }
     // Only these three carry the report; CQ and TU do not. A failed POST is not
@@ -2477,6 +2481,7 @@ function sendRawText(text) {
   // through audio too). OI3 TRX (external keyer) ignore this entirely; AUD1
   // has no relationship to that keyer.
   if (mg === 'DATA' && app.aud1Role === 'rtty' && !isOi3) {
+    noteTxStarted();
     sendAsRtty(text).catch(error => showHint(String(error.message || error)));
     return;
   }
@@ -2495,6 +2500,7 @@ function sendRawText(text) {
   // is open to show it. Not for isOi3 (external K3NG keyer, a different
   // physical device rtty.js has no display for).
   if (mg === 'RTTY' && !isOi3) echoRttyFsk(text);
+  noteTxStarted();
   fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     .catch(() => {});
 }
@@ -2527,7 +2533,7 @@ function handleRstEnter(e) {
 function handleCallEnter(e) {
   if (e.key === ' ') {
     e.preventDefault();
-    checkDupe(inpCall.value.trim());
+    armCallSearch();
     return;
   }
   if (e.key !== 'Enter' || e.altKey) return;
@@ -2550,13 +2556,13 @@ function handleCallEnter(e) {
     if (blockedCountry) {
       inpCall.value = '';
       renderDxccStatus(null);
-      clearDupePanel();
+      refreshCallSearch();   // the field was written directly: no input event
       showHint('⛔ BLOCKED: ' + blockedCountry, 5000);
       if (app.runMode === 'RUN') sendMacroText('CQ');
       return;
     }
     app.prevCallSent = call;
-    checkDupe(call);
+    armCallSearch();
     if (app.runMode === 'RUN') {
       sendMacroText('TXEXCH');
     } else {
@@ -2574,134 +2580,639 @@ function handleCallEnter(e) {
 
 // ── Dupe check ────────────────────────────────────────────────────────────────
 
+// Which band a frequency is on, or null when it is on none of them.
+//
+// Two gaps were closed here when the dupe colouring started depending on it.
+// The LF bands were missing entirely, so a 630m QSO could never match the band
+// the radio was on. And everything from 1240 MHz up returned one single 'shf',
+// which is worse than returning nothing: it made a 23cm QSO and a 3cm QSO read
+// as the same band and colour each other red. Above the named bands there is
+// still a catch-all, but it can now only collide with itself.
 function _bandFromHz(hz) {
   const k = hz / 1000;
-  if (k >= 1800  && k < 2000)    return '160m';
-  if (k >= 3500  && k < 4000)    return '80m';
-  if (k >= 5000  && k < 6000)    return '60m';
-  if (k >= 7000  && k < 7300)    return '40m';
-  if (k >= 10000 && k < 10200)   return '30m';
-  if (k >= 14000 && k < 14400)   return '20m';
-  if (k >= 18000 && k < 18200)   return '17m';
-  if (k >= 21000 && k < 21500)   return '15m';
-  if (k >= 24800 && k < 25000)   return '12m';
-  if (k >= 28000 && k < 30000)   return '10m';
-  if (k >= 50000 && k < 54000)   return '6m';
-  if (k >= 70000 && k < 71000)   return '4m';
-  if (k >= 144000 && k < 148000) return '2m';
-  if (k >= 430000 && k < 440000) return '70cm';
-  if (k >= 1240000)              return 'shf';
+  if (k >= 135     && k < 138)      return '2200m';
+  if (k >= 470     && k < 480)      return '630m';
+  if (k >= 1800    && k < 2000)     return '160m';
+  if (k >= 3500    && k < 4000)     return '80m';
+  if (k >= 5000    && k < 6000)     return '60m';
+  if (k >= 7000    && k < 7300)     return '40m';
+  if (k >= 10000   && k < 10200)    return '30m';
+  if (k >= 14000   && k < 14400)    return '20m';
+  if (k >= 18000   && k < 18200)    return '17m';
+  if (k >= 21000   && k < 21500)    return '15m';
+  if (k >= 24800   && k < 25000)    return '12m';
+  if (k >= 28000   && k < 30000)    return '10m';
+  if (k >= 50000   && k < 54000)    return '6m';
+  if (k >= 70000   && k < 71000)    return '4m';
+  if (k >= 144000  && k < 148000)   return '2m';
+  if (k >= 430000  && k < 440000)   return '70cm';
+  if (k >= 1240000 && k < 1300000)  return '23cm';
+  if (k >= 2300000 && k < 2450000)  return '13cm';
+  if (k >= 3400000 && k < 3475000)  return '9cm';
+  if (k >= 5650000 && k < 5850000)  return '6cm';
+  if (k >= 10000000 && k < 10500000) return '3cm';
+  if (k >= 24000000 && k < 24250000) return '1.2cm';
+  if (k >= 47000000)                return 'shf';
   return null;
 }
 
-function _parseDisplayFreqHz(display) {
-  if (!display) return 0;
-  const p = String(display).split('.');
-  if (p.length !== 3) return 0;
-  return (parseInt(p[0], 10) || 0) * 1_000_000
-       + (parseInt(p[1], 10) || 0) * 1_000
-       + (parseInt(p[2], 10) || 0) * 10;
+// ── Call search: duplicates and partial calls ────────────────────────────────
+//
+// Space in Call ARMS the search. While it is armed both surfaces track the
+// field live on every keystroke, and each shows itself exactly when it has
+// something to say:
+//
+//   * an exact match  -> the DUPE view, covering the whole journal
+//   * a longer match  -> the call palette, floating above the input row
+//
+// The two sets are disjoint by definition and LogDB.matchCalls() splits them in
+// one place -- which is the bug the old pair of searches had, where the global
+// partial search returned the exact matches too and left the caller to filter
+// them back out.
+//
+// Visibility is DERIVED, never stored. Emptying Call or clearing the form does
+// not disarm: it simply leaves nothing to match, both surfaces go away, and
+// they come back by themselves when a match does. That is what stops the DUPE
+// view from ever sitting over the journal showing a call no longer in the field.
+//
+// Disarming is deliberately narrow (grilled 2026-09-20):
+//
+//   * a logged QSO, but only in RUN. In S&P the operator goes straight on to
+//     the next station off the same band and wants the palette still tracking.
+//   * Esc, but only when nothing is transmitting -- see txLikelyRunning().
+//
+// The ✕ on either surface hides that surface alone, until the next Space.
+
+let _searchArmed = false;
+let _searchToken = 0;      // drops an answer the operator has already typed past
+let _dupeViewOff = false;  // ✕ on the DUPE view, until the next Space
+
+const DUPE_GLOBAL_KEY = 'wifilt-log-global-dupe';
+
+// Esc is this page's panic key and has to abort a transmission on the FIRST
+// press. /state is polled every 500 ms, so app.tx is still false for up to half
+// a second after Enter puts CW on the air -- which is exactly the window in
+// which an operator who sent the wrong thing reaches for Esc. The optimistic
+// deadline closes it: this page knows it just keyed something long before the
+// radio gets round to saying so.
+let _txOptimisticUntil = 0;
+function noteTxStarted() { _txOptimisticUntil = Date.now() + 1500; }
+function txLikelyRunning() {
+  if (app.tx) return true;
+  if (window.RttyPanel && window.RttyPanel.txBusy()) return true;
+  return Date.now() < _txOptimisticUntil;
 }
 
-function checkDupe(call) {
-  const log = LogManager.getActiveLog();
-  if (!log || !call) { clearDupePanel(); return; }
-  const normCall = call.toUpperCase();
-  const chkGlobal = document.getElementById('chkGlobalSearch');
-  const isGlobal  = !!(chkGlobal && chkGlobal.checked);
+// The LOG column names the log each match came out of. Cached, because the
+// search re-runs on every keystroke, and dropped wherever the set of logs --
+// or the QSOs in them -- can have moved under it.
+let _logMetaCache = null;
+function logMetaMap() {
+  if (_logMetaCache) return Promise.resolve(_logMetaCache);
+  return LogDB.getLogs().then(logs => {
+    _logMetaCache = {};
+    (logs || []).forEach(l => { _logMetaCache[l.id] = l; });
+    return _logMetaCache;
+  });
+}
 
-  const dupeProm    = isGlobal ? LogDB.findDupesGlobal(normCall)      : LogDB.findDupes(log.id, normCall);
-  const partialProm = call.length >= 2
-    ? (isGlobal ? LogDB.findPartialGlobal(normCall) : LogDB.findPartial(log.id, normCall))
-    : Promise.resolve([]);
-  const logsProm    = isGlobal ? LogDB.getLogs() : Promise.resolve(null);
+// LOGSYNC pulls remote QSOs and the JS8 page logs its own, each in its own tab
+// through its own copy of log-db.js -- neither can reach this one's call index.
+// Coming back to this tab is the moment to assume something did.
+function invalidateSearchCaches() {
+  _logMetaCache = null;
+  if (window.LogDB && LogDB.invalidateCallIndex) LogDB.invalidateCallIndex();
+}
 
-  Promise.all([dupeProm, partialProm, logsProm]).then(([dupes, partials, allLogs]) => {
-    const activeDupes    = dupes.filter(d => !d.deleted);
-    const activePartials = partials.filter(d => !d.deleted && d.call.toUpperCase() !== normCall);
-    if (!activeDupes.length && !activePartials.length) { clearDupePanel(); return; }
+function dupeGlobalOn() {
+  const el = document.getElementById('chkGlobalSearch');
+  return !!(el && el.checked);
+}
 
-    function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-    function hlCall(c, frag) {
-      const idx = c.indexOf(frag);
-      const dim = s => s ? '<span class="dp-partial-dim">' + esc(s) + '</span>' : '';
-      if (idx < 0) return dim(c);
-      return dim(c.slice(0, idx))
-        + '<span class="dp-partial-hl">' + esc(c.slice(idx, idx + frag.length)) + '</span>'
-        + dim(c.slice(idx + frag.length));
-    }
+// This switch was read in exactly one place and nowhere else: it had no change
+// handler, so flipping it did nothing until the operator pressed Space again,
+// and it was not stored, so it came back off after every reload. Both are fixed
+// here. It stays OFF by default and stays separate from the palette's own
+// switch -- a duplicate that scores is in the log being worked.
+(function wireDupeGlobal() {
+  const el = document.getElementById('chkGlobalSearch');
+  if (!el) return;
+  try { el.checked = localStorage.getItem(DUPE_GLOBAL_KEY) === '1'; } catch (_) {}
+  el.addEventListener('change', () => {
+    try { localStorage.setItem(DUPE_GLOBAL_KEY, el.checked ? '1' : '0'); } catch (_) {}
+    refreshCallSearch();
+  });
+})();
 
-    const logMap = Object.fromEntries((allLogs || []).map(l => [l.id, l]));
-    const myCall  = log.stationCall || '';
-    const hasDupe = activeDupes.some(d => d.logId === log.id);
-    let htmlPartial = '';
-    let htmlDupe    = '';
+function armCallSearch() {
+  _searchArmed = true;
+  _dupeViewOff = false;
+  CallPalette.unsuppress();
+  refreshCallSearch();
+}
 
-    if (activePartials.length) {
-      if (!isGlobal) {
-        const uniq = [...new Set(activePartials.map(d => d.call))].sort();
-        htmlPartial += '<div class="dp-line dp-partial">PARTIAL: '
-          + uniq.map(c => hlCall(c, normCall)).join('  ') + '</div>';
-      } else {
-        const pAct = [], pSame = [], pOther = [];
-        activePartials.forEach(d => {
-          if (d.logId === log.id) { pAct.push(d); return; }
-          const sc = (logMap[d.logId] || {}).stationCall || '';
-          (sc === myCall ? pSame : pOther).push(d);
-        });
-        const uAct   = [...new Set(pAct.map(d => d.call))].sort();
-        const uSame  = [...new Set(pSame.map(d => d.call))].sort();
-        const uOther = [...new Set(pOther.map(d => d.call))].sort();
-        const cells = [];
-        if (uOther.length) cells.push(uOther.map(c => esc(c)).join('  '));
-        if (uSame.length)  cells.push('<span class="dp-partial-green">' + uSame.map(c => esc(c)).join('  ') + '</span>');
-        if (uAct.length)   cells.push(uAct.map(c => hlCall(c, normCall)).join('  '));
-        if (cells.length) htmlPartial += '<div class="dp-line dp-partial">PARTIAL: ' + cells.join('  ') + '</div>';
-      }
-    }
+function disarmCallSearch() {
+  _searchArmed = false;
+  _searchToken++;            // any answer still in flight is no longer wanted
+  hideDupeView();
+  CallPalette.hide();
+}
 
-    if (activeDupes.length) {
-      const fmtD = d => 'DUPE: #' + String(d.qsoNumber).padStart(3,'0') + ' '
-        + esc(d.call) + ' ' + esc(d.timeOnUtc||'') + ' '
-        + esc(d.frequencyDisplay||'') + ' ' + esc(d.mode||'');
+function refreshCallSearch() {
+  if (!_searchArmed) return;
+  const token = ++_searchToken;
+  const log   = LogManager.getActiveLog();
+  const frag  = inpCall.value.trim().toUpperCase();
 
-      const trxBand = _bandFromHz(app.frequency);
-      const dupeCls = d => {
-        const b = _bandFromHz(_parseDisplayFreqHz(d.frequencyDisplay));
-        return (trxBand && b && b === trxBand) ? 'dp-dupe' : 'dp-dupe-other';
-      };
+  if (!log || !frag) { hideDupeView(); CallPalette.hide(); return; }
 
-      if (!isGlobal) {
-        activeDupes.forEach(d => { htmlDupe += '<div class="dp-line ' + dupeCls(d) + '">' + fmtD(d) + '</div>'; });
-      } else {
-        const logSuffix = d => {
-          const l = logMap[d.logId] || {};
-          const ts = (l.createdAtUtc || '').slice(0, 10);
-          return ' <span class="dp-log-name">| ' + esc((ts ? ts + ' ' : '') + (l.contestName || '')) + '</span>';
-        };
-        const cat1 = [], cat2 = [], cat3 = [];
-        activeDupes.forEach(d => {
-          if (d.logId === log.id) { cat3.push(d); return; }
-          const sc = (logMap[d.logId] || {}).stationCall || '';
-          (sc === myCall ? cat2 : cat1).push(d);
-        });
-        cat1.forEach(d => { htmlDupe += '<div class="dp-line dp-dupe-other">'   + fmtD(d) + logSuffix(d) + '</div>'; });
-        cat2.forEach(d => { htmlDupe += '<div class="dp-line dp-dupe-samecall">' + fmtD(d) + logSuffix(d) + '</div>'; });
-        cat3.forEach(d => { htmlDupe += '<div class="dp-line ' + dupeCls(d) + '">' + fmtD(d) + logSuffix(d) + '</div>'; });
-      }
-    }
-
-    const html = htmlPartial + htmlDupe;
-    if (!html) { clearDupePanel(); return; }
-
-    dupePanel.innerHTML = html;
-    dupePanel.className = 'dupe-panel' + (hasDupe ? '' : ' dupe-panel-similar');
-    dupePanel.classList.remove('dupe-panel-hidden');
-    document.querySelectorAll('.qso-row').forEach(row => {
-      row.classList.toggle('qso-dupe', row.dataset.call === normCall);
-    });
+  LogDB.matchCalls(frag, {
+    logId:         log.id,
+    exactGlobal:   dupeGlobalOn(),
+    partialGlobal: CallPalette.isGlobal(),
+  }).then(res => {
+    if (token !== _searchToken) return null;
+    // Two characters before the palette says anything: every call in the
+    // database contains any single letter, and a list of everything is a list
+    // of nothing.
+    CallPalette.show(frag.length >= 2 ? partialGroups(res.partial, frag) : null, frag);
+    if (!res.exact.length || _dupeViewOff) { hideDupeView(); return null; }
+    return Promise.all([
+      Promise.all(res.exact.map(r => LogDB.getQso(r.id))),
+      logMetaMap(),
+    ]).then(([qsos, meta]) => ({ recs: res.exact, qsos, meta }));
+  }).then(bundle => {
+    if (!bundle || token !== _searchToken) return;
+    renderDupeView(bundle, frag);
   }).catch(() => {});
 }
+
+// ── Mode comparison ──────────────────────────────────────────────────────────
+//
+// The Mode cell of a DUPE row keeps the row's colour only when the mode matches
+// too. Comparing the raw /state text against a stored mode does not work, on
+// three counts, all of them reproducible:
+//
+//   * loggedMode() maps USB-D and LSB-D onto RTTY or JS8 depending on who holds
+//     AUD1, so a radio sitting on USB-D with RTTY-ICOM running reads as a
+//     DIFFERENT mode from the QSO it just logged itself.
+//   * /state reports CW-R and RTTY-R, which are one mode with their stored
+//     counterparts to every operator alive.
+//   * the stored vocabulary is not one vocabulary: QRPLog writes loggedMode(),
+//     the JS8 auto-logger writes "JS8", the ADIF importer writes whatever the
+//     file had (and sometimes nothing), and the edit dialog writes its own short
+//     list.
+//
+// So: compare what a QSO logged RIGHT NOW would carry against what is stored,
+// with the -R suffix folded away. An unknown mode on either side is not a match
+// -- it is not knowing, which must not read as agreement.
+function _modeKey(mode) {
+  const m = String(mode || '').trim().toUpperCase();
+  if (!m || m === 'UNK') return '';
+  if (m === 'CW-R'   || m === 'CWR')   return 'CW';
+  if (m === 'RTTY-R' || m === 'RTTYR') return 'RTTY';
+  return m;
+}
+
+function liveModeKey() {
+  try { return _modeKey(loggedMode()); } catch (_) { return ''; }
+}
+
+// ── The DUPE view ────────────────────────────────────────────────────────────
+//
+// position:absolute over the WHOLE of .log-journal, its own header included.
+// Two things fall out of covering the header rather than sharing it: the view
+// can carry a LOG column the journal has no room for, and it owes nothing to
+// syncJournalHScroll, which translates the journal header by the body's
+// scrollLeft. Underneath, the journal is not touched at all -- its rows, its
+// scrollTop and JournalBottom's own "is it at the bottom" flag all survive the
+// view coming and going, which is the whole reason it is an overlay and not a
+// re-render.
+
+function hideDupeView() {
+  const view = document.getElementById('dupeView');
+  if (!view) return;
+  view.classList.add('ds-hidden');
+  view.textContent = '';
+}
+
+function _dupeCell(cls, text, extra) {
+  const span = document.createElement('span');
+  span.className = 'jcol ' + cls + (extra ? ' ' + extra : '');
+  span.textContent = text == null ? '' : String(text);
+  return span;
+}
+
+// Year, name, station call. The year and not the month: the Date column beside
+// it already carries the QSO's own date, and what this has to settle is only
+// which of two same-named logs a row came from. The station call is the half
+// that is not decoration -- a QSO signed with a different call is not the same
+// operator's duplicate, and colour cannot carry that as well as the band.
+function _logLabel(meta, logId) {
+  const l = meta[logId];
+  if (!l) return '';
+  const year = (l.createdAtUtc || '').slice(0, 4);
+  const name = l.contestName || logId;
+  const sc   = l.stationCall ? ' / ' + l.stationCall : '';
+  return (year ? year + ' ' : '') + name + sc;
+}
+
+function renderDupeView(bundle, frag) {
+  const view = document.getElementById('dupeView');
+  if (!view) return;
+
+  const rows = bundle.recs
+    .map((rec, i) => ({ rec, qso: bundle.qsos[i] }))
+    .filter(r => r.qso);
+
+  if (!rows.length || _dupeViewOff) { hideDupeView(); return; }
+
+  // Oldest at the top, newest at the bottom -- the journal's own direction, so
+  // the eye does not have to change gear when the view takes its place.
+  rows.sort((a, b) => (a.rec.ts < b.rec.ts ? -1 : a.rec.ts > b.rec.ts ? 1 : 0));
+
+  const trxBand  = _bandFromHz(app.frequency);
+  const liveMode = liveModeKey();
+
+  view.textContent = '';
+
+  // Header
+  const head = document.createElement('div');
+  head.className = 'dv-head';
+  const title = document.createElement('span');
+  title.className = 'dv-title';
+  title.textContent = 'DUPE · ' + frag + ' · ' + rows.length + ' QSO';
+  head.appendChild(title);
+  if (dupeGlobalOn()) {
+    const badge = document.createElement('span');
+    badge.className = 'dv-badge';
+    badge.textContent = 'global';
+    head.appendChild(badge);
+  }
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'dv-close';
+  close.title = 'Hide until the next Space';
+  close.textContent = '✕';
+  close.addEventListener('click', () => { _dupeViewOff = true; hideDupeView(); inpCall.focus(); });
+  head.appendChild(close);
+  view.appendChild(head);
+
+  // Column legend -- the view's own, not the journal's
+  const cols = document.createElement('div');
+  cols.className = 'dv-cols';
+  [['jcol-nr','Nr'],['jcol-date','Date'],['jcol-time','Time'],['jcol-call','Call'],
+   ['jcol-freq','Freq'],['jcol-mode','Mode'],['jcol-snt','Snt'],['jcol-rcv','Rcv'],
+   ['jcol-exch','Exch'],['jcol-trx','TRX'],['jcol-log','LOG']]
+    .forEach(([cls, label]) => cols.appendChild(_dupeCell(cls, label)));
+  view.appendChild(cols);
+
+  const body = document.createElement('div');
+  body.className = 'dv-body';
+  rows.forEach(({ rec, qso }) => {
+    const band = _bandFromHz(rec.hz);
+    const red  = !!(trxBand && band && band === trxBand);
+    const row  = document.createElement('div');
+    row.className = 'dv-row ' + (red ? 'dv-band' : 'dv-other');
+    row.appendChild(_dupeCell('jcol-nr',   String(qso.qsoNumber == null ? '' : qso.qsoNumber).padStart(3, '0')));
+    row.appendChild(_dupeCell('jcol-date', qso.qsoDateUtc || ''));
+    row.appendChild(_dupeCell('jcol-time', qso.timeOnUtc  || '--:--'));
+    row.appendChild(_dupeCell('jcol-call', qso.call || ''));
+    row.appendChild(_dupeCell('jcol-freq', qso.frequencyDisplay || ''));
+    // The one cell that does not follow the row: a mode that does not match the
+    // one being worked is dimmed, so the row carries the BAND and this carries
+    // the MODE without spending a third colour on it.
+    const modeOk = !!(liveMode && _modeKey(qso.mode) === liveMode);
+    row.appendChild(_dupeCell('jcol-mode', qso.mode || '', modeOk ? '' : 'dv-mode-off'));
+    row.appendChild(_dupeCell('jcol-snt',  qso.rstSent || ''));
+    row.appendChild(_dupeCell('jcol-rcv',  qso.rstReceived || ''));
+    row.appendChild(_dupeCell('jcol-exch', qso.exchangeReceived || ''));
+    row.appendChild(_dupeCell('jcol-trx',  qso.trx || ''));
+    row.appendChild(_dupeCell('jcol-log',  _logLabel(bundle.meta, qso.logId)));
+    body.appendChild(row);
+  });
+  // The columns are wider than a narrow window, so the body scrolls sideways.
+  // Its legend has to go with it -- the same translateX the journal's own header
+  // gets from syncJournalHScroll, and for the same reason: columns sliding out
+  // from under their labels is worse than no labels at all.
+  body.addEventListener('scroll', () => {
+    cols.style.transform = 'translateX(' + (-body.scrollLeft) + 'px)';
+  });
+
+  view.appendChild(body);
+  view.classList.remove('ds-hidden');
+  body.scrollTop = body.scrollHeight;   // newest row is the one being read
+}
+
+// ── Partial calls: grouping, colour and order ────────────────────────────────
+
+const PALETTE_MAX = 50;
+
+// One entry per CALL, not per QSO: this is a list of stations, and the same
+// station three times over would spend the cap on one of them.
+//
+// Red when ANY of that call's QSOs is on the band the radio is on now. The
+// question being asked is "can I call this station", and "on this band, once,
+// at some point" is the answer that matters -- the most recent QSO is answering
+// a different question.
+//
+// Ordered best-first here and reversed into groups, so the rendered blocks run
+// worst at the top to best at the BOTTOM, nearest the field being typed in.
+// Within one level the calls that START with the fragment come first: an
+// operator who caught a piece of a callsign most often caught its beginning.
+// The cap therefore drops the least useful end of the list.
+function partialGroups(recs, frag) {
+  const trxBand = _bandFromHz(app.frequency);
+  const byCall  = new Map();
+  for (let i = 0; i < recs.length; i++) {
+    const r = recs[i];
+    let e = byCall.get(r.call);
+    if (!e) {
+      e = { call: r.call, red: false, before: r.call.indexOf(frag), extra: r.call.length - frag.length };
+      byCall.set(r.call, e);
+    }
+    if (trxBand && _bandFromHz(r.hz) === trxBand) e.red = true;
+  }
+
+  const all = Array.from(byCall.values());
+  all.sort((a, b) =>
+    (a.extra - b.extra) ||
+    (a.before - b.before) ||
+    (a.call < b.call ? -1 : a.call > b.call ? 1 : 0));
+
+  const hidden = Math.max(0, all.length - PALETTE_MAX);
+  const kept   = all.slice(0, PALETTE_MAX);
+
+  const groups = [];
+  kept.forEach(it => {
+    const last = groups.length ? groups[groups.length - 1] : null;
+    if (last && last.extra === it.extra) last.items.push(it);
+    else groups.push({ extra: it.extra, items: [it] });
+  });
+  groups.reverse();
+  return { groups, hidden, frag };
+}
+
+// ── The call palette ─────────────────────────────────────────────────────────
+//
+// Same shape as the RTTY palette and the PA panel: position:fixed, dragged by
+// its head, anchored by the GAP from the window's bottom edge rather than by
+// its top, clamped on every placement, geometry in localStorage. Floating and
+// not in the layout flow on purpose -- it is re-rendered on every keystroke,
+// and anything in the flow below the journal would resize the journal under the
+// operator's fingers with every letter.
+//
+// What it does NOT persist is whether it is open: that is derived from whether
+// anything matches. What it does persist is where it is, how big it is, and its
+// own global switch -- which is separate from the DUPE view's, and on by
+// default. A duplicate that scores is in the log being worked; a partial call
+// is a memory aid worth asking the whole history about.
+const CallPalette = (function () {
+  const STORE_KEY = 'wifilt-log-call-palette';
+  const MIN_W = 180, MIN_H = 90;
+
+  let el = null, listEl = null, moreEl = null, chkEl = null;
+  let pos = null, gap = null, placed = null;
+  let size = null;            // set once the operator drags the corner
+  let suppressed = false;     // ✕, until the next Space
+  let isGlobal = true;        // the palette searches every log by default
+  let lastData = null;
+
+  // Wrapped both ways: a private window refuses localStorage outright, and a
+  // palette that threw on load would take the whole log's script with it.
+  function load() {
+    try {
+      const raw = localStorage.getItem(STORE_KEY);
+      if (!raw) return;
+      const v = JSON.parse(raw);
+      if (!v || typeof v !== 'object') return;
+      if (typeof v.x === 'number' && typeof v.y === 'number') pos = { x: v.x, y: v.y };
+      if (typeof v.gap === 'number') gap = v.gap;
+      if (typeof v.w === 'number' && typeof v.h === 'number') size = { w: v.w, h: v.h };
+      if (typeof v.global === 'boolean') isGlobal = v.global;
+    } catch (_) {}
+  }
+
+  function save() {
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify({
+        x: pos ? pos.x : null, y: pos ? pos.y : null, gap,
+        w: size ? size.w : null, h: size ? size.h : null,
+        global: isGlobal,
+      }));
+    } catch (_) {}
+  }
+
+  // A stored position is only valid against the window it was stored in. Clamp
+  // on every load and every resize, or a palette dragged to the right of a wide
+  // screen is simply gone on a laptop, with no way to get it back.
+  function clamp(p) {
+    if (!p) return p;
+    const w = el ? el.offsetWidth  : MIN_W;
+    const h = el ? el.offsetHeight : MIN_H;
+    return {
+      x: Math.min(Math.max(0, p.x), Math.max(0, window.innerWidth  - w)),
+      y: Math.min(Math.max(0, p.y), Math.max(0, window.innerHeight - h)),
+    };
+  }
+
+  // First ever opening: just above the Call field it belongs to.
+  function anchorPos() {
+    const r = inpCall ? inpCall.getBoundingClientRect() : null;
+    const w = el ? el.offsetWidth  : MIN_W;
+    const h = el ? el.offsetHeight : MIN_H;
+    if (!r) return clamp({ x: 20, y: 20 });
+    return clamp({ x: r.left, y: r.top - h - 8 });
+  }
+
+  // The palette hangs from the BOTTOM of the viewport: `gap` is the distance
+  // from the window's bottom edge to the palette's own, and the top is derived
+  // from it every time. That is what keeps it the same short distance above the
+  // entry fields as the window resizes -- and, because the content changes on
+  // every keystroke, what makes a growing list push its own top edge UP instead
+  // of walking down over the field being typed in.
+  function place() {
+    if (!el) return;
+    const h = el.offsetHeight;
+    if (!pos) pos = anchorPos();
+    if (gap === null) gap = window.innerHeight - (pos.y + h);
+    pos = clamp({ x: pos.x, y: window.innerHeight - h - gap });
+    el.style.left = pos.x + 'px';
+    el.style.top  = pos.y + 'px';
+    placed = { y: pos.y, h };
+  }
+
+  // Wherever the bottom edge has ENDED UP -- after a drag, or after the
+  // browser's own resize handle grew the box downward from a fixed top -- is the
+  // new anchor. A geometry place() itself wrote is not a move and is skipped,
+  // or every keystroke that changed the list's height would walk the palette
+  // down the screen.
+  function syncGap(force) {
+    if (!el || !pos) return;
+    const h = el.offsetHeight;
+    if (!force && placed && placed.y === pos.y && placed.h === h) return;
+    gap = window.innerHeight - (pos.y + h);
+    placed = { y: pos.y, h };
+  }
+
+  function mountDrag(handle) {
+    let dragging = false, dx = 0, dy = 0;
+    handle.addEventListener('pointerdown', e => {
+      if (e.target.closest('button, input, label')) return;
+      dragging = true;
+      dx = e.clientX - el.offsetLeft;
+      dy = e.clientY - el.offsetTop;
+      try { handle.setPointerCapture(e.pointerId); } catch (_) {}
+      e.preventDefault();        // no text selection, and no focus change
+    });
+    handle.addEventListener('pointermove', e => {
+      if (!dragging) return;
+      pos = clamp({ x: e.clientX - dx, y: e.clientY - dy });
+      el.style.left = pos.x + 'px';
+      el.style.top  = pos.y + 'px';
+    });
+    function end() {
+      if (!dragging) return;
+      dragging = false;
+      syncGap(true);             // a drag back to the same pixel is still "here"
+      save();
+    }
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
+  }
+
+  function build() {
+    el = document.createElement('div');
+    el.className = 'call-palette ds-hidden';
+    el.id = 'callPalette';
+    el.innerHTML =
+      '<div class="cp-head" id="cpHead">' +
+        '<span class="cp-title">CALL</span>' +
+        '<label class="cp-global" title="Search every log, not just the active one">' +
+          '<input type="checkbox" id="cpGlobal"> global</label>' +
+        '<button class="cp-close" id="cpClose" type="button" title="Hide until the next Space">&#10005;</button>' +
+      '</div>' +
+      '<div class="cp-more ds-hidden" id="cpMore"></div>' +
+      '<div class="cp-list" id="cpList"></div>';
+    document.body.appendChild(el);
+
+    listEl = el.querySelector('#cpList');
+    moreEl = el.querySelector('#cpMore');
+    chkEl  = el.querySelector('#cpGlobal');
+    chkEl.checked = isGlobal;
+    chkEl.addEventListener('change', () => {
+      isGlobal = chkEl.checked;
+      save();
+      refreshCallSearch();       // the switch IS the query; no second keypress
+    });
+    el.querySelector('#cpClose').addEventListener('click', () => {
+      suppressed = true;
+      hide();
+      inpCall.focus();
+    });
+    mountDrag(el.querySelector('#cpHead'));
+
+    if (size) { el.style.width = size.w + 'px'; el.style.height = size.h + 'px'; }
+
+    // Native resize on both axes, so the grab handle is the browser's own. The
+    // list is the flex child, so every pixel added goes to the calls.
+    if (window.ResizeObserver) {
+      new ResizeObserver(() => {
+        if (!el || el.classList.contains('ds-hidden')) return;
+        // Only a real drag of the handle sets an explicit size; a content
+        // change leaves width alone and is handled by place() above.
+        if (el.style.width || el.style.height) {
+          size = { w: el.offsetWidth, h: el.offsetHeight };
+        }
+        syncGap();
+        save();
+      }).observe(el);
+    }
+  }
+
+  // A call is drawn with the matched fragment carrying the colour and the rest
+  // of it dimmed -- red when that station has been worked on this band, amber
+  // otherwise. Built from nodes, not markup: these strings come out of the
+  // database and one of them is a callsign an operator typed.
+  function callNode(item, frag) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'cp-call' + (item.red ? ' cp-band' : ' cp-other');
+    btn.title = item.call;
+    const idx = item.call.indexOf(frag);
+    const add = (text, cls) => {
+      if (!text) return;
+      const sp = document.createElement('span');
+      if (cls) sp.className = cls;
+      sp.textContent = text;
+      btn.appendChild(sp);
+    };
+    if (idx < 0) { add(item.call, 'cp-dim'); }
+    else {
+      add(item.call.slice(0, idx), 'cp-dim');
+      add(item.call.slice(idx, idx + frag.length), 'cp-hl');
+      add(item.call.slice(idx + frag.length), 'cp-dim');
+    }
+    btn.addEventListener('click', () => {
+      // Same hand-off a DXC spot gets: the value, an input event so the DXCC
+      // lookup follows, the focus, and the caret at the end of what landed.
+      inpCall.value = item.call;
+      inpCall.dispatchEvent(new Event('input'));
+      inpCall.focus();
+      try { inpCall.setSelectionRange(inpCall.value.length, inpCall.value.length); } catch (_) {}
+    });
+    return btn;
+  }
+
+  function render() {
+    if (!lastData || !lastData.groups.length) { hide(); return; }
+    listEl.textContent = '';
+    lastData.groups.forEach(g => {
+      const block = document.createElement('div');
+      block.className = 'cp-group';
+      const tag = document.createElement('span');
+      tag.className = 'cp-tag';
+      tag.textContent = '+' + g.extra;
+      block.appendChild(tag);
+      g.items.forEach(it => block.appendChild(callNode(it, lastData.frag)));
+      listEl.appendChild(block);
+    });
+    if (lastData.hidden) {
+      moreEl.textContent = '+' + lastData.hidden + ' more';
+      moreEl.classList.remove('ds-hidden');
+    } else {
+      moreEl.classList.add('ds-hidden');
+    }
+    el.classList.remove('ds-hidden');
+    place();
+    listEl.scrollTop = listEl.scrollHeight;   // the closest matches are at the bottom
+  }
+
+  function show(data, frag) {
+    if (suppressed) return;
+    if (!data || !data.groups.length) { lastData = null; hide(); return; }
+    if (!el) build();
+    lastData = { groups: data.groups, hidden: data.hidden, frag };
+    render();
+  }
+
+  function hide() {
+    if (el) el.classList.add('ds-hidden');
+  }
+
+  function unsuppress() { suppressed = false; }
+
+  load();
+
+  // A window resize has to READ the gap, never rewrite it, or a placement the
+  // clamp had to pull back on a short window would forget where the operator
+  // put the palette.
+  window.addEventListener('resize', () => {
+    if (el && !el.classList.contains('ds-hidden')) place();
+  });
+
+  return { show, hide, unsuppress, isGlobal: () => isGlobal };
+})();
 
 function handleExchEnter(e) {
   if (e.key !== 'Enter' || e.altKey) return;
@@ -2860,6 +3371,11 @@ function logQso(call, exch, options) {
       // Phase 5: send TU macro + reset RIT
       if (opts.sendPostActions !== false) sendTuAndResetRit();
       clearForm();
+      // A logged QSO ends the search -- but only in RUN, where the next station
+      // calls in and the journal is what the operator wants back on screen. In
+      // S&P they go straight on to the next call off the same band, and the
+      // palette tracking their typing is the point of having it.
+      if (app.runMode === 'RUN') disarmCallSearch();
       if (opts.hint) showHint(opts.hint);
       // Show "prev exch" button in S&P mode after logging
       if (app.runMode === 'SP') setPrevExchVisible(true);
@@ -3234,13 +3750,14 @@ btnNrQ.addEventListener('click', () => {
 
 btnPrevEx.addEventListener('click', () => {
   if (window.LogMacros) {
+    noteTxStarted();
     LogMacros.sendMacro('TXEXCHSP2', macroCtx());
   }
   inpCall.focus();
 });
 
 btnCheck.addEventListener('click', () => {
-  checkDupe(inpCall.value.trim());
+  armCallSearch();
   inpCall.focus();
 });
 
@@ -3264,9 +3781,26 @@ function onActiveLogChanged(log) {
   btnOpenLog.classList.add('btn-trx-active');
   // reload journal rows for the active log
   loadJournalFromDb(log.id);
+  // A different log is a different answer to the same question: which half of
+  // each search is "this log" has just moved, and a log created or renamed in
+  // the picker changes what the LOG column should read.
+  _logMetaCache = null;
+  refreshCallSearch();
 }
 
 LogManager.onLogChanged(onActiveLogChanged);
+
+// LOGSYNC pulls remote QSOs and the JS8 page logs its own -- each in its own
+// tab, through its own copy of log-db.js, which this tab's call index cannot
+// see. There is no channel between them, so the moment this tab comes back to
+// the front is the moment to assume the database moved. Without this a station
+// synced while the operator was elsewhere would read as "never worked", which
+// is the one wrong answer a dupe check must not give.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  invalidateSearchCaches();
+  refreshCallSearch();
+});
 
 // ── Macro editor (MACROS button) ──────────────────────────────────────────────
 //
@@ -3832,7 +4366,7 @@ function insertWordIntoLog(word, trx, field) {
     // keystroke is either Enter or a correction typed onto the end of it.
     try { target.setSelectionRange(target.value.length, target.value.length); } catch (_) {}
   }
-  checkDupe(inpCall.value.trim());
+  armCallSearch();
 }
 
 // ── DXC tune broadcast ────────────────────────────────────────────────────────

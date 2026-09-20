@@ -182,12 +182,25 @@ const PAGE_SCRIPT = `
     if (undo) { undo(); await settle(); }
   }
 
-  function dupeLines(n) {
-    const p = $("dupePanel");
-    let html = "";
-    for (let i = 0; i < n; i++) html += '<span class="dp-line">DUPE OK1AAA 14.025 CW 2026-09-19</span>';
-    p.innerHTML = html;
-    p.classList.remove("dupe-panel-hidden");
+  // The dupe panel this harness used to grow is gone. What replaced it -- the
+  // DUPE view -- is an OVERLAY inside the journal, so it is no longer one of the
+  // pieces of chrome that can steal the journal's height. It gets a check of its
+  // own below instead, for the property the redesign now depends on: that it
+  // changes the journal's geometry by nothing at all.
+  function showDupeView(n) {
+    const v = $("dupeView");
+    let html = '<div class="dv-head"><span class="dv-title">DUPE · OK1AAA · ' + n + ' QSO</span></div>';
+    html += '<div class="dv-body">';
+    for (let i = 0; i < n; i++) {
+      html += '<div class="dv-row dv-band"><span class="jcol jcol-call">OK1AAA</span>' +
+              '<span class="jcol jcol-freq">14.025.00</span></div>';
+    }
+    v.innerHTML = html + '</div>';
+    v.classList.remove("ds-hidden");
+  }
+  function hideDupeView() {
+    $("dupeView").classList.add("ds-hidden");
+    $("dupeView").innerHTML = "";
   }
 
   try {
@@ -241,9 +254,27 @@ const PAGE_SCRIPT = `
       () => { bandBox.classList.add("dxc-active"); bandBox.classList.add("dxc-collapsed"); },
       () => { bandBox.classList.remove("dxc-active"); bandBox.classList.remove("dxc-collapsed"); });
 
-    await trigger("dupe panel full of matches",
-      () => dupeLines(10),
-      () => { $("dupePanel").classList.add("dupe-panel-hidden"); $("dupePanel").innerHTML = ""; });
+    // The DUPE view is the opposite of a trigger: it must move NOTHING. It sits
+    // absolutely positioned over the journal precisely so the rows underneath
+    // keep their geometry and their scroll position, which is what lets it be
+    // dismissed without re-rendering anything.
+    {
+      const h0 = body.clientHeight, top0 = body.scrollTop, sh0 = body.scrollHeight;
+      showDupeView(10);
+      await settle();
+      check("the DUPE view does not change the journal's height",
+        body.clientHeight === h0, h0 + " -> " + body.clientHeight);
+      check("the DUPE view does not move the journal's scroll",
+        body.scrollTop === top0 && body.scrollHeight === sh0,
+        top0 + "/" + sh0 + " -> " + body.scrollTop + "/" + body.scrollHeight);
+      check("the DUPE view really covers the journal",
+        $("dupeView").getBoundingClientRect().height > 50,
+        String(Math.round($("dupeView").getBoundingClientRect().height)));
+      hideDupeView();
+      await settle();
+      check("dismissing the DUPE view leaves the last QSO where it was",
+        body.scrollTop === top0 && lastRowVisible(), lastRowWhere());
+    }
 
     // The hint sits flex:1 in a row whose height is set by the 20px inputs, so
     // it has to wrap past about three lines before the row grows at all. The
@@ -293,16 +324,13 @@ const PAGE_SCRIPT = `
 
     // Everything at once -- the state an operator running a contest with the
     // band map up and a dupe on screen actually sees.
-    await trigger("band map, dupe panel and hint all at once",
+    await trigger("band map and a wrapped hint at once",
       () => {
         bandBox.classList.add("dxc-active");
-        dupeLines(8);
         $("logHint").textContent = "Duplicate QSO with OK1AAA on 20m CW logged at 12:31";
       },
       () => {
         bandBox.classList.remove("dxc-active");
-        $("dupePanel").classList.add("dupe-panel-hidden");
-        $("dupePanel").innerHTML = "";
         $("logHint").textContent = "";
       });
 
@@ -347,13 +375,12 @@ const PAGE_SCRIPT = `
     check("a band map does NOT yank a scrolled-up operator back",
       body.scrollTop === parked, parked + " -> " + body.scrollTop);
 
-    dupeLines(10);
+    showDupeView(10);
     await settle();
-    check("a dupe panel does NOT yank a scrolled-up operator back",
+    check("the DUPE view does NOT yank a scrolled-up operator back",
       body.scrollTop === parked, parked + " -> " + body.scrollTop);
 
-    $("dupePanel").classList.add("dupe-panel-hidden");
-    $("dupePanel").innerHTML = "";
+    hideDupeView();
     bandBox.classList.remove("dxc-active");
     await settle();
 
@@ -417,21 +444,10 @@ const PAGE_SCRIPT = `
     document.documentElement.style.removeProperty("--app-h");
     await settle();
 
-    // ---- the dupe panel cap on a short window ------------------------------
-    // 8em of dupe panel on a 560px window is 129px the journal cannot spare;
-    // no amount of scroll pinning shows a row that has no space to exist in.
-    // 400px, not 560: at 560 the min() still picks 8em and the check would
-    // pass while proving nothing. 22vh of 400 is 88px, well under 8em's 120px.
-    document.documentElement.style.setProperty("--app-h", "400px");
-    dupeLines(10);
-    await settle();
-    const cap = parseFloat(getComputedStyle($("dupePanel")).maxHeight);
-    check("the dupe panel is capped against the window, not just at 8em",
-      cap < 120 && cap <= 400 * 0.22 + 1, cap + "px");
-    check("the last QSO survives a dupe panel on a short window",
-      lastRowVisible(), lastRowWhere());
-    $("dupePanel").classList.add("dupe-panel-hidden");
-    document.documentElement.style.removeProperty("--app-h");
+    // The dupe panel's own height cap is gone with the panel. The call palette
+    // that replaced half of its job has a cap of its own, against --app-h for
+    // the same reason -- and it is checked in log-dupe-palette-smoke.js, where
+    // the palette actually lives.
   } catch (error) {
     check("the harness ran to the end", false, String(error && error.stack || error));
   }

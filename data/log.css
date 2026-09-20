@@ -361,6 +361,7 @@ body {
   flex-direction: column;
   overflow: hidden;
   background: var(--dark-bg);
+  position: relative;   /* the DUPE view covers this box, header included */
 }
 
 .log-journal-header {
@@ -402,6 +403,9 @@ body {
 .jcol-exch    { width: calc(125px * var(--jzoom)); }
 .jcol-trx     { width: calc(80px  * var(--jzoom)); }
 .jcol-dxcc    { width: calc(280px * var(--jzoom)); text-align: left; }
+/* Only the DUPE view has this one: which log a match came out of, and under
+   which station call. The journal has no room for it and no need. */
+.jcol-log     { width: calc(360px * var(--jzoom)); text-align: left; }
 
 /* Call header — clickable search trigger */
 .log-hdr-call {
@@ -474,16 +478,6 @@ body {
   background: var(--dark-row-hover);
 }
 
-.qso-row.qso-dupe {
-  color: var(--conn-fail);
-}
-
-.qso-row.qso-dupe .jcol-call::after {
-  content: ' DUPE';
-  font-size: calc(13px * var(--jzoom));
-  color: var(--conn-fail);
-}
-
 .qso-row.qso-deleted {
   color: var(--dark-muted);
   opacity: 0.45;
@@ -497,56 +491,230 @@ body {
   background: var(--dark-row-hover);
 }
 
-/* ── Dupe panel — between journal and status bar ─────────────────────────── */
+/* ── The DUPE view ────────────────────────────────────────────────────────
+   Covers the whole journal while the call in the form is an exact match.
+   Absolute rather than in the flow on two counts: the journal underneath keeps
+   its rows and its scroll position, so nothing has to be re-rendered when the
+   view goes away, and nothing below the journal changes height, so JournalBottom
+   never has to put the last QSO back.
 
-.dupe-panel {
-  flex-shrink: 0;
-  padding: 4px 10px;
+   Opaque on purpose. A translucent view over a list of QSOs reads as two lists. */
+.log-dupe-view {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
   background: #1a0000;
-  border-top: 1px solid #550000;
-  color: var(--conn-fail);
-  font-size: 15px;
   font-family: var(--font-mono);
-  font-weight: bold;
-  overflow-y: auto;
-  /* 8em is what the list wants; a fifth of the app's height is what the window
-     can spare. This panel is the only elastic piece of chrome under the journal
-     -- everything else down there is a fixed height the operator switched on
-     deliberately -- and it is the biggest, at up to 129px. On a short window
-     those 129px are the difference between a journal showing the last QSO and
-     one showing no rows at all, which no amount of scroll-pinning can fix.
-     Nothing is lost by capping it: the panel already scrolls inside itself.
-
-     Against --app-h and not 22vh, for the same reason --app-h exists at all:
-     vh is the LAYOUT viewport, so with an on-screen keyboard up it measures a
-     fifth of a screen the operator cannot see, and the cap does nothing in
-     exactly the situation with the least room to spare. */
-  max-height: min(8em, calc(var(--app-h, 100dvh) * 0.22));
+  overflow: hidden;   /* the legend is translated sideways; it must not spill */
 }
 
-.dupe-panel-hidden { display: none; }
+.dv-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 10px;
+  background: #2a0606;
+  border-bottom: 1px solid #551111;
+  color: var(--conn-fail);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
 
-.dupe-panel.dupe-panel-similar {
+.dv-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.dv-badge {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border: 1px solid #7a3a3a;
+  border-radius: 9px;
+  color: #d8a0a0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+}
+
+.dv-close {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: #b07878;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 4px;
+}
+
+.dv-close:hover { color: var(--conn-fail); }
+
+/* The view's own column legend. The journal's is underneath and says something
+   else -- there is no LOG column over there. */
+.dv-cols {
+  flex-shrink: 0;
+  display: flex;
+  padding: 4px 10px;
+  border-bottom: 1px solid #551111;
+  color: #9a7070;
+  font-size: calc(13px * var(--jzoom));
+  letter-spacing: 0.06em;
+}
+
+.dv-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 3px 0;
+}
+
+.dv-row {
+  display: flex;
+  flex-shrink: 0;
+  padding: 3px 10px;
+  border-bottom: 1px solid #3a1414;
+  font-size: calc(17px * var(--jzoom));
+}
+
+/* The row carries the BAND: red when the QSO was on the band the radio is on
+   now, amber when the call alone matched. */
+.dv-row.dv-band  { color: var(--conn-fail); }
+.dv-row.dv-other { color: #F5B027; }
+
+/* ...and the Mode cell carries the MODE, by dropping out of the row's colour
+   when it does not match. Two axes, two signals, one pair of colours. */
+.dv-mode-off { color: var(--dark-muted) !important; }
+
+.dv-cols, .dv-row { min-width: max-content; }
+
+/* ── The call palette ─────────────────────────────────────────────────────
+   Partial matches: calls that CONTAIN what is typed and are longer. Floats
+   over everything (PA is 90, the RTTY palette 91, dialogs 100) because it is
+   re-rendered on every keystroke, and anything in the layout flow would resize
+   the journal under the operator's fingers with every letter.
+
+   Dragged by its head, resized from its corner by the browser's own handle --
+   which is why overflow must not be visible. */
+.call-palette {
+  position: fixed;
+  z-index: 92;
+  display: flex;
+  flex-direction: column;
+  width: 320px;
+  min-width: 180px;
+  min-height: 90px;
+  max-width: calc(100vw - 16px);
+  /* Against --app-h and not vh, for the reason --app-h exists at all: vh is the
+     LAYOUT viewport, so with an on-screen keyboard up it measures half a screen
+     the operator cannot see. */
+  max-height: calc(var(--app-h, 100dvh) * 0.5);
   background: #1a1200;
-  border-top-color: #554400;
+  border: 1px solid #554400;
+  border-radius: 7px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.55);
+  font-family: var(--font-mono);
+  overflow: hidden;         /* required for `resize` to apply at all */
+  resize: both;
 }
 
-.dp-line {
-  display: block;
+.cp-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background: #2a2000;
+  border-bottom: 1px solid #554400;
+  cursor: move;
+  user-select: none;
+  touch-action: none;       /* the drag owns the pointer, not the scroller */
+}
+
+.cp-title {
+  flex: 1;
+  color: #F5B027;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.cp-global {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.06em;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
-.dp-dupe         { color: var(--conn-fail); }
-.dp-dupe-samecall { color: #F5B027; }
-.dp-dupe-other   { color: var(--dark-muted); }
-.dp-partial      { color: #F5B027; }
+.cp-close {
+  background: none;
+  border: none;
+  color: #a08040;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 3px;
+}
 
-.dp-partial-hl    { color: #F5B027; font-weight: 700; }
-.dp-partial-dim   { color: var(--dark-muted); }
-.dp-partial-green { color: #44cc66; }
-.dp-log-name      { color: var(--dark-muted); }
+.cp-close:hover { color: #F5B027; }
+
+/* How many the cap dropped. At the TOP, because the cap drops the worst
+   matches and the best ones are at the bottom. */
+.cp-more {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  color: var(--dark-muted);
+  font-size: 11px;
+  border-bottom: 1px solid #3a2e00;
+}
+
+.cp-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 6px;
+}
+
+/* One block per level of match -- fragment plus one character, plus two, and so
+   on -- worst at the top, best at the bottom, nearest the field being typed in. */
+.cp-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 8px;
+  padding: 2px 0;
+}
+
+.cp-group + .cp-group { border-top: 1px dotted #3a2e00; }
+
+.cp-tag {
+  flex-shrink: 0;
+  min-width: 2.2em;
+  color: var(--dark-muted);
+  font-size: 11px;
+}
+
+.cp-call {
+  background: none;
+  border: none;
+  padding: 1px 2px;
+  font: inherit;
+  font-size: 15px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cp-call:hover { background: #3a2e00; border-radius: 3px; }
+
+/* The matched fragment carries the colour, the rest of the call is dimmed:
+   red when that station has been worked on this band, amber otherwise. */
+.cp-call .cp-dim { color: var(--dark-muted); }
+.cp-band .cp-hl  { color: var(--conn-fail); font-weight: 700; }
+.cp-other .cp-hl { color: #F5B027; font-weight: 700; }
 
 .log-global-search-label {
   display: flex;
@@ -1706,9 +1874,17 @@ body {
 .pa-seg-arrow:hover:not(:disabled) { color: #dfe6ef; }
 .pa-seg-arrow:disabled { color: #3a424e; cursor: default; }
 
+/* Thin on purpose. This is the quietest thing in the panel -- a position, not a
+   reading -- and at 11px it carried more weight than the numbers above it. The
+   inset line is what keeps it findable once it is this thin: the trough is
+   1.06:1 against the panel, so an EMPTY scale (no frequency from the radio, or
+   a band the amplifier has no segments on) would otherwise be an invisible void
+   rather than a visibly empty scale, and "the preview vanished" is exactly how
+   that reads. */
 .pa-seg-scale {
   position: relative; flex: 1 1 auto;
-  height: 11px; background: #171b22;
+  height: 7px; background: #171b22;
+  box-shadow: inset 0 0 0 1px var(--pa-line);
   cursor: pointer; overflow: hidden;
 }
 .pa-seg-track { position: absolute; inset: 0; }
@@ -1732,7 +1908,7 @@ body {
    keeps it visible over a filled segment as well as over the unlit ground. */
 .pa-seg-dot {
   position: absolute; top: 50%; left: 0;
-  width: 5px; height: 5px; margin-left: -2.5px;
+  width: 4px; height: 4px; margin-left: -2px;
   border-radius: 50%;
   background: #ffffff; box-shadow: 0 0 0 1px #0d1117;
   transform: translateY(-50%);
@@ -1808,10 +1984,18 @@ body {
 
 /* Telemetry has stopped arriving. The numbers stay -- they were true once and
    the panel says how long ago -- but nothing pretends to be live. */
+/* Stale means "the last thing heard", not "nothing" -- and every one of these
+   is a dash when there is no reading, which is a thin glyph at 11px. The old
+   #49535f put it at 2.09:1 against the panel, where the dash is there in the
+   DOM and simply cannot be seen: the panel looked like it had stopped printing
+   values at all. 4.49:1 is still visibly quieter than a live reading (13:1) and
+   than the dimmed labels beside it (5.5:1), which is all the dimming has to do
+   -- the status line, the dot and the greyed bars already say NO DATA three
+   other ways. */
 .pa-panel.pa-stale .pa-val-v,
 .pa-panel.pa-stale .pa-swr,
 .pa-panel.pa-stale .pa-temp,
-.pa-panel.pa-stale .pa-band { color: #49535f !important; }
+.pa-panel.pa-stale .pa-band { color: #7c8797 !important; }
 .pa-panel.pa-stale .pa-led.on { background: #171b22; color: #4a5666; }
 
 .pa-note { font-size: 10px; color: #ff9a9a; line-height: 1.35; }

@@ -182,6 +182,30 @@ const PAGE_SCRIPT = `
   const $ = id => document.getElementById(id);
   const txt = id => { const e = $(id); return e ? e.textContent.trim() : "(missing)"; };
 
+  // Contrast, WCAG relative luminance. Here because the one thing this panel
+  // must never do with a value is print it where it cannot be read: every
+  // reading falls back to a dash, a dash is a thin glyph, and a dash nobody can
+  // see is indistinguishable from a panel that has stopped working.
+  const lum = c => {
+    const v = c.match(/[0-9.]+/g).slice(0, 3).map(Number).map(n => {
+      n /= 255;
+      return n <= 0.03928 ? n / 12.92 : Math.pow((n + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2];
+  };
+  const contrast = (fg, bg) => {
+    const a = lum(fg), b = lum(bg);
+    return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+  };
+  // The worst contrast among the panel's readings, against the panel itself.
+  const worstContrast = ids => {
+    const bg = getComputedStyle($("paPanel")).backgroundColor;
+    return ids.reduce((worst, id) => {
+      const c = contrast(getComputedStyle($(id)).color, bg);
+      return c < worst ? c : worst;
+    }, Infinity);
+  };
+
   const F = { TUNE:1, OPERATE:2, TX:4, ALARM:8, FULL:16, CONTEST:32, BEEP:64,
               ON:256, LINK:512, REV2:1024 };
 
@@ -332,6 +356,13 @@ const PAGE_SCRIPT = `
     check("stale telemetry says so", txt("paStatusText").startsWith("NO DATA"), txt("paStatusText"));
     check("stale telemetry greys the numbers out",
       $("paPanel").classList.contains("pa-stale"));
+    // Greyed, but still legible. This was 2.09:1 once, which is "the dash is in
+    // the DOM and invisible on screen" -- reported from the shack as the panel
+    // showing no value and not even a dash. Measured rather than eyeballed,
+    // because being unable to see it is the whole failure.
+    const stale4 = worstContrast(["paFw", "paRef", "paSwr", "paTemp", "paBand"]);
+    check("...and the dashes stay readable while it does",
+      stale4 >= 4, "worst contrast " + stale4.toFixed(2) + ":1");
 
     // The trap this panel walked into on real hardware: the daemon publishes
     // only from its STATUS handler, so a SWITCHED-OFF amplifier sends nothing at
@@ -726,6 +757,13 @@ const PAGE_SCRIPT = `
     check("and both arrows go dead", $("paSegDown").disabled && $("paSegUp").disabled);
     check("and say which of the two reasons it is",
       /no tuning segments on this band/.test($("paSegUp").title), $("paSegUp").title);
+    // An empty scale still has to LOOK like an empty scale. Its trough is
+    // 1.06:1 against the panel -- deliberately, it is a recess -- so without
+    // the inset line there is nothing on screen at all where the row is, and
+    // "the tuning preview disappeared" is how that gets reported.
+    check("an empty scale is still visibly a scale",
+      getComputedStyle($("paSegScale")).boxShadow !== "none",
+      getComputedStyle($("paSegScale")).boxShadow);
 
     await setFreq(5300000);
     check("60 m is not drawn as the top of 80 m", segs().length === 0, String(segs().length));

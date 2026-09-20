@@ -130,6 +130,10 @@
     qso.createdAtUtc = qso.createdAtUtc || new Date().toISOString();
     return tx('qso', 'readwrite', s => s.add(qso)).then(newId => {
       qso.id = newId;
+      // Patched rather than invalidated: this is the hot path -- every logged
+      // QSO comes through here -- and a search armed in S&P has to see the
+      // station that was just worked without paying for a whole rebuild.
+      if (_callIndex && !qso.deleted && qso.call) _callIndex.push(_indexRecord(qso));
       return qso;
     });
   }
@@ -144,6 +148,11 @@
 
   function updateQso(qso) {
     qso.updatedAtUtc = new Date().toISOString();
+    // Rebuilt, not patched: an edit can change the call, move the frequency to
+    // another band or set the deleted flag, and the QSO may not be in the index
+    // at all (it was deleted and is coming back). Edits are rare; the next
+    // search pays for one getAll and every later one is free again.
+    invalidateCallIndex();
     return tx('qso', 'readwrite', s => s.put(qso));
   }
 
@@ -152,34 +161,116 @@
   }
 
   function deleteQso(id) {
+    invalidateCallIndex();
     return tx('qso', 'readwrite', s => s.delete(id));
   }
 
-  // Exact dupe check
+  // Exact dupe check, one log, straight off the index. Kept as its own entry
+  // point for the JS8 auto-logger (data.js), which dedupes one call per band on
+  // a page that has no use for the call index below.
   function findDupes(logId, call) {
     return getAll('qso', 'logId_call', IDBKeyRange.only([logId, call.toUpperCase()]));
   }
 
-  // Partial check: all non-deleted QSOs whose call contains fragment (but isn't an exact match)
-  function findPartial(logId, fragment) {
-    const frag = fragment.toUpperCase();
-    return getQsosForLog(logId).then(qsos =>
-      qsos.filter(q => !q.deleted && q.call && q.call.toUpperCase().includes(frag) && q.call.toUpperCase() !== frag)
-    );
+  // ── Call index ─────────────────────────────────────────────────────────────
+  //
+  // QRPLog searches the log on every keystroke while its call search is armed,
+  // and the global half of that search reads EVERY log. Against IndexedDB that
+  // meant a getAll('qso') per keystroke -- the whole database deserialised to
+  // answer "does any call contain DL1". The calls live in a flat array instead,
+  // built once and patched in place.
+  //
+  // Lazy on purpose. This file is loaded by four pages (log, datasync, dxc,
+  // data) and only QRPLog ever searches; building the index in openDb() would
+  // charge the DXC pop-up for a table it never reads.
+  //
+  // The records are thin -- {id, logId, call, hz, ts} -- because the one caller
+  // that needs whole QSOs (the dupe list, a handful of rows) fetches them by id.
+  // A deleted QSO never enters the index at all.
+  //
+  // Invalidation lives HERE, inside the writers, so a write added later cannot
+  // forget it. What it cannot see is a write from ANOTHER document: LOGSYNC
+  // pulls remote QSOs and the JS8 page logs its own, each through its own copy
+  // of this file in its own tab. That is what invalidateCallIndex() is for --
+  // QRPLog calls it when its tab comes back to the front.
+  let _callIndex = null;
+
+  // frequencyHz is what every writer stores today, but the text beside it is
+  // not one format: QRPLog's own formatter writes "14.074.00" and the ADIF
+  // importer writes "14.0740 MHz". Reading the number back out of that text is
+  // what the old dupe colouring did, and it understood only the first of the
+  // two -- so an imported QSO could never match a band, and never turned red.
+  // Take the number when there is one; parse only a record that has none.
+  function _hzOf(q) {
+    const n = Number(q.frequencyHz);
+    if (Number.isFinite(n) && n > 0) return n;
+    const s = String(q.frequencyDisplay || '').trim();
+    const dotted = s.match(/^(\d+)\.(\d{1,3})\.(\d{1,2})$/);
+    if (dotted) return (+dotted[1]) * 1e6 + (+dotted[2]) * 1e3 + (+dotted[3]) * 10;
+    const mhz = s.match(/^([\d.]+)\s*MHZ$/i);
+    if (mhz) return Math.round(parseFloat(mhz[1]) * 1e6) || 0;
+    return 0;
   }
 
-  // Global search across all logs
-  function findDupesGlobal(call) {
-    return getAll('qso').then(qsos =>
-      qsos.filter(q => !q.deleted && q.call && q.call.toUpperCase() === call.toUpperCase())
-    );
+  // Sortable instant for a QSO. timestampUtc is what every writer sets now;
+  // the fallback is the same one loadJournalFromDb uses for older rows.
+  function _tsOf(q) {
+    return q.timestampUtc || ((q.qsoDateUtc || '') + 'T' + (q.timeOnUtc || '') + 'Z');
   }
 
-  function findPartialGlobal(fragment) {
-    const frag = fragment.toUpperCase();
-    return getAll('qso').then(qsos =>
-      qsos.filter(q => !q.deleted && q.call && q.call.toUpperCase().includes(frag))
-    );
+  function _indexRecord(q) {
+    return {
+      id:    q.id,
+      logId: q.logId,
+      call:  String(q.call).toUpperCase(),
+      hz:    _hzOf(q),
+      ts:    _tsOf(q),
+    };
+  }
+
+  function _buildCallIndex() {
+    return getAll('qso').then(qsos => {
+      const idx = [];
+      for (let i = 0; i < qsos.length; i++) {
+        const q = qsos[i];
+        if (q.deleted || !q.call) continue;
+        idx.push(_indexRecord(q));
+      }
+      _callIndex = idx;
+      return idx;
+    });
+  }
+
+  function invalidateCallIndex() { _callIndex = null; }
+
+  // The ONE place the two result sets are separated.
+  //
+  // They are disjoint by definition -- exact is call === fragment, partial is
+  // "contains it and is longer" -- and splitting them anywhere else is how the
+  // old code ended up with a global partial search that returned the exact
+  // matches too and left each caller to filter them back out.
+  //
+  // The two halves carry their own scope because QRPLog gives them their own
+  // switches: a duplicate that scores is in the log being worked, while a
+  // partial call is a memory aid worth asking the whole history about.
+  function matchCalls(fragment, opts) {
+    const frag  = String(fragment || '').toUpperCase();
+    const o     = opts || {};
+    const exact = [], partial = [];
+    if (!frag) return Promise.resolve({ exact, partial });
+    const p = _callIndex ? Promise.resolve(_callIndex) : _buildCallIndex();
+    return p.then(idx => {
+      for (let i = 0; i < idx.length; i++) {
+        const r = idx[i];
+        const own = r.logId === o.logId;
+        if (r.call === frag) {
+          if (o.exactGlobal || own) exact.push(r);
+        } else if (r.call.length > frag.length && r.call.indexOf(frag) !== -1) {
+          if (o.partialGlobal || own) partial.push(r);
+        }
+      }
+      return { exact, partial };
+    });
   }
 
   // Build + store a QSO in one shot: DXCC lookup (+ QRB/azimuth from the log's
@@ -282,7 +373,7 @@
     // logs
     createLog, getLogs, getLog, updateLog, deleteLog,
     // qso
-    addQso, getQso, updateQso, getQsosForLog, deleteQso, findDupes, findPartial, findDupesGlobal, findPartialGlobal, commitQso,
+    addQso, getQso, updateQso, getQsosForLog, deleteQso, findDupes, matchCalls, invalidateCallIndex, commitQso,
     // settings
     getSetting, setSetting, getAllSettings,
     // runtime state

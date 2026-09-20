@@ -864,7 +864,7 @@ it off**, so a log can never inherit another log's numbering; the number you typ
 coming back to that log offers it filled in and you only need to tick the box again.
 
 > **The offset changes what you transmit, not what you store.** The log keeps its own unbroken
-> numbering: the journal's **Nr** column, the `DUPE:` panel, the CSV, ADIF `STX` and Cabrillo
+> numbering: the journal's **Nr** column, the duplicate list, the CSV, ADIF `STX` and Cabrillo
 > all still show `721` for the QSO you sent `001` for. This is what lets one continuous log
 > carry a contest in the middle of it — but it does mean **a log submitted for that contest
 > needs its serials adjusted before you send it in**.
@@ -940,12 +940,41 @@ azimuth and its distance. A small azimuth indicator sits beside the Call field.
 
 ### 3.8 Duplicate and partial-call search
 
-Pressing **Space** in the Call field searches the log. It does two jobs at once: a duplicate
-check on the full call, and a partial-match search on a fragment — type `DL1` and space to
-see every DL1 station you have worked.
+Pressing **Space** in the Call field *arms* the call search. From then on it follows what you
+type, letter by letter, and answers two different questions at once.
 
-Matches appear in a panel above the status bar. The **global** checkbox beside the input row
-widens the search from the active log to *all* logs in the browser.
+**A call you have already worked** takes over the journal. The list of logged QSOs is replaced
+by a list of that station's QSOs — oldest at the top, newest at the bottom, same columns as
+the journal plus a **LOG** column saying which log each one came out of and under which
+station call. A row is **red** when the QSO was on the band the radio is on now and **amber**
+when only the callsign matched.
+
+The **Mode** cell is the one part of a row that does not follow the row's colour: when the
+mode does not match the one being worked it is dimmed instead. So a fully red row — Mode cell
+included — is a station worked on this band *in this mode*, and a red row with a dim Mode cell
+is the same band in a different mode. `CW` and `CW-R` count as one mode, as do `RTTY` and
+`RTTY-R`, and a data mode is compared as what it would actually be logged as.
+
+**A call that is only part of one** opens a small palette above the input row. It lists the
+callsigns that *contain* what you typed and are longer, grouped by how much longer: fragment
+plus one character at the bottom, plus two above it, and so on — so the closest matches are
+nearest your hand. Inside each group the callsigns that *start* with the fragment come first.
+The matching part of each callsign is highlighted, red or amber by the same rule as above.
+Click one and it goes into Call.
+
+The palette can be dragged by its title bar and resized from its corner; where you leave it is
+remembered. Both surfaces have a **✕** that hides them until the next Space.
+
+The two halves have their own **global** switches, with different defaults. The one beside the
+input row widens the *duplicate* half to all logs and is off to begin with — the duplicate that
+costs you points is in the log you are working. The one in the palette widens the *partial*
+half and is on to begin with — a half-heard callsign is worth asking your whole history about.
+Both are remembered, and flipping either re-runs the search at once.
+
+The search stays armed until you log a QSO in RUN, or press **Esc** while nothing is being
+transmitted. Clearing the Call field or pressing `Alt+W` does *not* end it: the surfaces simply
+have nothing to match, and come back as soon as the next callsign does. While anything is going
+out, `Esc` belongs to the transmission and aborts it.
 
 Clicking the **Call** column header opens a search box that filters the journal itself.
 
@@ -1120,8 +1149,9 @@ The **?** button opens this list.
 | `Alt+Enter` | log the QSO without sending a macro |
 | `Alt++` / `Alt+-` | text size of the logged QSOs below — the numpad `+` / `-` work too |
 | `Esc` (dialog open) | close the dialog |
-| `Esc` (no dialog) | **abort the transmission immediately** — CW, RTTY or an audio send from the RTTY palette |
-| `Space` in Call | duplicate check and partial-call search |
+| `Esc` (no dialog, transmitting) | **abort the transmission immediately** — CW, RTTY or an audio send from the RTTY palette |
+| `Esc` (no dialog, not transmitting) | end the call search |
+| `Space` in Call | arm the call search — duplicates and partial calls, both tracking as you type |
 | `Enter` in Snt / Rcv | as if pressed in Call, or in EXCH once a callsign is entered — **it transmits**; `Tab` leaves without keying |
 
 `Alt++` and `Alt+-` scale the logged QSOs the way the DX cluster's own **+** / **−**
