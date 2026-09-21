@@ -1037,6 +1037,9 @@ TRX1, TRX2 and TRX3 exactly as they do in the window.
 from any other page's **DXC** tab, since only QRPLog's tab toggles the split. They share one
 cluster login (there is only ever one), but each keeps its **own** filters, columns, view mode
 and zoom, so the pane can show one band in three columns while the window shows everything.
+The single exception is the *Mode* filter and the *Mode* column, which are shared: that filter
+decides what the shared connection is allowed to keep, so it cannot sensibly differ between
+two views of it.
 Whichever opened first holds the connection and feeds the other; its `WS` chip reads `WS↗`
 on the instance being fed. Close one and the other picks the connection up on its own.
 Commands and **Reconnect Telnet** work from either.
@@ -1192,7 +1195,8 @@ callsign from *Identity*. Four status chips sit in the toolbar:
 the QRPLog split pane and the external window are both open, the one that opened first holds
 it and passes everything it receives to the other; the second shows `WS↗`. Commands,
 **Reconnect Telnet** and the spot table all work from either, and each instance keeps its
-**own** filters, columns, view mode and zoom. Close the one holding the connection and the
+**own** filters, columns, view mode and zoom — except the *Mode* filter and the *Mode*
+column, which are shared, because that filter discards spots for both. Close the one holding the connection and the
 other picks it up by itself, with the spots so far handed over. This replaces the old rule
 that only one DXC window could be open at a time.
 
@@ -1206,8 +1210,9 @@ that only one DXC window could be open at a time.
 | **km** | distance from your locator, with an arrow rotated to the bearing |
 | **Spotter** | who posted it |
 | **Type** | `CQ`, `DE`, or blank |
+| **Mode** | `CW`, `RTTY`, `FT8`, `PSK63`… — taken from the spot itself, blank when the cluster did not say |
 | **dB** | signal report, drawn as a small bar |
-| **WPM** | keying speed |
+| **WPM** | keying speed — words per minute for CW, bauds for RTTY; the *Mode* column says which |
 | **Info** | the spot comment |
 | **Raw** | the unparsed cluster line |
 
@@ -1216,8 +1221,20 @@ best DX and the strongest signals stand out without reading numbers.
 
 ### 4.3 Filters
 
-Five column headers are buttons that open a filter menu. A filter that is doing something
+Six column headers are buttons that open a filter menu. A filter that is doing something
 marks its button, and every setting is remembered in the browser.
+
+**Mode is not like the others.** Every filter here except *Mode* hides rows that are already
+in the list. *Mode* **discards** non-matching spots as they arrive, so they never occupy one
+of the 500 slots the spot list holds — which is the point of it: filtered to RTTY, the list
+holds 500 RTTY spots instead of the five that would fit between the CW. Three things follow.
+It is **not retroactive**: unticking a mode does not remove what is already listed, and
+ticking it back does not recover what was thrown away. It is **shared** between the split
+pane and the external window, along with the *Mode* column's own show/hide — the one setting
+that is not per-instance, because both are fed by one cluster connection. And **hiding the
+Mode column switches it off**, so nothing can ever be discarded without the button that does
+it being on screen; the button's tooltip says how many spots it has discarded since **Clear**.
+Untick every mode and the filter resets itself to letting everything through.
 
 | Filter | Controls |
 |---|---|
@@ -1225,6 +1242,7 @@ marks its button, and every setting is remembered in the browser.
 | **DX** | free text, or a JavaScript regular expression when **Regex** is ticked (case-insensitive); **Clear** resets it. **Careful:** ticking Regex on an *empty* field pre-loads a ready-made expression rather than matching everything, and the filter persists in this browser until you clear it. The header button marks itself as filtering, but you have to open the menu to see what the expression actually is — so check it before deciding a band is dead. |
 | **km** | a minimum and maximum distance, `0 – 20 000 km`, with a reset |
 | **Type** | `CQ`, `DE`, `EMPTY` checkboxes |
+| **Mode** | `CW`, `RTTY`, `PSK`, `FT8`, `FT4`, `JT65`, `JT9`, `BEACON` and *other / unknown* checkboxes. Discards on arrival — see above. *Other / unknown* covers every spot whose mode the cluster did not state, which on a human cluster is most of them, so leave it ticked unless you mean to throw those away |
 | **dB** | a minimum and maximum, `−30 – 100 dB`, with a reset |
 
 Separately, the **Dupe** selector cross-references the spots against your *active* log by
@@ -1257,7 +1275,7 @@ band map follows the **pane's** filters, since that is the list sitting next to 
 
 | Control | Purpose |
 |---|---|
-| **view selector** | `Table` — the parsed spot table · `Raw` — the unmodified cluster stream · `Histogram` — spot activity per band |
+| **view selector** | `Table` — the parsed spot table · `Raw` — the unmodified cluster stream, including spots the *Mode* filter discarded and lines that are not spots at all; after a page reload it is rebuilt from the listed spots and no longer shows either · `Histogram` — spot activity per band |
 | **Columns** | show and hide individual columns |
 | **Clear** | empty the table, the raw log and the histogram |
 | **Stop scroll** | freeze automatic scrolling so a row stays put while you read it |

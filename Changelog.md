@@ -11,6 +11,64 @@ published.
 
 ## Working tree — not committed
 
+**DXC has a Mode column, and its filter throws non-matching spots away instead of hiding them.**
+
+* **What was missing.** Connected to a Reverse Beacon cluster, every spot carries its mode
+  as the first token after the callsign — `CW`, `RTTY`, `PSK63`, `FT8`. The page parsed the
+  dB and the WPM out of that tail and dumped whatever was left, mode included, into *Info*.
+  So the information was on screen but had no column, no header and nothing to filter on.
+* **It discards, and that is the point.** Every other filter on the page hides rows that are
+  already in `rows[]`. This one refuses them at the door. At one RTTY spot per hundred CW,
+  a 500-row buffer holds five RTTY spots; refusing the CW at arrival makes the same buffer
+  hold 500 of them. The filter therefore turns the list from *count*-bounded into
+  *time*-bounded, which is the honest limit — nobody needs an hour-old spot.
+* **Three doors, not one.** `rows[]` is filled by `addLine()`, by the restored cache and by
+  the leader's seed. The test lives in one place, `modeAdmitted()`, and all three call it —
+  a filter applied only at the socket would have had the refused spots walk back in through
+  the other two the moment the page was reloaded or a second instance came up.
+* **The policy is shared; every other filter is not.** Filters, columns, zoom and view mode
+  are deliberately per-instance, because the split pane and the external window are two
+  views. This one is not a view: it decides what the one shared cluster feed is allowed to
+  become, and the spot cache is shared for exactly the same reason. A per-instance
+  admission policy would have let a CW-only pane quietly overwrite the window's 30-minute
+  backlog with a CW-only one. The Mode column's own show/hide travels with it, since the
+  column is what arms the filter. It rides the DXC instances' existing BroadcastChannel —
+  handled *above* the leader branch, whose unconditional `return` would otherwise have made
+  the message invisible to whichever instance owns the socket.
+* **Hiding the column switches the discarding off.** That keeps the page's existing rule
+  (a hidden column's filter does not apply) and buys something specific: spots can never be
+  discarded without the button doing it being on screen. The button's tooltip carries the
+  count since **Clear**, because a refused spot appears in neither half of the `visible/total`
+  counter.
+* **Raw keeps everything.** It is the only way to tell "the filter ate it" from "the cluster
+  has gone quiet". After a reload it cannot — the Raw view is rebuilt from the surviving
+  rows — and that is now written down rather than discovered.
+* **`rows[]` grew a live 30-minute cap.** The buffer used to be bounded by traffic: at
+  cluster pace 500 rows is a few minutes. Discarding cuts that tie, and RTTY-only would have
+  filled the table with eight hours of dead spots that a reload then cut back to thirty
+  minutes — a twentyfold shrink that reads as a fault. The cap is `HISTORY_MAX_MIN`, the
+  number the cache already used, so live and restored finally agree. It sweeps the whole
+  array rather than walking off the front, because a cluster dumps its backlog on login and
+  an hour-old spot routinely arrives at the *newest* end.
+* **Unticking the last mode resets to all modes**, the escape a collapsed numeric range
+  already gets. On a display filter an empty table is a mistake undone in one click; here it
+  would be thirty minutes of spots destroyed and a table that then stays empty.
+* **`BPS` counts as a speed now.** RBN reports RTTY in bauds, and `45 BPS` used to be left
+  in *Info* while the CW rows went empty. With mode taken out and bauds taken in, *Info* is
+  genuinely empty for every RBN spot and the column can be hidden outright.
+* **Mode is deliberately NOT sent to the rotator map or the band map.** The rotator's
+  contract rejects a body over 8 kB and keeps the previous blob, so the map would freeze
+  rather than degrade. Measured at 120 spots: 7 105 B today against 8 785 B with the field,
+  and 7 705 B / 9 625 B with long calls on 23 cm. (That ceiling is tight *already*, with
+  only 6 % of headroom — noted, not addressed here.) The filter makes the body smaller
+  instead, since both payloads are built from `rows[]`.
+* **Fixed on the way past: spots with the spotter's grid square never parsed at all.**
+  `parse()` required the time at the end of the line, so every DXSpider spot ending
+  `… 1432Z JN79` was dropped in silence — including every line `tools/dxc-fake-cluster.py`
+  emits, which is why that script produced no table rows whatsoever. Without this the
+  filter's *other / unknown* bucket, which exists precisely so a mode filter cannot swallow
+  human spots, was unreachable and untestable.
+
 **PA palette: a scale of the amplifier's tuning segments, with arrows onto their centres.**
 
 * **The gap this fills.** The EXPERT 1K-FA's tuner keeps one setting per sub-band, so it

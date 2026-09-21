@@ -132,6 +132,12 @@ const server = http.createServer((request, response) => {
   if (url.pathname === "/pass") return json({pass});
   if (url.pathname === "/ws-stats") return json({opens: wsOpens, live: wsConns.length, cmds: clusterCmds});
   if (url.pathname === "/ws-stats/clear") { wsOpens = 0; clusterCmds = []; return json({ok: true}); }
+  // A progress beacon, with no callers by default. Everything else this fixture
+  // knows is reported in one burst at the very end, so a pass that dies or
+  // wedges mid-script says nothing at all about WHERE. When that happens, drop
+  //   const note = t => fetch("/note?t=" + encodeURIComponent(t));
+  // into the page script and await it between sections.
+  if (url.pathname === "/note") { console.log("  ..  " + (url.searchParams.get("t") || "")); return json({ok: true}); }
   if (url.pathname === "/ws-push") { clusterPush(url.searchParams.get("line") || ""); return json({ok: true}); }
 
   if (url.pathname === "/state") return json({
@@ -227,7 +233,17 @@ const PAGE_SCRIPT = `
     await fetch("/result", {method: "POST", body: JSON.stringify({checks, hard: !!hard})});
   };
 
-  const SPOT = "DX de OK2XYZ:    14074.0  JA1ABC       CQ CQ UP              1204Z";
+  // Every spot this fixture pushes carries a CURRENT UTC stamp. dxc.html trims
+  // rows[] to HISTORY_MAX_MIN (30 minutes) LIVE, not only on restore -- the
+  // mode filter cut the tie between "500 rows" and "recent", so the age cap is
+  // what keeps the live table and a restored one saying the same thing. A spot
+  // frozen at "1204Z" is therefore refused for all but a few minutes of the
+  // day, which shows up here as "timed out waiting for the spot to render".
+  const hmUtc = at => String(at.getUTCHours()).padStart(2, "0") +
+                      String(at.getUTCMinutes()).padStart(2, "0");
+  const nowZ  = () => hmUtc(new Date()) + "Z";
+
+  const SPOT = () => "DX de OK2XYZ:    14074.0  JA1ABC       CQ CQ UP              " + nowZ();
 
   function realClick(node, init) {
     node.dispatchEvent(new PointerEvent("pointerdown", Object.assign({bubbles: true}, init)));
@@ -284,6 +300,10 @@ const PAGE_SCRIPT = `
     // ══ Pass 1: wide enough ════════════════════════════════════════════════
     try { localStorage.removeItem("wifilt-log-split"); } catch (e) {}
     try { localStorage.removeItem("dxcEFreqFilter"); localStorage.removeItem("dxcFreqFilter"); } catch (e) {}
+    // The mode policy is global, not per-instance, and a run that dies inside
+    // section 12c would otherwise leave a discarding filter in the profile for
+    // the next one -- which would read as spots mysteriously not arriving.
+    try { localStorage.removeItem("wifilt-dxc-mode"); } catch (e) {}
     LogDxcSplit.close();
     await sleep(1200);
 
@@ -330,7 +350,7 @@ const PAGE_SCRIPT = `
       s.live === 1 && s.opens === 1, JSON.stringify(s));
 
     // ---- 5. a spot arrives and renders ------------------------------------
-    await fetch("/ws-push?line=" + encodeURIComponent(SPOT));
+    await fetch("/ws-push?line=" + encodeURIComponent(SPOT()));
     const link = await until(() => fdoc.querySelector("#body .freq-link"), 6000, "the spot to render");
     check("a cluster line renders as a clickable frequency", !!link, link && link.textContent);
 
@@ -537,7 +557,7 @@ const PAGE_SCRIPT = `
     // from the radio's 14074000 Hz.
     const onMap = call => $("dxcBandSvg").textContent.indexOf(call) >= 0;
     await fetch("/ws-push?line=" + encodeURIComponent(
-      "DX de OK9AAA:    14090.0  ZZ9ZZ        test                  1211Z"));
+      "DX de OK9AAA:    14090.0  ZZ9ZZ        test                  " + nowZ()));
     await until(() => onMap("ZZ9ZZ"), 6000, "the pane's spot to reach the band map")
       .catch(() => {});
     check("the pane's own spots feed the band map",
@@ -561,7 +581,7 @@ const PAGE_SCRIPT = `
       s.opens === 0 && s.live === 1, JSON.stringify(s));
 
     await fetch("/ws-push?line=" + encodeURIComponent(
-      "DX de OK1AAA:     7015.0  VK3QQQ       up 2                  1215Z"));
+      "DX de OK1AAA:     7015.0  VK3QQQ       up 2                  " + nowZ()));
     await until(() => second.contentDocument.querySelectorAll("#body tr").length > 0,
       6000, "the follower to receive the relayed feed").catch(() => {});
     check("the follower sees the relayed spots",
@@ -592,6 +612,144 @@ const PAGE_SCRIPT = `
     await sleep(600);
     check("an external window cannot feed the band map while the pane is open",
       !onMap("QQ0QQ"), $("dxcBandSvg").textContent.slice(0, 100));
+
+    // ---- 12c. Mode: the one filter that discards on arrival ---------------
+    // Every other filter on this page hides rows. This one refuses them at the
+    // door, so a 500-row buffer spent on CW is not a buffer the one-in-a-
+    // hundred RTTY spot never gets into. Four things about that cannot be read
+    // out of the source: that a refused spot really never reaches rows[] (or
+    // the feature saves nothing), that it is still in Raw (the operator's only
+    // way to tell "discarded" from "cluster is quiet"), that hiding the column
+    // disarms it, and that the policy is SHARED. The last one guards a specific
+    // trap -- linkOnMessage()'s leader branch ends in an unconditional return,
+    // so a handler placed in the follower switch below it would be invisible to
+    // whoever owns the socket. It is therefore set in the FOLLOWER here.
+    const dxc = frame.contentDocument;
+    const paneCell = (call, cls) => {
+      for (const tr of dxc.querySelectorAll("#body tr")) {
+        const dx = tr.querySelector(".c-dx");
+        if (dx && dx.textContent.trim() === call) {
+          const td = tr.querySelector("." + cls);
+          return td ? td.textContent.trim() : null;
+        }
+      }
+      return null;
+    };
+    const hasRow = call => paneCell(call, "c-time") !== null;
+    const held   = () => Number(String(dxc.getElementById("cnt").textContent).split("/")[1] || 0);
+    // The menu rebuilds its own innerHTML on every change, so the checkbox is
+    // re-queried each time rather than held -- a detached node would take the
+    // click and change nothing.
+    const tick = (doc, key, on) => {
+      doc.getElementById("modeFilterBtn").click();
+      const box = doc.querySelector('#modeMenu input[data-mode-filter="' + key + '"]');
+      box.checked = on;
+      box.dispatchEvent(new doc.defaultView.Event("click", {bubbles: true}));
+    };
+
+    await fetch("/ws-push?line=" + encodeURIComponent([
+      "DX de G4IRN-#:  14033.50  OH6KD          CW    38 dB  27 WPM  CQ      " + nowZ(),
+      "DX de PA5KT-4-#:  7042.90  ON4AEF         RTTY  28 dB  45 BPS  CQ      " + nowZ()
+    ].join("\\n")));
+    await until(() => paneCell("ON4AEF", "c-mode"), 6000,
+      "the RBN spots to render").catch(() => {});
+    check("an RBN spot fills the Mode column",
+      paneCell("OH6KD", "c-mode") === "CW" && paneCell("ON4AEF", "c-mode") === "RTTY",
+      paneCell("OH6KD", "c-mode") + " / " + paneCell("ON4AEF", "c-mode"));
+    check("and Info is left empty, the mode and the bauds taken out of it",
+      paneCell("OH6KD", "c-comment") === "" && paneCell("ON4AEF", "c-comment") === "",
+      JSON.stringify([paneCell("OH6KD", "c-comment"), paneCell("ON4AEF", "c-comment")]));
+    check("RTTY's 45 BPS lands in WPM instead of as a crumb in Info",
+      paneCell("ON4AEF", "c-wpm") === "45", String(paneCell("ON4AEF", "c-wpm")));
+    check("a human spot keeps an empty Mode and an untouched Info",
+      paneCell("JA1ABC", "c-mode") === "" && paneCell("JA1ABC", "c-comment") === "CQ UP",
+      JSON.stringify([paneCell("JA1ABC", "c-mode"), paneCell("JA1ABC", "c-comment")]));
+    const heldBefore = held();
+    tick(dxc, "RTTY", false);
+    await sleep(150);
+    await fetch("/ws-push?line=" + encodeURIComponent(
+      "DX de OH6BG-#:  14028.00  DROPME         RTTY  30 dB  45 BPS  CQ      " + nowZ()));
+    await sleep(500);
+    check("unticking RTTY discards the spot rather than hiding it",
+      !hasRow("DROPME"), "row present: " + hasRow("DROPME"));
+    check("and it never took a slot in the buffer",
+      held() === heldBefore, held() + " vs " + heldBefore);
+    check("but Raw still has it, so 'discarded' can be told from 'cluster quiet'",
+      /DROPME/.test(dxc.getElementById("raw").textContent));
+    check("the Mode button counts what it threw away",
+      /1 discarded/.test(dxc.getElementById("modeFilterBtn").title),
+      dxc.getElementById("modeFilterBtn").title);
+    tick(second.contentDocument, "CW", false);
+    await sleep(500);
+    check("a policy set in the FOLLOWER reaches the leader's own menu",
+      dxc.querySelector('#modeMenu input[data-mode-filter="CW"]').checked === false,
+      String(dxc.querySelector('#modeMenu input[data-mode-filter="CW"]').checked));
+    await fetch("/ws-push?line=" + encodeURIComponent(
+      "DX de OH6BG-#:  14028.00  CWDROP         CW    30 dB  28 WPM  CQ      " + nowZ()));
+    await sleep(500);
+    check("and the leader, which owns the socket, discards by it too",
+      !hasRow("CWDROP"), "row present: " + hasRow("CWDROP"));
+
+    // The column convention, kept deliberately: hide Mode and nothing is thrown
+    // away. It is what makes silent discarding impossible -- when the filter is
+    // discarding, the button that does it is on screen.
+    dxc.getElementById("colbtn").click();
+    let modeCol = dxc.querySelector('#cols input[data-x="mode"]');
+    modeCol.checked = false;
+    modeCol.dispatchEvent(new dxc.defaultView.Event("click", {bubbles: true}));
+    await sleep(300);
+    await fetch("/ws-push?line=" + encodeURIComponent(
+      "DX de OH6BG-#:  14028.00  KEEPME         RTTY  30 dB  45 BPS  CQ      " + nowZ()));
+    await sleep(500);
+    check("hiding the Mode column disarms the discard",
+      hasRow("KEEPME"), "row present: " + hasRow("KEEPME"));
+    check("and that column's visibility is shared, unlike every other column",
+      second.contentDocument.querySelector('th[data-c="mode"]').classList.contains("hide"),
+      second.contentDocument.querySelector('th[data-c="mode"]').className);
+    modeCol = dxc.querySelector('#cols input[data-x="mode"]');
+    modeCol.checked = true;
+    modeCol.dispatchEvent(new dxc.defaultView.Event("click", {bubbles: true}));
+    await sleep(300);
+    check("re-arming is not retroactive either way",
+      hasRow("KEEPME") && !hasRow("DROPME"),
+      JSON.stringify({KEEPME: hasRow("KEEPME"), DROPME: hasRow("DROPME")}));
+
+    // rows[] has three doors, not one. The pane is holding an RTTY row it took
+    // in while the column was hidden, and RTTY is refused again -- so a third
+    // instance coming up now is handed that row by both the leader's seed and
+    // the shared cache, and has to refuse it at both. JA1ABC is the control:
+    // mode-less, so it rides the OTHER bucket and must arrive.
+    const third = document.createElement("iframe");
+    third.id = "smokeThirdDxc";
+    third.src = "/dxc.html";
+    third.style.cssText = "position:fixed;left:-9999px;width:600px;height:700px";
+    document.body.appendChild(third);
+    await until(() => third.contentDocument && third.contentDocument.getElementById("body"),
+      8000, "the third instance to load");
+    await until(() => /JA1ABC/.test(third.contentDocument.getElementById("body").textContent),
+      8000, "the third instance to be seeded").catch(() => {});
+    const thirdText = third.contentDocument.getElementById("body").textContent;
+    check("the seed and the restored cache are both filtered on receipt",
+      /JA1ABC/.test(thirdText) && !/KEEPME/.test(thirdText), thirdText.slice(0, 160));
+    third.remove();
+    await sleep(400);
+
+    // Unticking the last mode would destroy thirty minutes of spots and leave a
+    // table that stays empty, reading exactly like a dead cluster -- so it
+    // resets to admitting everything, the same escape a collapsed range gets.
+    // It doubles as the cleanup for everything above.
+    const modeKeys = Array.from(dxc.querySelectorAll("#modeMenu input[data-mode-filter]"))
+      .map(i => i.getAttribute("data-mode-filter"));
+    for (const k of modeKeys) { tick(dxc, k, false); await sleep(40); }
+    await sleep(300);
+    check("unticking the last mode resets the filter to admitting everything",
+      modeKeys.length === 9 &&
+      Array.from(dxc.querySelectorAll("#modeMenu input[data-mode-filter]")).every(i => i.checked),
+      modeKeys.join(",") + " -> " +
+      Array.from(dxc.querySelectorAll("#modeMenu input[data-mode-filter]")).map(i => i.checked).join(","));
+    check("and the button stops marking itself as filtering",
+      !dxc.getElementById("modeFilterBtn").classList.contains("active"),
+      dxc.getElementById("modeFilterBtn").className);
 
     // ---- 13. losing the leader promotes the other ------------------------
     // The pane connected first, so the PANE is the leader -- removing the
@@ -679,11 +837,19 @@ const PAGE_SCRIPT = `
     await fetch("/ws-push?line=" + encodeURIComponent(spotAt("CACHE1", "14045.0", ago(1))));
     await fetch("/ws-push?line=" + encodeURIComponent(spotAt("CACHE2", "14055.0", ago(20))));
     await fetch("/ws-push?line=" + encodeURIComponent(spotAt("STALE9", "14065.0", ago(95))));
-    await until(() => /STALE9/.test(paneText()), 6000,
-      "all three cache-pass spots to render").catch(() => {});
-    check("the cache pass starts with all three spots on screen",
-      /CACHE1/.test(paneText()) && /CACHE2/.test(paneText()) && /STALE9/.test(paneText()),
-      paneText().slice(0, 200));
+    await until(() => /CACHE2/.test(paneText()), 6000,
+      "the two fresh cache-pass spots to render").catch(() => {});
+    check("the cache pass starts with both fresh spots on screen",
+      /CACHE1/.test(paneText()) && /CACHE2/.test(paneText()), paneText().slice(0, 200));
+    // rows[] is now bounded by HISTORY_MAX_MIN as well as by MAX. The mode
+    // filter is what made that necessary: it cut the tie between "500 rows" and
+    // "recent", so RTTY-only at one-in-a-hundred would otherwise fill the table
+    // with eight hours of spots and a reload would then shrink it twentyfold.
+    // STALE9 is pushed LAST on purpose -- arrival order is not age order, a
+    // cluster dumps its backlog on login, and a trim that only walked off the
+    // front of rows[] would leave an hour-old spot parked behind fresh ones.
+    check("a 95-minute spot is refused as it arrives, not merely on reload",
+      !/STALE9/.test(paneText()), paneText().slice(0, 200));
 
     // ---- 15a. the zoom buttons move the COLUMNS, not just the type --------
     // Reported alongside the cache: shrinking the text left the columns at full
@@ -729,7 +895,7 @@ const PAGE_SCRIPT = `
     pane = $("logDxcFrame").contentDocument;
     check("spots come back after leaving the pane and returning",
       /CACHE1/.test(paneText()) && /CACHE2/.test(paneText()), paneText().slice(0, 200));
-    check("a spot older than 30 minutes does not",
+    check("and a spot older than 30 minutes is still absent after the round trip",
       !/STALE9/.test(paneText()), paneText().slice(0, 200));
     check("and the Raw view is rebuilt from the surviving rows",
       /CACHE1/.test(pane.getElementById("raw").textContent) &&
@@ -825,7 +991,7 @@ const PAGE_SCRIPT = `
     const bulk = [];
     for (let i = 0; i < 80; i++) {
       bulk.push("DX de OK1AAA:    14025.0  T" + (100 + i)
-        + "ABC       filler                1220Z");
+        + "ABC       filler                " + nowZ());
     }
     await fetch("/ws-push?line=" + encodeURIComponent(bulk.join("\\n")));
     await until(() => pane.querySelectorAll("#body tr").length > 60, 6000,
@@ -882,9 +1048,27 @@ function launchChrome(w, h) {
   });
 }
 
+// PAGE_SCRIPT is a TEMPLATE LITERAL, so a single-backslash "\n" written inside
+// it arrives in the browser as a real newline -- breaking whatever JS string it
+// sat in -- and every "${" interpolates. `node --check` on this file cannot see
+// that: it validates the literal, not the source it will deliver. Get it wrong
+// and Chrome throws at parse time, so no check runs and no /result is ever
+// posted; the only symptom is the whole harness timing out minutes later with
+// "the page reported within the timeout". Parsing it here turns four wasted
+// minutes into a named error on the spot.
+try { new Function(PAGE_SCRIPT); } catch (error) {
+  console.error("PAGE_SCRIPT does not parse: " + error.message);
+  process.exit(2);
+}
+
 server.listen(0, "127.0.0.1", () => {
   port = server.address().port;
   launchChrome(1280, 900);
+  // One budget for BOTH Chrome passes, against a run that takes about 20 s. The
+  // margin is deliberate and it is not a performance allowance: when the page
+  // script fails to PARSE, nothing reports and this timer is the only thing
+  // that ends the run -- so every second of it is a second of not knowing why.
+  // That is what the new Function(PAGE_SCRIPT) check above is for.
   timer = setTimeout(() => finish({checks: [["the page reported within the timeout", false,
     "no /result was posted"]], hard: true}), 120000);
 });
