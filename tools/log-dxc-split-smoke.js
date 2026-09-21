@@ -751,6 +751,144 @@ const PAGE_SCRIPT = `
       !dxc.getElementById("modeFilterBtn").classList.contains("active"),
       dxc.getElementById("modeFilterBtn").className);
 
+    // ---- 12d. Repeat suppression: one row per station ---------------------
+    // A Reverse Beacon feed is a list of RECEPTIONS, not of stations: one CQ
+    // heard by thirty skimmers arrives as thirty lines. In one observed minute
+    // OK1CF appeared 26 times on 1825.80. So a matching spot refreshes the row
+    // that is already there rather than adding one -- and that choice, not a
+    // plain discard, is what these checks are really about. A discarded repeat
+    // would leave the row's clock frozen, the 30-minute age cap would then take
+    // it, and with its repeats still suppressed the loudest station on the band
+    // would disappear from the table altogether.
+    const agoZ = mins => hmUtc(new Date(Date.now() - mins * 60000)) + "Z";
+    const rbn = (call, khz, mode, db, mins) =>
+      "DX de " + call + "-SP" + db + ":  " + khz + "  " + call + "   " + mode
+      + "  " + db + " dB  25 WPM  CQ  " + agoZ(mins || 0);
+    const pushAll = lines => fetch("/ws-push?line=" + encodeURIComponent(lines.join("\\n")));
+    const cellOf = (call, cls) => {
+      for (const tr of dxc.querySelectorAll("#body tr")) {
+        const dx = tr.querySelector(".c-dx");
+        if (dx && dx.textContent.trim() === call) {
+          const td = tr.querySelector("." + cls);
+          return td ? td.textContent.trim() : null;
+        }
+      }
+      return null;
+    };
+    const rowsFor = call => Array.prototype.filter.call(
+      dxc.querySelectorAll("#body tr"),
+      tr => (tr.querySelector(".c-dx") || {}).textContent === call).length;
+
+    dxc.getElementById("clear").click();
+    await sleep(150);
+
+    // Twelve receptions of one CQ, dB all over the place as real skimmers are.
+    const burst = [];
+    for (let i = 0; i < 12; i++) burst.push(rbn("OK1CF", "1825.80", "CW", 5 + i * 4));
+    await pushAll(burst);
+    // The refresh render is coalesced on purpose, so wait for the count rather
+    // than for a fixed delay.
+    await until(() => cellOf("OK1CF", "c-hits") === "12", 6000,
+      "the twelve receptions to collapse").catch(() => {});
+    check("twelve receptions of one CQ make one row",
+      rowsFor("OK1CF") === 1, String(rowsFor("OK1CF")));
+    check("and the x column says how many it stands for",
+      cellOf("OK1CF", "c-hits") === "12", String(cellOf("OK1CF", "c-hits")));
+    check("the row keeps the BEST report, not the last",
+      cellOf("OK1CF", "c-db").indexOf("49") >= 0, String(cellOf("OK1CF", "c-db")));
+    check("and the spotter is the one that heard it best",
+      cellOf("OK1CF", "c-spotter") === "OK1CF-SP49", String(cellOf("OK1CF", "c-spotter")));
+    // Raw is the only way to tell "merged" from "the cluster went quiet", so it
+    // is checked HERE -- Clear, which several of the sections below use, wipes
+    // rawLines along with the rows.
+    check("all twelve receptions are still in Raw",
+      (dxc.getElementById("raw").textContent.match(/OK1CF/g) || []).length >= 12,
+      String((dxc.getElementById("raw").textContent.match(/OK1CF/g) || []).length));
+
+    // Per-mode tolerance, measured off the live feed: CW jitters by 0.1 kHz,
+    // RTTY by well over a kilohertz.
+    await pushAll([rbn("SA6AUT", "7016.00", "CW", 15), rbn("SA6AUT", "7016.10", "CW", 18)]);
+    await pushAll([rbn("TOLCW", "14025.00", "CW", 15), rbn("TOLCW", "14026.00", "CW", 18)]);
+    await pushAll([rbn("TOLRY", "21082.30", "RTTY", 49), rbn("TOLRY", "21083.40", "RTTY", 19)]);
+    await sleep(900);
+    check("CW merges 0.10 kHz away", rowsFor("SA6AUT") === 1, String(rowsFor("SA6AUT")));
+    check("CW does NOT merge 1.00 kHz away", rowsFor("TOLCW") === 2, String(rowsFor("TOLCW")));
+    check("RTTY merges 1.10 kHz away", rowsFor("TOLRY") === 1, String(rowsFor("TOLRY")));
+
+    // Tolerance is not transitive, so the anchor is fixed: 14085.58 and
+    // 14087.93 are 2.35 kHz apart and must not be joined by way of 14086.99.
+    await pushAll([rbn("ANCHW", "14085.58", "RTTY", 9), rbn("ANCHW", "14086.99", "RTTY", 68),
+                   rbn("ANCHW", "14087.93", "RTTY", 10)]);
+    await sleep(900);
+    check("the anchor does not walk across the band",
+      rowsFor("ANCHW") === 2, String(rowsFor("ANCHW")));
+
+    // The window is measured on the spots' own stamps, which is what lets this
+    // be tested without waiting ten minutes.
+    await pushAll([rbn("WINDW", "7005.00", "CW", 10, 20), rbn("WINDW", "7005.00", "CW", 10, 0)]);
+    await sleep(900);
+    check("after 20 min of silence a repeat starts a new row",
+      rowsFor("WINDW") === 2, String(rowsFor("WINDW")));
+
+    // Busted decodes. Off by default because it is the one part that can absorb
+    // a genuinely different station -- EC5W and EC5K are one edit apart and both
+    // are real.
+    const bust = [rbn("VE3IDS", "14033.00", "CW", 10), rbn("VE3IDS", "14033.00", "CW", 17),
+                  rbn("VE3IDS", "14033.00", "CW", 18), rbn("VE3ID", "14033.10", "CW", 8),
+                  rbn("VE3INS", "14033.00", "CW", 8)];
+    await pushAll(bust);
+    await sleep(900);
+    check("busted-callsign merging is off by default",
+      rowsFor("VE3ID") === 1 && rowsFor("VE3INS") === 1,
+      rowsFor("VE3ID") + " / " + rowsFor("VE3INS"));
+
+    dxc.getElementById("clear").click();
+    await sleep(150);
+    dxc.getElementById("repeatFilterBtn").click();
+    const fuzzyBox = dxc.querySelector("#repeatMenu input[data-repeat-fuzzy]");
+    fuzzyBox.checked = true;
+    fuzzyBox.dispatchEvent(new dxc.defaultView.Event("click", {bubbles: true}));
+    await sleep(200);
+    await pushAll(bust);
+    await sleep(900);
+    check("switched on, the distance-1 manglings are absorbed",
+      rowsFor("VE3ID") === 0 && rowsFor("VE3INS") === 0 && rowsFor("VE3IDS") === 1,
+      [rowsFor("VE3ID"), rowsFor("VE3INS"), rowsFor("VE3IDS")].join(" / "));
+    await pushAll([rbn("NEWAN", "7008.00", "CW", 10), rbn("NEWAO", "7008.00", "CW", 11)]);
+    await sleep(900);
+    check("but an anchor heard only once absorbs nothing",
+      rowsFor("NEWAN") === 1 && rowsFor("NEWAO") === 1,
+      rowsFor("NEWAN") + " / " + rowsFor("NEWAO"));
+
+    // Shared, like the mode policy and for the same reason: it decides what the
+    // one cluster feed is allowed to become.
+    check("the setting reached the other instance",
+      second.contentDocument.querySelector("#repeatMenu input[data-repeat-fuzzy]").checked === true,
+      String(second.contentDocument.querySelector("#repeatMenu input[data-repeat-fuzzy]").checked));
+
+    const fuzzyBox2 = dxc.querySelector("#repeatMenu input[data-repeat-fuzzy]");
+    fuzzyBox2.checked = false;
+    fuzzyBox2.dispatchEvent(new dxc.defaultView.Event("click", {bubbles: true}));
+    await sleep(200);
+
+    // Same convention as Mode: hide the column and nothing is suppressed.
+    dxc.getElementById("colbtn").click();
+    let hitsCol = dxc.querySelector('#cols input[data-x="hits"]');
+    hitsCol.checked = false;
+    hitsCol.dispatchEvent(new dxc.defaultView.Event("click", {bubbles: true}));
+    await sleep(250);
+    await pushAll([rbn("NOSUP", "7009.00", "CW", 10), rbn("NOSUP", "7009.00", "CW", 11)]);
+    await sleep(900);
+    check("hiding the x column stops the suppression",
+      rowsFor("NOSUP") === 2, String(rowsFor("NOSUP")));
+    hitsCol = dxc.querySelector('#cols input[data-x="hits"]');
+    hitsCol.checked = true;
+    hitsCol.dispatchEvent(new dxc.defaultView.Event("click", {bubbles: true}));
+    await sleep(250);
+
+    dxc.getElementById("clear").click();
+    await sleep(200);
+
     // ---- 13. losing the leader promotes the other ------------------------
     // The pane connected first, so the PANE is the leader -- removing the
     // second instance here would only retire a follower and prove nothing.

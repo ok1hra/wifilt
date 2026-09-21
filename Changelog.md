@@ -11,6 +11,70 @@ published.
 
 ## Working tree — not committed
 
+**DXC: one row per station, not one per skimmer — repeat suppression on the Reverse Beacon feed.**
+
+* **What the feed actually is.** A Reverse Beacon cluster sends *receptions*, not stations.
+  One CQ heard by thirty skimmers arrives as thirty lines. In one observed minute `OK1CF`
+  filled 26 lines on `1825.80`, `IZ7GEG` 20 on `14028.00`, and `EC5W` about 45 around
+  `14087`. At that rate the 500-row buffer holds roughly three minutes, so the 30-minute age
+  limit added with the Mode column never even gets to apply, and the table is unreadable.
+  Ninety-one lines from that sample now collapse to three rows.
+* **A repeat refreshes its row, it does not vanish.** This is the part that matters, and a
+  plain discard would have been wrong. A frozen row's clock would stop, the age limit would
+  take it after 30 minutes, and with its repeats still being suppressed the loudest station
+  on the band would disappear from the table altogether. So a match updates the row instead:
+  *UTC* becomes the last time heard, the new **×** column counts the receptions, and *dB*,
+  *kHz*, *Spotter* and *WPM* follow the best report received. dB from skimmers scattered
+  around the world spans 40 dB for one station, so showing the most recent would make the
+  column flicker; the best is stable and means something.
+* **The window is a silence threshold, not a hiding period.** While a station keeps being
+  heard its row simply stays. Ten minutes (settable `1–60`) is how long it must go quiet
+  before the next spot counts as a new appearance and earns a new line.
+* **Tolerance is per mode, because the jitter is.** Measured on the live feed: CW lands
+  within `0.1 kHz` (`7016.00`/`7016.10`, `14033.00`/`14033.10`), while RTTY scatters over
+  `14085.58 … 14087.93` — 2.35 kHz for one station. One figure cannot serve both, so CW and
+  the digital modes get `0.2 kHz` and RTTY gets `1.5 kHz`. Mode is part of the identity too,
+  so RTTY's wide tolerance cannot reach across and swallow a CW station a kilohertz away.
+* **The anchor frequency never moves, and is a field of its own.** Tolerance is not
+  transitive: `14085.58` and `14087.93` are 2.35 kHz apart and do not match each other, yet
+  both match `14086.99`. Matching against the last accepted value instead of a fixed anchor
+  would let a row walk across the band, swallowing a widening range one step at a time. The
+  *displayed* frequency does follow the best report, separately — on RTTY the anchor can sit
+  1.5 kHz from where the strongest skimmer heard it, and clicking **kHz** has to tune the
+  radio onto the station rather than onto the anchor.
+* **Busted callsigns can be merged, but that is off by default.** Skimmers mis-copy: the same
+  station appeared as `VE3IDS`, `VE3ID`, `VE3INS` and `VE3I`, and `EC5W` also as `EC5A`,
+  `EC5Q`, `C5W`, `ZC5W` and `EK5W`. One edit of Levenshtein distance absorbs all five of the
+  latter. It is off by default because `EC5W` and `EC5K` are *also* one edit apart and both
+  are real stations in that same feed — only their frequency and mode keep them apart. When
+  it is on, the gate is narrow: same mode, inside the frequency tolerance, distance exactly
+  one, and only against an anchor already heard three times, so one mangling can never become
+  the anchor that swallows the next. Distance two is refused outright — it would merge
+  `IZ3DVW` with its beacon `IZ3DVW/B` and `W1AW` with `W1AW/9`.
+* **The index is derived from `rows[]`, never kept beside it.** It costs a walk of at most
+  500 rows per line — nothing next to the full `innerHTML` rebuild `render()` already does —
+  and buys the property that suppression can never outlive the row it points at: whatever
+  removes the row lets the station straight back in. It also means the restored cache and the
+  leader's seed need no handling at all, where the Mode filter had to be taught about all
+  three ways into `rows[]`.
+* **Where the CPU saving comes from.** Roughly nine in ten incoming lines are now a refresh of
+  one cell, and `render()` is expensive: it rebuilds the whole table body, walks every column,
+  does a DXCC lookup per row and writes the spot snapshot to `localStorage` synchronously.
+  A new row still appears at once; refreshes are coalesced at 500 ms. The memory saving is the
+  smaller half of this change.
+* **Ordering inside `addLine()`, and a trap in it.** Mode filter, then age limit, then repeat
+  suppression. The age check must come first because a cluster dumps its backlog on login, and
+  an old line reaching the refresh would drag a live row's clock *backwards* and push it under
+  the age limit. Belt and braces: the time only ever moves forward.
+* **One policy object instead of two.** The mode whitelist and repeat suppression are the same
+  kind of thing — they decide what the shared feed is allowed to become — so they now share
+  one `wifilt-dxc-policy` key and one message between instances, rather than two parallel sets
+  of save/load/adopt machinery. The older `wifilt-dxc-mode` key is not migrated; its defaults
+  are harmless.
+* **Naming.** *Dupe* on this page already means "worked before, per the active log". This is
+  deliberately called repeat suppression and lives on its own column header, so the two do not
+  collide in the UI or in the source.
+
 **DXC has a Mode column, and its filter throws non-matching spots away instead of hiding them.**
 
 * **What was missing.** Connected to a Reverse Beacon cluster, every spot carries its mode

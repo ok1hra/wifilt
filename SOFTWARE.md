@@ -1208,10 +1208,11 @@ that only one DXC window could be open at a time.
 | **kHz** | frequency — a link, see below |
 | **DX** | the spotted callsign — a link to a Google search |
 | **km** | distance from your locator, with an arrow rotated to the bearing |
-| **Spotter** | who posted it |
+| **Spotter** | who posted it — with repeat suppression on, whichever skimmer heard it *best* |
 | **Type** | `CQ`, `DE`, or blank |
 | **Mode** | `CW`, `RTTY`, `FT8`, `PSK63`… — taken from the spot itself, blank when the cluster did not say |
-| **dB** | signal report, drawn as a small bar |
+| **dB** | signal report, drawn as a small bar — with repeat suppression on, the best report received |
+| **×** | how many spots this one row stands for; blank when it stands for a single spot. Its header is the repeat-suppression button |
 | **WPM** | keying speed — words per minute for CW, bauds for RTTY; the *Mode* column says which |
 | **Info** | the spot comment |
 | **Raw** | the unparsed cluster line |
@@ -1221,20 +1222,36 @@ best DX and the strongest signals stand out without reading numbers.
 
 ### 4.3 Filters
 
-Six column headers are buttons that open a filter menu. A filter that is doing something
+Seven column headers are buttons that open a filter menu. A filter that is doing something
 marks its button, and every setting is remembered in the browser.
 
-**Mode is not like the others.** Every filter here except *Mode* hides rows that are already
-in the list. *Mode* **discards** non-matching spots as they arrive, so they never occupy one
-of the 500 slots the spot list holds — which is the point of it: filtered to RTTY, the list
-holds 500 RTTY spots instead of the five that would fit between the CW. Three things follow.
-It is **not retroactive**: unticking a mode does not remove what is already listed, and
-ticking it back does not recover what was thrown away. It is **shared** between the split
-pane and the external window, along with the *Mode* column's own show/hide — the one setting
-that is not per-instance, because both are fed by one cluster connection. And **hiding the
-Mode column switches it off**, so nothing can ever be discarded without the button that does
-it being on screen; the button's tooltip says how many spots it has discarded since **Clear**.
-Untick every mode and the filter resets itself to letting everything through.
+**Two of them are not like the others.** Every filter here except *Mode* and *×* hides rows
+that are already in the list. Those two act on arrival instead, so what they reject never
+occupies one of the 500 slots the spot list holds. Both are **not retroactive** — changing
+them never removes what is already listed and never brings back what was not kept — and both
+are **shared** between the split pane and the external window, together with their own
+columns' show/hide. That is the one thing here that is not per-instance, and it is deliberate:
+those two decide what the single shared cluster connection is allowed to become, so they
+cannot sensibly differ between two views of it. For both, **hiding the column switches the
+filter off**, so neither can ever act without the button that causes it being on screen.
+
+*Mode* **discards** non-matching spots outright: filtered to RTTY, the list holds 500 RTTY
+spots instead of the five that would fit between the CW. Its button's tooltip says how many
+it has discarded since **Clear**, and unticking every mode resets it to letting everything
+through.
+
+*×* is **repeat suppression**, and it is what makes a Reverse Beacon feed readable at all.
+That feed is a list of *receptions*, not of stations: one CQ heard by thirty skimmers arrives
+as thirty lines, and in one ordinary minute a single station can fill twenty-six of them. A
+spot that matches a row already in the list — same callsign, same mode, frequency within
+`0.2 kHz`, or `1.5 kHz` on RTTY where the skimmers scatter far more — does not add a row. It
+**refreshes** the one that is there: the *UTC* becomes the last time it was heard, *×* counts
+up, and *dB*, *kHz*, *Spotter* and *WPM* take the values of the best report so far. So the
+list reads as one line per active station, whose time tells you whether it is still there.
+The window in the menu is therefore not "how long to hide repeats" but **how long a silence
+before this counts as a new appearance**; while a station keeps being heard, its row simply
+stays. Beyond 30 minutes the setting has no further effect, because a silent row is removed
+by the list's own age limit first.
 
 | Filter | Controls |
 |---|---|
@@ -1243,7 +1260,11 @@ Untick every mode and the filter resets itself to letting everything through.
 | **km** | a minimum and maximum distance, `0 – 20 000 km`, with a reset |
 | **Type** | `CQ`, `DE`, `EMPTY` checkboxes |
 | **Mode** | `CW`, `RTTY`, `PSK`, `FT8`, `FT4`, `JT65`, `JT9`, `BEACON` and *other / unknown* checkboxes. Discards on arrival — see above. *Other / unknown* covers every spot whose mode the cluster did not state, which on a human cluster is most of them, so leave it ticked unless you mean to throw those away |
+| **×** | **Suppress repeated spots** (on by default), the silence in minutes before a repeat counts as a new appearance (`1 – 60`, default `10`), and **Also merge busted callsigns**. That last one is **off** by default and should stay off unless the manglings bother you: skimmers mis-copy callsigns, so one station can appear as `VE3IDS`, `VE3ID` and `VE3INS` at once, and merging anything one character away from an established row cleans that up — but `EC5W` and `EC5K` are also one character apart and both are real, so on a shared frequency it can absorb a genuinely different station |
 | **dB** | a minimum and maximum, `−30 – 100 dB`, with a reset |
+
+Note that **Dupe** below and the **×** column are unrelated: *Dupe* is about stations *you*
+have already worked, *×* is about the same reception arriving many times.
 
 Separately, the **Dupe** selector cross-references the spots against your *active* log by
 call and band:
