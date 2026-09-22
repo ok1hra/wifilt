@@ -507,7 +507,7 @@ body {
   flex-direction: column;
   background: #1a0000;
   font-family: var(--font-mono);
-  overflow: hidden;   /* the legend is translated sideways; it must not spill */
+  overflow: hidden;   /* the rows are wider than a narrow window; .dv-body scrolls */
 }
 
 .dv-head {
@@ -551,11 +551,19 @@ body {
 .dv-close:hover { color: var(--conn-fail); }
 
 /* The view's own column legend. The journal's is underneath and says something
-   else -- there is no LOG column over there. */
+   else -- there is no LOG column over there.
+   Inside the scroller, below the spacer, so it travels with the rows it labels
+   when a short list is pushed to the bottom -- and sticky, so a list long enough
+   to scroll still has it at the top. It needs its own background for the rows
+   passing under it, and it scrolls sideways with them for free. */
 .dv-cols {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   flex-shrink: 0;
   display: flex;
   padding: 4px 10px;
+  background: #1a0000;
   border-bottom: 1px solid #551111;
   color: #9a7070;
   font-size: calc(13px * var(--jzoom));
@@ -567,7 +575,17 @@ body {
   min-height: 0;
   overflow: auto;
   padding: 3px 0;
+  /* A flex column so the spacer below can push a short list down. */
+  display: flex;
+  flex-direction: column;
 }
+
+/* Two or three duplicates do not fill the window, and left at the top they sit
+   a screen away from the fields being typed in -- the operator has to look up,
+   read, and look back down. The same spacer the journal uses for the same
+   reason pins them to the BOTTOM instead, where the eye already is. It
+   collapses to nothing once the rows overflow, so scrolling up still works. */
+.dv-spacer { flex: 1; min-width: 100%; }
 
 .dv-row {
   display: flex;

@@ -946,7 +946,8 @@ type, letter by letter, and answers two different questions at once.
 **A call you have already worked** takes over the journal. The list of logged QSOs is replaced
 by a list of that station's QSOs — oldest at the top, newest at the bottom, same columns as
 the journal plus a **LOG** column saying which log each one came out of and under which
-station call. A row is **red** when the QSO was on the band the radio is on now and **amber**
+station call. A handful of duplicates sits at the *bottom* of the window rather than the top,
+next to the fields you are typing in, the same way the journal keeps the newest QSO there. A row is **red** when the QSO was on the band the radio is on now and **amber**
 when only the callsign matched.
 
 The **Mode** cell is the one part of a row that does not follow the row's colour: when the
@@ -967,9 +968,10 @@ remembered. Both surfaces have a **✕** that hides them until the next Space.
 
 The two halves have their own **global** switches, with different defaults. The one beside the
 input row widens the *duplicate* half to all logs and is off to begin with — the duplicate that
-costs you points is in the log you are working. The one in the palette widens the *partial*
-half and is on to begin with — a half-heard callsign is worth asking your whole history about.
-Both are remembered, and flipping either re-runs the search at once.
+costs you points is in the log you are working. `Alt+G` toggles it without reaching for the
+mouse. The one in the palette widens the *partial* half and is on to begin with — a half-heard
+callsign is worth asking your whole history about. Both are remembered, and flipping either
+re-runs the search at once.
 
 The search stays armed until you log a QSO in RUN, or press **Esc** while nothing is being
 transmitted. Clearing the Call field or pressing `Alt+W` does *not* end it: the surfaces simply
@@ -1149,6 +1151,7 @@ The **?** button opens this list.
 | `Alt+1` / `Alt+2` / `Alt+3` | select TRX1 / TRX2 / TRX3 |
 | `Alt+U` | toggle RUN / S&P |
 | `Alt+W` | clear the form |
+| `Alt+G` | toggle the **global** switch on the input row |
 | `Alt+Enter` | log the QSO without sending a macro |
 | `Alt++` / `Alt+-` | text size of the logged QSOs below — the numpad `+` / `-` work too |
 | `Esc` (dialog open) | close the dialog |

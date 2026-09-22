@@ -315,6 +315,28 @@ const PAGE_SCRIPT = `
       rows[0].querySelector(".jcol-log").textContent.indexOf("DUPEMAIN") !== -1,
       rows[0].querySelector(".jcol-log").textContent);
 
+    // Three rows do not fill the window. Left at the top they would sit a
+    // screen away from the fields being typed in; the spacer pushes them down
+    // to the bottom edge instead, where the eye already is.
+    {
+      const bodyEl = view().querySelector(".dv-body");
+      const last = rows[rows.length - 1].getBoundingClientRect();
+      const box  = bodyEl.getBoundingClientRect();
+      check("a short list really does not fill the view",
+        bodyEl.scrollHeight <= bodyEl.clientHeight + 1,
+        bodyEl.scrollHeight + " vs " + bodyEl.clientHeight);
+      check("...so its rows sit at the BOTTOM, next to the input row",
+        Math.abs(last.bottom - box.bottom) < 8,
+        Math.round(last.bottom) + " vs " + Math.round(box.bottom));
+      // The legend travels with them. Left in the header it ended up half a
+      // window above the rows it labels.
+      const legend = view().querySelector(".dv-cols").getBoundingClientRect();
+      const first  = rows[0].getBoundingClientRect();
+      check("...and the column legend came down with them",
+        Math.abs(first.top - legend.bottom) < 6,
+        Math.round(legend.bottom) + " vs first row " + Math.round(first.top));
+    }
+
     // The mode cell: same mode keeps the row's colour, a different one does not.
     check("a matching mode keeps the row's colour",
       viewRows().every(x => modeCell(x).className.indexOf("dv-mode-off") === -1),
@@ -366,6 +388,27 @@ const PAGE_SCRIPT = `
     $("chkGlobalSearch").checked = false;
     $("chkGlobalSearch").dispatchEvent(new Event("change", {bubbles: true}));
     await sleep(300);
+
+    // Alt+G is the same switch from the keyboard. Driven through the checkbox
+    // and its change event, so it cannot drift away from the click.
+    const altG = () => document.dispatchEvent(new KeyboardEvent("keydown",
+      {key: "g", code: "KeyG", altKey: true, bubbles: true}));
+    altG();
+    await sleep(320);
+    check("Alt+G turns the global switch on", $("chkGlobalSearch").checked === true, "");
+    check("...and widens the open DUPE view with it", viewRows().length === 4,
+      String(viewRows().length));
+    altG();
+    await sleep(320);
+    check("Alt+G turns it back off",
+      $("chkGlobalSearch").checked === false && viewRows().length === 3,
+      $("chkGlobalSearch").checked + " / " + viewRows().length);
+    // It must not reach the palette's own switch, which answers another question.
+    const palGlobalBefore = $("cpGlobal") ? $("cpGlobal").checked : null;
+    altG(); await sleep(250); altG(); await sleep(250);
+    check("Alt+G leaves the palette's own global alone",
+      ($("cpGlobal") ? $("cpGlobal").checked : null) === palGlobalBefore,
+      String(palGlobalBefore));
 
     // ---- 5. the palette ---------------------------------------------------
     await arm("OK1AB");

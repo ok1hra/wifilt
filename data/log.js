@@ -2106,6 +2106,24 @@ document.addEventListener('keydown', e => {
     inpCall.focus();
     return;
   }
+  // Alt+G — the global switch on the input row, which widens the duplicate half
+  // of the call search to every log. Through the checkbox and its change event,
+  // not through a flag: that one handler already stores the setting and re-runs
+  // an armed search, so the key cannot drift away from the click.
+  //
+  // The palette keeps its OWN global switch, and this does not touch it -- the
+  // two answer different questions and have different defaults.
+  if (altHotkey(e, ['KeyG'], 'g')) {
+    e.preventDefault();
+    const chk = document.getElementById('chkGlobalSearch');
+    if (chk) {
+      chk.checked = !chk.checked;
+      chk.dispatchEvent(new Event('change', { bubbles: true }));
+      showHint(chk.checked ? 'Global search ON — all logs' : 'Global search OFF — this log');
+    }
+    inpCall.focus();
+    return;
+  }
   // Alt+Enter — log current QSO without sending any memory
   if (altHotkey(e, ['Enter', 'NumpadEnter'], 'enter')) {
     e.preventDefault();
@@ -2858,17 +2876,28 @@ function renderDupeView(bundle, frag) {
   head.appendChild(close);
   view.appendChild(head);
 
-  // Column legend -- the view's own, not the journal's
+  const body = document.createElement('div');
+  body.className = 'dv-body';
+  // Pushes a short list down to the bottom edge, next to the input row. Shrinks
+  // to nothing as soon as the rows overflow, so a long list still scrolls.
+  const spacer = document.createElement('div');
+  spacer.className = 'dv-spacer';
+  body.appendChild(spacer);
+
+  // The column legend -- the view's own, not the journal's, which is underneath
+  // and says something else. It lives INSIDE the scroller, below the spacer, so
+  // it stays with the rows it labels when a short list is pushed to the bottom;
+  // left in the header it ended up half a window away from them. Sticky, so a
+  // list long enough to scroll still has it at the top. Being inside also means
+  // it scrolls sideways with the rows for free -- no translateX to keep in step.
   const cols = document.createElement('div');
   cols.className = 'dv-cols';
   [['jcol-nr','Nr'],['jcol-date','Date'],['jcol-time','Time'],['jcol-call','Call'],
    ['jcol-freq','Freq'],['jcol-mode','Mode'],['jcol-snt','Snt'],['jcol-rcv','Rcv'],
    ['jcol-exch','Exch'],['jcol-trx','TRX'],['jcol-log','LOG']]
     .forEach(([cls, label]) => cols.appendChild(_dupeCell(cls, label)));
-  view.appendChild(cols);
+  body.appendChild(cols);
 
-  const body = document.createElement('div');
-  body.className = 'dv-body';
   rows.forEach(({ rec, qso }) => {
     const band = _bandFromHz(rec.hz);
     const red  = !!(trxBand && band && band === trxBand);
@@ -2891,14 +2920,6 @@ function renderDupeView(bundle, frag) {
     row.appendChild(_dupeCell('jcol-log',  _logLabel(bundle.meta, qso.logId)));
     body.appendChild(row);
   });
-  // The columns are wider than a narrow window, so the body scrolls sideways.
-  // Its legend has to go with it -- the same translateX the journal's own header
-  // gets from syncJournalHScroll, and for the same reason: columns sliding out
-  // from under their labels is worse than no labels at all.
-  body.addEventListener('scroll', () => {
-    cols.style.transform = 'translateX(' + (-body.scrollLeft) + 'px)';
-  });
-
   view.appendChild(body);
   view.classList.remove('ds-hidden');
   body.scrollTop = body.scrollHeight;   // newest row is the one being read
