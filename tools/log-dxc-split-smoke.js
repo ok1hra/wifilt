@@ -374,8 +374,25 @@ const PAGE_SCRIPT = `
       document.activeElement === $("inpCall"),
       document.activeElement && document.activeElement.id);
 
+    // A second spot, with Call already filled. A real click moves focus into
+    // the iframe first, so Call is no longer the active element and the log's
+    // "field the operator is working in" answers from the form state instead:
+    // Exch. Right for a clicked RTTY token, wrong for a spot -- this once put
+    // the callsign in the exchange. realClick() moves no focus, hence focus().
+    $("inpCall").value = "OK1XYZ";
+    $("inpExch").value = "";
+    $("logDxcFrame").focus();
+    realClick(link, {button: 0});
+    await sleep(250);
+    check("a second spot with Call already filled still lands in Call",
+      $("inpCall").value === "JA1ABC", $("inpCall").value);
+    check("and leaves Exch alone", $("inpExch").value === "", $("inpExch").value);
+
     // ---- 7. the middle and right buttons still pick TRX2 / TRX3 ----------
-    link.dispatchEvent(new MouseEvent("auxclick", {bubbles: true, button: 1}));
+    // Looked up again: the table re-renders while the check above waits, and
+    // an event dispatched on the detached old link bubbles to nothing.
+    const link2 = fdoc.querySelector("#body .freq-link");
+    link2.dispatchEvent(new MouseEvent("auxclick", {bubbles: true, button: 1}));
     await sleep(200);
     check("middle click hands the spot to TRX2",
       $("btnTrx2").classList.contains("btn-trx-active"), $("btnTrx2").className);

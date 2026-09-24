@@ -1488,6 +1488,14 @@ function startClock() {
 // separate call rather than as a side effect of delivering a word. It stays a
 // command named for what it does, not a door onto `app`.
 //
+// workSpot() joined them 2026-09-24, because insertWord(call, trx, null) was
+// the wrong door for a spot: `null` means "wherever the operator is working",
+// and once the first spot had filled Call that answer is Exch -- so the SECOND
+// spot clicked in the split pane landed in the exchange. That rule exists for
+// a clicked RTTY token, which may be a piece of the exchange; a spot is always
+// a callsign. One command now does both halves of working a spot, for the
+// embedded pane and the channel alike, so the two cannot drift apart again.
+//
 // tuneTo() joined them 2026-09-18 for the PA palette's tuning-segment scale,
 // whose arrows retune the radio to the centre of the neighbouring segment. It
 // deliberately carries NO side effects -- no run-mode change, no caret move --
@@ -1502,6 +1510,7 @@ window.LogRadio = {
   focusedField: () => focusedLogField(),
   insertWord: (word, trx, field) => insertWordIntoLog(word, trx, field),
   setRunMode: (m) => setRunMode(m),
+  workSpot:   (call, trx) => workDxcSpot(call, trx),
   tuneTo:     (hz, reqId) => tuneActiveTrx(hz, reqId),
 };
 
@@ -4376,10 +4385,11 @@ function insertWordIntoLog(word, trx, field) {
   const target = field || focusedLogField();
   selectTrx(trx);
   if (word) {
-    // A DXC spot is always a whole callsign, always Call. A word clicked in
-    // an RTTY RX log isn't necessarily a callsign at all -- it's whatever
-    // token was clicked, which could just as well be a piece of the exchange
-    // -- so it goes wherever the operator was actually working right now.
+    // A DXC spot is always a whole callsign, always Call (workDxcSpot() says
+    // so explicitly). A word clicked in an RTTY RX log isn't necessarily a
+    // callsign at all -- it's whatever token was clicked, which could just as
+    // well be a piece of the exchange -- so it goes wherever the operator was
+    // actually working right now.
     target.value = word;
     target.dispatchEvent(new Event('input'));
     target.focus();
@@ -4390,21 +4400,25 @@ function insertWordIntoLog(word, trx, field) {
   armCallSearch();
 }
 
+// DXC hands over a spot to work -- switching to S&P is the point, and the
+// callsign goes to Call no matter which field the operator was last in.
+function workDxcSpot(call, trx) {
+  setRunMode('SP');
+  insertWordIntoLog(call, trx, inpCall);
+}
+
 // ── DXC tune broadcast ────────────────────────────────────────────────────────
 try {
   const dxcActionCh = new BroadcastChannel('wifilt-dxc-action');
   dxcActionCh.addEventListener('message', e => {
     const msg = e.data;
     if (!msg || msg.type !== 'dxc-tune') return;
-    // DXC hands over a spot to work -- switching to S&P is the point. A click
-    // in an RTTY RX log (msg.source === 'rtty') is just "insert this word",
-    // not "start a new QSO in a particular mode" -- whatever RUN/S&P the
-    // operator was already in stays as it is.
-    // A DXC spot is always a whole callsign and always goes to Call; an RTTY
-    // token goes wherever the operator is actually working right now.
-    const target = msg.source === 'rtty' ? focusedLogField() : inpCall;
-    if (msg.source !== 'rtty') setRunMode('SP');
-    insertWordIntoLog(msg.callsign, msg.trx, target);
+    // A click in an RTTY RX log (msg.source === 'rtty') is just "insert this
+    // word", not "start a new QSO in a particular mode" -- whatever RUN/S&P
+    // the operator was already in stays as it is, and the token goes wherever
+    // the operator is actually working right now.
+    if (msg.source === 'rtty') insertWordIntoLog(msg.callsign, msg.trx, focusedLogField());
+    else workDxcSpot(msg.callsign, msg.trx);
   });
 } catch (_) {}
 

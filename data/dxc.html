@@ -349,11 +349,15 @@ function setTrxFrequency(freqKhz,dxCallsign){setTrxFrequencyN(freqKhz,dxCallsign
    blurs this iframe and puts the caret AND the keyboard in Call, so the next
    keystroke is typed into the log. That is the entire reason the split view
    exists.
+   workSpot(), not insertWord(call,trx,null): null means "the field the
+   operator is working in", which after the first spot is Exch -- the second
+   click used to drop the callsign into the exchange. A spot always goes to
+   Call.
    It also scopes the hand-off correctly: a channel broadcast lands in every
    open QRPlog tab, this lands in the one this pane is part of.
    Standalone, nothing changes -- the channel is still the only way across,
    and log.js has read it since long before this. */
-function handOffToLog(call,trxN){var lr=null;try{if(window.parent&&window.parent!==window)lr=window.parent.LogRadio}catch(e){lr=null}if(lr&&lr.insertWord){try{if(lr.setRunMode)lr.setRunMode("SP");lr.insertWord(call,trxN,null);return}catch(e){}}try{var ch=new BroadcastChannel("wifilt-dxc-action");ch.postMessage({type:"dxc-tune",callsign:call,trx:trxN});ch.close()}catch(e){}}
+function handOffToLog(call,trxN){var lr=null;try{if(window.parent&&window.parent!==window)lr=window.parent.LogRadio}catch(e){lr=null}if(lr&&lr.workSpot){try{lr.workSpot(call,trxN);return}catch(e){}}try{var ch=new BroadcastChannel("wifilt-dxc-action");ch.postMessage({type:"dxc-tune",callsign:call,trx:trxN});ch.close()}catch(e){}}
 function setTrxFrequencyN(freqKhz,dxCallsign,trxN){var hz=freqKhzToHz(freqKhz);if(!hz)return;var netId=trxN===2?trx2NetId:trxN===3?trx3NetId:0;if(trxN===1){fetch("/cmd",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({type:"setFrequency",reqId:"dxc-1",frequency:hz})}).catch(function(){})}else if(netId){fetch("/oi3/set-hz",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({trx:trxN,hz:parseInt(hz,10)})}).catch(function(){})}else{return}handOffToLog(normalizeCallsign(dxCallsign||""),trxN)}
 function readJson(url,onDone,onError){var http=new XMLHttpRequest();http.onreadystatechange=function(){var data;if(http.readyState!==4)return;if(http.status!==200){if(onError)onError();return}try{data=JSON.parse(String(http.responseText||"{}"))}catch(e){if(onError)onError();return}onDone(data)};http.open("GET",url,true);http.send()}
 function initDxcInfo(){readJson("/dxcinfo",function(data){var loc=normalizeMaidenheadLocator(String(data.locator||""));if(loc)dxcLocator=loc;callsign=normalizeCallsign(data.callsign||"");trx2NetId=data.trx2netid||0;trx3NetId=data.trx3netid||0;mapHost=String(data.maphost||"");updateMapPill();render()},function(){})}
