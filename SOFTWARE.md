@@ -727,18 +727,20 @@ the exchange by voice.
 
 `Alt+W` clears the form.
 
-`Alt+K` opens a one-line message bar just above the input row, for whatever the macros do
-not say. `Enter` sends it and `Esc` throws it away; either way the bar empties, closes and
-the cursor goes back to the field it came from. It keys exactly the way the macros do: in
+`Alt+K` opens a small one-line message palette just above the Call field, for whatever the
+macros do not say. `Enter` sends it and `Esc` throws it away; either way it empties, closes and
+the cursor goes back to the field it came from. It floats: drag it by its label or its frame
+(never by the text field, and the cursor stays in the text while you do), widen it by the
+corner, and it opens there next time. Double-click the label to put it back over Call. It keys exactly the way the macros do: in
 CW the text as typed, in RTTY — true FSK, or USB-D/LSB-D while the RTTY palette holds the
-audio — on a new line with a space after it. The bar opens only where the message would
+audio — on a new line with a space after it. The palette opens only where the message would
 actually go out, and says why not otherwise (phone, TRX not connected, USB-D without the
 palette). Its label shows the route and a counter the limit: **30** characters in CW (the
 radio's own CW-message command), **33** in RTTY FSK (the interface's 36-character send
 buffer, less the new line and the space), **200** over the palette. If the mode changes
-under a message to one with a shorter limit, the bar turns red and `Enter` refuses rather
+under a message to one with a shorter limit, the palette turns red and `Enter` refuses rather
 than cutting the text. `Esc` while something is being transmitted stops the transmission
-**and** closes the bar in one keystroke.
+**and** closes the palette in one keystroke.
 
 ### 3.5 CW and RTTY macros
 
@@ -1211,7 +1213,7 @@ The **?** button opens this list.
 | `Alt+Enter` | log the QSO without sending a macro |
 | `Alt++` / `Alt+-` | text size of the logged QSOs below — the numpad `+` / `-` work too |
 | `Esc` (dialog open) | close the dialog |
-| `Esc` (message bar open) | discard the message and close the bar — and abort a transmission in progress |
+| `Esc` (message palette open) | discard the message and close the palette — and abort a transmission in progress |
 | `Esc` (no dialog, transmitting) | **abort the transmission immediately** — CW, RTTY or an audio send from the RTTY palette |
 | `Esc` (no dialog, not transmitting) | end the call search |
 | `Space` in Call | arm the call search — duplicates and partial calls, both tracking as you type |
@@ -2711,7 +2713,7 @@ macros build the whole exchange for you — [section 3.5](#35-cw-and-rtty-macros
 | **TRX RF power** | percent, with the watts beside it and a **SET** button. Written to the radio when the page opens and after the link returns; turning the knob on the radio stops that until the next SET — the same convention as JS8, WSPR and Mercury. |
 | **FSK mark frequency** | 1275 / 1615 / 2125 Hz — the radio's own *RTTY Mark Frequency*. Normally the last value the radio itself answered, since a successful read writes it back here, and it is only **used** when the radio cannot be asked: a model whose address is not verified, or a read that times out. On such a model it is the whole story, which is why it is an operator-facing setting at all. |
 | **FSK output** | `Internal (this device's own GPIO)` or `External (TrxNet device)`, and the peer's **NET_ID** when external, with the live peer list below it. **This is a station-wide setting** — QRPLog uses it too, from any computer — and it is stored in the interface, not in this browser. It only chooses *where* the FSK signal originates; whether FSK is used at all is always the radio's mode. |
-| **TrxNet text stream** | off by default. When on, the text of both decoders and of every RTTY transmission (AFSK and FSK, from this page, the QRPLog palette, macros and `Alt+K`) goes out on TrxNet as `/rtty1`, `/rtty2` and `/rtty-tx` — for analysis on another device. Not broadcast: only to devices that ask for it with `/s-rtty` and keep renewing that request (up to four); the line below the switch names who is listening. Station-wide and stored in the interface, like FSK output. The decoded text is what the RX log shows, so from the palette, which runs without squelch, noise comes through too. The wire format is in the TrxNet library's `INTEGRATION.md` §7.1; `tools/rtty-stream-listen.py` is a ready listener. |
+| **TrxNet text stream** | off by default. When on, the text of both decoders and of every RTTY transmission (AFSK and FSK, from this page, the QRPLog palette, macros and `Alt+K`) goes out on TrxNet as `/rtty1`, `/rtty2` and `/rtty-tx` — for analysis on another device. Not broadcast: only to devices that ask for it with `/s-rtty` and keep renewing that request (up to four); the line below the switch names who is listening. Station-wide and stored in the interface, like FSK output. The decoded text is what the RX log shows, so from the palette, which runs without squelch, noise comes through too. The wire format is in the TrxNet library's `INTEGRATION.md` §7.1; `tools/rtty-stream-listen.py` is a ready listener, `tools/rtty-stream-record.py` keeps both decoders in two files per day for analysis (one listener per computer; add `RTY` to SETUP → TrxNet → Priority prefixes). |
 
 The shift is a fixed **170 Hz** at **45.45 baud** — the decoder is built around those and
 cannot follow another value, which is also why the radio's own *Shift Width* menu item is

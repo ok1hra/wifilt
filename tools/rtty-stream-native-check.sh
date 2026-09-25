@@ -14,6 +14,8 @@
 #     abort -> [seq][0x00]
 #   - an FSK transmission (/cmd sendCw in RTTY) -> /rtty-tx, from the firmware
 #   - /s-rtty 0 ends it
+#   - tools/rtty-stream-record.py, alongside, writes the same text into its two
+#     files (the recorder's own rules are in rtty-stream-record-check.sh)
 #
 # Needs no sudo: it re-runs itself in a fresh user+network namespace, where it is
 # root of its own loopback and may bind ports 80-83 -- the AUD1 socket is fixed
@@ -78,7 +80,8 @@ for _ in $(seq 1 30); do
 done
 
 python3 - "$ROOT" "$HTTP_PORT" <<'PYEOF'
-import base64, hashlib, json, os, socket, subprocess, sys, time, urllib.request, urllib.parse
+import base64, glob, hashlib, json, os, signal, socket, subprocess, sys, tempfile, time
+import urllib.request, urllib.parse
 
 root, http_port = sys.argv[1], sys.argv[2]
 HTTP = f"http://127.0.0.1:{http_port}"
@@ -115,13 +118,22 @@ off.wait()
 post("/log-config/rtty-stream", {"rttyStream": "1"})
 check("the switch is stored", get("/log-config").get("rttyStream") is True)
 lis = listener(14)
+iface = get("/setup-data.json").get("trxnetDeviceName", "")
+# From another source address: TrxNet names a sender by its IP alone, so two
+# listeners on one address would both count as whichever it met first.
+rec_dir = tempfile.mkdtemp()
+rec = subprocess.Popen([sys.executable, f"{root}/tools/rtty-stream-record.py",
+    "--target", "10.99.0.1:5683", "--port", "5691", "--bind", "10.99.0.1",
+    "--iface", iface, "--dir", rec_dir],
+    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
 subs = []
 for _ in range(20):
     time.sleep(0.25)
     subs = get("/rtty-stream.json").get("subs", [])
-    if subs: break
-check("/s-rtty registers the listener", [s["name"] for s in subs] == ["RTTYMON.01"], subs)
-check("with the 90 s lease", subs and 85 <= subs[0]["expiresS"] <= 90, subs)
+    if len(subs) == 2: break
+check("/s-rtty registers the listener and the recorder",
+      sorted(s["name"] for s in subs) == ["RTY.01", "RTY.fe"], subs)
+check("with the 90 s lease", subs and all(85 <= s["expiresS"] <= 90 for s in subs), subs)
 
 # ---- AUD1: decoded text and an AFSK transmission ----------------------------
 token = base64.b16encode(os.urandom(8)).decode().lower()
@@ -190,6 +202,21 @@ check("then its abort, then the FSK text keyed by the firmware itself",
       tx_texts[-2:] == ["ABORT", "\r\nFSK K "], tx_texts)
 check("every packet fits TrxNet's 64 bytes", all(len(p["text"]) <= 63 for p in packets))
 
+rec.send_signal(signal.SIGTERM)
+rec_err = rec.communicate(timeout=10)[1]
+def rec_lines(topic):
+    paths = glob.glob(os.path.join(rec_dir, f"*_{iface}_{topic}.jsonl"))
+    return [json.loads(l) for l in open(paths[0])] if len(paths) == 1 else []
+f1, f2 = rec_lines("rtty1"), rec_lines("rtty2")
+text = lambda ls: "".join(l["text"] for l in ls if "ev" not in l)
+check("the recorder's rtty1 file holds DEC 1's text", text(f1) == "CQ TEST DE OK1HRA\r\n", (f1, rec_err))
+check("its rtty2 file holds DEC 2's text", text(f2) == "CQ TEXT DE", f2)
+rec_tx = [("ABORT" if l["ev"] == "tx-abort" else l["text"]) for l in f1 if l.get("ev", "").startswith("tx")]
+check("both files have what went out, as the listener saw it",
+      rec_tx == tx_texts and [l for l in f2 if l.get("ev", "").startswith("tx")]
+      == [l for l in f1 if l.get("ev", "").startswith("tx")], (rec_tx, tx_texts))
+check("and a close on SIGTERM", f1 and f1[-1].get("ev") == "close" and f2 and f2[-1].get("ev") == "close")
+
 # ---- a listener that leaves says so ------------------------------------------
 post("/log-config/rtty-stream", {"rttyStream": "1"})
 bye = listener(3)
@@ -198,7 +225,7 @@ had = [s["name"] for s in get("/rtty-stream.json").get("subs", [])]
 bye.wait()
 time.sleep(0.5)
 check("/s-rtty 0 on the way out ends the subscription",
-      had == ["RTTYMON.01"] and get("/rtty-stream.json").get("subs") == [], had)
+      had == ["RTY.fe"] and get("/rtty-stream.json").get("subs") == [], had)
 post("/log-config/rtty-stream", {"rttyStream": "0"})
 
 failed = [n for n, ok in checks if not ok]

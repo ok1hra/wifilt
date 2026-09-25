@@ -2579,6 +2579,132 @@ const freeTxLabel = document.getElementById('freeTxRoute');
 const freeTxCount = document.getElementById('freeTxCount');
 let freeTxReturnTo = null;
 
+// Where the palette sits. Same rules as CallPalette: position:fixed, anchored
+// by the GAP from the window's bottom edge, clamped on every placement,
+// geometry in localStorage. One difference: until the operator has moved it,
+// nothing is stored and it opens over the Call field wherever that is NOW --
+// the DXC split moves the whole log sideways, and a remembered default would
+// hang over the cluster. Double-clicking the label forgets it all again.
+const FREE_TX_STORE = 'wifilt-log-free-tx';
+let freeTxPos = null, freeTxGap = null, freeTxWidth = null;
+
+(function loadFreeTxGeometry() {
+  try {
+    const v = JSON.parse(localStorage.getItem(FREE_TX_STORE) || 'null');
+    if (!v || typeof v !== 'object') return;
+    if (typeof v.x === 'number' && typeof v.gap === 'number') { freeTxPos = { x: v.x, y: 0 }; freeTxGap = v.gap; }
+    if (typeof v.w === 'number') freeTxWidth = v.w;
+  } catch (_) {}
+  if (freeTxWidth) freeTxBar.style.width = freeTxWidth + 'px';
+})();
+
+function saveFreeTxGeometry() {
+  try {
+    if (!freeTxPos && !freeTxWidth) { localStorage.removeItem(FREE_TX_STORE); return; }
+    localStorage.setItem(FREE_TX_STORE, JSON.stringify({
+      x: freeTxPos ? freeTxPos.x : null, gap: freeTxPos ? freeTxGap : null, w: freeTxWidth,
+    }));
+  } catch (_) {}
+}
+
+function clampFreeTx(p) {
+  return {
+    x: Math.min(Math.max(0, p.x), Math.max(0, window.innerWidth  - freeTxBar.offsetWidth)),
+    y: Math.min(Math.max(0, p.y), Math.max(0, window.innerHeight - freeTxBar.offsetHeight)),
+  };
+}
+
+// Written as `bottom`, not `top`: the gap IS the anchor, so a palette whose
+// height settles a moment after opening (fonts, the counter's first text) keeps
+// its bottom edge where it was put instead of creeping toward the fields.
+// Home is left edge on the Call field, bottom edge 8 px above the input row.
+function placeFreeTx() {
+  if (!freeTxIsOpen()) return;
+  let x, gap;
+  if (freeTxPos) { x = freeTxPos.x; gap = freeTxGap; }
+  else {
+    const row = inpCall.closest('.log-input-row').getBoundingClientRect();
+    x = inpCall.getBoundingClientRect().left;
+    gap = window.innerHeight - (row.top - 8);
+  }
+  x   = Math.min(Math.max(0, x), Math.max(0, window.innerWidth - freeTxBar.offsetWidth));
+  gap = Math.min(Math.max(0, gap), Math.max(0, window.innerHeight - freeTxBar.offsetHeight));
+  freeTxBar.style.left   = x + 'px';
+  freeTxBar.style.top    = 'auto';
+  freeTxBar.style.bottom = gap + 'px';
+}
+
+// Dragged by anything but the field and the browser's own resize grip in the
+// bottom-right corner. preventDefault() on pointerdown keeps the caret in the
+// field: the operator can move the palette in the middle of a word.
+(function mountFreeTxDrag() {
+  const GRIP = 16;
+  let dragging = false, moved = false, dx = 0, dy = 0, x0 = 0, y0 = 0, lastLabelDown = 0;
+  freeTxBar.addEventListener('pointerdown', e => {
+    if (e.target === inpFreeTx) return;
+    const r = freeTxBar.getBoundingClientRect();
+    if (e.clientX > r.right - GRIP && e.clientY > r.bottom - GRIP) return;
+    // A double-click on the label puts it back. Counted here, not with a
+    // dblclick listener: the preventDefault() below is what keeps the caret in
+    // the field, and a browser need not synthesize dblclick after it.
+    if (e.target === freeTxLabel) {
+      const now = Date.now();
+      if (now - lastLabelDown < 400) { lastLabelDown = 0; e.preventDefault(); resetFreeTx(); return; }
+      lastLabelDown = now;
+    }
+    dragging = true;
+    moved = false;
+    x0 = e.clientX; y0 = e.clientY;
+    dx = e.clientX - r.left;
+    dy = e.clientY - r.top;
+    try { freeTxBar.setPointerCapture(e.pointerId); } catch (_) {}
+    e.preventDefault();
+  });
+  freeTxBar.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    // A click -- or the two of a double-click -- is not a move, and must not
+    // pin a palette that is still following the Call field.
+    if (!moved && Math.abs(e.clientX - x0) < 3 && Math.abs(e.clientY - y0) < 3) return;
+    moved = true;
+    lastLabelDown = 0;           // a press that became a drag was not a click
+    const p = clampFreeTx({ x: e.clientX - dx, y: e.clientY - dy });
+    freeTxBar.style.left   = p.x + 'px';
+    freeTxBar.style.top    = p.y + 'px';
+    freeTxBar.style.bottom = 'auto';
+  });
+  function end() {
+    if (!dragging) return;
+    dragging = false;
+    if (!moved) return;
+    freeTxPos = { x: freeTxBar.offsetLeft, y: freeTxBar.offsetTop };
+    freeTxGap = window.innerHeight - (freeTxBar.offsetTop + freeTxBar.offsetHeight);
+    saveFreeTxGeometry();
+    placeFreeTx();               // back to hanging from the bottom edge
+  }
+  freeTxBar.addEventListener('pointerup', end);
+  freeTxBar.addEventListener('pointercancel', end);
+
+  function resetFreeTx() {
+    dragging = false;
+    freeTxPos = freeTxGap = freeTxWidth = null;
+    freeTxBar.style.width = '';
+    saveFreeTxGeometry();
+    placeFreeTx();
+    inpFreeTx.focus();
+  }
+
+  // Only the grip sets an explicit width; opening and closing do not.
+  if (window.ResizeObserver) {
+    new ResizeObserver(() => {
+      if (!freeTxIsOpen() || !freeTxBar.style.width) return;
+      if (freeTxBar.offsetWidth === freeTxWidth) return;
+      freeTxWidth = freeTxBar.offsetWidth;
+      saveFreeTxGeometry();
+    }).observe(freeTxBar);
+  }
+  window.addEventListener('resize', placeFreeTx);
+})();
+
 function freeTxRoute() {
   const trxIdx = app.activeTrx - 1;
   const isOi3  = app.trxOi3[trxIdx] && trxIdx > 0;
@@ -2618,7 +2744,12 @@ function openFreeTx() {
   inpFreeTx.maxLength = route.limit;
   freeTxBar.hidden = false;
   renderFreeTx();
+  // Placed after the focus moves, and once more on the next frame: Call losing
+  // the focus changes the macro preview under the input row, which moves the
+  // row the palette is placed against.
   inpFreeTx.focus();
+  placeFreeTx();
+  requestAnimationFrame(placeFreeTx);
 }
 
 function closeFreeTx() {

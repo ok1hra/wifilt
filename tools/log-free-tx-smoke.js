@@ -323,15 +323,111 @@ const PAGE_SCRIPT = `
     $("helpModalClose").click();
     await sleep(100);
 
-    // Placement: over the status bar, directly above the input row.
+    // ---- the palette: where it opens, moving it, remembering it ------------
+    localStorage.removeItem("wifilt-log-free-tx");
     call.focus();
     altK();
     await sleep(80);
-    const barBox = $("freeTxBar").getBoundingClientRect();
+    const pal = $("freeTxBar"), label = $("freeTxRoute"), inp = $("inpFreeTx");
+    const box = () => pal.getBoundingClientRect();
     const rowBox = document.querySelector(".log-input-row").getBoundingClientRect();
-    check("the bar sits right on top of the input row",
-      Math.abs(barBox.bottom - rowBox.top) < 1.5 && barBox.width >= rowBox.width - 1,
-      JSON.stringify({bar: [barBox.top, barBox.bottom, barBox.width], row: [rowBox.top, rowBox.width]}));
+    const callBox = call.getBoundingClientRect();
+    check("it floats: position fixed, no header, label on the left",
+      getComputedStyle(pal).position === "fixed" && pal.children[0] === label &&
+        !pal.querySelector("[class*=head]"));
+    check("it opens with its left edge on the Call field",
+      Math.abs(box().left - callBox.left) < 1.5, box().left + " vs " + callBox.left);
+    check("and its bottom 8 px above the input row",
+      Math.abs(box().bottom - (rowBox.top - 8)) < 1.5, box().bottom + " vs " + (rowBox.top - 8));
+    check("320 px wide, one narrow line like the RTTY palette's title bar", Math.abs(box().width - 320) < 1.5 && box().height <= 26 && !inp.classList.contains("log-input"),
+      JSON.stringify([box().width, box().height]));
+    check("above the other palettes, under the dialogs", getComputedStyle(pal).zIndex === "93");
+
+    const ptr = (target, type, x, y) => target.dispatchEvent(new PointerEvent(type,
+      {bubbles: true, cancelable: true, pointerId: 7, clientX: x, clientY: y, button: 0}));
+    type("TU");
+    const lb = label.getBoundingClientRect();
+    const sx = lb.left + 5, sy = lb.top + 5;
+    // A click on the label is not a move.
+    ptr(label, "pointerdown", sx, sy); ptr(pal, "pointerup", sx, sy);
+    check("a click on the label pins nothing", localStorage.getItem("wifilt-log-free-tx") === null);
+    await sleep(450);   // or the next press would be the second half of a double-click
+    const before = box();
+    ptr(label, "pointerdown", sx, sy);
+    ptr(pal, "pointermove", sx + 60, sy - 150);
+    ptr(pal, "pointerup", sx + 60, sy - 150);
+    await sleep(50);
+    check("dragging the label moves it", Math.abs(box().left - (before.left + 60)) < 1.5 &&
+      Math.abs(box().top - (before.top - 150)) < 1.5, JSON.stringify([before.left, before.top, box().left, box().top]));
+    check("the caret stays in the field through a drag", document.activeElement === inp && inp.value === "TU");
+    const stored = JSON.parse(localStorage.getItem("wifilt-log-free-tx") || "null");
+    check("where it was put is remembered, from the bottom edge",
+      stored && Math.abs(stored.x - box().left) < 1.5 &&
+        Math.abs(stored.gap - (innerHeight - box().bottom)) < 1.5, JSON.stringify(stored));
+
+    const fb = box();
+    ptr(inp, "pointerdown", fb.left + 150, fb.top + 20);
+    ptr(pal, "pointermove", fb.left + 250, fb.top + 60);
+    ptr(pal, "pointerup", fb.left + 250, fb.top + 60);
+    check("the field itself does not drag", Math.abs(box().left - fb.left) < 1 && Math.abs(box().top - fb.top) < 1);
+
+    // The frame drags too (the counter, here).
+    const cb = $("freeTxCount").getBoundingClientRect();
+    ptr($("freeTxCount"), "pointerdown", cb.left + 2, cb.top + 2);
+    ptr(pal, "pointermove", cb.left + 22, cb.top + 2);
+    ptr(pal, "pointerup", cb.left + 22, cb.top + 2);
+    check("so does the frame", Math.abs(box().left - (fb.left + 20)) < 1.5, box().left + " vs " + (fb.left + 20));
+
+    esc();
+    await sleep(80);
+    const moved = box();
+    altK();
+    await sleep(80);
+    check("closed and opened again, it comes back where it was put",
+      Math.abs(box().left - (fb.left + 20)) < 1.5 && Math.abs(box().top - fb.top) < 1.5,
+      JSON.stringify([box().left, box().top, fb.left + 20, fb.top]));
+
+    // Two presses far apart are two clicks, not a double-click.
+    const lb1 = label.getBoundingClientRect();
+    ptr(label, "pointerdown", lb1.left + 5, lb1.top + 5); ptr(pal, "pointerup", lb1.left + 5, lb1.top + 5);
+    await sleep(500);
+    ptr(label, "pointerdown", lb1.left + 5, lb1.top + 5); ptr(pal, "pointerup", lb1.left + 5, lb1.top + 5);
+    await sleep(60);
+    check("two slow clicks on the label do not put it back",
+      Math.abs(box().left - (fb.left + 20)) < 1.5 && localStorage.getItem("wifilt-log-free-tx") !== null);
+
+    // The grip sets the width (emulated: it writes style.width, as the browser does).
+    pal.style.width = "620px";
+    await sleep(120);
+    check("a new width is remembered",
+      JSON.parse(localStorage.getItem("wifilt-log-free-tx")).w === 620, localStorage.getItem("wifilt-log-free-tx"));
+    esc();
+    await sleep(80);
+    altK();
+    await sleep(80);
+    check("and kept", Math.abs(box().width - 620) < 1.5, String(box().width));
+
+    const lb2 = label.getBoundingClientRect();
+    await sleep(450);   // clear of the earlier label press
+    for (let i = 0; i < 2; i++) {
+      ptr(label, "pointerdown", lb2.left + 5, lb2.top + 5);
+      ptr(pal, "pointerup", lb2.left + 5, lb2.top + 5);
+      await sleep(60);
+    }
+    await sleep(80);
+    check("double-clicking the label puts it back over Call",
+      Math.abs(box().left - callBox.left) < 1.5 && Math.abs(box().bottom - (rowBox.top - 8)) < 1.5,
+      JSON.stringify([box().left, box().bottom]));
+    check("at 320 px, with nothing left stored",
+      Math.abs(box().width - 320) < 1.5 && localStorage.getItem("wifilt-log-free-tx") === null, String(box().width));
+    check("and the caret is in the field", document.activeElement === inp);
+
+    // Red frame too, not just the field.
+    type("X".repeat(40));
+    await sleep(50);
+    check("over the limit the frame goes red as well",
+      pal.classList.contains("free-tx-bad") && getComputedStyle(pal).borderTopColor === "rgb(221, 51, 0)",
+      getComputedStyle(pal).borderTopColor);
     esc();
     await sleep(80);
   } catch (error) {

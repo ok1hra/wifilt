@@ -442,7 +442,7 @@ itself is in the TrxNet library's `INTEGRATION.md` §7.1.
 
 ```json
 {"enabled":true,"trxnet":true,
- "subs":[{"name":"RTTYMON.01","expiresS":61}],
+ "subs":[{"name":"RTY.fe","expiresS":61}],
  "packets":214,"dropped":0,"refused":0}
 ```
 

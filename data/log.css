@@ -822,44 +822,69 @@ body {
   gap: 10px;
   padding: 8px 10px;
   background: var(--light-bg);
-  position: relative;   /* anchors the Alt+K bar */
 }
 
-/* Alt+K free-text message: floats over the status bar, directly above the
-   input row, so opening it moves nothing. Under the palettes (90+). */
-.free-tx-bar {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 100%;
-  z-index: 30;
+/* Alt+K free-text message: a narrow floating palette the size of the RTTY
+   palette's title bar (320 px, 11 px mono), in the CallPalette's amber frame,
+   with no header -- the label and the frame are the drag handle, the field is
+   only for typing. Above the other palettes (PA 90, RTTY 91, CALL 92) because
+   it is where the operator is typing; under the dialogs (100). Width is the
+   operator's (resize), height is one line. */
+.free-tx-palette {
+  position: fixed;
+  z-index: 93;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 6px 10px;
-  background: var(--light-bg);
-  border-top: 1px solid var(--line);
+  gap: 6px;
+  width: 320px;
+  min-width: 200px;
+  max-width: calc(100vw - 16px);
+  padding: 3px 12px 3px 8px;    /* room on the right for the resize grip */
+  background: #1a1200;
+  border: 1px solid #554400;
+  border-radius: 7px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.55);
+  font: 700 11px/1 var(--font-mono);
+  letter-spacing: 0.08em;
+  overflow: hidden;             /* required for `resize` to apply at all */
+  resize: horizontal;
+  cursor: move;
+  user-select: none;
+  touch-action: none;           /* the drag owns the pointer */
 }
-.free-tx-bar[hidden] { display: none; }
+.free-tx-palette[hidden] { display: none; }
 .free-tx-route {
-  font-family: var(--font-mono);
-  font-size: 15px;
-  font-weight: bold;
-  color: var(--text);
+  color: #F5B027;
   white-space: nowrap;
-  min-width: 64px;
+  min-width: 44px;
 }
-.free-tx-input { flex: 1; width: auto; min-width: 0; }
+.free-tx-input {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+  padding: 2px 4px;
+  background: #0d0900;
+  border: 1px solid #3a2e00;
+  border-radius: 3px;
+  outline: none;
+  color: #f0e6c8;
+  font: inherit;
+  letter-spacing: 0.04em;
+  cursor: text;
+  user-select: text;
+  touch-action: auto;
+}
+.free-tx-input:focus { border-color: #F5B027; }
 .free-tx-count {
-  font-family: var(--font-mono);
-  font-size: 14px;
   color: var(--muted);
+  font-weight: 400;
   white-space: nowrap;
 }
+.free-tx-bad { border-color: var(--conn-fail); }
 .free-tx-bad .free-tx-input,
 .free-tx-bad .free-tx-input:focus {
-  background: var(--conn-fail);
-  border-color: #a02000;
+  background: #3a0d00;
+  border-color: var(--conn-fail);
   color: #ffffff;
 }
 .free-tx-bad .free-tx-route,

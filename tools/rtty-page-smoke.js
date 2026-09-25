@@ -127,7 +127,7 @@ const server = http.createServer((request, response) => {
     });
   if (url.pathname === "/rtty-stream-posts") return json(rttyStreamPosts);
   if (url.pathname === "/rtty-stream.json") return json({enabled: rttyStreamOn, trxnet: true,
-    subs: rttyStreamOn ? [{name: "RTTYMON.01", expiresS: 61}] : [], packets: 0, dropped: 0, refused: 0});
+    subs: rttyStreamOn ? [{name: "RTY.fe", expiresS: 61}] : [], packets: 0, dropped: 0, refused: 0});
   if (url.pathname === "/log-config/fsk") return json({});
   if (url.pathname === "/txgain.json") return json({v: 1, entries: {}});
   if (url.pathname === "/txgain-plan.json") return json({});
@@ -592,7 +592,7 @@ const PAGE_SCRIPT = `
     await sleep(400);
     const streamPosts = await (await fetch("/rtty-stream-posts")).json();
     check("ticking it stores it in the firmware", streamPosts.join() === "rttyStream=1", streamPosts.join());
-    check("and names who is listening", /Listening: RTTYMON\\.01 \\(61 s\\)/.test($("rttyStreamSubs").textContent),
+    check("and names who is listening", /Listening: RTY\\.fe \\(61 s\\)/.test($("rttyStreamSubs").textContent),
       $("rttyStreamSubs").textContent);
     $("rttyStreamEnabled").click();
     await sleep(400);

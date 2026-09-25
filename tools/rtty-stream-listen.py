@@ -13,7 +13,8 @@ real analyser follows:
   4. send /s-rtty = 0 on the way out.
 
 The switch in DATA / RTTY-ICOM / SETTINGS must be on, or the interface ignores
-the subscription.
+the subscription. One listener per computer: the interface names a sender by
+its IP alone, so a second one there only renews the first's subscription.
 
   tools/rtty-stream-listen.py                         # broadcast, find the interface
   tools/rtty-stream-listen.py --target 192.168.1.50   # talk to one interface only
@@ -22,7 +23,9 @@ the subscription.
 --target also lets this share a host with the native build: both want the
 well-known port, so this one takes another (--port) and is seeded with the
 interface's address, because TrxNet answers a probe on its own well-known port.
-No dependencies beyond the standard library.
+To keep the text for later, tools/rtty-stream-record.py writes both decoders to
+files; its protocol functions are a copy of the ones here -- change one, change
+both. No dependencies beyond the standard library.
 """
 
 import argparse, json, signal, socket, struct, sys, time
@@ -86,7 +89,7 @@ def shown(text):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--name", default="RTTYMON.01", help="this device's TrxNet name")
+    ap.add_argument("--name", default="RTY.fe", help="this device's TrxNet name (type RTY, INTEGRATION.md §2)")
     ap.add_argument("--port", type=int, default=5683, help="local UDP port (default 5683)")
     ap.add_argument("--target", help="host[:port] of one interface; default: broadcast")
     ap.add_argument("--broadcast", default="255.255.255.255")
