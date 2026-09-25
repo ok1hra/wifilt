@@ -1,3 +1,6 @@
+// FROZEN copy of data/rtty-codec.js as of commit 80a9165, before the
+// §20 decoder (docs/rtty-implementace.md). The bench's "base" is THIS decoder:
+// gate.js checks the prototype's all-defaults path against it. Never edit.
 // Baudot/ITA2 RTTY codec -- AFSK encoder (TX, audio-stream method) and
 // Goertzel bit-sync decoder (RX). Fixed 45.45 Bd / 170 Hz shift, see
 // docs/rtty-implementace.md §1 decision 1-2. Consumed by data/rtty.js (the
@@ -28,7 +31,6 @@
   const SHIFT_HZ = 170;        // on purpose (see docs/rtty-implementace.md §3)
   const CODE_FIGS = 27;        // 11011
   const CODE_LTRS = 31;        // 11111
-  const CODE_SPACE = 4;        // 00100
 
   // [ltrsChar, figsChar] per 5-bit ITA2 code. Bit order throughout this file is
   // bit0=first-transmitted..bit4=last-transmitted, matching wifilt.ino's d1..d5
@@ -103,31 +105,18 @@
     return out;
   }
 
-  // Whether a character that wants `want` needs a shift frame first. Besides
-  // the plain page change, FIGS is re-sent after every SPACE: a receiver with
-  // unshift-on-space (USOS -- this decoder's default, and MMTTY's/N1MM's)
-  // falls back to LTRS on a space, so "599 001" sent without it reads
-  // "599 PPQ" there. The extra FIGS costs one frame and is harmless to a
-  // receiver without USOS; wifilt.ino's own FSK sender already does exactly
-  // this (the `space == 1 && fig2 == 1` branch in its send loop).
-  function needsShift(want, page, afterSpace) {
-    return !!want && (want !== page || (want === "F" && afterSpace));
-  }
-
   // [{code, page}] -> [code,...] with LTRS/FIGS shift codes inserted on page
-  // change (and FIGS after a space, see needsShift()). startPage defaults to
-  // LTRS, matching both this decoder's own initial state and every other
-  // Baudot terminal's reset condition.
+  // change. startPage defaults to LTRS, matching both this decoder's own
+  // initial state and every other Baudot terminal's reset condition.
   function baudotToFrames(chars, startPage = "L") {
     const frames = [];
-    let page = startPage, afterSpace = false;
+    let page = startPage;
     for (const {code, page: want} of chars) {
-      if (needsShift(want, page, afterSpace)) {
+      if (want && want !== page) {
         frames.push(want === "F" ? CODE_FIGS : CODE_LTRS);
         page = want;
       }
       frames.push(code);
-      afterSpace = code === CODE_SPACE;
     }
     return frames;
   }
@@ -155,14 +144,13 @@
   function charStartTimes(text, startPage = "L") {
     const upper = String(text).toUpperCase();
     const out = [];
-    let page = startPage, frame = 0, afterSpace = false;
+    let page = startPage, frame = 0;
     for (let i = 0; i < upper.length; i++) {
       const entry = CHAR_TO_CODE.get(upper[i]);
       if (!entry) continue;
-      if (needsShift(entry.page, page, afterSpace)) { frame++; page = entry.page; }
+      if (entry.page && entry.page !== page) { frame++; page = entry.page; }
       out.push({index: i, startMs: frame * CHAR_DURATION_MS});
       frame++;
-      afterSpace = entry.code === CODE_SPACE;
     }
     return out;
   }
@@ -265,70 +253,31 @@
   }
 
   // Goertzel(markHz)/Goertzel(spaceHz) over a sliding window, re-evaluated every
-  // hopSize samples, feeding a classic async start-bit-edge bit synchronizer:
-  // idle until a mark->space transition while squelch is open, then sample bit
-  // centers at fixed offsets from that edge. Never assumes a fixed
-  // pushSamples() block size (per docs/modem-implementation.md §1) -- samples
-  // are folded into the ring buffer one at a time regardless of how they arrived.
-  //
-  // Signal-from-noise separation (docs/rtty-implementace.md §20, measured
-  // offline with tools/rtty-bench/ before any of it went in -- each piece is
-  // there for one channel and was checked not to cost in the others):
-  //   * window: 188 samples (23.5 ms) with a Hann taper. 170 Hz is exactly 4
-  //     bins at that length, so each tone sits in a null of the other's
-  //     filter, and the Hann sidelobes keep a neighbouring station out: a
-  //     station 300 Hz away is tolerated ~12 dB louder than with the old
-  //     96-sample rectangle, white noise gains ~1 dB.
-  //   * ATC (fldigi's "optimal ATC", Kok Chen W7AY): mark and space envelopes
-  //     plus a noise floor set the decision threshold, instead of plain
-  //     mark - space. Selective fading otherwise moves the zero crossing that
-  //     marks the start bit -- the further the longer the window, which is
-  //     why the long window is ONLY safe together with ATC (alone it floors
-  //     at 5-40 % CER in fading). Envelope decay is 4 bits, not fldigi's 16:
-  //     16 leaves a floor on 2 Hz fading.
-  //   * noise blanker: a sample above NB_K x running RMS zeroes it and the
-  //     next NB_HANG samples -- static crashes, ~7 dB, neutral elsewhere.
-  //   * squelch against the noise, not against loudness: in RTTY one tone is
-  //     always off, so the weaker Goertzel IS the noise; |mark - space| over
-  //     about one character is the signal. squelchDb is dB above that noise
-  //     (0 = never gates). The old absolute-magnitude threshold depended on
-  //     the LAN audio level: at one level it passed nothing, at another it
-  //     cost 5 dB, at a third it let garbage through.
-  //   * USOS (unshift on space), switchable -- see _emitCode().
-  const NB_K = 5, NB_HANG = 24;
-  const ATC_DECAY_BITS = 4;
-  const SQUELCH_HYSTERESIS_DB = 1;
-
-  const hannCache = new Map();
-  function hannWindow(n) {
-    let w = hannCache.get(n);
-    if (!w) {
-      w = new Float32Array(n);
-      for (let i = 0; i < n; i++) w[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * (i + 0.5) / n);
-      hannCache.set(n, w);
-    }
-    return w;
-  }
-
+  // hopSize samples (~22x oversampled per bit at the default 8 samples/hop vs.
+  // ~176 samples/bit @ 8 kHz -- docs/rtty-implementace.md §5 window sizing note),
+  // feeding a classic async start-bit-edge bit synchronizer: idle until a
+  // mark->space transition while squelch is open, then sample bit centers at
+  // fixed offsets from that edge via the same floor-accumulator idea as the
+  // encoder. Never assumes a fixed pushSamples() block size (per
+  // docs/modem-implementation.md §1) -- samples are folded into the ring buffer
+  // one at a time regardless of how they arrived.
   class Decoder {
     constructor(sampleRate, {toneHz = 1500, shiftHz = SHIFT_HZ, baud = BAUD,
-                 reverse = false, squelchDb = 3, usos = true, windowSize = 188,
-                 hopSize = 8, noiseBlanker = true} = {}) {
+                 reverse = false, squelchThreshold = 4, windowSize = 96,
+                 hopSize = 8} = {}) {
       this.sampleRate = sampleRate;
       this.toneHz = toneHz; this.shiftHz = shiftHz; this.baud = baud;
-      this.reverse = reverse; this.squelchDb = squelchDb; this.usos = usos;
+      this.reverse = reverse; this.squelchThreshold = squelchThreshold;
       this.windowSize = windowSize; this.hopSize = hopSize;
-      this.noiseBlanker = noiseBlanker;
       this._onChar = null; this._onEvent = null;
 
       this.ring = new Float32Array(windowSize);
       this.scratch = new Float32Array(windowSize);
-      this.window = hannWindow(windowSize);
       this.ringPos = 0; this.ringCount = 0;
       this.samplesSinceHop = 0; this.totalSamples = 0;
 
       this.page = "L";
-      this.squelchOpen = squelchDb <= 0;
+      this.squelchOpen = false;
       this.lastMarkMag = 0; this.lastSpaceMag = 0; this.lastSnrDb = -Infinity;
 
       this.syncState = "searching"; // 'searching' | 'framing'
@@ -336,92 +285,27 @@
       this.bitIndex = 0;   // 0=start, 1..5=data (d1..d5), 6=stop check
       this.dataBits = 0;
       this.prevBeta = 0;
-
-      this._resetTracking();
-    }
-
-    _resetTracking() {
-      this.markEnv = 0; this.spaceEnv = 0; this.noiseFloor = 0;   // ATC, amplitudes
-      this.sqSignal = 0; this.sqNoise = 0;                         // squelch, powers
-      this.noiseSnrDb = -Infinity;
-      this.nbRms = 0; this.nbHang = 0;
-      this.closedEdgeSample = -Infinity;
     }
 
     setToneOffset(hz) { this.toneHz = hz; }
     setReverse(reverse) { this.reverse = reverse; }
-    setSquelchDb(db) {
-      this.squelchDb = db;
-      if (!(db > 0) && !this.squelchOpen) {
-        this.squelchOpen = true;
-        if (this._onEvent) this._onEvent({type: "squelch", open: true});
-      }
-    }
-    setUsos(usos) { this.usos = !!usos; }
+    setSquelchThreshold(v) { this.squelchThreshold = v; }
     onChar(cb) { this._onChar = cb; return this; }
     onEvent(cb) { this._onEvent = cb; return this; }
 
     reset() {
       this.page = "L"; this.syncState = "searching";
       this.ringCount = 0; this.samplesSinceHop = 0; this.prevBeta = 0;
-      this._resetTracking();
-    }
-
-    // Blanks impulses. The RMS reference is updated on EVERY sample, with the
-    // pulse clipped to the threshold -- updating it only outside blanking
-    // lets it freeze low and then blank everything forever.
-    _blank(x) {
-      const a = Math.abs(x);
-      const limit = NB_K * this.nbRms;
-      if (this.nbRms > 0 && a > limit) this.nbHang = NB_HANG;
-      const c = this.nbRms > 0 ? Math.min(a, limit) : a;
-      this.nbRms = Math.sqrt(this.nbRms * this.nbRms * 0.998 + c * c * 0.002);
-      if (this.nbHang > 0) { this.nbHang--; return 0; }
-      return x;
-    }
-
-    // ATC decision value for amplitudes m/s: > 0 means mark. Antisymmetric in
-    // (mark, space), so REVERSE is a plain sign flip.
-    _atc(m, s, hopsPerBit) {
-      const attack = hopsPerBit / 4, decay = hopsPerBit * ATC_DECAY_BITS;
-      this.markEnv += (m - this.markEnv) / (m > this.markEnv ? attack : decay);
-      this.spaceEnv += (s - this.spaceEnv) / (s > this.spaceEnv ? attack : decay);
-      const low = Math.min(m, s);
-      this.noiseFloor += (low - this.noiseFloor) /
-        (low < this.noiseFloor ? attack : hopsPerBit * 48);
-      const nf = this.noiseFloor;
-      const mc = Math.max(nf, Math.min(m, this.markEnv));
-      const sc = Math.max(nf, Math.min(s, this.spaceEnv));
-      const me = this.markEnv - nf, se = this.spaceEnv - nf;
-      return (mc - nf) * me - (sc - nf) * se - 0.25 * (me * me - se * se);
-    }
-
-    _updateSquelch(markMag, spaceMag, hopsPerBit) {
-      const alpha = 1 / (hopsPerBit * 7.5);   // about one character
-      this.sqSignal += alpha * (Math.abs(markMag - spaceMag) - this.sqSignal);
-      this.sqNoise += alpha * (Math.min(markMag, spaceMag) - this.sqNoise);
-      // On noise alone E|m - s| = 2 E min(m, s) for two exponential powers,
-      // so the /2 puts pure noise at ~0 dB.
-      this.noiseSnrDb = 10 * Math.log10(Math.max(this.sqSignal / 2, 1e-30) /
-                                        Math.max(this.sqNoise, 1e-30));
-      const db = this.squelchDb;
-      const open = !(db > 0) ||
-        (this.squelchOpen ? this.noiseSnrDb >= db - SQUELCH_HYSTERESIS_DB : this.noiseSnrDb >= db);
-      if (open !== this.squelchOpen) {
-        this.squelchOpen = open;
-        if (this._onEvent) this._onEvent({type: "squelch", open});
-      }
     }
 
     pushSamples(float32) {
       const markHz = this.toneHz + this.shiftHz / 2;
       const spaceHz = this.toneHz - this.shiftHz / 2;
       const samplesPerBit = this.sampleRate / this.baud;
-      const hopsPerBit = samplesPerBit / this.hopSize;
-      const n = this.windowSize, win = this.window;
+      const n = this.windowSize;
 
       for (let i = 0; i < float32.length; i++) {
-        this.ring[this.ringPos] = this.noiseBlanker ? this._blank(float32[i]) : float32[i];
+        this.ring[this.ringPos] = float32[i];
         this.ringPos = (this.ringPos + 1) % n;
         if (this.ringCount < n) this.ringCount++;
         this.totalSamples++;
@@ -433,38 +317,26 @@
         const tailLen = n - this.ringPos;
         this.scratch.set(this.ring.subarray(this.ringPos), 0);
         this.scratch.set(this.ring.subarray(0, this.ringPos), tailLen);
-        for (let k = 0; k < n; k++) this.scratch[k] *= win[k];
         const markMag = goertzelMag(this.scratch, n, markHz, this.sampleRate);
         const spaceMag = goertzelMag(this.scratch, n, spaceHz, this.sampleRate);
         this.lastMarkMag = markMag; this.lastSpaceMag = spaceMag;
 
-        this._updateSquelch(markMag, spaceMag, hopsPerBit);
-        let beta = this._atc(Math.sqrt(markMag), Math.sqrt(spaceMag), hopsPerBit);
+        const wasOpen = this.squelchOpen;
+        this.squelchOpen = (markMag + spaceMag) >= this.squelchThreshold;
+        if (this.squelchOpen !== wasOpen && this._onEvent)
+          this._onEvent({type: "squelch", open: this.squelchOpen});
+
+        let beta = markMag - spaceMag; // >0 => mark, <0 => space, before reverse
         if (this.reverse) beta = -beta;
         const now = this.totalSamples;
 
         if (!this.squelchOpen) {
-          // Remember the last mark->space edge seen while closed (forgotten
-          // once the line goes back to mark): the squelch averages over about
-          // a character, so it opens late -- often already inside the first
-          // start bit of a station that keys straight into text with no idle
-          // MARK first (this page's own Encoder does exactly that).
-          if (this.prevBeta >= 0 && beta < 0) this.closedEdgeSample = now;
-          else if (beta >= 0) this.closedEdgeSample = -Infinity;
           this.syncState = "searching";
           this.prevBeta = beta;
           continue;
         }
 
-        if (this.syncState === "searching" && beta < 0 && this.prevBeta < 0 &&
-            now - this.closedEdgeSample <= samplesPerBit) {
-          // just opened inside a start bit: frame from its real edge
-          this.frameStartSample = this.closedEdgeSample;
-          this.syncState = "framing";
-          this.bitIndex = 0;
-          this.dataBits = 0;
-          this.closedEdgeSample = -Infinity;
-        } else if (this.syncState === "searching" && this.prevBeta >= 0 && beta < 0) {
+        if (this.syncState === "searching" && this.prevBeta >= 0 && beta < 0) {
           this.frameStartSample = now;
           this.syncState = "framing";
           this.bitIndex = 0;
@@ -496,18 +368,12 @@
       const entry = TABLE[code];
       if (!entry) return;
       const ch = this.page === "F" ? entry[1] : entry[0];
-      // USOS: a space drops back to LTRS, so one corrupted FIGS garbles a
-      // word instead of the rest of the line (+0.2..1.6 dB, most in fading).
-      // A station that sends figures after a space WITHOUT re-sending FIGS
-      // reads wrong with it on ("599 001" -> "599 PPQ"); hence the switch.
-      if (this.usos && code === CODE_SPACE) this.page = "L";
       if (ch === null || ch === undefined) return;
       const snrDb = 10 * Math.log10(Math.max(this.lastMarkMag, 1e-12) /
                                      Math.max(this.lastSpaceMag, 1e-12));
       if (Number.isFinite(snrDb)) this.lastSnrDb = this.reverse ? -snrDb : snrDb;
       if (this._onChar) this._onChar(ch, {code, page: this.page,
-        markMag: this.lastMarkMag, spaceMag: this.lastSpaceMag, snrDb: this.lastSnrDb,
-        noiseSnrDb: this.noiseSnrDb});
+        markMag: this.lastMarkMag, spaceMag: this.lastSpaceMag, snrDb: this.lastSnrDb});
     }
   }
 

@@ -99,10 +99,15 @@ const encoded = new RttyCodec.Encoder(8000, {
 }).encode(integrationText);
 const decoder = new RttyCodec.Decoder(8000, {
   toneHz: CENTRE_HZ + acquiredHz,
-  squelchThreshold: 4,
+  squelchDb: 3,
 });
 let decoded = "";
 decoder.onChar(ch => { decoded += ch; });
+// 0.2 s of silence first: the decoder's 23.5 ms window has to be full before
+// it can place a start-bit edge, and on the air it always is -- it runs
+// continuously. Only a decoder born on the very first sample of a signal
+// that keys straight into a start bit (as this Encoder does) misses it.
+decoder.pushSamples(new Float32Array(1600));
 decoder.pushSamples(Float32Array.from(encoded, sample => sample / 32767));
 assert.strictEqual(decoded, integrationText,
   `acquired offset did not restore decoding: ${JSON.stringify(decoded)}`);

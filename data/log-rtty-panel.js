@@ -246,10 +246,11 @@
     // FSK sync is idle, and writing into that would put a zero squelch into
     // everyone else's settings on the next save.
     effective = base === stored ? Object.assign({}, stored) : base;
-    effective.squelchThreshold = 0;
+    effective.squelchDb = 0;
     if (decoder) {
       decoder.setReverse(effective.reverse);
-      decoder.setSquelchThreshold(effective.squelchThreshold);
+      decoder.setSquelchDb(effective.squelchDb);
+      decoder.setUsos(effective.usos);
       decoder.setToneOffset(effective.toneHz + (afc ? afc.offsetHz() : 0));
     }
     if (scope) scope.drawOverlay();
@@ -515,7 +516,7 @@
   function buildEngine() {
     decoder = new RttyCodec.Decoder(RX_AUDIO_RATE, {
       toneHz: effective.toneHz, reverse: effective.reverse,
-      squelchThreshold: effective.squelchThreshold
+      squelchDb: effective.squelchDb, usos: effective.usos
     });
 
     rxLog = RttyRxLog.create({

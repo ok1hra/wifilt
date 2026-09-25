@@ -546,11 +546,11 @@ const PAGE_SCRIPT = `
 
     // Squelch: always off HERE, never touched THERE.
     check("squelch is off in the palette whatever the shared setting says",
-      window.RttyPanel.getState().settings.squelchThreshold === 0,
-      String(window.RttyPanel.getState().settings.squelchThreshold));
+      window.RttyPanel.getState().settings.squelchDb === 0,
+      String(window.RttyPanel.getState().settings.squelchDb));
     check("and the stored level the full page gates on is left alone",
-      window.RttyPanel.getState().stored.squelchThreshold > 0,
-      String(window.RttyPanel.getState().stored.squelchThreshold));
+      window.RttyPanel.getState().stored.squelchDb > 0,
+      String(window.RttyPanel.getState().stored.squelchDb));
 
     // A radio that cannot be asked (an unverified model, or a read that times
     // out) must still land somewhere sane, and must SAY that it guessed.

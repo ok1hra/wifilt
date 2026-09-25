@@ -42,7 +42,7 @@ function fakeRadio(answers, options) {
 
 function makeSync(radio, options) {
   const opts = options || {};
-  const state = {stored: {toneHz: 1500, reverse: false, squelchThreshold: 4,
+  const state = {stored: {toneHz: 1500, reverse: false, squelchDb: 3,
                           fskMarkHz: opts.fallbackMarkHz || 2125},
                  changes: 0, saved: []};
   state.sync = RttyFskSync.create({

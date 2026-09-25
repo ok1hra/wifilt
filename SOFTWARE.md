@@ -2550,7 +2550,7 @@ where the mark actually lands on the air, because that is what the segment test 
 | **AUD1** | `ready` once the audio channel is up |
 | **● ONLINE / OFFLINE** | the control link, with a **Reconnect** button when it is down |
 | **NORMAL / REVERSE** | swaps mark and space **for decoding only** — for copying a station whose own transmission is inverted. What *this* station transmits is the separate *TX polarity* setting in SETTINGS, and keeping them apart is deliberate: fixing one backwards contact used to silently invert your own signal for the rest of the QSO. |
-| **SQL** | the squelch threshold as configured in SETTINGS, highlighted whenever it is not 0. **Click it to turn squelch off and back on** without opening SETTINGS. |
+| **SQL** | the squelch level as configured in SETTINGS, in dB above the noise, highlighted whenever squelch is on. **Click it to turn squelch off and back on** without opening SETTINGS. |
 | **SNR** | the mark-versus-space magnitude ratio at the last decoded character |
 
 > **SNR here is not a calibrated signal-to-noise figure.** It is one Goertzel window's
@@ -2593,6 +2593,14 @@ than in brightness).
 of an RTTY stream is "insert this", not "start a new QSO". Dragging across the text selects it
 for copying instead and hands over nothing.
 
+Behind the text is a decoder built to separate the signal from the noise: its tone filters
+are narrow enough to keep a station 300 Hz away out, it follows each tone's own strength
+through selective fading instead of comparing the two raw levels, and a blanker drops
+static crashes before they reach the filters. The version of 25 September 2026 measured, in
+simulation, about 1 dB better in plain noise, 6–7 dB better in selective fading, 8 dB better
+in static crashes, and a neighbouring station can be about 12 dB louder than before without
+breaking the copy.
+
 **CLEAR** empties the log. With *Squelch-open marker* enabled in SETTINGS, a line break is
 inserted each time the squelch opens from silence, at most once every couple of seconds, so
 separate receptions do not run together.
@@ -2619,8 +2627,9 @@ macros build the whole exchange for you — [section 3.5](#35-cw-and-rtty-macros
 | Field | Meaning |
 |---|---|
 | **TX polarity** | `Normal` / `Reverse` — what this station's own AFSK transmits. Independent of the RX-only NORMAL/REVERSE pill in the header. |
-| **Squelch level** | on a dB scale. This only sets the level for when squelch *is* on; on/off is the header's SQL pill. Default 4. |
+| **Squelch level** | 1–10 dB **above the noise**, default 3. The decoder measures the noise itself (in RTTY one of the two tones is always off, so the quieter filter is the noise), so the same setting means the same thing however loud the radio's LAN audio is. At 3 dB pure noise prints nothing and no readable signal is lost; raise it only if noise bursts still print. This only sets the level for when squelch *is* on; on/off is the header's SQL pill. |
 | **Squelch-open marker** | inserts a line break in the RX log each time squelch opens from silence, at most once per ~2 s |
+| **Unshift on space (USOS)** | on by default: after a space the decoder returns to letters, so one corrupted FIGURES shift garbles a word instead of the rest of the line. Turn it off for a station whose numbers come out as letters after a space — `599 PPQ` instead of `599 001` — which means it sends figures after a space without repeating FIGURES. This station's own transmissions always repeat FIGURES after a space, AFSK and FSK alike, so they read correctly either way. |
 | **Default TX/RX tone** | the lower of the two tones, in Hz, 500–2700. One number serves both receive and transmit. |
 | **AFC** | nudges the *decoder's* frequency to follow another station's drift on short messages such as a lone callsign. **This station's own transmit tone never moves.** |
 | **AFC rate** | Hz per Baudot character (165 ms), not Hz per second — the unit the operator actually reasons in |

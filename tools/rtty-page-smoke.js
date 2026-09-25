@@ -419,6 +419,44 @@ const PAGE_SCRIPT = `
     check("the first break after real text is inserted", rx2.squelchBreak() === true);
     check("a second break inside the throttle window is dropped",
       rx2.squelchBreak() === false);
+
+    // ---- 10. squelch in dB above the noise, USOS switch, v1 migration -----
+    // The page booted from a v1 store with squelchThreshold 40 (a raw
+    // magnitude). 40 dB would be a nonsense level on the new scale; the
+    // migration keeps only "it was on" and lands on the 3 dB default.
+    const sq = $("rttySquelchInput");
+    check("the squelch slider runs 1..10 dB above the noise",
+      sq.min === "1" && sq.max === "10", sq.min + ".." + sq.max);
+    check("a v1 squelch level migrates to the 3 dB default, still on",
+      $("rttySquelch").textContent === "SQL 3 dB" && sq.value === "3",
+      $("rttySquelch").textContent + " / slider " + sq.value);
+    check("USOS starts on for a store that never had the field",
+      $("rttyUsos").checked === true);
+    $("rttyUsos").click();
+    await sleep(80);
+    const afterUsos = JSON.parse(localStorage.getItem("wifilt.data.rtty-settings"));
+    check("unticking USOS is saved, with the store now on schema v2",
+      afterUsos.usos === false && afterUsos.v === 2 && !("squelchThreshold" in afterUsos),
+      JSON.stringify(afterUsos));
+    $("rttyUsos").click();
+    sq.value = "6";
+    sq.dispatchEvent(new Event("input"));
+    await sleep(80);
+    check("the slider sets the level and the header pill follows",
+      $("rttySquelch").textContent === "SQL 6 dB" &&
+        JSON.parse(localStorage.getItem("wifilt.data.rtty-settings")).squelchDb === 6,
+      $("rttySquelch").textContent);
+    $("rttySquelch").click();
+    await sleep(80);
+    check("the pill turns squelch off (0) without losing the level",
+      $("rttySquelch").textContent === "SQL OFF" && sq.value === "6" &&
+        JSON.parse(localStorage.getItem("wifilt.data.rtty-settings")).squelchDb === 0,
+      $("rttySquelch").textContent + " / slider " + sq.value);
+    $("rttySquelch").click();
+    await sleep(80);
+    check("and back on at the same level", $("rttySquelch").textContent === "SQL 6 dB",
+      $("rttySquelch").textContent);
+    check("nothing on the way threw", bootErrors.length === 0, bootErrors.join(" | "));
   } catch (error) {
     check("the test script ran to the end", false, String(error && error.stack || error));
   }
@@ -452,6 +490,13 @@ process.on("SIGTERM", () => finish({checks: [["interrupted", false, "SIGTERM"]]}
 // other script (so a boot-time throw is caught, not missed), and the test
 // script after them. The page under test is otherwise byte-identical.
 const ERROR_COLLECTOR = `
+// A store as the page wrote it before schema v2 (docs/rtty-implementace.md
+// §20): squelch as a raw Goertzel magnitude, no USOS field. Seeded before any
+// page script runs, so the boot has to migrate it -- section 10 checks that.
+localStorage.setItem("wifilt.data.rtty-settings", JSON.stringify({v: 1, toneHz: 1500,
+  reverse: false, squelchThreshold: 40, rfPercent: null, txPolarity: "normal",
+  afcEnabled: false, afcRateHzPerChar: 60, afcMaxDeviationHz: 60,
+  squelchNewlineEnabled: false, fskMarkHz: 2125}));
 window.__rttySmokeErrors = [];
 window.addEventListener("error", e =>
   window.__rttySmokeErrors.push(String((e.error && e.error.stack) || e.message)));

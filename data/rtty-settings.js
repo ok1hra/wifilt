@@ -34,7 +34,7 @@
   else root.RttySettings = value;
 })(typeof globalThis !== "undefined" ? globalThis : self, function () {
   const STORAGE_KEY = "wifilt.data.rtty-settings";
-  const SCHEMA_VERSION = 1;
+  const SCHEMA_VERSION = 2;
   const TONE_MIN_HZ = 500;
   const TONE_MAX_HZ = 2700;
   // settings.toneHz itself stores the internal mark/space CENTRE, not the
@@ -56,38 +56,26 @@
   const CENTER_SHIFT_HZ = 85;
   const TONE_CENTER_MIN_HZ = TONE_MIN_HZ + CENTER_SHIFT_HZ;
   const TONE_CENTER_MAX_HZ = TONE_MAX_HZ + CENTER_SHIFT_HZ;
-  const SQUELCH_MIN = 0;
-  // Goertzel sum-of-squares magnitude over a 96-sample window (rtty-codec.js's
-  // Decoder default): for a matched tone of amplitude A, magnitude ~ (N*A/2)^2,
-  // so ~200 at a fairly weak A=0.3. 500 leaves headroom above that without the
-  // 10000 ceiling this used to carry, which was ~50x wider than the actual
-  // <input type="range" max="..."> in rtty.html could ever submit (code-review
-  // -- kept the two in sync, rtty.js's boot sequence now sets the slider's
-  // min/max from these constants instead of rtty.html carrying its own copy).
-  const SQUELCH_MAX = 500;
-
-  // Squelch dB scale (grilled 2026-08-29): the raw magnitude above is what the
-  // decoder actually compares against, but it means nothing to an operator --
-  // "347" gives no sense of how tight the gate is, and the default of 4 sits
-  // in the first 1% of the 0-500 slider, where a LINEAR slider has almost no
-  // usable resolution. 10*log10(magnitude) reads as an ordinary ham-radio dB
-  // figure AND spreads that same useful low end across most of the slider's
-  // travel instead of compressing it into a sliver. magnitude=0 ("squelch
-  // never gates" -- rtty.js's own header-pill on/off toggle, not a point on
-  // this scale) has no dB equivalent and is handled separately by that pill;
-  // the dB slider itself only ever sets a magnitude of 1 or more.
-  const SQUELCH_DB_MIN = 0;                                    // magnitude 1
-  const SQUELCH_DB_MAX = Math.round(10 * Math.log10(SQUELCH_MAX)); // ~27 dB at 500
-  function squelchMagnitudeToDb(magnitude) {
-    const m = Number(magnitude);
-    if (!Number.isFinite(m) || m < 1) return SQUELCH_DB_MIN;
-    return Math.max(SQUELCH_DB_MIN, Math.min(SQUELCH_DB_MAX, 10 * Math.log10(m)));
-  }
-  function squelchDbToMagnitude(db) {
-    const d = Number(db);
-    if (!Number.isFinite(d)) return 1;
-    return Math.max(1, Math.min(SQUELCH_MAX, Math.round(Math.pow(10, d / 10))));
-  }
+  // Squelch threshold in dB ABOVE THE NOISE (schema v2, 2026-09-25 --
+  // docs/rtty-implementace.md §20). rtty-codec.js's Decoder estimates the
+  // noise from the weaker of its two tone filters (in RTTY one tone is
+  // always off), so the same number means the same thing at any LAN audio
+  // level. 0 = squelch off (never gates) -- the header SQL pill's own state,
+  // not a point on this scale; the slider only ever sets 1..10.
+  // Measured range of that estimate: pure noise sits around 0 dB (3.2 dB
+  // was the highest in two minutes), a signal at -6 dB SNR in 2500 Hz reads
+  // ~5.6 dB, and it saturates near 12 dB on a strong clean signal -- so a
+  // threshold above 10 could never open at all. 3 dB is where the offline
+  // bench saw no garbage in two minutes of noise at any audio level and no
+  // sensitivity loss; 2 dB already let ~6 chars/min through.
+  //
+  // v1 stored `squelchThreshold`, a raw Goertzel magnitude whose meaning
+  // depended on the audio level. normalize() carries only its on/off over
+  // (0 stays off, any level becomes the default) -- the number itself does
+  // not translate to anything on the new scale.
+  const SQUELCH_DB_MIN = 1;
+  const SQUELCH_DB_MAX = 10;
+  const SQUELCH_DB_DEFAULT = 3;
 
   // AFC. Wide acquisition now requires the complete mark/space pair rather
   // than accepting whichever single carrier is louder, so it is no longer
@@ -117,7 +105,7 @@
 
   function defaults() {
     return {v: SCHEMA_VERSION, toneHz: 1500, reverse: false,
-            squelchThreshold: 4, rfPercent: null, txPolarity: "normal",
+            squelchDb: SQUELCH_DB_DEFAULT, usos: true, rfPercent: null, txPolarity: "normal",
             afcEnabled: false, afcRateHzPerChar: 60, afcMaxDeviationHz: 60,
             squelchNewlineEnabled: false, fskMarkHz: 2125};
   }
@@ -126,7 +114,9 @@
     const source = input && typeof input === "object" ? input : {};
     const d = defaults();
     const toneHz = Math.round(Number(source.toneHz));
-    const squelchThreshold = Number(source.squelchThreshold);
+    let squelchDb = Number(source.squelchDb);
+    if (source.squelchDb === undefined && source.squelchThreshold !== undefined)
+      squelchDb = Number(source.squelchThreshold) === 0 ? 0 : d.squelchDb;   // v1 -> v2
     const rfPercent = Number(source.rfPercent);
     const afcRateHzPerChar = Number(source.afcRateHzPerChar);
     const afcMaxDeviationHz = Number(source.afcMaxDeviationHz);
@@ -135,9 +125,13 @@
       toneHz: Number.isFinite(toneHz) && toneHz >= TONE_CENTER_MIN_HZ && toneHz <= TONE_CENTER_MAX_HZ
         ? toneHz : d.toneHz,
       reverse: source.reverse === true,
-      squelchThreshold: Number.isFinite(squelchThreshold) &&
-        squelchThreshold >= SQUELCH_MIN && squelchThreshold <= SQUELCH_MAX
-        ? squelchThreshold : d.squelchThreshold,
+      squelchDb: squelchDb === 0 ? 0
+        : Number.isFinite(squelchDb) && squelchDb >= SQUELCH_DB_MIN && squelchDb <= SQUELCH_DB_MAX
+          ? Math.round(squelchDb) : d.squelchDb,
+      // Unshift-on-space on RX. Missing reads as ON (the default, and what
+      // every v1 store upgrades to); only an explicit false turns it off --
+      // the reverse of reverse/afcEnabled's `=== true` gate on purpose.
+      usos: source.usos !== false,
       rfPercent: Number.isFinite(rfPercent) && rfPercent >= 1 && rfPercent <= 100
         ? Math.round(rfPercent) : d.rfPercent,
       // Grilled 2026-08-28 (2nd session, item 3): what this station's OWN
@@ -187,8 +181,7 @@
 
   return {STORAGE_KEY, SCHEMA_VERSION, TONE_MIN_HZ, TONE_MAX_HZ,
           TONE_CENTER_MIN_HZ, TONE_CENTER_MAX_HZ,
-          SQUELCH_MIN, SQUELCH_MAX, SQUELCH_DB_MIN, SQUELCH_DB_MAX,
-          squelchMagnitudeToDb, squelchDbToMagnitude,
+          SQUELCH_DB_MIN, SQUELCH_DB_MAX, SQUELCH_DB_DEFAULT,
           AFC_RATE_MIN_HZ_PER_CHAR, AFC_RATE_MAX_HZ_PER_CHAR,
           AFC_MAX_DEVIATION_MIN_HZ, AFC_MAX_DEVIATION_HARD_CAP_HZ,
           FSK_MARK_CHOICES_HZ,

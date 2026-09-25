@@ -58,7 +58,7 @@
     "rttyScope", "rttyLiveSpectrum", "rttyScopeOverlay", "liveSpectrumCanvas",
     "rttyRxLog", "rxSummary", "rttyRxClear",
     "rttyTxText", "rttyTxAbort", "rttyTxState",
-    "rttySquelchInput", "rttySquelchLive", "rttySquelchNewlineEnabled", "rttyToneInput", "settingsSummary",
+    "rttySquelchInput", "rttySquelchLive", "rttySquelchNewlineEnabled", "rttyUsos", "rttyToneInput", "settingsSummary",
     // AFC (grilled 2026-08-28, 3rd session): see the RttyAfc.createTracker()
     // wiring below for what these drive.
     "rttyAfcEnabled", "rttyAfcRateInput", "rttyAfcMaxDeviationInput",
@@ -85,7 +85,7 @@
   const settings = RttySettings.load(window.localStorage);
   function saveSettings() { RttySettings.save(window.localStorage, settings); }
 
-  // Squelch on/off (grilled 2026-08-29): settings.squelchThreshold=0 already
+  // Squelch on/off (grilled 2026-08-29): settings.squelchDb=0 already
   // meant "never gates" before this (renderStatusPills' own .active check),
   // so turning it off needs no new field -- but restoring the LEVEL an
   // operator had dialled in before they hit the header pill's OFF does. This
@@ -93,19 +93,19 @@
   // has nothing on-disk to remember a level from, so it starts back at the
   // schema default like any other fresh load. Seeded from the loaded
   // threshold when it is already a real level, otherwise the schema default.
-  let squelchOnMagnitude = settings.squelchThreshold > 0
-    ? settings.squelchThreshold : RttySettings.defaults().squelchThreshold;
+  let squelchOnDb = settings.squelchDb > 0
+    ? settings.squelchDb : RttySettings.defaults().squelchDb;
   function formatSquelchDb(db) { return `${Math.round(db)} dB`; }
   // Single place both the header pill and the SETTINGS row call to flip
   // squelch off (threshold 0, decoder never gates) or back on (whatever
   // level the slider was last parked at) -- keeps the two controls, and the
   // decoder itself, from ever disagreeing about which state they are in.
   function setSquelchEnabled(enabled) {
-    settings.squelchThreshold = enabled ? squelchOnMagnitude : 0;
+    settings.squelchDb = enabled ? squelchOnDb : 0;
     saveSettings();
     applyEffective();
-    dom.rttySquelchInput.value = String(Math.round(RttySettings.squelchMagnitudeToDb(squelchOnMagnitude)));
-    dom.rttySquelchLive.textContent = formatSquelchDb(RttySettings.squelchMagnitudeToDb(squelchOnMagnitude));
+    dom.rttySquelchInput.value = String(squelchOnDb);
+    dom.rttySquelchLive.textContent = formatSquelchDb(squelchOnDb);
     renderStatusPills();
   }
 
@@ -201,7 +201,13 @@
     // on a const still in its temporal dead zone, so it would turn the case
     // it claims to handle into an exception.)
     decoder.setReverse(effective.reverse);
-    decoder.setSquelchThreshold(effective.squelchThreshold);
+    // Squelch and USOS straight from `settings`, not `effective`: the FSK
+    // override never touches them, and while it is active effective() hands
+    // back a copy cached per `settings` IDENTITY -- which the in-place edits
+    // below (slider, pill, checkbox) never change, so a copy of them would
+    // stay stale until the next FSK mode/mark change.
+    decoder.setSquelchDb(settings.squelchDb);
+    decoder.setUsos(settings.usos);
     // afcReset() re-tones the decoder on its way out (its onOffset does), so
     // a moved centre goes through it rather than being written twice -- and
     // an AFC offset accumulated around the OLD centre is nonsense applied to
@@ -563,7 +569,7 @@
 
   const decoder = new RttyCodec.Decoder(RX_AUDIO_RATE,
     {toneHz: effective.toneHz, reverse: effective.reverse,
-     squelchThreshold: effective.squelchThreshold});
+     squelchDb: settings.squelchDb, usos: settings.usos});
 
   // kap.13/13.4 + item 6: the RX log itself -- word tokens, the per-character
   // SNR gradient, scrollback trimming, the squelch-open break and this
@@ -1021,9 +1027,9 @@
     // the pill is now also the on/off button (click handler below) --
     // OFF reads as plain text, ON as the dB level, same .active highlight as
     // before either way.
-    dom.rttySquelch.textContent = settings.squelchThreshold === 0
-      ? "SQL OFF" : "SQL " + formatSquelchDb(RttySettings.squelchMagnitudeToDb(settings.squelchThreshold));
-    dom.rttySquelch.classList.toggle("active", settings.squelchThreshold !== 0);
+    dom.rttySquelch.textContent = settings.squelchDb === 0
+      ? "SQL OFF" : "SQL " + formatSquelchDb(settings.squelchDb);
+    dom.rttySquelch.classList.toggle("active", settings.squelchDb !== 0);
     dom.rttySnr.textContent = "SNR " +
       (Number.isFinite(state.lastSnrDb) ? `${state.lastSnrDb.toFixed(1)} dB` : "—");
     dom.rxSummary.textContent = state.rxChars ? `${state.rxChars} chars decoded` : "";
@@ -1311,22 +1317,23 @@
       clearRxLog();
     });
 
-    // Grilled 2026-08-29: this slider moves on the dB scale now and only ever
-    // sets the LEVEL (never 0 -- squelchDbToMagnitude() floors at magnitude
-    // 1) -- dragging it always leaves squelch on, same as turning a physical
+    // Grilled 2026-08-29: this slider only ever sets the LEVEL, in dB above
+    // the noise since schema v2 (never 0 -- its min is SQUELCH_DB_MIN) --
+    // dragging it always leaves squelch on, same as turning a physical
     // squelch knob up from its detented-off position always does.
     dom.rttySquelchInput.addEventListener("input", () => {
-      squelchOnMagnitude = RttySettings.squelchDbToMagnitude(Number(dom.rttySquelchInput.value));
-      settings.squelchThreshold = squelchOnMagnitude;
+      squelchOnDb = Math.max(RttySettings.SQUELCH_DB_MIN,
+        Math.min(RttySettings.SQUELCH_DB_MAX, Math.round(Number(dom.rttySquelchInput.value))));
+      settings.squelchDb = squelchOnDb;
       saveSettings();
       applyEffective();
-      dom.rttySquelchLive.textContent = formatSquelchDb(RttySettings.squelchMagnitudeToDb(squelchOnMagnitude));
+      dom.rttySquelchLive.textContent = formatSquelchDb(squelchOnDb);
       renderStatusPills();   // item 16: the SQL pill mirrors this live
     });
     // Header SQL pill (grilled 2026-08-29): now the on/off control, not just a
     // readout -- stopPropagation is not needed here, it is not inside a
     // <summary>.
-    dom.rttySquelch.addEventListener("click", () => setSquelchEnabled(settings.squelchThreshold === 0));
+    dom.rttySquelch.addEventListener("click", () => setSquelchEnabled(settings.squelchDb === 0));
     dom.rttyToneInput.addEventListener("change", () => {
       const hz = Math.round(Number(dom.rttyToneInput.value));
       if (!Number.isFinite(hz)) return;
@@ -1351,6 +1358,14 @@
       settings.fskMarkHz = hz;
       saveSettings();
       if (fskSync.active() && !fskSync.fromRadio()) fskSync.setMarkHz(hz);
+    });
+
+    // §20: unshift-on-space, on by default -- off only for a station that
+    // sends figures after a space without re-sending FIGS.
+    dom.rttyUsos.addEventListener("change", () => {
+      settings.usos = dom.rttyUsos.checked;
+      saveSettings();
+      applyEffective();
     });
 
     // kap.13.4 (grilled 2026-08-29): see decoder.onEvent() above for what this drives.
@@ -1411,10 +1426,10 @@
 
     dom.rttySquelchInput.min = String(RttySettings.SQUELCH_DB_MIN);
     dom.rttySquelchInput.max = String(RttySettings.SQUELCH_DB_MAX);
-    // The slider always shows the LEVEL (squelchOnMagnitude), on or off --
+    // The slider always shows the LEVEL (squelchOnDb), on or off --
     // on/off itself is the header pill's job (renderStatusPills() below).
-    dom.rttySquelchInput.value = String(Math.round(RttySettings.squelchMagnitudeToDb(squelchOnMagnitude)));
-    dom.rttySquelchLive.textContent = formatSquelchDb(RttySettings.squelchMagnitudeToDb(squelchOnMagnitude));
+    dom.rttySquelchInput.value = String(squelchOnDb);
+    dom.rttySquelchLive.textContent = formatSquelchDb(squelchOnDb);
     // rtty.html's <input min/max> is a static fallback for the instant before
     // this runs; RttySettings is authoritative from here on (code-review).
     dom.rttyToneInput.min = String(RttySettings.TONE_MIN_HZ);
@@ -1425,6 +1440,7 @@
     renderToneField();
     dom.rttyTxPolarity.value = settings.txPolarity;
     dom.rttySquelchNewlineEnabled.checked = settings.squelchNewlineEnabled;
+    dom.rttyUsos.checked = settings.usos;
     // The radio's own Mark Frequency, for the models it cannot be read from
     // (and as the fallback for a read that times out on the ones it can).
     dom.rttyFskMark.value = String(settings.fskMarkHz);
