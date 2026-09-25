@@ -4363,6 +4363,25 @@ function focusedLogField() {
   return formStateOf() === 'CALL_ENTERED' ? inpExch : inpCall;
 }
 
+// A word handed over from the RTTY palette/page or a DXC spot, bound for Call,
+// that resolves to a blocked DXCC entity. Refused whole: Call keeps what it had,
+// no TRX or RUN/S&P switch, nothing keyed -- a click is not a transmit action the
+// way Enter is. The caret goes back where the operator was.
+//
+// Only callsign-shaped words (a letter AND a digit) are checked: DXCC.lookupDxcc()
+// resolves plain RTTY words too -- RST, RYRY, UFB -> European Russia, TNX -> Congo
+// -- and a click on those must not read "BLOCKED". No real callsign lacks a digit.
+// Grilled 2026-09-25; Enter's own check (handleCallEnter) deliberately unchanged.
+function refuseBlockedWord(word, field) {
+  const w = String(word || '').trim();
+  if (!/[A-Za-z]/.test(w) || !/[0-9]/.test(w)) return false;
+  const blockedCountry = blockedCountryForCall(w);
+  if (!blockedCountry) return false;
+  field.focus();
+  showHint('⛔ BLOCKED: ' + blockedCountry, 5000);
+  return true;
+}
+
 // ── A word arriving from elsewhere ───────────────────────────────────────────
 //
 // Two callers, one behaviour. dxc.html posts a spot over the BroadcastChannel
@@ -4383,6 +4402,10 @@ function insertWordIntoLog(word, trx, field) {
   // was -- found by an on-air-style test catching the exact race, not by
   // inspection.
   const target = field || focusedLogField();
+  // Blocked DXCC is refused on the way IN, not only at Enter: before selectTrx(),
+  // so a refused word switches nothing. Exch is left alone -- the check is about
+  // the station about to be worked, and that is Call.
+  if (target === inpCall && refuseBlockedWord(word, target)) return;
   selectTrx(trx);
   if (word) {
     // A DXC spot is always a whole callsign, always Call (workDxcSpot() says
@@ -4403,6 +4426,8 @@ function insertWordIntoLog(word, trx, field) {
 // DXC hands over a spot to work -- switching to S&P is the point, and the
 // callsign goes to Call no matter which field the operator was last in.
 function workDxcSpot(call, trx) {
+  // Before setRunMode(): a spot we may not work must not flip RUN to S&P either.
+  if (refuseBlockedWord(call, inpCall)) return;
   setRunMode('SP');
   insertWordIntoLog(call, trx, inpCall);
 }

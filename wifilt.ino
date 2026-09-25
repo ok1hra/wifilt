@@ -707,6 +707,62 @@ uint32_t paTxLastMs = 0;   // when the last attempt was made
 #define PA_CMD_FULL     0x04
 #define PA_CMD_TUNE     0x08
 
+// /pa-flags bits this file acts on (the palette documents all of them).
+#define PA_F_TUNE   0x0001
+#define PA_F_ALARM  0x0008
+#define PA_F_ON     0x0100
+#define PA_F_LINK   0x0200
+
+// TUNE+ -- the whole amplifier tune, run from here rather than from the
+// palette so it finishes (or stops the carrier) even if the tab is closed.
+// The carrier comes from the OI3 keyer that does this station's FSK: it sits
+// on TRX1's CI-V bus, and its low-power TUNE (/s-lptune) keys CW at TunePower
+// %, then restores power, mode and filter itself. Sequence, per the EXPERT
+// manual section d: carrier first, then the amplifier's TUNE key, then wait
+// for its TUNE flag to fall. See paTunePlusTick().
+//
+// Plain #defines rather than an enum: arduino-builder puts its generated
+// prototypes above any type declared this far down (ino-prototype trap).
+#define TP_IDLE      0
+#define TP_START     1   // /s-lptune 1 sent, waiting for OI3's carrier
+#define TP_CARRIER   2   // carrier up, /s-tune sent, waiting for the TUNE flag
+#define TP_TUNING    3   // amplifier tuning, waiting for the TUNE flag to fall
+#define TP_STOPPING  4   // /s-lptune 0 sent, waiting for OI3 to restore the rig
+#define TP_DONE      5
+#define TP_FAIL      6
+#define TP_REQ_START 1
+#define TP_REQ_STOP  2
+#define TP_START_MS      4000   // power read 2x300 ms + settle + sequencer up
+#define TP_CARRIER_MS    3000   // the daemon itself gives the key 1 s
+#define TP_TUNING_MS    20000   // under OI3's own TuneMaxMs (30 s)
+#define TP_STOPPING_MS   3000
+#define TP_KEEPALIVE_MS  1000   // OI3 drops the carrier after TuneKeepaliveMs (2.5 s)
+#define TP_PA_SILENT_MS  3000
+uint8_t          tpState   = TP_IDLE;
+uint32_t         tpStateAt = 0;       // millis() the current state was entered
+uint32_t         tpKaAt    = 0;       // last keepalive
+bool             tpOk      = false;   // how STOPPING should end
+const char*      tpWhy     = "";      // sentence for the palette; string literals only
+uint16_t         tpSwr     = 0;       // amplifier's SWR as the TUNE flag fell
+volatile uint8_t tpReq     = 0;       // TP_REQ_*, set by the web handler
+// OI3's /lptune, as heard from the FSK keyer only. lpGot latches every state
+// that arrived since the last tick -- OI3 sends "3 aborted" and "0 restored"
+// back to back, and a plain last-value would lose the abort.
+volatile uint8_t lpGot     = 0;
+bool             lpSeen    = false;   // it has ever announced /lptune ...
+char             lpFrom[TRXNET_MAX_DEVICE_NAME] = "";   // ... under this name
+uint32_t         lpAskedAt = 0;       // last /s-lptune 3 (state query)
+#define TP_QUERY_MS      5000   // how often to ask an OI3 that has not announced itself
+
+// Switching the radio's own tuner off (CI-V 1C 01 00) when the amplifier is
+// switched on and before every TUNE+: the EXPERT manual asks for it, and two
+// tuners hunting on one line fight each other. Fire and forget -- the result
+// reported is only whether the frame could be sent.
+volatile bool    paAtuOffPending = false;
+uint32_t         atuAt  = 0;          // 0 = never tried
+bool             atuOk  = false;
+const char*      atuWhy = "";
+
 int incomingByte = 0;   // for incoming serial data
 
 #if defined(WIFI)
@@ -1165,6 +1221,12 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void onPaBand(const char* from, const uint8_t* data, size_t len);
   void paSubscribeTopics(void);
   void paPublishPending(void);
+  void onOi3LpTune(const char* from, const uint8_t* data, size_t len);
+  bool tpOi3Name(char* out, size_t n);
+  bool tunePlusAvailable(const char** why);
+  bool paPeerActive(const char* name);
+  void paTunePlusTick(void);
+  void trx1AtuOff(void);
   void handlePaJson(void);
   void handlePaCmd(void);
   static const char* trxnetModeToString(uint8_t civMode);
@@ -2184,7 +2246,7 @@ void handleTrxTopics(){
 // them.
 void handlePaJson(){
   String j;
-  j.reserve(320);
+  j.reserve(640);
   j += "{";
   const char* state = "ok";
   if (APmode && !WiFiStationReady()) state = "ap";
@@ -2193,15 +2255,11 @@ void handlePaJson(){
   j += "\"state\":\""; j += state; j += "\"";
   j += ",\"name\":\""; j += configJsonEscape(String(paPeerName)); j += "\"";
 
-  bool present = false;
-  if (strcmp(state, "ok") == 0 && paPeerName[0] != '\0') {
-    int count = net.peerCount();
-    for (int i = 0; i < count; i++) {
-      const TrxPeer* p = net.peer(i);
-      if (p && p->active && strcmp(p->name, paPeerName) == 0) { present = true; break; }
-    }
-  }
+  bool present = strcmp(state, "ok") == 0 && paPeerActive(paPeerName);
   j += ",\"present\":"; j += present ? "true" : "false";
+  // The radio the amplifier follows, for the palette's title (PA.01/IC-7610).
+  // TRX1 by definition: that is the only /hz this interface publishes.
+  j += ",\"trx1\":\""; j += configJsonEscape(g_lcTrx1Label); j += "\"";
 
   uint32_t now = millis();
   if (paState.seen) {
@@ -2235,6 +2293,25 @@ void handlePaJson(){
   j += ",\"txFailed\":"; j += paTxFailed;
   j += ",\"txAgeMs\":";
   if (paTxLastMs) j += (uint32_t)(millis() - paTxLastMs); else j += "null";
+
+  // TUNE+: whether it is on offer, why not when it is not, and where a run is.
+  const char* tpWhyNot = "";
+  bool tpAvail = tunePlusAvailable(&tpWhyNot);
+  j += ",\"tunePlus\":"; j += tpAvail ? "true" : "false";
+  j += ",\"tunePlusWhy\":\""; j += tpWhyNot; j += "\"";
+  static const char* const kTpNames[] = {
+    "idle", "start", "carrier", "tuning", "stopping", "done", "fail" };
+  j += ",\"tp\":{\"st\":\""; j += kTpNames[tpState <= TP_FAIL ? tpState : TP_FAIL];
+  j += "\",\"why\":\""; j += tpWhy;
+  j += "\",\"swr\":"; j += tpSwr;
+  j += ",\"ageMs\":"; j += (uint32_t)(now - tpStateAt);
+  j += "}";
+  j += ",\"atuOff\":";
+  if (atuAt) {
+    j += "{\"ok\":"; j += atuOk ? "true" : "false";
+    j += ",\"why\":\""; j += atuWhy;
+    j += "\",\"ageMs\":"; j += (uint32_t)(now - atuAt); j += "}";
+  } else j += "null";
   j += "}";
   webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   webServer.sendHeader("Connection", "close");
@@ -2258,6 +2335,38 @@ void handlePaCmd(){
   // extractJsonString() returns "" both for a missing key and for a malformed
   // one, and ""..toInt() is 0 -- which is a legitimate value here. Length first.
   int    val  = valS.length() ? valS.toInt() : -1;
+
+  // TUNE+ is not a command to the amplifier but a run of several, owned by
+  // paTunePlusTick(); this only asks for it to start or stop.
+  if (what == "tuneplus") {
+    if (val < 0 || val > 1) {
+      webServer.send(400, "application/json", "{\"error\":\"bad_request\"}");
+      return;
+    }
+    bool running = tpState >= TP_START && tpState <= TP_STOPPING;
+    if (val == 0) {
+      if (running) tpReq = TP_REQ_STOP;
+      webServer.send(200, "application/json", "{\"ok\":true}");
+      return;
+    }
+    const char* err = nullptr;
+    const char* whyNot = "";
+    if (running)                                      err = "tp_busy";
+    else if (!tunePlusAvailable(&whyNot))             err = "tp_unavailable";
+    else if (!paPeerActive(paPeerName))               err = "pa_absent";
+    else if ((paState.flags & (PA_F_ON | PA_F_LINK)) != (PA_F_ON | PA_F_LINK))
+                                                      err = "pa_off";
+    else if (stateTx)                                 err = "trx_tx";
+    if (err) {
+      String e = String("{\"error\":\"") + err + "\"}";
+      webServer.send(409, "application/json", e);
+      return;
+    }
+    tpReq = TP_REQ_START;
+    webServer.send(200, "application/json", "{\"ok\":true}");
+    return;
+  }
+
   uint8_t bit = 0;
   if      (what == "on")      bit = PA_CMD_ON;
   else if (what == "operate") bit = PA_CMD_OPERATE;
@@ -2271,16 +2380,17 @@ void handlePaCmd(){
     webServer.send(409, "application/json", "{\"error\":\"pa_unset\"}");
     return;
   }
-  bool present = false;
-  int count = net.peerCount();
-  for (int i = 0; i < count; i++) {
-    const TrxPeer* p = net.peer(i);
-    if (p && p->active && strcmp(p->name, paPeerName) == 0) { present = true; break; }
-  }
-  if (!present) {
+  if (!paPeerActive(paPeerName)) {
     webServer.send(409, "application/json", "{\"error\":\"pa_absent\"}");
     return;
   }
+  // Switching the amplifier or its OPERATE state in the middle of a tune ends
+  // the tune first -- the carrier must not outlive what the operator changed.
+  if ((bit == PA_CMD_ON || bit == PA_CMD_OPERATE)
+      && tpState >= TP_START && tpState <= TP_STOPPING) tpReq = TP_REQ_STOP;
+  // OFF -> ON: the radio's own tuner goes off now, not after the ~7 s the
+  // amplifier takes to come up. The palette only ever sends on=1 from OFF.
+  if (bit == PA_CMD_ON && val == 1) paAtuOffPending = true;
   paPendingCmd  |= bit;
   if (val) paPendingVals |= bit; else paPendingVals &= ~bit;
   webServer.send(200, "application/json", "{\"ok\":true}");
@@ -7521,6 +7631,7 @@ void TrxNetLoop(){
   prevWifiConnected = wifiConnected;
   if (trxNetEnabled && wifiConnected) {
     net.loop();
+    paTunePlusTick();       // before the publish, so its /s-tune goes out this pass
     paPublishPending();     // after loop(): the peer table is fresh
   }
 }
@@ -7704,6 +7815,174 @@ void paSubscribeTopics(void) {
   net.subscribe("/swr",      onPaSwr);
   net.subscribe("/band",     onPaBand);
   net.subscribe("/pa-temp",  onPaTemp);
+  // TUNE+'s carrier source. Here rather than beside /hz because TUNE+ exists
+  // only for the amplifier, and this is the one function both net.begin()
+  // sites already call. The sender is checked in the callback.
+  net.subscribe("/lptune",   onOi3LpTune);
+}
+
+// ---- TUNE+ ------------------------------------------------------------------
+
+bool paPeerActive(const char* name) {
+  if (!name || !name[0] || !trxNetEnabled) return false;
+  int count = net.peerCount();
+  for (int i = 0; i < count; i++) {
+    const TrxPeer* p = net.peer(i);
+    if (p && p->active && strcmp(p->name, name) == 0) return true;
+  }
+  return false;
+}
+
+// The OI3 that keys this station's FSK -- which makes it the one on TRX1's
+// CI-V bus, and so the one that can give the amplifier a carrier. Its name
+// comes from the RTTY page's external-FSK setting, read live so a change there
+// needs no restart.
+bool tpOi3Name(char* out, size_t n) {
+  if (g_lcFskOutputMode != "trxnet") return false;
+  long id = strtol(g_lcFskNetId.c_str(), nullptr, 16);
+  if (id <= 0 || id > 255) return false;
+  snprintf(out, n, "OI3.%02x", (unsigned)id);
+  return true;
+}
+
+// Whether the palette may offer TUNE+ instead of the bare TUNE key, and why
+// not as a short code when it may not.
+bool tunePlusAvailable(const char** why) {
+  char oi3[TRXNET_MAX_DEVICE_NAME];
+  const char* w = "";
+  if (!tpOi3Name(oi3, sizeof(oi3)))       w = "no_oi3";      // FSK not external
+  else if (!paPeerActive(oi3))            w = "oi3_absent";
+  else if (!lpSeen || strcmp(lpFrom, oi3) != 0)
+                                          w = "oi3_old";     // never announced /lptune
+  if (why) *why = w;
+  return w[0] == '\0';
+}
+
+void onOi3LpTune(const char* from, const uint8_t* data, size_t len) {
+  char oi3[TRXNET_MAX_DEVICE_NAME];
+  if (len < 1 || data[0] > 7 || !tpOi3Name(oi3, sizeof(oi3)) || strcmp(from, oi3) != 0) return;
+  lpGot |= (uint8_t)(1u << data[0]);
+  lpSeen = true;
+  strncpy(lpFrom, oi3, sizeof(lpFrom) - 1);
+  lpFrom[sizeof(lpFrom) - 1] = '\0';
+}
+
+// CI-V 1C 01 00 -- internal antenna tuner OFF -- to TRX1 by whatever carries
+// its CAT. A TrxNet TRX1 cannot take it: that transport forwards frequency
+// only, on purpose (catWriteFrameSlot).
+void trx1AtuOff(void) {
+  atuAt = millis();
+  if (radioSlots[0].transport == RADIO_TRXNET) { atuOk = false; atuWhy = "trxnet"; return; }
+  if (radioSlots[0].transport == RADIO_CIV && radio_address == 0x00) {
+    atuOk = false; atuWhy = "noaddr"; return;
+  }
+  uint8_t frame[] = {START_BYTE, START_BYTE, radio_address, CONTROLLER_ADDRESS,
+                     0x1C, 0x01, 0x00, STOP_BYTE};
+  atuOk  = catWriteFrame(frame, sizeof(frame), true);
+  atuWhy = atuOk ? "" : "offline";
+  if (Debug || !atuOk) Serial.printf("PA| TRX1 tuner off %s\n", atuOk ? "sent" : atuWhy);
+}
+
+static void tpEnter(uint8_t st) { tpState = st; tpStateAt = millis(); }
+
+static bool tpSend(const char* oi3, uint8_t v) {
+  // Start and stop retransmit until acknowledged; a keepalive or a query is
+  // sent again soon anyway, so it costs no pending slot.
+  bool ok = net.publishTo(oi3, "/s-lptune", &v, 1, (v == 0 || v == 1) ? TRX_CON : TRX_NON);
+  if (Debug || !ok) Serial.printf("PA| /s-lptune %u -> %s%s\n", v, oi3, ok ? "" : " FAILED");
+  return ok;
+}
+
+// End a run: ask OI3 to drop the carrier and restore the rig, and remember how
+// it should read once OI3 confirms. `got` carries this tick's /lptune states,
+// because OI3's "0 restored" may well have come in the same batch as the
+// reason for stopping.
+static void tpStop(const char* oi3, bool ok, const char* why, uint8_t got) {
+  tpOk  = ok;
+  tpWhy = why;
+  if (oi3) tpSend(oi3, 0);
+  tpEnter(TP_STOPPING);
+  if (got & 0x01) tpEnter(tpOk ? TP_DONE : TP_FAIL);
+}
+
+void paTunePlusTick(void) {
+  uint32_t now = millis();
+  uint8_t got = lpGot; lpGot = 0;
+  uint8_t req = tpReq; tpReq = 0;
+  char oi3[TRXNET_MAX_DEVICE_NAME];
+  bool haveOi3 = tpOi3Name(oi3, sizeof(oi3));
+
+  // OI3 announces /lptune when it first meets a peer. After a restart of THIS
+  // device it does not meet us again -- we never left its table -- so ask.
+  // An OI3 without the feature does not subscribe the topic and stays silent.
+  if (haveOi3 && !(lpSeen && strcmp(lpFrom, oi3) == 0)
+      && now - lpAskedAt >= TP_QUERY_MS && paPeerActive(oi3)) {
+    lpAskedAt = now;
+    tpSend(oi3, 3);
+  }
+
+  if (req == TP_REQ_START && (tpState == TP_IDLE || tpState >= TP_DONE)) {
+    if (!haveOi3) return;                 // setting changed since the handler looked
+    trx1AtuOff();
+    tpOk = false; tpWhy = ""; tpSwr = 0;
+    tpSend(oi3, 1);
+    tpKaAt = now;
+    tpEnter(TP_START);
+    return;
+  }
+  if (tpState < TP_START || tpState > TP_STOPPING) return;
+  uint32_t inState = now - tpStateAt;
+
+  if (tpState == TP_STOPPING) {
+    if (got & 0x01)                  tpEnter(tpOk ? TP_DONE : TP_FAIL);
+    else if (inState > TP_STOPPING_MS) {
+      if (tpOk) tpWhy = "Tuned, but OI3 did not confirm it restored the radio.";
+      tpEnter(TP_FAIL);
+    }
+    return;
+  }
+
+  // Anything that ends a run early. Each is a reason to stop the carrier now;
+  // OI3's own restore then puts the radio back.
+  const char* abortWhy = nullptr;
+  if (req == TP_REQ_STOP)                         abortWhy = "Stopped.";
+  else if (!haveOi3)                              abortWhy = "External FSK (OI3) is no longer set up.";
+  else if (paState.flags & PA_F_ALARM)            abortWhy = "Amplifier ALARM.";
+  else if (!paPeerActive(paPeerName))             abortWhy = "The amplifier left the network.";
+  else if (now - paState.lastRxMs > TP_PA_SILENT_MS)
+                                                  abortWhy = "No telemetry from the amplifier.";
+  else if (got & 0x08)                            abortWhy = "OI3 dropped the carrier (interlock or its own time limit).";
+  else if (tpState != TP_START && (got & 0x01))   abortWhy = "OI3 dropped the carrier.";
+  if (abortWhy) {
+    if (tpState == TP_START && (got & 0x04)) { tpWhy = "OI3 refused: something else is transmitting."; tpEnter(TP_FAIL); return; }
+    tpStop(haveOi3 ? oi3 : nullptr, false, abortWhy, got);
+    return;
+  }
+
+  if (now - tpKaAt >= TP_KEEPALIVE_MS) { tpSend(oi3, 2); tpKaAt = now; }
+
+  switch (tpState) {
+    case TP_START:
+      if (got & 0x04) { tpWhy = "OI3 refused: something else is transmitting."; tpEnter(TP_FAIL); }
+      else if (got & 0x02) {
+        // Carrier up: now the amplifier's TUNE key, through the ordinary path.
+        paPendingCmd  |= PA_CMD_TUNE;
+        paPendingVals |= PA_CMD_TUNE;
+        tpEnter(TP_CARRIER);
+      }
+      else if (inState > TP_START_MS) tpStop(oi3, false, "No carrier from OI3.", got);
+      break;
+    case TP_CARRIER:
+      if (paState.flags & PA_F_TUNE)  tpEnter(TP_TUNING);
+      else if (inState > TP_CARRIER_MS)
+        tpStop(oi3, false, "The amplifier did not start tuning.", got);
+      break;
+    case TP_TUNING:
+      if (!(paState.flags & PA_F_TUNE)) { tpSwr = paState.swr; tpStop(oi3, true, "", got); }
+      else if (inState > TP_TUNING_MS)
+        tpStop(oi3, false, "Tuning took longer than 20 s.", got);
+      break;
+  }
 }
 
 // Send whatever the web handler queued. Publishing has to happen here rather
@@ -7717,6 +7996,7 @@ void paSubscribeTopics(void) {
 // belongs to the daemon. TRX_CON because a lost command to a kilowatt is worth
 // a retransmit, and publishTo() to a single peer costs one pending slot.
 void paPublishPending(void) {
+  if (paAtuOffPending) { paAtuOffPending = false; trx1AtuOff(); }
   if (!paPendingCmd || !trxNetEnabled || paPeerName[0] == '\0') return;
   uint8_t cmds = paPendingCmd, vals = paPendingVals;
   paPendingCmd = 0;

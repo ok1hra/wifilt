@@ -46,10 +46,13 @@ IC-705 (Bluetooth CI-V)
 | `/swr` | `uint16_t` LE | `PA.xx` only | SWR × 100; `0` = no answer, `65535` = infinite. |
 | `/band` | `uint8_t` | `PA.xx` only | Band in metres. Compared against the radio's own frequency; a mismatch is what the palette draws in red. |
 | `/pa-temp` | `int16_t` LE | `PA.xx` only | Heatsink temperature, °C × 100 — always °C, converted by the daemon from whichever scale the amplifier reports in. |
+| `/lptune` | `uint8_t` | FSK `OI3.xx` only | The OI3 keyer's low-power TUNE state: `0` idle (radio restored), `1` carrier up, `2` start refused, `3` aborted. Hearing it at all is what makes the PA palette offer **TUNE+**. |
 
 The six PA topics are accepted **only** from the peer named `PA.xx`, where `xx`
 is the `PA NET_ID` set in SETUP → TrxNet; with it at `00` they are not
-subscribed at all. `/pa-temp` is a separate topic from the WX node's `/temp`
+subscribed at all. `/lptune` is subscribed with them (TUNE+ exists only for the
+amplifier) and accepted only from `OI3.xx`, where `xx` is the external FSK
+keyer's NET_ID on the RTTY page — that keyer sits on TRX1's CI-V bus. `/pa-temp` is a separate topic from the WX node's `/temp`
 even though the encoding is identical: one name for both would have a heatsink
 reported as the weather.
 
@@ -147,8 +150,30 @@ After restart the WIFILT will broadcast a discovery probe. The k3ng keyer will r
 | `/s-hz` | `uint32_t` LE | Set VFO frequency command |
 | `/s-mode` | `uint8_t` | Set mode command |
 | `/s-cw` | `char[]` | CW text to key (reliable delivery, CON) |
+| `/s-lptune` | `uint8_t` | Low-power TUNE: `1` start, `2` keepalive, `0` stop, `3` query state |
 
 The WIFILT sends `/s-cw` and `/s-hz` to the configured OI3 peer when LOG/DXC controls target TRX2 or TRX3. It does not publish `/s-mode`.
+
+### TUNE+ (PA palette)
+
+With the external FSK keyer (RTTY page → FSK output → TrxNet) announcing
+`/lptune`, the PA palette's TUNE key becomes **TUNE+** and the firmware runs
+the whole amplifier tune (`paTunePlusTick()`):
+
+1. CI-V `1C 01 00` to TRX1 — its own antenna tuner off (also sent when the
+   palette switches the amplifier OFF → ON).
+2. `/s-lptune 1` to the keyer: CW, `TunePower` %, sequencer PTT, solid carrier.
+   Keepalive `/s-lptune 2` every second; the keyer drops the carrier after
+   `TuneKeepaliveMs` (2.5 s) without one.
+3. On `/lptune 1`, `/s-tune 1` to `PA.xx` — carrier first, then the key, as the
+   EXPERT manual asks.
+4. The amplifier's TUNE flag rises (within 3 s) and falls (within 20 s).
+5. `/s-lptune 0`; the keyer restores power, mode and filter and says `/lptune 0`.
+
+Stop, the OPERATE or ON key, ALARM, the amplifier leaving or going silent for
+3 s, or the keyer reporting `3` all end the run at step 5. The keyer announces
+`/lptune` to a new peer; one that restarted asks with `/s-lptune 3` every 5 s
+until it hears an answer.
 
 ---
 

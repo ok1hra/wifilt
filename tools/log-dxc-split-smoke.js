@@ -176,7 +176,7 @@ const server = http.createServer((request, response) => {
   if (url.pathname === "/identity") return json({call: "OK1HRA", grid: "JO70UC"});
   if (url.pathname === "/log-config") return json({
     trx1Label: "TRX1", trx2Label: "TRX2", trx3Label: "TRX3",
-    trx2enabled: true, trx3enabled: true, blockedDxcc: "",
+    trx2enabled: true, trx3enabled: true, blockedDxcc: "Russia",
   });
   if (url.pathname === "/log-macros.json") return json({});
   if (url.pathname === "/pa.json") return json({state: "ok", present: false});
@@ -400,6 +400,24 @@ const PAGE_SCRIPT = `
     await sleep(100);
     $("btnTrx1").click();          // back to the radio the band map follows
     await sleep(400);
+
+    // ---- 7b. a blocked spot switches nothing --------------------------------
+    // /log-config blocks "Russia". Checked before setRunMode() and selectTrx():
+    // a spot we may not work must not flip RUN to S&P or move the TRX either.
+    window.LogRadio.setRunMode("RUN");
+    $("inpCall").value = "OK1XYZ"; $("logHint").textContent = "";
+    window.LogRadio.workSpot("UA3ABC", 2);
+    await sleep(200);
+    check("a blocked spot does not reach Call", $("inpCall").value === "OK1XYZ", $("inpCall").value);
+    check("and does not flip RUN to S&P", $("btnRunMode").textContent.indexOf("RUN") >= 0,
+      $("btnRunMode").textContent);
+    check("and does not switch the TRX", $("btnTrx1").classList.contains("btn-trx-active")
+      && !$("btnTrx2").classList.contains("btn-trx-active"),
+      $("btnTrx1").className + " / " + $("btnTrx2").className);
+    check("and says why", $("logHint").textContent.indexOf("BLOCKED: European Russia") >= 0,
+      $("logHint").textContent);
+    $("inpCall").value = ""; $("logHint").textContent = "";
+    window.LogRadio.setRunMode("SP");
 
     // ---- 8. the gutter drags, clamps and persists -------------------------
     const gutter = $("logSplitGutter"), left = $("logSplitLeft");

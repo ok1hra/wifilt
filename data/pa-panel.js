@@ -134,6 +134,10 @@
   var pending   = {};    // what -> {want, until, from}
   var settledAt = {};    // what -> when the amplifier last CONFIRMED it
   var note    = '';      // one line of trouble, shown under the buttons
+  // TUNE+ runs in the firmware (/pa.json "tp"); these only follow it.
+  var tpAskedAt = 0;     // a start/stop is on its way: '…' until the state moves
+  var tpLastSt  = null;  // last tp.st seen, to notice a run finishing
+  var atuLastAt = null;  // when the last tuner-off attempt was, to report it once
   var segKey  = '';      // band + first shown segment, so the scale's dividers
                          // are rebuilt only when the window actually moves
   var segView = null;    // {list, start, end, lo, hi} of what is drawn right now,
@@ -347,6 +351,13 @@
     //
     // Nothing holds the button after a command that was NOT confirmed -- if the
     // amplifier is not listening, pressing again is exactly what to try next.
+    // With TUNE+ on offer the TUNE key starts a whole tune, and while one runs
+    // it is the STOP key. Neither goes through pending/settled: the firmware
+    // owns the run and /pa.json says where it is.
+    if (what === 'tune' && (tpRunning() || (state && state.tunePlus))) {
+      sendTunePlus(tpRunning() ? 0 : 1);
+      return;
+    }
     if (pending[what]) return;
     if (Date.now() - (settledAt[what] || 0) < SETTLE_MS) return;
     var f = flags();
@@ -398,6 +409,85 @@
       note = 'Command did not reach the interface.';
       render();
     });
+  }
+
+  function sendTunePlus(value) {
+    tpAskedAt = Date.now();
+    if (value) note = '';
+    render();
+    fetch('/pa/cmd', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ what: 'tuneplus', value: value }),
+      signal: AbortSignal.timeout(6000)
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; })
+              .then(function (d) { return { ok: r.ok, status: r.status, body: d }; });
+    }).then(function (r) {
+      if (r.ok && !(r.body && r.body.error)) return;
+      tpAskedAt = 0;
+      var e = r.body && r.body.error;
+      note = e === 'pa_off'         ? 'Switch the amplifier ON first.'
+           : e === 'trx_tx'         ? 'The radio is transmitting.'
+           : e === 'tp_busy'        ? 'A tune is already running.'
+           : e === 'tp_unavailable' ? 'TUNE+ is not available: ' + tunePlusWhyText(state && state.tunePlusWhy)
+           : e === 'pa_absent'      ? 'Amplifier not on the network.'
+           : e                      ? 'Refused: ' + e
+           : r.status === 404       ? 'This interface has no /pa/cmd — its firmware predates the PA panel.'
+           : 'The interface refused the command (HTTP ' + r.status + ').';
+      render();
+    }).catch(function () {
+      tpAskedAt = 0;
+      note = 'Command did not reach the interface.';
+      render();
+    });
+  }
+
+  function tpState() {
+    return (state && state.tp && state.tp.st) || 'idle';
+  }
+  function tpRunning() {
+    var st = tpState();
+    return st === 'start' || st === 'carrier' || st === 'tuning' || st === 'stopping';
+  }
+
+  function tunePlusWhyText(code) {
+    return code === 'no_oi3'     ? 'FSK output is not set to an external OI3 (RTTY settings).'
+         : code === 'oi3_absent' ? 'the OI3 keyer is not on the network.'
+         : code === 'oi3_old'    ? 'the OI3 keyer has not announced remote TUNE — its firmware may be older.'
+         : 'unknown reason.';
+  }
+
+  // A run that has just finished, and a tuner-off attempt that has just failed,
+  // each say so once on the trouble line. Only fresh ones: opening QRPLog
+  // must not replay the result of a tune from an hour ago.
+  var FRESH_MS = 5000;
+  function reapTunePlus() {
+    var tp = state && state.tp;
+    var st = tpState();
+    if (tpAskedAt && (st !== tpLastSt || Date.now() - tpAskedAt > 3000)) tpAskedAt = 0;
+    if (st !== tpLastSt) {
+      var fresh = tp && typeof tp.ageMs === 'number' && tp.ageMs < FRESH_MS;
+      if (st === 'done' && fresh) {
+        note = 'Tuned' + (tp.swr ? ' — SWR ' + (tp.swr >= 65535 ? '∞' : (tp.swr / 100).toFixed(1)) : '') + '.';
+      } else if (st === 'fail' && fresh) {
+        note = 'TUNE+ ' + (tp.why ? tp.why.charAt(0).toLowerCase() + tp.why.slice(1) : 'failed.');
+      }
+      tpLastSt = st;
+    }
+    var a = state && state.atuOff;
+    if (a && typeof a.ageMs === 'number') {
+      var at = Math.round((Date.now() - a.ageMs) / 1000);
+      if (atuLastAt !== null && Math.abs(at - atuLastAt) > 1 && a.ageMs < FRESH_MS && !a.ok) {
+        note = 'The radio\'s own tuner was NOT switched off: ' + (
+          a.why === 'trxnet'  ? 'TRX1 is on TrxNet, which carries frequency only.'
+        : a.why === 'noaddr'  ? 'TRX1 has no CI-V address.'
+        : 'TRX1 is not connected.');
+      }
+      if (atuLastAt === null || Math.abs(at - atuLastAt) > 1) atuLastAt = at;
+    } else if (atuLastAt === null) {
+      atuLastAt = -1;                    // "never tried" seen: the next attempt is new
+    }
   }
 
   // Has the amplifier answered? It confirms by moving its own flags -- there is
@@ -518,8 +608,10 @@
     var f = flags(), stale = isStale(), live = !!(state && state.present);
 
     el.classList.toggle('pa-stale', stale);
+    // PA.01/IC-7610: the amplifier, and the radio whose /hz it follows.
     document.getElementById('paName').textContent =
-      (state && state.name) ? state.name.toUpperCase() : 'PA';
+      ((state && state.name) ? state.name.toUpperCase() : 'PA') +
+      ((state && state.trx1) ? '/' + state.trx1 : '');
 
     var fw = watts(state ? state.fwdPk : null);
     var rf = watts(state ? state.refPk : null);
@@ -614,9 +706,32 @@
     // genuinely cannot act is with the radio keying: the amplifier locks the
     // whole RF path while TX is asserted (measured on the bench, flags stuck at
     // 0x84 with no drive; only OPERATE / MODE / OFF / DISPLAY answered).
-    setBtn('paBtnTune', pending.tune ? '…' : 'TUNE',
-           (f & F.TUNE) ? 'st-on' : 'st-off', !!pending.tune,
-           whyDisabled(f, live, stale, true), hint);
+    //
+    // TUNE+ runs the whole tune (carrier from OI3, the amplifier's TUNE, the
+    // radio put back) and while it runs this is its STOP key -- never greyed
+    // out then, whatever else is going on: the radio IS transmitting, on
+    // purpose, and losing sight of the amplifier is a reason to stop, not to
+    // take the stop away.
+    if (tpRunning()) {
+      var st = tpState();
+      setBtn('paBtnTune', tpAskedAt ? '…' : st === 'carrier' ? 'CARRIER'
+             : st === 'tuning' ? 'TUNING' : '…',
+             'st-tp', !!tpAskedAt || st === 'stopping', '',
+             'TUNE+ running — click to stop');
+    } else if (state && state.tunePlus) {
+      var tpWhy = whyDisabled(f, live, stale, true) ||
+        (((f & F.ON) && (f & F.LINK)) ? '' : 'Switch the amplifier ON first.');
+      setBtn('paBtnTune', tpAskedAt ? '…' : 'TUNE+',
+             (f & F.TUNE) ? 'st-on' : 'st-off', !!tpAskedAt, tpWhy,
+             hint || 'Full tune: low-power CW carrier from OI3, the amplifier\'s TUNE, ' +
+                     'then the radio back to its mode and power');
+    } else {
+      var tpNo = state && state.tunePlusWhy;
+      setBtn('paBtnTune', pending.tune ? '…' : 'TUNE',
+             (f & F.TUNE) ? 'st-on' : 'st-off', !!pending.tune,
+             whyDisabled(f, live, stale, true),
+             hint || ((tpNo && tpNo !== 'no_oi3') ? 'TUNE+ unavailable: ' + tunePlusWhyText(tpNo) : ''));
+    }
 
     var noteEl = document.getElementById('paNote');
     noteEl.textContent = note;
@@ -881,6 +996,7 @@
       .then(function (d) {
         state = d;
         reapPending();
+        reapTunePlus();
         renderButton();
         if (open) render();
       })
@@ -922,7 +1038,7 @@
   global.PaPanel = {
     setOpen: setOpen,
     isOpen: function () { return open; },
-    apply: function (d) { state = d; reapPending(); renderButton(); if (open) render(); },
+    apply: function (d) { state = d; reapPending(); reapTunePlus(); renderButton(); if (open) render(); },
     getState: function () { return state; }
   };
 

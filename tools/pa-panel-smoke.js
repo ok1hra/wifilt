@@ -815,6 +815,88 @@ const PAGE_SCRIPT = `
         document.activeElement === call,
         document.activeElement ? document.activeElement.id || document.activeElement.tagName : "none");
     }
+
+    // ---- 17. TUNE+ and the radio's own tuner --------------------------------
+    // The firmware runs the whole tune; the palette offers it, shows where it
+    // is and turns into its STOP key. Judged on the rendered button, the note
+    // line and the POSTed bodies -- the same three things as everything above.
+    const tuneCmds = async () => (await commandsSince()).filter(c => c.what === "tune" || c.what === "tuneplus");
+    const idle = {st:"idle", why:"", swr:0, ageMs:60000};
+
+    await setPa(base({flags:F.ON|F.LINK, trx1:"IC-7610", tunePlus:false, tunePlusWhy:"no_oi3", tp:idle}));
+    check("the title names the radio the amplifier follows", txt("paName") === "PA.01/IC-7610", txt("paName"));
+    check("without an OI3 the key stays plain TUNE", txt("paBtnTune") === "TUNE", txt("paBtnTune"));
+    check("and an ordinary station is not told about TUNE+", !/TUNE[+]/.test($("paBtnTune").title), $("paBtnTune").title);
+
+    await setPa(base({flags:F.ON|F.LINK, trx1:"IC-7610", tunePlus:false, tunePlusWhy:"oi3_old", tp:idle}));
+    check("an OI3 without remote TUNE is named as the reason", /older/.test($("paBtnTune").title), $("paBtnTune").title);
+
+    await setPa(base({flags:F.ON|F.LINK, trx1:"IC-7610", tunePlus:true, tunePlusWhy:"", tp:idle}));
+    check("with the OI3 there the key reads TUNE+", txt("paBtnTune") === "TUNE+", txt("paBtnTune"));
+    check("and is enabled", !$("paBtnTune").disabled, $("paBtnTune").title);
+    await clearCommands();
+    $("paBtnTune").click();
+    await sleep(150);
+    let tc = await tuneCmds();
+    check("a click starts TUNE+, not the bare amplifier key",
+      tc.length === 1 && tc[0].what === "tuneplus" && tc[0].value === 1, JSON.stringify(tc));
+    check("and the key shows the request is out", txt("paBtnTune") === "…", txt("paBtnTune"));
+
+    await setPa(base({flags:F.ON|F.LINK|F.TX, trx1:"IC-7610", tunePlus:true, tp:{st:"carrier", why:"", swr:0, ageMs:200}}));
+    check("carrier up reads CARRIER", txt("paBtnTune") === "CARRIER", txt("paBtnTune"));
+    check("drawn as a run in progress", $("paBtnTune").classList.contains("st-tp"), $("paBtnTune").className);
+    await fetch("/set-tx?v=1");
+    await setPa(base({present:false, flags:F.ON|F.LINK|F.TX|F.TUNE, trx1:"IC-7610", tunePlus:true,
+                      tp:{st:"tuning", why:"", swr:0, ageMs:900}}));
+    await sleep(1300);
+    check("tuning reads TUNING", txt("paBtnTune") === "TUNING", txt("paBtnTune"));
+    check("and stays clickable while the radio transmits and the amplifier is lost -- it is the STOP key",
+      !$("paBtnTune").disabled, $("paBtnTune").title);
+    await clearCommands();
+    $("paBtnTune").click();
+    await sleep(150);
+    tc = await tuneCmds();
+    check("a click while running stops it",
+      tc.length === 1 && tc[0].what === "tuneplus" && tc[0].value === 0, JSON.stringify(tc));
+    await fetch("/set-tx?v=0");
+    await sleep(1300);
+
+    await setPa(base({flags:F.ON|F.LINK, trx1:"IC-7610", tunePlus:true, tp:{st:"done", why:"", swr:130, ageMs:300}}));
+    check("a finished tune reports the SWR", /Tuned.*SWR 1[.]3/.test(txt("paNote")), txt("paNote"));
+    check("and the key is TUNE+ again", txt("paBtnTune") === "TUNE+", txt("paBtnTune"));
+
+    await setPa(base({flags:F.ON|F.LINK, trx1:"IC-7610", tunePlus:true,
+                      tp:{st:"fail", why:"The amplifier did not start tuning.", swr:0, ageMs:300}}));
+    check("a failed tune says why", /did not start tuning/.test(txt("paNote")), txt("paNote"));
+
+    await setPa(base({flags:F.LINK, trx1:"IC-7610", tunePlus:true, tp:idle}));
+    check("TUNE+ is greyed out with the amplifier OFF", $("paBtnTune").disabled, $("paBtnTune").title);
+    check("and says to switch it on", /ON first/.test($("paBtnTune").title), $("paBtnTune").title);
+
+    await setPa(base({flags:F.ON|F.LINK, trx1:"IC-7610", tunePlus:true, tp:idle}));
+    await fetch("/set-cmd-error?code=trx_tx");
+    $("paBtnTune").click();
+    await sleep(200);
+    check("a refused start says why", /transmitting/.test(txt("paNote")), txt("paNote"));
+    check("and the key does not hang on the request", txt("paBtnTune") === "TUNE+", txt("paBtnTune"));
+    await fetch("/set-cmd-error?code=");
+
+    // A tune that ended long ago must not be reported as news.
+    $("paBtnTune").click();
+    await sleep(150);
+    await setPa(base({flags:F.ON|F.LINK, trx1:"IC-7610", tunePlus:true, tp:{st:"done", why:"", swr:110, ageMs:60000}}));
+    check("a stale result is not replayed", txt("paNote") === "", txt("paNote"));
+
+    // The radio's own tuner, switched off on OFF -> ON by the firmware.
+    await setPa(base({flags:F.ON|F.LINK, trx1:"IC-7610", tunePlus:true, tp:idle, atuOff:null}));
+    await setPa(base({flags:F.ON|F.LINK, trx1:"IC-7610", tunePlus:true, tp:idle,
+                      atuOff:{ok:false, why:"trxnet", ageMs:100}}));
+    check("a tuner that could not be switched off is reported",
+      /NOT switched off/.test(txt("paNote")) && /TrxNet/.test(txt("paNote")), txt("paNote"));
+
+    const ev = new MouseEvent("mousedown", {bubbles:true, cancelable:true});
+    $("paBtnTune").dispatchEvent(ev);
+    check("mousedown on TUNE+ is cancelled, so the caret cannot leave Call", ev.defaultPrevented);
   } catch (error) {
     check("the test script ran to the end", false, String(error && error.stack || error));
   }

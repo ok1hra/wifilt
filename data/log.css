@@ -1832,7 +1832,10 @@ body {
   font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
   color: var(--pa-dim);
 }
-.pa-head-name { margin-right: auto; color: #dfe6ef; }
+.pa-head-name {
+  margin-right: auto; color: #dfe6ef;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .pa-close {
   background: none; border: none; color: var(--pa-dim);
   font-family: inherit; font-size: 13px; line-height: 1;
@@ -1996,6 +1999,8 @@ body {
 .pa-btn.st-on  { color: var(--pa-fw);  border-color: #2a5f42; }
 .pa-btn.st-op  { background: var(--pa-fw);  border-color: var(--pa-fw);  color: #0c0f14; }
 .pa-btn.st-hi  { background: var(--pa-rev); border-color: var(--pa-rev); color: #0c0f14; }
+/* TUNE+ running: this station is keyed on purpose, and the key is STOP. */
+.pa-btn.st-tp  { background: #f5d048; border-color: #f5d048; color: #0c0f14; }
 /* Waiting for the amplifier to confirm. It answers a command by moving its own
    flags, and ON takes about seven seconds, so the wait has to be visible. */
 .pa-btn.pa-pending { opacity: 0.55; font-style: italic; }

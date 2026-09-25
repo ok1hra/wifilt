@@ -991,6 +991,12 @@ call from a blocked country and the form clears with `⛔ BLOCKED: <country>` fo
 seconds — and in RUN mode the CQ macro goes out again immediately, so the run does not
 stall. The same list hides those stations across the JS8 page.
 
+A blocked call cannot get into Call from outside either. Clicking it in the RTTY palette or
+on the RTTY page, or handing over a DXC spot for it, leaves Call as it was and shows the same
+`⛔ BLOCKED: <country>` hint. The TRX and RUN/S&P stay as they were, and nothing is sent.
+Only callsign-shaped words, with at least one digit, are checked, so plain RTTY words such as
+`RST` or `RYRY` still go through. A word clicked into **Exch** is not checked.
+
 ### 3.10 The journal and editing a QSO
 
 The journal shows `Nr · Date · Time · Call · Freq · Mode · Snt · Rcv · Exch · TRX · DXCC`.
@@ -1069,7 +1075,9 @@ telemetry on screen, not an estimate: everything the amplifier publishes is here
 else is invented.
 
 The button only exists once the amplifier's NET_ID is set in
-[SETUP → TrxNet](#95-trxnet).
+[SETUP → TrxNet](#95-trxnet). The title names the amplifier and the radio it follows —
+`PA.01/IC-7610` — which is always **TRX1**, the only radio whose frequency this interface
+publishes; the second half is TRX1's label from the log settings.
 
 | Reading | |
 |---|---|
@@ -1119,10 +1127,40 @@ Four buttons, each showing the state it is in rather than the state it would mov
 
 | Button | |
 |---|---|
-| **OFF / ON** | mains power |
+| **OFF / ON** | mains power. Switching it **ON** also switches **TRX1's own antenna tuner off** (CI-V `1C 01 00`) — the amplifier's manual asks for it, and two tuners hunting on one line fight each other. That goes out at once, not after the seven seconds the amplifier takes to come up; if TRX1 cannot take it (it is on TrxNet, or not connected) the line under the buttons says so. |
 | **STANDBY / OPERATE** | in line, or bypassed |
 | **PWR-L / PWR-H** | half or full power |
-| **TUNE** | runs the tuner. It works in STANDBY — tuning runs at low power — but **not while the radio is keying**: the amplifier locks the whole RF path while TX is asserted. |
+| **TUNE** | runs the tuner. It works in STANDBY — tuning runs at low power — but **not while the radio is keying**: the amplifier locks the whole RF path while TX is asserted. You provide the carrier yourself. |
+| **TUNE+** | shown instead of TUNE when the whole tune can be done from here — see below. |
+
+#### TUNE+
+
+When this station's **external FSK keyer** (an OI3 set on the RTTY page, FSK output →
+TrxNet) is on the network and says it can, TUNE becomes **TUNE+** and one click does the
+whole job the amplifier's manual describes:
+
+1. TRX1's own tuner goes off;
+2. the keyer switches TRX1 to CW at its low tune power (20 % by default), raises PTT and
+   keys a steady carrier;
+3. only then the amplifier's TUNE key — carrier first, as the manual asks;
+4. the button reads **CARRIER**, then **TUNING** while the amplifier's TUNE flag is lit;
+5. when the flag goes out the carrier drops and the keyer puts TRX1 back to the mode, filter
+   and power it had. The line under the buttons says `Tuned — SWR 1.3`.
+
+It tunes **where the radio stands** — to tune a segment's centre, click it on the scale
+first. The amplifier's OPERATE/STANDBY state is left as it is.
+
+While it runs the button is yellow and is the **STOP** key — never greyed out, not even
+while the radio transmits (it is supposed to) or the amplifier drops off the network. Stop,
+the ON or OPERATE button, an ALARM, the amplifier going silent for 3 s, the keyer's interlock,
+or a step that does not happen in time (no carrier in 4 s, no TUNE flag in 3 s, tuning longer
+than 20 s) all end it the same way: carrier off, radio restored, and the reason on the line
+under the buttons. The run belongs to the interface, not to the page — closing QRPLog does
+not leave the carrier up — and the keyer itself drops the carrier if the interface goes quiet
+for 2.5 s.
+
+Without such a keyer the button stays **TUNE**; its tooltip says why when there is a keyer
+that is absent or whose firmware predates this.
 
 > **A command is not a confirmation.** The amplifier's daemon accepts commands only if it was
 > started to, and silently drops them if this device is not on its allow list — neither
@@ -3298,7 +3336,9 @@ as it stands, and it is filed under that exact band and power. A whole matrix at
 
 The blocked list has two different effects, which is worth knowing before you use it:
 
-- In **QRPLog** a matching callsign is refused at logging time, with `⛔ BLOCKED: <country>`.
+- In **QRPLog** a matching callsign is refused at logging time, with `⛔ BLOCKED: <country>`,
+  and it is not put into Call from the RTTY palette, the RTTY page or a DXC spot
+  ([§ 3.9](#39-blocked-dxcc)).
 - On the **DATA page** those stations are **hidden entirely** — from the stations table, the
   traffic list, the map and every automatic function. They are discarded silently, with no
   error, and transmission to them is refused outright.

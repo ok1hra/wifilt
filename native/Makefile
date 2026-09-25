@@ -27,6 +27,12 @@ INCLUDES := -Iarduino -Iplatform -Ifs -Inet -I$(SKETCH_DIR) -I$(TRXNET_DIR)
 # WIFILT_NATIVE drives platform_caps.h: no WiFi provisioning, no CI-V wire, no
 # GPIO. ARDUINO is defined on purpose -- see the note at the top of this file.
 DEFINES  := -DARDUINO=10819 -DWIFILT_NATIVE=1
+# TrxNet sizes its tables per board and a PC is neither ESP32 nor AVR, so it
+# fell to the smallest profile: 4 peers, 4 pending CON, 8 subscriptions. The
+# sketch subscribes ten topics (radio + amplifier + OI3 /lptune), and a path
+# that does not fit is dropped SILENTLY -- /pa-temp and /lptune simply never
+# fired here. Same numbers as the ESP32, as the library asks: build flag only.
+DEFINES  += -DTRXNET_MAX_PEERS=24 -DTRXNET_MAX_PENDING=24 -DTRXNET_MAX_SUBS=16 -DTRXNET_MAX_SEEN=48
 
 WARNINGS := -Wall -Wextra -Wno-unused-parameter
 OPT      ?= -O2
@@ -85,21 +91,35 @@ $(BUILD_DIR)/$(TARGET): $(OBJECTS)
 	$(CXX) $(OBJECTS) $(LDFLAGS) $(LDLIBS) -o $@
 	@echo "built $@"
 
+# Every object depends on the flags it was compiled with, not only on its
+# sources: make tracks timestamps, never command lines. When the TrxNet limits
+# above were raised, build-win/ kept a TrxNet.cpp.o from before while the sketch
+# recompiled, and the link died on TrxNet's ABI guard (abi_tag<7200>). The stamp
+# is rewritten only when the flags actually differ, so an unchanged build still
+# rebuilds nothing.
+FLAGS_STAMP := $(BUILD_DIR)/.flags
+FLAGS_LINE  := $(CXX) $(CXXFLAGS) | $(CC) $(CFLAGS)
+$(FLAGS_STAMP): FORCE
+	@mkdir -p $(dir $@)
+	@echo '$(FLAGS_LINE)' | cmp -s - $@ || echo '$(FLAGS_LINE)' > $@
+.PHONY: FORCE
+FORCE:
+
 # .ino is C++ that relies on the Arduino builder inserting forward declarations.
 # 154 of them are already written by hand (wifilt.ino:786 onward); any the
 # compiler still misses get added to the sketch rather than generated, so both
 # targets keep compiling from one identical file.
 # -include Arduino.h reproduces what the Arduino builder does: the sketch uses
 # String and byte at line 91, long before its first #include.
-$(BUILD_DIR)/wifilt.ino.o: $(SKETCH)
+$(BUILD_DIR)/wifilt.ino.o: $(SKETCH) $(FLAGS_STAMP)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -x c++ -include Arduino.h -c $< -o $@
 
-$(BUILD_DIR)/%.cpp.o: %.cpp
+$(BUILD_DIR)/%.cpp.o: %.cpp $(FLAGS_STAMP)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/%.c.o: %.c
+$(BUILD_DIR)/%.c.o: %.c $(FLAGS_STAMP)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 

@@ -146,7 +146,7 @@ const server = http.createServer((request, response) => {
   if (url.pathname === "/identity") return json({call: "OK1HRA", grid: "JO70"});
   if (url.pathname === "/log-config") return json({
     trx1Label: "TRX1", trx2Label: "TRX2", trx3Label: "TRX3",
-    trx2enabled: false, trx3enabled: false, blockedDxcc: "",
+    trx2enabled: false, trx3enabled: false, blockedDxcc: "Russia",
   });
   if (url.pathname === "/log-macros.json") return json({});
   if (url.pathname === "/pa.json") return json({state: "ok", present: false});
@@ -330,6 +330,42 @@ const PAGE_SCRIPT = `
       \`call=\${inpCall.value} exch=\${inpExch.value}\`);
     check("and the caret follows it there", document.activeElement === inpExch,
       document.activeElement ? document.activeElement.id : "(none)");
+
+    // ---- 4b. a blocked DXCC never reaches Call ------------------------------
+    // /log-config above blocks "Russia". Refused whole: Call keeps what it had,
+    // the caret goes back, the hint names the country.
+    inpCall.value = "OK1XYZ"; inpExch.value = "";
+    $("logHint").textContent = "";
+    inpCall.focus();
+    realClick(putToken("UA3ABC"));
+    await sleep(120);
+    check("a blocked callsign clicked while in Call is refused", inpCall.value === "OK1XYZ",
+      JSON.stringify(inpCall.value));
+    check("and says so, naming the country",
+      $("logHint").textContent.indexOf("BLOCKED: European Russia") >= 0,
+      JSON.stringify($("logHint").textContent));
+    check("and the caret is back in Call", document.activeElement === inpCall,
+      document.activeElement ? document.activeElement.id : "(none)");
+
+    // Plain RTTY words resolve to a DXCC too (RST -> European Russia); without
+    // a digit they are not callsigns and must pass untouched.
+    inpCall.value = ""; $("logHint").textContent = "";
+    inpCall.focus();
+    realClick(putToken("RST"));
+    await sleep(120);
+    check("a word without a digit is not taken for a blocked callsign",
+      inpCall.value === "RST" && $("logHint").textContent === "",
+      \`call=\${inpCall.value} hint=\${$("logHint").textContent}\`);
+
+    // Exch is not checked: only Call is about the station being worked.
+    inpCall.value = "DL2XYZ"; inpExch.value = "";
+    inpExch.focus();
+    realClick(putToken("UA3ABC"));
+    await sleep(120);
+    check("a blocked callsign clicked while in Exch still lands in Exch",
+      inpExch.value === "UA3ABC" && inpCall.value === "DL2XYZ",
+      \`call=\${inpCall.value} exch=\${inpExch.value}\`);
+    inpCall.value = ""; inpExch.value = ""; $("logHint").textContent = "";
 
     // ---- 5. selecting text must not be mistaken for a click ---------------
     inpCall.focus();
