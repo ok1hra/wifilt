@@ -421,6 +421,39 @@ This endpoint merges just these two fields into the stored document, leaving
 
 ---
 
+### 2.7 `POST /log-config/rtty-stream` — RTTY text on TrxNet
+
+```
+POST /log-config/rtty-stream HTTP/1.1
+Content-Type: application/x-www-form-urlencoded
+
+rttyStream=1
+```
+
+**Response:** `{"ok": true}`
+
+The RTTY-ICOM page's *TrxNet text stream* switch (grilled 2026-09-25,
+`rtty_stream.h`). `1` turns it on, anything else off; stored in the same
+document as `rttyStream: true|false`, the other fields untouched, same narrow
+path as 2.6. Off also forgets every subscriber. The wire format of the stream
+itself is in the TrxNet library's `INTEGRATION.md` §7.1.
+
+### 2.8 `GET /rtty-stream.json` — who is listening
+
+```json
+{"enabled":true,"trxnet":true,
+ "subs":[{"name":"RTTYMON.01","expiresS":61}],
+ "packets":214,"dropped":0,"refused":0}
+```
+
+`subs` are the TrxNet peers subscribed with `/s-rtty`, each with the seconds
+left on its 90 s lease. `packets` counts packets sent (one per subscriber),
+`dropped` characters lost to a full buffer, `refused` subscriptions turned away
+because four were already listening. `trxnet: false` means TrxNet is not running
+on this interface at all, so nothing can subscribe.
+
+---
+
 ## 3. Legacy interfaces (kept for compatibility)
 
 ### 3.1 HTTP CAT port (default 81)

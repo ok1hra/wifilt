@@ -31,6 +31,8 @@ const mime = {".html": "text/html", ".css": "text/css", ".js": "application/java
 let finished = false, chrome = null, timer = null;
 const commands = [];              // every /cmd?radio=lan body, in order
 let radioMode = "USB-D";          // what /state reports, switchable mid-run
+let rttyStreamOn = false;         // the TrxNet text stream switch, as the firmware stores it
+const rttyStreamPosts = [];       // every POST /log-config/rtty-stream body
 
 // The firmware's civ.read as a fixture -- one armed slot plus a sequence the
 // caller polls until it moves (wifilt.ino's civReadArm/civReadSeq). An IC-705
@@ -116,7 +118,16 @@ const server = http.createServer((request, response) => {
   if (url.pathname === "/commands") return json(commands);
   if (url.pathname === "/commands/clear") { commands.length = 0; return json({ok: true}); }
 
-  if (url.pathname === "/log-config") return json({trx1Label: "TRX1"});
+  if (url.pathname === "/log-config") return json({trx1Label: "TRX1", rttyStream: rttyStreamOn});
+  if (url.pathname === "/log-config/rtty-stream" && request.method === "POST")
+    return readBody(body => {
+      rttyStreamPosts.push(body);
+      rttyStreamOn = new URLSearchParams(body).get("rttyStream") === "1";
+      return json({ok: true});
+    });
+  if (url.pathname === "/rtty-stream-posts") return json(rttyStreamPosts);
+  if (url.pathname === "/rtty-stream.json") return json({enabled: rttyStreamOn, trxnet: true,
+    subs: rttyStreamOn ? [{name: "RTTYMON.01", expiresS: 61}] : [], packets: 0, dropped: 0, refused: 0});
   if (url.pathname === "/log-config/fsk") return json({});
   if (url.pathname === "/txgain.json") return json({v: 1, entries: {}});
   if (url.pathname === "/txgain-plan.json") return json({});
@@ -574,6 +585,65 @@ const PAGE_SCRIPT = `
     check("the squelch-open marker is gone from SETTINGS",
       !$("rttySquelchNewlineEnabled") &&
         !("squelchNewlineEnabled" in JSON.parse(localStorage.getItem("wifilt.data.rtty-settings"))));
+    // ---- TrxNet text stream (rtty_stream.h, grilled 2026-09-25) -----------
+    check("the TrxNet stream switch starts off, as the firmware stores it",
+      $("rttyStreamEnabled").checked === false && $("rttyStreamSubs").textContent === "");
+    $("rttyStreamEnabled").click();
+    await sleep(400);
+    const streamPosts = await (await fetch("/rtty-stream-posts")).json();
+    check("ticking it stores it in the firmware", streamPosts.join() === "rttyStream=1", streamPosts.join());
+    check("and names who is listening", /Listening: RTTYMON\\.01 \\(61 s\\)/.test($("rttyStreamSubs").textContent),
+      $("rttyStreamSubs").textContent);
+    $("rttyStreamEnabled").click();
+    await sleep(400);
+    check("unticking it stores that too and clears the line",
+      (await (await fetch("/rtty-stream-posts")).json()).join() === "rttyStream=1,rttyStream=0" &&
+        $("rttyStreamSubs").textContent === "");
+
+    // The feed: batched, one frame per 500 ms at most, straight onto the socket.
+    const frames = [];
+    const fakeSession = {hello: {streamId: 1}, sendControl: m => frames.push(m)};
+    let feedSession = fakeSession;
+    const feed = RttyStreamFeed.create({session: () => feedSession});
+    "CQ TEST".split("").forEach(ch => feed.push(1, ch));
+    feed.push(2, "C"); feed.push(2, "Q");
+    await sleep(100);
+    check("the feed does not send each character on its own", frames.length === 0, JSON.stringify(frames));
+    await sleep(550);
+    check("it sends both decoders' text in one rtty.stream frame",
+      frames.length === 1 && frames[0].type === "rtty.stream" && frames[0].r1 === "CQ TEST" && frames[0].r2 === "CQ",
+      JSON.stringify(frames));
+    await sleep(600);
+    check("and nothing when nothing was decoded", frames.length === 1);
+    feedSession = null;
+    feed.push(1, "X");
+    await sleep(600);
+    feedSession = fakeSession;
+    feed.push(1, "Y");
+    await sleep(600);
+    check("text from while the socket was gone is dropped, not sent late",
+      frames.length === 2 && frames[1].r1 === "Y", JSON.stringify(frames));
+
+    // The TX side: the text rides tx.prepare, so the firmware publishes it only
+    // once it accepts the transmission. JS8's prepare stays exactly as it was.
+    const prepared = [];
+    const probe = {hello: {streamId: 1}, drained: new Set(), pendingPrepare: new Map(),
+      readyTimeoutMs: 1e9, wallNow: () => 0, abort() {}, sendControl: m => prepared.push(m)};
+    const prep = Js8Aud1Transport.Aud1WebSocketSession.prototype.prepare;
+    prep.call(probe, 5, {slotUtcMs: 1, prebufferSamples: 10, packetMs: 20, samples: 10, packets: 1,
+      rttyText: "\\r\\nCQ "});
+    prep.call(probe, 6, {slotUtcMs: 1, prebufferSamples: 10, packetMs: 20, samples: 10, packets: 1});
+    check("tx.prepare carries rttyText when given", prepared[0].rttyText === "\\r\\nCQ ", JSON.stringify(prepared[0]));
+    check("and has no such field for JS8/WSPR", !("rttyText" in prepared[1]), JSON.stringify(prepared[1]));
+    const afskPrepared = [];
+    const afsk = RttyAfskTx.create({
+      session: () => ({hello: {streamId: 1}, prepare: (id, meta) => { afskPrepared.push(meta); return Promise.reject(new Error("stop here")); }}),
+      settings: () => ({toneHz: 1500, txPolarity: "normal"}),
+    });
+    await afsk.start("\\r\\nTU 73 ").catch(() => {});
+    check("the AFSK transmitter names its text in tx.prepare",
+      afskPrepared.length === 1 && afskPrepared[0].rttyText === "\\r\\nTU 73 ", JSON.stringify(afskPrepared));
+
     check("nothing on the way threw", bootErrors.length === 0, bootErrors.join(" | "));
   } catch (error) {
     check("the test script ran to the end", false, String(error && error.stack || error));

@@ -14,7 +14,8 @@ build-arm64/wifilt.ino.o: ../wifilt.ino arduino/Arduino.h \
  ../icom_lan_tx_history.h platform/freertos/FreeRTOS.h \
  platform/freertos_compat.h platform/freertos/task.h ../radio_transport.h \
  ../aud1_tx_state.h ../unattended_guard.h ../unattended_events.h \
- ../aud1_ws_parser.h ../js8_session.h ../icom_lan_discovery.h
+ ../aud1_ws_parser.h ../js8_session.h ../rtty_stream.h \
+ ../icom_lan_discovery.h
 arduino/Arduino.h:
 arduino/esp32-hal.h:
 arduino/esp32-hal-log.h:
@@ -67,4 +68,5 @@ platform/freertos/task.h:
 ../unattended_events.h:
 ../aud1_ws_parser.h:
 ../js8_session.h:
+../rtty_stream.h:
 ../icom_lan_discovery.h:

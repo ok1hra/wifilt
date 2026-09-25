@@ -101,7 +101,10 @@ the firmware.
 Every modem frame gets its own non-zero `txId` and its own PTT cycle. The
 client first sends a text `tx.prepare` message with the fields `txId`,
 `sampleRate`, `samples`, `packets`, `mode`, `toneHz`, `slotUtcMs`,
-`prebufferSamples` and `packetMs=20`. Binary `TX_PCM16` may only start once the
+`prebufferSamples` and `packetMs=20`. An RTTY transmission adds `rttyText`, the
+message itself, which the firmware publishes on TrxNet's `/rtty-tx` once it has
+accepted the prepare (and follows with an abort marker if the transmission is
+cut short); JS8, WSPR and Mercury leave it out. Binary `TX_PCM16` may only start once the
 server has answered `tx-ready` with the same `txId` — and `tx-ready` is still
 not permission to key.
 
@@ -125,6 +128,11 @@ transmission with `tx.abort`; the firmware then discards pending audio and
 acknowledges the state with PTT OFF. A timeout, a lost WebSocket, a bad
 sequence, an underrun and a reconnect must all, without exception, end at PTT
 OFF.
+
+Unrelated to TX, an RTTY page also sends `{"type":"rtty.stream","r1":"…","r2":"…"}`
+at most every 500 ms: what its two decoders printed since the last one, for the
+TrxNet text stream (`rtty_stream.h`). The firmware drops it unless the stream is
+switched on and somebody subscribed.
 
 ```text
 QUEUED -> PREPARING -> WAITING_SLOT -> PREBUFFERING -> TRANSMITTING

@@ -200,7 +200,10 @@
         samples:metadata.samples, packets:metadata.packets, mode:metadata.mode,
         toneHz:metadata.toneHz, slotUtcMs:metadata.slotUtcMs,
         clientUtcMs:this.wallNow(), alcFast:Boolean(metadata.alcFast),
-        prebufferSamples:metadata.prebufferSamples, packetMs:metadata.packetMs});
+        prebufferSamples:metadata.prebufferSamples, packetMs:metadata.packetMs,
+        // RTTY only: the message itself, which the firmware publishes on
+        // TrxNet's /rtty-tx once it accepts this prepare (rtty_stream.h).
+        ...(typeof metadata.rttyText === "string" ? {rttyText:metadata.rttyText} : {})});
       return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
           this.pendingPrepare.delete(txId); this.abort(txId, "tx-ready timeout");

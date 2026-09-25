@@ -511,6 +511,7 @@
 
   function closeAudio() {
     if (afskTx) afskTx.reset();
+    if (streamFeed) streamFeed.stop();
     if (session) { session.stop(); session = null; }
   }
 
@@ -527,7 +528,7 @@
   // ── decode, scope, AFC, transmit ──────────────────────────────────────────
 
   var decoder = null, decoder2 = null, dec2On = false;
-  var scope = null, rxLog = null, afc = null, afskTx = null;
+  var scope = null, rxLog = null, afc = null, afskTx = null, streamFeed = null;
   var gainStore = null, modLevelClient = null, modLevel = 0;
 
   function buildEngine() {
@@ -557,11 +558,16 @@
     // Receptions are separated by the tape itself (§21): a pause that would
     // leave a row empty becomes a rule. That replaced this palette's own 3 s
     // silence break, which only existed because its squelch is always off.
+    // Everything the tape gets also goes to the TrxNet stream, which the
+    // firmware sends on only when switched on and listened to.
+    streamFeed = RttyStreamFeed.create({ session: function () { return session; } });
     decoder.onChar(function (ch, meta) {
       rxLog.pushChar(ch, Object.assign({}, meta, { stream: 1 }));
+      streamFeed.push(1, ch);
     });
     decoder2.onChar(function (ch, meta) {
       rxLog.pushChar(ch, Object.assign({}, meta, { stream: 2 }));
+      streamFeed.push(2, ch);
     });
     // shifts print nothing but take air time -- the tape needs them (rtty.js)
     decoder.onEvent(function (evt) {

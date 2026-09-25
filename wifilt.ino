@@ -427,6 +427,7 @@ char CwMsg[37] = "";
 #include "unattended_events.h"  // shared event-log formatting used by native regression tests
 #include "aud1_ws_parser.h"     // incremental, non-blocking browser WebSocket framing
 #include "js8_session.h"        // single-operator lock for the JS8LAN page
+#include "rtty_stream.h"        // RTTY decoder/TX text to TrxNet subscribers
 // See radio_transport.h's own comment on radioLanLocalControlPort(): 0 means
 // "use the real default (50001)", exactly today's behavior on the real
 // device and on native/ unless --lan-port-base overrides it.
@@ -813,6 +814,8 @@ int incomingByte = 0;   // for incoming serial data
   Aud1WsParser aud1WsParser;
   UnattendedGuard unattendedGuard;
   Js8Session js8Session;                   // which browser currently owns JS8LAN
+  RttyStream rttyStream = {};              // /rtty1 /rtty2 /rtty-tx, rtty_stream.h
+  bool aud1TxRtty = false;                 // the AUD1 TX in flight carries RTTY text
   static const char* UNATTENDED_LOG_PATH = "/unattended.log";
   // Deferred unattended-log ring. unattendedLogEvent() is called from the audio
   // hot path (aud1TxAbort/aud1TxTick/aud1HandleControl); a synchronous LittleFS
@@ -1168,6 +1171,8 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void handleGetLogConfig(void);
   void handlePostLogConfig(void);
   void handlePostFskOutput(void);
+  void handlePostRttyStream(void);
+  void handleGetRttyStream(void);
   void handleGetJs8Config(void);
   void handlePostJs8Config(void);
   void handleGetLogMacros(void);
@@ -1211,6 +1216,7 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void handleOi3Send(void);
   void handleOi3SetHz(void);
   void TrxNetLoop(void);
+  void rttyStreamPublish(void*, const char* peer, const char* topic, const uint8_t* data, size_t len);
   void onTrxHz(const char* from, const uint8_t* data, size_t len);
   void onTrxMode(const char* from, const uint8_t* data, size_t len);
   void onTrxSetHz(const char* from, const uint8_t* data, size_t len);
@@ -1504,6 +1510,7 @@ void loadLogConfigVars(void){
   if (v == "internal" || v == "trxnet") g_lcFskOutputMode = v;
   v = extractJsonString(j, "fskNetId");
   if (v.length() > 0) g_lcFskNetId = v;
+  rttyStreamSetEnabled(rttyStream, extractJsonBool(j, "rttyStream", false));
 }
 
 String jsonEscape(const String &value){
@@ -1699,7 +1706,8 @@ static String buildLogConfigJson(
   const String &trx3Label,
   const String &blockedDxcc,
   const String &fskOutputMode,
-  const String &fskNetId
+  const String &fskNetId,
+  bool rttyStreamOn
 ) {
   String json;
   json.reserve(256);
@@ -1710,6 +1718,7 @@ static String buildLogConfigJson(
   json += ",\"blockedDxcc\":\""; json += jsonEscape(blockedDxcc); json += "\"";
   json += ",\"fskOutputMode\":\""; json += jsonEscape(fskOutputMode); json += "\"";
   json += ",\"fskNetId\":\""; json += jsonEscape(fskNetId); json += "\"";
+  json += ",\"rttyStream\":"; json += rttyStreamOn ? "true" : "false";
   json += "}";
   return json;
 }
@@ -2954,6 +2963,9 @@ void handlePostCmd(){
         byte peerNetId = (byte)strtol(g_lcFskNetId.c_str(), nullptr, 16);
         uint8_t stopByte = 0xFF;
         trxNetSendCwText(peerNetId, &stopByte, 1);
+        // This interface cannot tell whether the keyer was still sending, so
+        // for the external keyer the marker means "abort was requested".
+        rttyStreamAbortTx(rttyStream, millis());
       } else {
         abortFskTransmission = true;
       }
@@ -4133,13 +4145,61 @@ void handlePostFskOutput() {
   String nextLogConfig = buildLogConfigJson(
     readLogConfigJson(),
     g_lcTrx1Label, g_lcTrx2Label, g_lcTrx3Label,
-    g_lcBlockedDxcc, fskOutputMode, fskNetId
+    g_lcBlockedDxcc, fskOutputMode, fskNetId, rttyStream.enabled
   );
   if (!saveLogConfigJson(nextLogConfig)) {
     webServer.send(500, "application/json", "{\"error\":\"write\"}");
     return;
   }
   webServer.send(200, "application/json", "{\"ok\":true}");
+}
+
+// The RTTY-ICOM page's "stream RX/TX text to TrxNet" switch (grilled
+// 2026-09-25, rtty_stream.h). A station setting like FSK output above, not a
+// per-browser one: the firmware itself publishes FSK transmissions, whichever
+// page -- or none -- is open. Same narrow write path, for the same reason.
+void handlePostRttyStream() {
+  webServer.sendHeader("Connection", "close");
+  webServer.client().setNoDelay(true);
+  bool on = requestArg("rttyStream") == "1";
+  String nextLogConfig = buildLogConfigJson(
+    readLogConfigJson(),
+    g_lcTrx1Label, g_lcTrx2Label, g_lcTrx3Label,
+    g_lcBlockedDxcc, g_lcFskOutputMode, g_lcFskNetId, on
+  );
+  if (!saveLogConfigJson(nextLogConfig)) {   // reloads, which applies `on`
+    webServer.send(500, "application/json", "{\"error\":\"write\"}");
+    return;
+  }
+  webServer.send(200, "application/json", "{\"ok\":true}");
+}
+
+// Who is listening right now, for the line under that switch. A subscription
+// that never arrived and one that lapsed look identical from the listener's
+// side; this is where the operator can tell.
+void handleGetRttyStream() {
+  uint32_t now = millis();
+  rttyStreamExpire(rttyStream, now);
+  String out = "{\"enabled\":"; out += rttyStream.enabled ? "true" : "false";
+  out += ",\"trxnet\":"; out += trxNetEnabled ? "true" : "false";
+  out += ",\"subs\":[";
+  bool first = true;
+  for (uint8_t i = 0; i < RTTY_STREAM_MAX_SUBS; i++) {
+    const RttyStreamSub& sub = rttyStream.subs[i];
+    if (!sub.used) continue;
+    if (!first) out += ",";
+    first = false;
+    out += "{\"name\":\""; out += jsonEscape(String(sub.name));
+    out += "\",\"expiresS\":"; out += String((RTTY_STREAM_LEASE_MS - (now - sub.lastMs)) / 1000);
+    out += "}";
+  }
+  out += "],\"packets\":"; out += String(rttyStream.packets);
+  out += ",\"dropped\":"; out += String(rttyStream.droppedChars);
+  out += ",\"refused\":"; out += String(rttyStream.refused);
+  out += "}";
+  webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  webServer.sendHeader("Connection", "close");
+  webServer.send(200, "application/json", out);
 }
 
 // ---- JS8 / WSPR operating profile --------------------------------------------
@@ -5266,6 +5326,8 @@ void setupWebServer(void){
   webServer.on("/log-config", HTTP_GET,  handleGetLogConfig);
   webServer.on("/log-config", HTTP_POST, handlePostLogConfig);
   webServer.on("/log-config/fsk", HTTP_POST, handlePostFskOutput);
+  webServer.on("/log-config/rtty-stream", HTTP_POST, handlePostRttyStream);
+  webServer.on("/rtty-stream.json", HTTP_GET, handleGetRttyStream);
   webServer.on("/identity",   HTTP_GET,  handleGetIdentity);
   webServer.on("/identity",   HTTP_POST, handlePostIdentity);
   webServer.on("/js8-config.json", HTTP_GET,  handleGetJs8Config);
@@ -7633,7 +7695,14 @@ void TrxNetLoop(){
     net.loop();
     paTunePlusTick();       // before the publish, so its /s-tune goes out this pass
     paPublishPending();     // after loop(): the peer table is fresh
+    rttyStreamDrain(rttyStream, millis(), 4, rttyStreamPublish, nullptr);
   }
+}
+
+// One RTTY-stream packet to one subscriber. NON -- see rtty_stream.h for why a
+// retransmitted stream would endanger the FSK keyer's own /s-cw.
+void rttyStreamPublish(void*, const char* peer, const char* topic, const uint8_t* data, size_t len) {
+  net.publishTo(peer, topic, data, len, TRX_NON);
 }
 
 //-------------------------------------------------------------------------------------------------------
@@ -7678,6 +7747,9 @@ static const char* trxnetModeToString(uint8_t civMode) {
 void onTrxAnyTopic(const char* from, const char* path,
                    const uint8_t* data, size_t len) {
   if (!from || !from[0] || !path || !path[0]) return;
+  // A listener asking for the RTTY text (rtty_stream.h). Taken here rather than
+  // with subscribe(): it costs no _subs slot, and it only writes a table entry.
+  if (strcmp(path, "/s-rtty") == 0) { rttyStreamSubscribe(rttyStream, from, data, len, millis()); return; }
   if (path[0] == '/' && path[1] == 's' && path[2] == '-') return;
   if (len > TRX_TOPIC_VAL_MAX) return;
 
@@ -8600,6 +8672,7 @@ bool sendCW(){
     if (payloadLen <= 0) return false;
     byte peerNetId = (byte)strtol(g_lcFskNetId.c_str(), nullptr, 16);
     bool ok = trxNetSendCwText(peerNetId, (const uint8_t*)CwMsg, (size_t)payloadLen);
+    if (ok) rttyStreamAppend(rttyStream, RTTY_STREAM_TX, CwMsg, (size_t)payloadLen, millis());
     if (Debug) {
       Serial.print("FSK->TrxNet OI3."); Serial.print(peerNetId, HEX);
       Serial.print(ok ? " ok " : " FAILED "); Serial.println(CwMsg);
@@ -8611,6 +8684,9 @@ bool sendCW(){
       return false;
     }
     abortFskTransmission = false;
+    // Queued now, published by TrxNetLoop() -- which the per-character
+    // pumpBackgroundLoops() below keeps running -- as the keying starts.
+    rttyStreamAppend(rttyStream, RTTY_STREAM_TX, CwMsg, (size_t)payloadLen, millis());
     // Dark for the whole transmission. The restore at the end of this branch had
     // no counterpart -- nothing ever turned the LED off -- so RTTY had no
     // indication at all while the header comment promised one. Per-bit keying
@@ -8653,6 +8729,7 @@ bool sendCW(){
     }
     if (Debug) Serial.println();
     abortFskTransmission = false;
+    if (fskAborted) rttyStreamAbortTx(rttyStream, millis());
     // ch = ' '; Serial.print(ch); chTable(); sendFsk();   // Space after sending
     if (!fskAborted) delayPumped(PTTtail);
     digitalWrite(PTT, LOW);
@@ -9528,7 +9605,7 @@ void handleSet() {
       String nextLogConfig = buildLogConfigJson(
         readLogConfigJson(),
         trx1Label, trx2Label, trx3Label,
-        blockedDxcc, fskOutputMode, fskNetId
+        blockedDxcc, fskOutputMode, fskNetId, rttyStream.enabled
       );
       if (!saveLogConfigJson(nextLogConfig)) {
         ERRdetect = 1;
@@ -10415,6 +10492,9 @@ static void aud1TxResetState(Aud1TxState next = AUD1_TX_IDLE){
 
 void aud1TxAbort(const String& reason, bool notify){
   uint32_t txId = aud1TxId;
+  // Whatever cut it short -- the operator, a fault, a watchdog -- the rest of an
+  // RTTY message did not go out, and /rtty-tx says so.
+  if(aud1TxRtty){ rttyStreamAbortTx(rttyStream, millis()); aud1TxRtty = false; }
   if(IcomLanClient *client = lanRadioClient()) client->setTxTrafficActive(false);
   audioPttOff(); aud1TxResetState(reason.length() ? AUD1_TX_FAULT : AUD1_TX_IDLE);
   if(notify && AudioWsClient.connected()){
@@ -10533,7 +10613,7 @@ void aud1TxTick(bool deferPrebufferMiss){
   }
   if(txSnapshot.drained){
     txClient->setTxTrafficActive(false);
-    audioPttOff(); aud1TxState = AUD1_TX_DRAINED;
+    audioPttOff(); aud1TxState = AUD1_TX_DRAINED; aud1TxRtty = false;
     AudioSendText("{\"type\":\"tx-drained\",\"txId\":" + String(aud1TxId) + ",\"ptt\":false}");
     Serial.println("AUD1 | TX drained, PTT OFF");
     return;
@@ -10633,6 +10713,17 @@ static void aud1HandleControl(const String& json){
   // (or a future "why doesn't mercury.ping do X" question) finds this type
   // named and explained here, not silently falling through with no trace.
   if(type == "mercury.ping") return;
+  // Decoded RTTY text from whichever page holds this socket, for the TrxNet
+  // stream (rtty_stream.h). Sent whether or not anybody listens: the page does
+  // not know, and appending to an inactive stream is a no-op.
+  if(type == "rtty.stream"){
+    uint32_t now = millis();
+    String r1 = extractJsonString(json, "r1");
+    String r2 = extractJsonString(json, "r2");
+    rttyStreamAppend(rttyStream, RTTY_STREAM_RX1, r1.c_str(), r1.length(), now);
+    rttyStreamAppend(rttyStream, RTTY_STREAM_RX2, r2.c_str(), r2.length(), now);
+    return;
+  }
   if(type != "tx.prepare") return;
 
   uint64_t slotUtcMs = aud1JsonU64(json, "slotUtcMs");
@@ -10679,6 +10770,12 @@ static void aud1HandleControl(const String& json){
   // run a sequence that has already moved, and its first reading -- taken at
   // the old drive level -- would be accepted as fresh.
   aud1AlcReset();
+  // An RTTY transmission names its text, for /rtty-tx: published here, once the
+  // firmware has actually accepted it, so a refused prepare never shows up as
+  // sent. JS8/WSPR/Mercury send no rttyText and are not RTTY.
+  String rttyText = extractJsonString(json, "rttyText");
+  aud1TxRtty = rttyText.length() > 0;
+  if(aud1TxRtty) rttyStreamAppend(rttyStream, RTTY_STREAM_TX, rttyText.c_str(), rttyText.length(), millis());
   aud1TxId = txId; aud1TxTotalSamples = totalSamples; aud1TxExpectedPackets = packets;
   aud1TxPrebufferSamples = prebuffer; aud1TxTargetMs = millis() + uint32_t(delayMs);
   aud1TxDeadlineMs = aud1TxTargetMs + uint32_t(totalSamples / 48) + 2500;

@@ -324,6 +324,15 @@
           <div id="rttyTrxnetPeersFsk" class="trxnet-peers-body"><span class="trxnet-peers-empty">…</span></div>
         </div>
       </div>
+      <!-- Grilled 2026-09-25 (rtty_stream.h): both decoders' text and every
+           RTTY transmission, published on TrxNet as /rtty1 /rtty2 /rtty-tx to
+           the devices that ask for it with /s-rtty. Firmware-stored like FSK
+           output above: the firmware publishes FSK transmissions itself,
+           whichever page is open. -->
+      <label>TrxNet text stream
+        <input id="rttyStreamEnabled" type="checkbox">
+        <small>Sends both decoders' text and every RTTY transmission to TrxNet devices that subscribe to it, for analysis elsewhere. Station-wide.<br><span id="rttyStreamSubs"></span></small>
+      </label>
     </div>
     <!-- CAL PLAN's single-shot measuring device (kap.9): hidden, mounted here
          only so TxGainCalUi has a DOM node -- same as wspr.html/data.html's
@@ -355,7 +364,7 @@
      reusable copy. Js8Tx.TxController/CaptureTxSink/planSlot go unused here
      (JS8's own periodic-slot shape, kap.3 explicitly wants immediate PTT
      instead) -- only Js8Tx.packetizeTxPcm48k is called. -->
-<script src="/js8-aud1.js?v=b5d81c6f"></script>
+<script src="/js8-aud1.js?v=c44fe09c"></script>
 <script src="/js8-tx.js?v=26bed715"></script>
 <!-- CAL PLAN (kap.9): the same TxGainCalUi/TxGainPlanUi tools JS8/WSPR mount,
      unchanged -- the calibration carrier is WsprTx's own tone (wspr-core.js/
@@ -383,7 +392,8 @@
 <script src="/rtty-fsk-sync.js?v=49b392d8"></script>
 <script src="/rtty-scope.js?v=c2f2337f"></script>
 <script src="/rtty-rxlog.js?v=add3f023"></script>
-<script src="/rtty-afsk-tx.js?v=121d6342"></script>
-<script src="/rtty.js?v=7d9afa48"></script>
+<script src="/rtty-afsk-tx.js?v=998de20c"></script>
+<script src="/rtty-stream-feed.js?v=855b19dd"></script>
+<script src="/rtty.js?v=53ae54e6"></script>
 </body>
 </html>

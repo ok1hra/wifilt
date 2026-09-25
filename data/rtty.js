@@ -58,6 +58,7 @@
     "rttyScope", "rttyLiveSpectrum", "rttyScopeOverlay", "liveSpectrumCanvas",
     "rttyRxLog", "rxSummary", "rttyRxClear",
     "rttyTxText", "rttyTxAbort", "rttyTxState",
+    "rttyStreamEnabled", "rttyStreamSubs",
     "rttySquelchInput", "rttySquelchLive", "rttySecondDecoder", "rttyUsos", "rttyToneInput", "settingsSummary",
     // AFC (grilled 2026-08-28, 3rd session): see the RttyAfc.createTracker()
     // wiring below for what these drive.
@@ -616,13 +617,19 @@
   });
 
   // The SNR pill and the character count follow DEC 1 only.
+  // Everything the tape gets also goes to the TrxNet stream (rtty-stream-feed.js).
+  const streamFeed = RttyStreamFeed.create({session: () => session});
   decoder.onChar((ch, meta) => {
     state.rxChars++;
     if (Number.isFinite(meta.snrDb)) state.lastSnrDb = meta.snrDb;
     rxLog.pushChar(ch, Object.assign({}, meta, {stream: 1}));
+    streamFeed.push(1, ch);
     renderStatusPills();
   });
-  decoder2.onChar((ch, meta) => rxLog.pushChar(ch, Object.assign({}, meta, {stream: 2})));
+  decoder2.onChar((ch, meta) => {
+    rxLog.pushChar(ch, Object.assign({}, meta, {stream: 2}));
+    streamFeed.push(2, ch);
+  });
   // FIGS/LTRS shifts take air time but print nothing; the tape needs them to
   // keep a word like OE3PAN free of blanks around the figure.
   decoder.onEvent(evt => { if (evt.type === "shift") rxLog.pushShift({stream: 1, t: evt.t}); });
@@ -1255,6 +1262,7 @@
       const data = await response.json();
       dom.rttyFskOutputMode.value = data.fskOutputMode === "trxnet" ? "trxnet" : "internal";
       dom.rttyFskNetId.value = typeof data.fskNetId === "string" ? data.fskNetId : "00";
+      dom.rttyStreamEnabled.checked = data.rttyStream === true;
     } catch (_error) {
       // Leaves whatever the <select>/<input> defaults already are -- same
       // "station not reachable yet" fallback every other SETTINGS field here
@@ -1273,6 +1281,39 @@
         body: new URLSearchParams({fskOutputMode, fskNetId}).toString(),
       });
     } catch (_error) { /* transient network failure -- the field just did not take */ }
+  }
+
+  // The TrxNet text stream switch, and who is listening (rtty_stream.h). The
+  // firmware stores it and does all the filtering; this page only feeds text
+  // (rtty-stream-feed.js) and shows the answer. Polled only while SETTINGS is
+  // open and the switch is on -- the line is for the moment of checking that
+  // a listener's subscription actually arrived.
+  async function saveRttyStream() {
+    try {
+      await fetch("/log-config/rtty-stream", {
+        method: "POST", signal: fetchDeadline(),
+        headers: {"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"},
+        body: new URLSearchParams({rttyStream: dom.rttyStreamEnabled.checked ? "1" : "0"}).toString(),
+      });
+    } catch (_error) { /* transient network failure -- the switch just did not take */ }
+    pollRttyStream();
+  }
+
+  async function pollRttyStream() {
+    if (!dom.rttyStreamEnabled.checked) { dom.rttyStreamSubs.textContent = ""; return; }
+    try {
+      const response = await fetch("/rtty-stream.json", {cache: "no-store", signal: fetchDeadline()});
+      if (!response.ok) throw new Error(String(response.status));
+      const data = await response.json();
+      const subs = Array.isArray(data.subs) ? data.subs : [];
+      let line = !data.trxnet ? "TrxNet is off on this interface — nothing can subscribe."
+        : subs.length ? "Listening: " + subs.map(s => s.name + " (" + s.expiresS + " s)").join(", ")
+        : "Nobody listening.";
+      if (data.refused) line += " Refused (table full): " + data.refused + ".";
+      dom.rttyStreamSubs.textContent = line;
+    } catch (_error) {
+      dom.rttyStreamSubs.textContent = "";
+    }
   }
 
   // ---- boot -------------------------------------------------------------
@@ -1432,6 +1473,7 @@
       saveFskOutput();
     });
     dom.rttyFskNetId.addEventListener("change", saveFskOutput);
+    dom.rttyStreamEnabled.addEventListener("change", saveRttyStream);
 
     // Item 13: same input/SET pairing as data.js's own #rfPercent/#rfPercentSet,
     // now the same shared rfPowerAuto engine both pages call into.
@@ -1481,7 +1523,8 @@
     // Item 5 (2nd session): firmware/EEPROM-backed, so it arrives with a
     // fetch rather than with rtty-settings.js's own localStorage load above
     // -- same one-time-at-boot convention log.js's own /log-config read uses.
-    loadFskConfig();
+    loadFskConfig().then(pollRttyStream);
+    setInterval(() => { if (dom.rttySettingsSection.open) pollRttyStream(); }, 5000);
     // FSK output device: one target, no ambiguity -- the shared picker fills the
     // NET_ID field and the 'change' it dispatches is what saves it.
     TrxnetPeers.mount(dom.rttySettingsSection, dom.rttyTrxnetPeersFsk,

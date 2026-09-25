@@ -100,7 +100,7 @@
         const prebufferSamples = Math.round(cfg.prebufferMs * cfg.sampleRate / 1000);
         await session.prepare(myTxId, {mode: 0, toneHz: settings.toneHz,
           samples: pcm16.length, packets: packets.length, slotUtcMs,
-          prebufferSamples, packetMs: cfg.packetMs});
+          prebufferSamples, packetMs: cfg.packetMs, rttyText: text});
         const streamSpanMs = Math.min(cfg.prebufferMs + cfg.streamLeadMs, cfg.ringLimitMs);
         audioTx = {txId: myTxId, packets, packetIndex: 0, echo,
           prebufferStartUtcMs: slotUtcMs - streamSpanMs,
