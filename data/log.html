@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>QRPLog — WIFILT</title>
-  <link rel="stylesheet" href="/log.css?v=940a546a">
+  <link rel="stylesheet" href="/log.css?v=c960628e">
 </head>
 <body>
   <!-- Split shell (2026-09-07). Everything the log itself is lives in the RIGHT
@@ -187,6 +187,21 @@
 
     <!-- Input row -->
     <div class="log-input-row">
+      <!-- Alt+K free-text message (log.js, freeTxRoute()). Floats over the
+           status bar just above this row, so it moves nothing while open. -->
+      <div id="freeTxBar" class="free-tx-bar" hidden>
+        <span id="freeTxRoute" class="free-tx-route"></span>
+        <input id="inpFreeTx"
+               class="log-input free-tx-input"
+               type="text"
+               autocomplete="off"
+               autocorrect="off"
+               autocapitalize="characters"
+               spellcheck="false"
+               enterkeyhint="send"
+               aria-label="Message to transmit">
+        <span id="freeTxCount" class="free-tx-count"></span>
+      </div>
       <!-- Call + attached button (RUN: *?  /  S&P: check) -->
       <div class="log-input-group">
         <span class="log-az-indicator" id="azIndicator"></span>
@@ -328,6 +343,7 @@
             <tr><td><kbd>Alt+U</kbd></td><td>Toggle RUN / S&amp;P</td></tr>
             <tr><td><kbd>Alt+W</kbd></td><td>Clear form</td></tr>
             <tr><td><kbd>Alt+G</kbd></td><td>Toggle the <em>global</em> switch on the input row — duplicates searched across all logs, or just this one</td></tr>
+            <tr><td><kbd>Alt+K</kbd></td><td>Type a message and send it — CW, or RTTY on a new line. <kbd>Enter</kbd> sends, <kbd>Esc</kbd> discards it and stops a transmission in progress</td></tr>
             <tr><td><kbd>Alt+Enter</kbd></td><td>Log QSO without sending memory</td></tr>
             <tr><td><kbd>Alt++</kbd></td><td>Larger text in the logged QSOs below — numpad <kbd>+</kbd> too</td></tr>
             <tr><td><kbd>Alt+-</kbd></td><td>Smaller text in the logged QSOs below — numpad <kbd>-</kbd> too. The size is remembered</td></tr>
@@ -348,7 +364,7 @@
   <script src="/dxcc.js?v=c56ee081"></script>
   <script src="/log-db.js?v=4d465b7e"></script>
   <script src="/station-identity.js?v=a1a20249"></script>
-  <script src="/log.js?v=976dc136"></script>
+  <script src="/log.js?v=4b1bd266"></script>
   <!-- After log.js: it reads window.LogRadio (for setRunMode) and log.js reads
        window.LogDxcSplit only from inside a channel callback, never at load. -->
   <script src="/log-dxc-split.js?v=295ebac7"></script>

@@ -822,7 +822,48 @@ body {
   gap: 10px;
   padding: 8px 10px;
   background: var(--light-bg);
+  position: relative;   /* anchors the Alt+K bar */
 }
+
+/* Alt+K free-text message: floats over the status bar, directly above the
+   input row, so opening it moves nothing. Under the palettes (90+). */
+.free-tx-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--light-bg);
+  border-top: 1px solid var(--line);
+}
+.free-tx-bar[hidden] { display: none; }
+.free-tx-route {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: bold;
+  color: var(--text);
+  white-space: nowrap;
+  min-width: 64px;
+}
+.free-tx-input { flex: 1; width: auto; min-width: 0; }
+.free-tx-count {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.free-tx-bad .free-tx-input,
+.free-tx-bad .free-tx-input:focus {
+  background: var(--conn-fail);
+  border-color: #a02000;
+  color: #ffffff;
+}
+.free-tx-bad .free-tx-route,
+.free-tx-bad .free-tx-count { color: var(--conn-fail); }
 
 .log-field {
   display: flex;

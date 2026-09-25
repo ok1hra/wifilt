@@ -1583,6 +1583,7 @@ function pollAud1Role() {
     .then(r => r.json())
     .then(data => { app.aud1Role = data.held ? String(data.role || '') : ''; })
     .catch(() => { app.aud1Role = ''; })
+    .then(() => renderFreeTx())
     .finally(() => { app._aud1RoleTimer = setTimeout(pollAud1Role, 3000); });
 }
 
@@ -1662,6 +1663,7 @@ function renderStatusBar() {
   } else {
     renderDxccStatus(null);
   }
+  renderFreeTx();
 }
 
 const sbDxccGroup      = document.getElementById('sbDxccGroup');
@@ -2068,6 +2070,14 @@ document.addEventListener('keydown', e => {
       closeQsoEdit();
       return;
     }
+    // The Alt+K message bar closes on Esc wherever the focus is, and the same
+    // keystroke still stops a transmission in progress -- by the rule the
+    // call search below keeps too: aborting stays ONE key away.
+    if (freeTxIsOpen()) {
+      if (txLikelyRunning()) abortTransmission();
+      closeFreeTx();
+      return;
+    }
     // The call search gets Esc only while nothing is going out. Aborting a
     // transmission has to stay ONE keystroke away -- an operator who hears
     // themselves sending the wrong thing must not have to notice a palette is
@@ -2131,6 +2141,17 @@ document.addEventListener('keydown', e => {
       showHint(chk.checked ? 'Global search ON — all logs' : 'Global search OFF — this log');
     }
     inpCall.focus();
+    return;
+  }
+  // Alt+K — the free-text message bar. Not over an open dialog: it would take
+  // the focus from underneath it.
+  if (altHotkey(e, ['KeyK'], 'k')) {
+    e.preventDefault();
+    const dialogOpen = ['helpModal', 'qsoEditModal'].some(id => {
+      const m = document.getElementById(id);
+      return m && !m.classList.contains('lm-hidden');
+    });
+    if (!dialogOpen) openFreeTx();
     return;
   }
   // Alt+Enter — log current QSO without sending any memory
@@ -2531,6 +2552,110 @@ function sendRawText(text) {
   fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     .catch(() => {});
 }
+
+// ── Alt+K: a free-text message (grilled 2026-09-25) ──────────────────────────
+//
+// One line typed and sent, for whatever the macros do not say. It goes out
+// through sendRawText() -- the macros' own door -- so every path they key by
+// (CW over CI-V, true FSK from the firmware's GPIO or the external TrxNet
+// keyer, AFSK through whoever holds AUD1 for RTTY, OI3) and every refusal they
+// make is the same here. Nothing about the message is special once it leaves.
+//
+// freeTxRoute() is sendRawText()'s own decision, asked ahead of time: the bar
+// opens only where the message would actually go out, and asks again on Enter,
+// because the mode or the TRX (Alt+2) can change while it is being typed.
+//
+// The limits are the firmware's, not a style choice. /cmd sendCw copies the
+// text into CwMsg[37] with toCharArray(), which silently drops everything past
+// the 36th character -- for CW and for true FSK alike -- and the radio's own
+// CI-V CW-message command (0x17) takes 30 characters. RTTY spends three of the
+// 36 on its framing, hence 33. The AFSK hand-off has no such buffer; 200 keeps
+// one line one line.
+const FREE_TX_LIMIT = { CW: 30, RTTY: 33, DATA: 200 };
+
+const freeTxBar   = document.getElementById('freeTxBar');
+const inpFreeTx   = document.getElementById('inpFreeTx');
+const freeTxLabel = document.getElementById('freeTxRoute');
+const freeTxCount = document.getElementById('freeTxCount');
+let freeTxReturnTo = null;
+
+function freeTxRoute() {
+  const trxIdx = app.activeTrx - 1;
+  const isOi3  = app.trxOi3[trxIdx] && trxIdx > 0;
+  const mg = window.LogMacros ? LogMacros.modeGroup(app.mode) : 'NONE';
+  if (mg === 'PHONE') return { why: 'Phone mode — send manually' };
+  if (!app.connected && !isOi3) return { why: 'TRX not connected' };
+  if (mg === 'CW' || mg === 'RTTY') return { group: mg, limit: FREE_TX_LIMIT[mg] };
+  if (mg === 'DATA' && app.aud1Role === 'rtty' && !isOi3) return { group: 'DATA', limit: FREE_TX_LIMIT.DATA };
+  if (mg === 'DATA') return { why: app.mode + ' — open the RTTY palette first' };
+  return { why: (app.mode || 'This mode') + ' cannot be keyed — send manually' };
+}
+
+function freeTxIsOpen() { return !freeTxBar.hidden; }
+
+// Re-drawn on every keystroke and on every /state and AUD1-role poll while
+// open. A mode that changed under the text to something stricter turns the bar
+// red rather than cutting the text: maxlength never truncates what is already
+// in the field, and that is exactly the behaviour wanted here.
+function renderFreeTx() {
+  if (!freeTxIsOpen()) return;
+  const route = freeTxRoute();
+  const len = inpFreeTx.value.trim().length;
+  freeTxLabel.textContent = (route.group || '—') + ' ›';
+  freeTxCount.textContent = route.limit ? len + '/' + route.limit : '';
+  if (route.limit) inpFreeTx.maxLength = Math.max(route.limit, inpFreeTx.value.length);
+  freeTxBar.classList.toggle('free-tx-bad', !route.group || len > route.limit);
+  freeTxBar.title = route.why || '';
+}
+
+function openFreeTx() {
+  if (freeTxIsOpen()) { inpFreeTx.focus(); return; }
+  const route = freeTxRoute();
+  if (!route.group) { showHint(route.why); return; }
+  const a = document.activeElement;
+  freeTxReturnTo = [inpCall, inpExch, inpRst, inpRstRcvd].includes(a) ? a : inpCall;
+  inpFreeTx.value = '';
+  inpFreeTx.maxLength = route.limit;
+  freeTxBar.hidden = false;
+  renderFreeTx();
+  inpFreeTx.focus();
+}
+
+function closeFreeTx() {
+  inpFreeTx.value = '';
+  freeTxBar.hidden = true;
+  freeTxBar.classList.remove('free-tx-bad');
+  const back = freeTxReturnTo || inpCall;
+  freeTxReturnTo = null;
+  back.focus();
+}
+
+function sendFreeTx() {
+  const text = inpFreeTx.value.trim();
+  if (!text) { closeFreeTx(); return; }
+  const route = freeTxRoute();
+  if (!route.group) { renderFreeTx(); showHint(route.why); return; }
+  if (text.length > route.limit) {
+    renderFreeTx();
+    showHint('Too long for ' + route.group + ': ' + text.length + '/' + route.limit);
+    return;
+  }
+  // RTTY: a new line first, so the message starts on a line of its own at the
+  // other end, and a space after it, so its last word does not run into the
+  // next transmission. CW has no line to start, and a trailing space is only
+  // a word gap more of keying.
+  sendRawText(route.group === 'CW' ? text : '\r\n' + text + ' ');
+  closeFreeTx();
+}
+
+normaliseUpper(inpFreeTx);
+inpFreeTx.addEventListener('input', renderFreeTx);
+// Esc is the global handler's: it must also stop a transmission in progress.
+inpFreeTx.addEventListener('keydown', e => {
+  if (e.key !== 'Enter' || e.altKey) return;
+  e.preventDefault();
+  sendFreeTx();
+});
 
 
 // ── Enter key workflow ────────────────────────────────────────────────────────

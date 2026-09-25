@@ -727,6 +727,19 @@ the exchange by voice.
 
 `Alt+W` clears the form.
 
+`Alt+K` opens a one-line message bar just above the input row, for whatever the macros do
+not say. `Enter` sends it and `Esc` throws it away; either way the bar empties, closes and
+the cursor goes back to the field it came from. It keys exactly the way the macros do: in
+CW the text as typed, in RTTY — true FSK, or USB-D/LSB-D while the RTTY palette holds the
+audio — on a new line with a space after it. The bar opens only where the message would
+actually go out, and says why not otherwise (phone, TRX not connected, USB-D without the
+palette). Its label shows the route and a counter the limit: **30** characters in CW (the
+radio's own CW-message command), **33** in RTTY FSK (the interface's 36-character send
+buffer, less the new line and the space), **200** over the palette. If the mode changes
+under a message to one with a shorter limit, the bar turns red and `Enter` refuses rather
+than cutting the text. `Esc` while something is being transmitted stops the transmission
+**and** closes the bar in one keystroke.
+
 ### 3.5 CW and RTTY macros
 
 Macros are generated, not typed. What goes out depends on the radio's current mode, the
@@ -1194,9 +1207,11 @@ The **?** button opens this list.
 | `Alt+U` | toggle RUN / S&P |
 | `Alt+W` | clear the form |
 | `Alt+G` | toggle the **global** switch on the input row |
+| `Alt+K` | type a message and send it — CW, or RTTY on a new line ([section 3.4](#34-working-a-station)) |
 | `Alt+Enter` | log the QSO without sending a macro |
 | `Alt++` / `Alt+-` | text size of the logged QSOs below — the numpad `+` / `-` work too |
 | `Esc` (dialog open) | close the dialog |
+| `Esc` (message bar open) | discard the message and close the bar — and abort a transmission in progress |
 | `Esc` (no dialog, transmitting) | **abort the transmission immediately** — CW, RTTY or an audio send from the RTTY palette |
 | `Esc` (no dialog, not transmitting) | end the call search |
 | `Space` in Call | arm the call search — duplicates and partial calls, both tracking as you type |
