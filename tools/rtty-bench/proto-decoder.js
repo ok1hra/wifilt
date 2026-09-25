@@ -36,7 +36,20 @@ const DEFAULTS = {
   limiter: "none",       // O8: 'none' | 'clip' | 'nb'
   nbK: 5,                //     blanker threshold in running RMS
   sql: null,             // O6: null | {type:'snrmin'|'oob', thDb, hystDb}
+  samplePhase: 0.5,      // where in the bit the point sample is taken
+  discCutHz: 180,        // 'disc': baseband lowpass cutoff
+  discAvg: 88,           // 'disc': frequency averaging, samples (half a bit)
 };
+
+// RBJ biquad lowpass coefficients
+function lpf(fc, q, fs) {
+  const w = 2 * Math.PI * fc / fs, cw = Math.cos(w), al = Math.sin(w) / (2 * q), a0 = 1 + al;
+  return {b0: (1 - cw) / 2 / a0, b1: (1 - cw) / a0, b2: (1 - cw) / 2 / a0, a1: -2 * cw / a0, a2: (1 - al) / a0};
+}
+function biquad(c) {
+  let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+  return x => { const y = c.b0 * x + c.b1 * x1 + c.b2 * x2 - c.a1 * y1 - c.a2 * y2; x2 = x1; x1 = x; y2 = y1; y1 = y; return y; };
+}
 
 class ProtoDecoder {
   constructor(sampleRate, opts = {}) {
@@ -82,6 +95,16 @@ class ProtoDecoder {
     }
     this.nbRms = 0.01; this.nbHang = 0;
 
+    // 'disc': complex baseband FM discriminator (a different principle from
+    // the Goertzel energy detectors -- instantaneous frequency, not tone power)
+    if (o.decision === "disc") {
+      const c1 = lpf(o.discCutHz, 0.5412, sampleRate), c2 = lpf(o.discCutHz, 1.3066, sampleRate);
+      this.lr = [biquad(c1), biquad(c2)]; this.li = [biquad(c1), biquad(c2)];
+      this.dph = 2 * Math.PI * o.toneHz / sampleRate; this.ph = 0;
+      this.pr = 0; this.pi = 0;
+      this.fring = new Float32Array(o.discAvg); this.fpos = 0; this.fsum = 0;
+    }
+
     // O6 squelch
     if (o.sql) {
       this.sqSig = 0; this.sqNoise = 1e-12;
@@ -125,7 +148,9 @@ class ProtoDecoder {
     const o = this.o, n = o.windowSize, spb = this.spb;
     const custom = o.preBpf > 0 || o.limiter !== "none";
     for (let i = 0; i < float32.length; i++) {
-      this.ring[this.ringPos] = custom ? this._pre(float32[i]) : float32[i];
+      const xin = custom ? this._pre(float32[i]) : float32[i];
+      this.ring[this.ringPos] = xin;
+      if (o.decision === "disc") this._disc(xin);
       this.ringPos = (this.ringPos + 1) % n;
       if (this.ringCount < n) this.ringCount++;
       this.totalSamples++;
@@ -149,12 +174,14 @@ class ProtoDecoder {
       let beta;
       const ma = Math.sqrt(markMag), sa = Math.sqrt(spaceMag);
       if (o.decision === "diff") beta = markMag - spaceMag;
+      else if (o.decision === "disc") beta = this.fsum / o.discAvg;   // Hz from centre, + = mark
       else beta = this._atc(ma, sa);
       if (o.reverse) beta = -beta;
       // soft value for integration + confidence: v / scale in [-1, 1]
       let v, scale;
       if (o.decision === "diff") { v = ma - sa; scale = ma + sa; }
       else if (o.decision === "envnorm") { v = beta; scale = 1; }
+      else if (o.decision === "disc") { v = Math.max(-85, Math.min(85, beta)); scale = 85; }
       else { v = beta; scale = Math.abs(beta) + this._atcScale(); }
       if (o.reverse) v = -v;
 
@@ -199,7 +226,7 @@ class ProtoDecoder {
       return;
     }
     if (o.sample === "point") {
-      const target = this.frameStartSample + Math.round((bi + 0.5) * spb);
+      const target = this.frameStartSample + Math.round((bi + o.samplePhase) * spb);
       if (now >= target) this._bit(beta > 0, Math.abs(v) / (scale + 1e-20));
     } else {
       const half = o.intFrac * spb / 2;
@@ -240,6 +267,16 @@ class ProtoDecoder {
       this._emitCode(this.dataBits);
     }
     this.bitIndex++;
+  }
+
+  _disc(x) {
+    this.ph += this.dph; if (this.ph > 2 * Math.PI) this.ph -= 2 * Math.PI;
+    let zr = x * Math.cos(this.ph), zi = -x * Math.sin(this.ph);
+    zr = this.lr[1](this.lr[0](zr)); zi = this.li[1](this.li[0](zi));
+    const f = Math.atan2(zi * this.pr - zr * this.pi, zr * this.pr + zi * this.pi) * this.sampleRate / (2 * Math.PI);
+    this.pr = zr; this.pi = zi;
+    this.fsum += f - this.fring[this.fpos]; this.fring[this.fpos] = f;
+    this.fpos = (this.fpos + 1) % this.fring.length;
   }
 
   _atcScale() {

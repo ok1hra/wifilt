@@ -259,6 +259,9 @@ const PAGE_SCRIPT = `
     await sleep(120);
     const echo = $("rttyRxLog").querySelector(".rtty-tx-echo");
     check("a mirrored FSK send appears in the page's own RX log", !!echo);
+    check("the echo is written into both columns of the tape",
+      $("rttyRxLog").querySelectorAll(".rtty-tx-echo").length === 2,
+      String($("rttyRxLog").querySelectorAll(".rtty-tx-echo").length));
     check("echoed uppercase, one span per character",
       echo && echo.querySelectorAll(".rtty-tx-char").length === "CQ DE OK1HRA".length,
       echo ? String(echo.querySelectorAll(".rtty-tx-char").length) : "no echo");
@@ -267,8 +270,10 @@ const PAGE_SCRIPT = `
 
     $("rttyRxClear").click();
     await sleep(60);
-    check("CLEAR empties the page's RX log", $("rttyRxLog").textContent === "",
-      JSON.stringify($("rttyRxLog").textContent.slice(0, 40)));
+    const tapeRows = () => $("rttyRxLog").querySelectorAll(".rtty-tape-body .rtty-tape-row").length;
+    check("CLEAR empties the page's RX log", tapeRows() === 0, String(tapeRows()));
+    check("and shows the waiting line again",
+      !$("rttyRxLog").querySelector(".rtty-tape-empty").hidden);
 
     // ---- 8. the extracted RX-log module, mounted standalone ---------------
     // The page gives no handle on its decoder, so the token/colour/click
@@ -285,18 +290,26 @@ const PAGE_SCRIPT = `
     for (const ch of "OK1HRA") rxLog.pushChar(ch, {snrDb: 12});
     rxLog.pushChar(" ", {});
     for (const ch of "DL2XYZ") rxLog.pushChar(ch, {snrDb: 1});
-    const tokens = scratch.querySelectorAll(".rtty-tok");
+    // Each decoded character is its own span carrying its word as data-tok,
+    // so group them back into words (DEC 1 column only).
+    const words = host => {
+      const out = new Map();
+      host.querySelectorAll(".rtty-tape-s1 .rtty-tok").forEach(n => {
+        if (!out.has(n.dataset.tok)) out.set(n.dataset.tok, []);
+        out.get(n.dataset.tok).push(n);
+      });
+      return Array.from(out.values());
+    };
+    const tokens = words(scratch);
     check("decoded words become separate clickable tokens", tokens.length === 2,
       String(tokens.length));
     check("a space ends a token, and is not swallowed",
-      scratch.textContent === "OK1HRA DL2XYZ", JSON.stringify(scratch.textContent));
+      rxLog.rowsText()[0].dec1 === "OK1HRA DL2XYZ", JSON.stringify(rxLog.rowsText()));
 
     // The gradient keys off |snrDb|, so a strong character must be visibly
     // brighter than a weak one -- the whole point of colouring them at all.
-    const strong = tokens[0].querySelector(".rtty-rx-char").style
-      .getPropertyValue("--rtty-rx-char-color");
-    const weak = tokens[1].querySelector(".rtty-rx-char").style
-      .getPropertyValue("--rtty-rx-char-color");
+    const strong = tokens[0][0].style.getPropertyValue("--rtty-rx-char-color");
+    const weak = tokens[1][0].style.getPropertyValue("--rtty-rx-char-color");
     const lum = c => (c.match(/\\d+/g) || [0]).reduce((a, b) => a + +b, 0);
     check("a strong character is drawn brighter than a weak one",
       strong && weak && lum(strong) > lum(weak), \`\${weak} vs \${strong}\`);
@@ -308,9 +321,7 @@ const PAGE_SCRIPT = `
     // backwards. (It was sandy yellow until 2026-09-08; the operator read the
     // sand as washed out and asked for QRPLog's own bar green instead.)
     for (const ch of " OK1ABC") rxLog.pushChar(ch, {snrDb: 24});
-    const hotTok = scratch.querySelectorAll(".rtty-tok")[2];
-    const hot = hotTok.querySelector(".rtty-rx-char").style
-      .getPropertyValue("--rtty-rx-char-color");
+    const hot = words(scratch)[2][0].style.getPropertyValue("--rtty-rx-char-color");
     const rgb = c => (c.match(/\\d+/g) || []).map(Number);
     // Green is a HUE shift, not a dimming: the green channel must stay up at
     // the white end's level while red drops away. Getting that backwards would
@@ -343,7 +354,7 @@ const PAGE_SCRIPT = `
         return deeper[0] < warm[0] && deeper[0] > 110;
       })());
 
-    tokens[1].querySelector(".rtty-rx-char").click();
+    words(scratch)[1][0].click();
     check("clicking a character hands over the WHOLE word", handedOver === "DL2XYZ",
       String(handedOver));
 
@@ -353,11 +364,11 @@ const PAGE_SCRIPT = `
     // this pushes some, and demands the log end up both under budget and
     // still showing the most recent text.
     for (let i = 0; i < 60; i++) { for (const ch of "TEST") rxLog.pushChar(ch, {snrDb: 6}); rxLog.pushChar(" ", {}); }
-    check("scrollback is trimmed to the budget", scratch.textContent.length <= 200,
-      String(scratch.textContent.length));
+    const kept = rxLog.rowsText().map(r => r.dec1 || "").join(" ");
+    check("scrollback is trimmed to the budget",
+      kept.split("").filter(c => c !== " ").length <= 200, String(kept.length));
     check("and the newest text survives the trim, oldest first out",
-      scratch.textContent.trim().endsWith("TEST") && !scratch.textContent.includes("OK1HRA"),
-      JSON.stringify(scratch.textContent.slice(-30)));
+      kept.trim().endsWith("TEST") && !kept.includes("OK1HRA"), JSON.stringify(kept.slice(-30)));
 
     // ---- 8b. real FSK: the radio owns tone and polarity --------------------
     // Nothing used to guard this on either surface. The palette shipped
@@ -409,16 +420,109 @@ const PAGE_SCRIPT = `
     check("and the SETTINGS field shows it", $("rttyFskMark").value === "1615",
       $("rttyFskMark").value);
 
-    // ---- 9. squelch break: throttled, never a leading blank line ----------
-    const scratch2 = document.createElement("div");
-    document.body.appendChild(scratch2);
-    const rx2 = RttyRxLog.create({el: scratch2, maxChars: 500,
-      squelchNewlineThrottleMs: 2000, onToken: () => {}});
-    check("no break is inserted into an empty log", rx2.squelchBreak() === false);
-    rx2.pushChar("A", {snrDb: 9});
-    check("the first break after real text is inserted", rx2.squelchBreak() === true);
-    check("a second break inside the throttle window is dropped",
-      rx2.squelchBreak() === false);
+    // ---- 9. the two-column tape (§21) -----------------------------------
+    // Characters carry t, the audio sample their start bit began at; both
+    // decoders count the same samples. A fixed column width keeps the
+    // geometry independent of the window.
+    const CS = RttyRxLog.CHAR_SAMPLES;
+    const tape = document.createElement("div");
+    tape.style.width = "900px";
+    document.body.appendChild(tape);
+    let tapeWord = null;
+    const tl = RttyRxLog.create({el: tape, maxChars: 2000, columnChars: 20,
+      floorRgb: [40, 40, 40], onToken: w => { tapeWord = w; }});
+    const put = (stream, text, t0, period) => Array.from(text).forEach((ch, i) =>
+      tl.pushChar(ch, {stream, t: t0 + i * (period || CS), snrDb: 12}));
+    // DEC 1 misreads one letter; DEC 2 gets it. DEC 2 also arrives AFTER all
+    // of DEC 1, the way a slower decoder's output interleaves in real time.
+    put(1, "CQ TEST OK1HQA", 100000);
+    put(2, "CQ TEST OK1HRA", 100000 + 40);
+    let rows = tl.rowsText();
+    check("the same audio lands on the same row in both columns",
+      rows.length === 1 && rows[0].dec1 === "CQ TEST OK1HQA" && rows[0].dec2 === "CQ TEST OK1HRA",
+      JSON.stringify(rows));
+    check("the one disagreeing slot is marked, in the DEC 2 column only",
+      tape.querySelectorAll(".rtty-diff").length === 1 &&
+        tape.querySelectorAll(".rtty-tape-s2 .rtty-diff").length === 1 &&
+        tape.querySelector(".rtty-tape-s2 .rtty-diff").textContent === "R",
+      String(tape.querySelectorAll(".rtty-diff").length));
+    check("DEC 1 stays unmarked", tape.querySelectorAll(".rtty-tape-s1 .rtty-diff").length === 0);
+    // A row keeps receiving while it is read: new characters must update it
+    // in place, or a click landing mid-update is lost and a selection wiped.
+    const firstSpan = tape.querySelector(".rtty-tape-s1 .rtty-tok");
+    tl.pushChar("X", {stream: 1, t: 100000 + 19 * CS});
+    check("a new character leaves the row's existing nodes in place",
+      firstSpan.isConnected && tape.querySelector(".rtty-tape-s1 .rtty-tok") === firstSpan);
+    // A character only DEC 2 decoded leaves a blank at that slot in DEC 1, and
+    // everything after it stays aligned.
+    put(1, "5NN", 100000 + 15 * CS);
+    put(2, "5NN", 100000 + 15 * CS);
+    tl.pushChar("K", {stream: 2, t: 100000 + 18 * CS});
+    rows = tl.rowsText();
+    check("a character one column missed keeps the columns aligned",
+      rows[0].dec1 === "CQ TEST OK1HQA 5NN X" && rows[0].dec2 === "CQ TEST OK1HRA 5NNK",
+      JSON.stringify(rows));
+    // A short pause keeps the row's time geometry...
+    put(1, "AB", 100000 + 21 * CS);
+    rows = tl.rowsText();
+    check("a short pause continues on the next row, no rule",
+      rows.length === 2 && !rows[1].gap && rows[1].dec1 === " AB", JSON.stringify(rows));
+    // ...a long one skips the empty rows, starts at the left edge, draws a rule.
+    put(1, "DL2XYZ", 100000 + 200 * CS);
+    rows = tl.rowsText();
+    check("a long pause skips the empty rows and draws one rule",
+      rows.length === 3 && rows[2].gap && rows[2].dec1 === "DL2XYZ", JSON.stringify(rows));
+    // A word the row edge wraps is still ONE word for the click.
+    put(1, " VERYLONGCALLSIGN", 100000 + 214 * CS);
+    rows = tl.rowsText();
+    const longWord = words(tape).find(w => w.map(n => n.textContent).join("") === "VERYLONGCALLSIGN");
+    const wrappedRows = longWord ? new Set(longWord.map(n => n.closest(".rtty-tape-row"))).size : 0;
+    check("a word the row edge wrapped spans two rows", wrappedRows === 2,
+      JSON.stringify(rows.slice(-2)));
+    if (longWord) longWord[longWord.length - 1].click();
+    check("and clicking its second half hands over the whole word",
+      tapeWord === "VERYLONGCALLSIGN", String(tapeWord));
+    // The echo is a row of its own in both columns; the next reception starts
+    // on a fresh row after it.
+    tl.echoTx("TU 599");
+    put(1, "QRZ", 100000 + 400 * CS);
+    rows = tl.rowsText();
+    check("an echo is its own row, the next reception starts after it",
+      rows[rows.length - 2].echo === "TU 599" && rows[rows.length - 1].dec1 === "QRZ",
+      JSON.stringify(rows.slice(-2)));
+    // A sender with 2 stop bits runs 8 bits per character instead of 7.5; the
+    // tape learns that rather than drifting a blank into the word.
+    const tl2 = RttyRxLog.create({el: document.body.appendChild(document.createElement("div")),
+      maxChars: 500, columnChars: 40, onToken: () => {}});
+    Array.from("ABCDEFGHIJKLMNOPQRSTUVWXYZ").forEach((ch, i) =>
+      tl2.pushChar(ch, {stream: 1, t: 5000 + i * CS * 8 / 7.5}));
+    check("a 2-stop-bit sender prints without blanks inside the word",
+      tl2.rowsText()[0].dec1 === "ABCDEFGHIJKLMNOPQRSTUVWXYZ", JSON.stringify(tl2.rowsText()));
+    // FIGS/LTRS shifts take a character's air time and print nothing: the
+    // tape must not show that time as a blank inside the word.
+    const tl3 = RttyRxLog.create({el: document.body.appendChild(document.createElement("div")),
+      maxChars: 500, columnChars: 40, onToken: () => {}});
+    [["O", 0], ["E", 1], [null, 2], ["3", 3], [null, 4], ["P", 5], ["A", 6], ["N", 7]].forEach(([ch, k]) => {
+      for (const stream of [1, 2]) {
+        if (ch) tl3.pushChar(ch, {stream, t: 9000 + k * CS});
+        else tl3.pushShift({stream, t: 9000 + k * CS});
+      }
+    });
+    check("a callsign with a figure in it shows no blanks around the figure",
+      tl3.rowsText()[0].dec1 === "OE3PAN" && tl3.rowsText()[0].dec2 === "OE3PAN",
+      JSON.stringify(tl3.rowsText()));
+    // One column: DEC 2 hidden, the tape itself unchanged.
+    tl.setDual(false);
+    check("DEC 2 off hides the second column",
+      tape.classList.contains("rtty-tape-single") &&
+        getComputedStyle(tape.querySelector(".rtty-tape-body .rtty-tape-s2")).display === "none");
+    check("and nothing is marked as a difference any more",
+      tape.querySelectorAll(".rtty-diff").length === 0,
+      String(tape.querySelectorAll(".rtty-diff").length));
+    tl.setDual(true);
+    check("back on, both columns and the marks return",
+      tape.querySelectorAll(".rtty-diff").length > 0 && tl.rowsText()[0].dec2 === "CQ TEST OK1HRA 5NNK",
+      String(tape.querySelectorAll(".rtty-diff").length));
 
     // ---- 10. squelch in dB above the noise, USOS switch, v1 migration -----
     // The page booted from a v1 store with squelchThreshold 40 (a raw
@@ -456,6 +560,20 @@ const PAGE_SCRIPT = `
     await sleep(80);
     check("and back on at the same level", $("rttySquelch").textContent === "SQL 6 dB",
       $("rttySquelch").textContent);
+    check("the second decoder is on by default", $("rttySecondDecoder").checked === true);
+    $("rttySecondDecoder").click();
+    await sleep(80);
+    check("unticking it turns the page's RX log into one column, and is saved",
+      $("rttyRxLog").classList.contains("rtty-tape-single") &&
+        JSON.parse(localStorage.getItem("wifilt.data.rtty-settings")).secondDecoder === false);
+    $("rttySecondDecoder").click();
+    await sleep(80);
+    check("ticking it back brings the two columns back",
+      !$("rttyRxLog").classList.contains("rtty-tape-single") &&
+        JSON.parse(localStorage.getItem("wifilt.data.rtty-settings")).secondDecoder === true);
+    check("the squelch-open marker is gone from SETTINGS",
+      !$("rttySquelchNewlineEnabled") &&
+        !("squelchNewlineEnabled" in JSON.parse(localStorage.getItem("wifilt.data.rtty-settings"))));
     check("nothing on the way threw", bootErrors.length === 0, bootErrors.join(" | "));
   } catch (error) {
     check("the test script ran to the end", false, String(error && error.stack || error));

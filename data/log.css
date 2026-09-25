@@ -2054,12 +2054,14 @@ body {
 
   position: fixed;
   z-index: 91;            /* over the PA palette (90), under .lm-modal (100) */
-  width: 320px;           /* spectrum.js's own minWidth: no stretched canvas */
+  width: 320px;           /* default; log-rtty-panel.js sets the remembered one */
+  min-width: 320px;       /* spectrum.js's own minWidth: no stretched canvas */
   min-height: 240px;
   display: flex;
   flex-direction: column;
   overflow: hidden;       /* required for `resize` to apply at all */
-  resize: vertical;       /* the grab handle is the browser's own */
+  resize: both;           /* the grab handle is the browser's own; wider since
+                             §21 gives the RX tape's two columns more room */
   background: #0e1b19;
   border: 1px solid var(--line);
   border-radius: 7px;
@@ -2140,24 +2142,45 @@ body {
 /* ---- the RX log: the flex child, so dragging the palette taller shows more
    decoded text and nothing else ---- */
 .rtty-panel-rx {
-  flex: 1; min-height: 0; overflow-y: auto; padding: 6px 8px;
+  flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 6px;
   background: var(--panel2);
   font: 12px/1.5 var(--font-mono);
-  white-space: pre-wrap; word-break: break-word; color: var(--text);
+  color: var(--text);
   /* The one place in this palette where selecting text has to work: reading a
      decoded exchange out with the mouse is worth keeping, which is also why
      log-rtty-panel.js does NOT cancel mousedown here the way it does on the
      buttons -- it captures the target log field on pointerdown instead. */
   user-select: text;
 }
-.rtty-panel-rx:empty::before { content: "Waiting for signal…"; color: var(--muted); }
-.rtty-panel-rx .rtty-tok { cursor: pointer; border-radius: 3px; padding: 0 1px; }
+/* §21: the two-column tape (DEC 1 | DEC 2) rtty-rxlog.js lays out -- same
+   rules as rtty.css's, scoped to the palette, a narrower gap for 320 px. */
+.rtty-panel-rx .rtty-tape-head {
+  position: sticky; top: 0; z-index: 1;
+  display: grid; grid-template-columns: 1fr 1fr; column-gap: 10px;
+  padding: 4px 0 2px; margin-bottom: 3px; background: var(--panel2);
+  border-bottom: 1px solid var(--line);
+  font: 700 9px/1.2 system-ui, sans-serif; letter-spacing: .08em; color: var(--muted);
+}
+.rtty-panel-rx .rtty-tape-head span { cursor: help; }
+.rtty-panel-rx .rtty-tape-empty { color: var(--muted); padding-top: 6px; }
+.rtty-panel-rx .rtty-tape-row {
+  display: grid; grid-template-columns: 1fr 1fr; column-gap: 10px;
+  background: linear-gradient(var(--line), var(--line)) 50% 0 / 1px 100% no-repeat;
+}
+.rtty-panel-rx .rtty-tape-cell { min-width: 0; white-space: pre-wrap; word-break: break-all; }
+.rtty-panel-rx.rtty-tape-single .rtty-tape-head { display: none; }
+.rtty-panel-rx.rtty-tape-single .rtty-tape-row { grid-template-columns: 1fr; background: none; }
+.rtty-panel-rx.rtty-tape-single .rtty-tape-s2 { display: none; }
+.rtty-panel-rx .rtty-tape-gap { border-top: 1px dashed var(--line); margin-top: 3px; padding-top: 3px; }
+.rtty-panel-rx .rtty-tape-probe { visibility: hidden; height: 0; overflow: hidden; }
+.rtty-panel-rx .rtty-diff { background: rgba(240, 180, 40, .17); border-radius: 2px; }
+.rtty-panel-rx .rtty-tok { cursor: pointer; border-radius: 3px; }
 /* Hover marks the word and changes nothing else (operator, 2026-09-08). It used
    to repaint the token cyan and light its background too, which fought the one
    job the colour has here: every character carries its own signal strength, so
    a hover that overrode it hid exactly the information being pointed at.
    Underline says "clickable" without spending the colour channel twice. */
-.rtty-panel-rx .rtty-tok:hover { text-decoration: underline; }
+.rtty-panel-rx .rtty-tok:hover, .rtty-panel-rx .rtty-tok.hover { text-decoration: underline; }
 /* Set as a custom property rather than `color` directly. Nothing overrides it
    any more -- the cyan hover above it did, and is gone -- but it stays the DOM
    contract rtty-rxlog.js writes, and it keeps any future override winnable by

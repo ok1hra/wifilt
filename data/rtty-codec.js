@@ -313,12 +313,17 @@
   class Decoder {
     constructor(sampleRate, {toneHz = 1500, shiftHz = SHIFT_HZ, baud = BAUD,
                  reverse = false, squelchDb = 3, usos = true, windowSize = 188,
-                 hopSize = 8, noiseBlanker = true} = {}) {
+                 hopSize = 8, noiseBlanker = true, bitDecision = "point",
+                 intFrac = 0.7, dpll = false} = {}) {
       this.sampleRate = sampleRate;
       this.toneHz = toneHz; this.shiftHz = shiftHz; this.baud = baud;
       this.reverse = reverse; this.squelchDb = squelchDb; this.usos = usos;
       this.windowSize = windowSize; this.hopSize = hopSize;
       this.noiseBlanker = noiseBlanker;
+      // DEC 2 (§21) is this same decoder with bitDecision "integrate" and the
+      // DPLL flywheel on; DEC 1 keeps the defaults (point sample, no DPLL).
+      this.bitDecision = bitDecision; this.intFrac = intFrac; this.dpll = dpll;
+      this.bitAcc = 0; this.expectStart = -Infinity;
       this._onChar = null; this._onEvent = null;
 
       this.ring = new Float32Array(windowSize);
@@ -452,47 +457,94 @@
           if (this.prevBeta >= 0 && beta < 0) this.closedEdgeSample = now;
           else if (beta >= 0) this.closedEdgeSample = -Infinity;
           this.syncState = "searching";
+          this.expectStart = -Infinity;
           this.prevBeta = beta;
           continue;
         }
 
-        if (this.syncState === "searching" && beta < 0 && this.prevBeta < 0 &&
-            now - this.closedEdgeSample <= samplesPerBit) {
-          // just opened inside a start bit: frame from its real edge
-          this.frameStartSample = this.closedEdgeSample;
-          this.syncState = "framing";
-          this.bitIndex = 0;
-          this.dataBits = 0;
-          this.closedEdgeSample = -Infinity;
-        } else if (this.syncState === "searching" && this.prevBeta >= 0 && beta < 0) {
-          this.frameStartSample = now;
-          this.syncState = "framing";
-          this.bitIndex = 0;
-          this.dataBits = 0;
-        } else if (this.syncState === "framing") {
-          const targetSample = this.frameStartSample +
-            Math.round((this.bitIndex + 0.5) * samplesPerBit);
-          if (now >= targetSample) {
-            const bitIsMark = beta > 0;
-            if (this.bitIndex === 0) {
-              if (bitIsMark) this.syncState = "searching"; // false start, abandon frame
-            } else if (this.bitIndex <= 5) {
-              if (bitIsMark) this.dataBits |= (1 << (this.bitIndex - 1));
-            } else {
-              this._emitCode(this.dataBits);
-              this.syncState = "searching";
-            }
-            this.bitIndex++;
-          }
-        }
+        if (this.syncState === "searching") this._search(beta, now, samplesPerBit);
+        else this._frame(beta, now, samplesPerBit);
 
         this.prevBeta = beta;
       }
     }
 
+    _beginFrame(start) {
+      this.frameStartSample = start;
+      this.syncState = "framing";
+      this.bitIndex = 0;
+      this.dataBits = 0;
+      this.bitAcc = 0;
+    }
+
+    _search(beta, now, samplesPerBit) {
+      const edge = this.prevBeta >= 0 && beta < 0;
+      if (this.dpll && this.expectStart > -Infinity) {
+        // Continuous traffic: the next start bit is due 7.5 bits after the
+        // last good one. An "edge" inside that stop bit can only be noise; a
+        // real edge near the prediction is averaged with it; no edge at all
+        // but SPACE where the start bit should be is taken on the prediction
+        // (the flywheel); MARK there means the sender went idle.
+        if (now < this.expectStart - 0.5 * samplesPerBit) return;
+        if (edge) {
+          const err = now - this.expectStart;
+          this._beginFrame(Math.abs(err) <= 0.5 * samplesPerBit
+            ? Math.round(this.expectStart + 0.5 * err) : now);
+        } else if (now >= this.expectStart + 0.5 * samplesPerBit) {
+          if (beta < 0) this._beginFrame(this.expectStart);
+          else this.expectStart = -Infinity;
+        }
+        return;
+      }
+      if (beta < 0 && this.prevBeta < 0 &&
+          now - this.closedEdgeSample <= samplesPerBit) {
+        // just opened inside a start bit: frame from its real edge
+        this._beginFrame(this.closedEdgeSample);
+        this.closedEdgeSample = -Infinity;
+      } else if (edge) this._beginFrame(now);
+    }
+
+    _frame(beta, now, samplesPerBit) {
+      const centre = this.frameStartSample + (this.bitIndex + 0.5) * samplesPerBit;
+      if (this.bitDecision === "integrate") {
+        // Sum the decision value over the middle intFrac of the bit instead
+        // of reading one point at its centre (DEC 2, §21).
+        const half = this.intFrac * samplesPerBit / 2;
+        if (now >= centre - half) this.bitAcc += beta;
+        if (now < centre + half) return;
+        const isMark = this.bitAcc > 0;
+        this.bitAcc = 0;
+        this._bit(isMark, samplesPerBit);
+      } else if (now >= this.frameStartSample + Math.round((this.bitIndex + 0.5) * samplesPerBit)) {
+        this._bit(beta > 0, samplesPerBit);
+      }
+    }
+
+    _bit(isMark, samplesPerBit) {
+      if (this.bitIndex === 0) {
+        if (isMark) {                       // false start, abandon frame
+          this.syncState = "searching";
+          this.expectStart = -Infinity;
+        }
+      } else if (this.bitIndex <= 5) {
+        if (isMark) this.dataBits |= (1 << (this.bitIndex - 1));
+      } else {
+        this.syncState = "searching";
+        this.expectStart = this.dpll ? this.frameStartSample + 7.5 * samplesPerBit : -Infinity;
+        this._emitCode(this.dataBits);
+      }
+      this.bitIndex++;
+    }
+
     _emitCode(code) {
-      if (code === CODE_FIGS) { this.page = "F"; return; }
-      if (code === CODE_LTRS) { this.page = "L"; return; }
+      if (code === CODE_FIGS || code === CODE_LTRS) {
+        this.page = code === CODE_FIGS ? "F" : "L";
+        // A shift prints nothing but takes a character's time on the air; the
+        // RX tape (rtty-rxlog.js) needs to know, or "OE3PAN" -- sent as
+        // O E FIGS 3 LTRS P A N -- would show a blank on each side of the 3.
+        if (this._onEvent) this._onEvent({type: "shift", page: this.page, t: this.frameStartSample});
+        return;
+      }
       const entry = TABLE[code];
       if (!entry) return;
       const ch = this.page === "F" ? entry[1] : entry[0];
@@ -507,7 +559,10 @@
       if (Number.isFinite(snrDb)) this.lastSnrDb = this.reverse ? -snrDb : snrDb;
       if (this._onChar) this._onChar(ch, {code, page: this.page,
         markMag: this.lastMarkMag, spaceMag: this.lastSpaceMag, snrDb: this.lastSnrDb,
-        noiseSnrDb: this.noiseSnrDb});
+        noiseSnrDb: this.noiseSnrDb,
+        // sample index of this character's start bit: two decoders fed the
+        // same samples share this clock, which is what lines their output up
+        t: this.frameStartSample});
     }
   }
 

@@ -58,7 +58,7 @@
     "rttyScope", "rttyLiveSpectrum", "rttyScopeOverlay", "liveSpectrumCanvas",
     "rttyRxLog", "rxSummary", "rttyRxClear",
     "rttyTxText", "rttyTxAbort", "rttyTxState",
-    "rttySquelchInput", "rttySquelchLive", "rttySquelchNewlineEnabled", "rttyUsos", "rttyToneInput", "settingsSummary",
+    "rttySquelchInput", "rttySquelchLive", "rttySecondDecoder", "rttyUsos", "rttyToneInput", "settingsSummary",
     // AFC (grilled 2026-08-28, 3rd session): see the RttyAfc.createTracker()
     // wiring below for what these drive.
     "rttyAfcEnabled", "rttyAfcRateInput", "rttyAfcMaxDeviationInput",
@@ -200,20 +200,19 @@
     // `typeof decoder` guard would be worse than useless here: typeof throws
     // on a const still in its temporal dead zone, so it would turn the case
     // it claims to handle into an exception.)
-    decoder.setReverse(effective.reverse);
+    for (const d of [decoder, decoder2]) d.setReverse(effective.reverse);
     // Squelch and USOS straight from `settings`, not `effective`: the FSK
     // override never touches them, and while it is active effective() hands
     // back a copy cached per `settings` IDENTITY -- which the in-place edits
     // below (slider, pill, checkbox) never change, so a copy of them would
     // stay stale until the next FSK mode/mark change.
-    decoder.setSquelchDb(settings.squelchDb);
-    decoder.setUsos(settings.usos);
+    for (const d of [decoder, decoder2]) { d.setSquelchDb(settings.squelchDb); d.setUsos(settings.usos); }
     // afcReset() re-tones the decoder on its way out (its onOffset does), so
     // a moved centre goes through it rather than being written twice -- and
     // an AFC offset accumulated around the OLD centre is nonsense applied to
     // this one.
     if (effective.toneHz !== before.toneHz) afcReset();
-    else decoder.setToneOffset(effective.toneHz + afcTracker.offsetHz());
+    else setDecoderTone(effective.toneHz + afcTracker.offsetHz());
     drawScopeOverlay();
     renderStatusPills();
     renderToneField();
@@ -562,6 +561,7 @@
     // were a received one).
     if (session && session.ptt) return;
     if (decoder) decoder.pushSamples(samples);
+    if (decoder2 && settings.secondDecoder) decoder2.pushSamples(samples);
     scope.ingest(samples);
   }
 
@@ -570,10 +570,22 @@
   const decoder = new RttyCodec.Decoder(RX_AUDIO_RATE,
     {toneHz: effective.toneHz, reverse: effective.reverse,
      squelchDb: settings.squelchDb, usos: settings.usos});
+  // DEC 2 (docs/rtty-implementace.md §21): the same decoder, but deciding each
+  // bit from the sum over its middle 70 % and keeping the character rhythm
+  // (DPLL). Measured offline it rescues about a third of the words DEC 1
+  // loses, most of all in noise, static and next to another station; the
+  // operator picks whichever copy came through. Same tone, squelch, REVERSE
+  // and USOS as DEC 1 -- it has no settings of its own. Fed only while
+  // SETTINGS' "Second decoder" is on.
+  const decoder2 = new RttyCodec.Decoder(RX_AUDIO_RATE,
+    {toneHz: effective.toneHz, reverse: effective.reverse,
+     squelchDb: settings.squelchDb, usos: settings.usos,
+     bitDecision: "integrate", dpll: true});
+  const setDecoderTone = hz => { decoder.setToneOffset(hz); decoder2.setToneOffset(hz); };
 
-  // kap.13/13.4 + item 6: the RX log itself -- word tokens, the per-character
-  // SNR gradient, scrollback trimming, the squelch-open break and this
-  // station's own TX echo -- lives in rtty-rxlog.js since 2026-09-07, shared
+  // kap.13 + item 6 + §21: the RX log itself -- the DEC 1 | DEC 2 tape, word
+  // tokens, the per-character SNR gradient, scrollback trimming, the pause
+  // rule and this station's own TX echo -- lives in rtty-rxlog.js since 2026-09-07, shared
   // with QRPlog's own RTTY palette (log-rtty-panel.js). That module's header
   // carries the reasoning all of it accumulated, including why the gradient
   // keys off Math.abs(snrDb) and why its dB bounds are still placeholders.
@@ -595,6 +607,7 @@
   const rxLog = RttyRxLog.create({
     el: dom.rttyRxLog,
     maxChars: RX_LOG_MAX_CHARS,
+    dual: settings.secondDecoder,
     onToken: word => {
       if (!dxcChannel) return;
       dxcChannel.postMessage({type: "dxc-tune", callsign: word,
@@ -602,22 +615,31 @@
     },
   });
 
+  // The SNR pill and the character count follow DEC 1 only.
   decoder.onChar((ch, meta) => {
     state.rxChars++;
     if (Number.isFinite(meta.snrDb)) state.lastSnrDb = meta.snrDb;
-    rxLog.pushChar(ch, meta);
+    rxLog.pushChar(ch, Object.assign({}, meta, {stream: 1}));
     renderStatusPills();
   });
+  decoder2.onChar((ch, meta) => rxLog.pushChar(ch, Object.assign({}, meta, {stream: 2})));
+  // FIGS/LTRS shifts take air time but print nothing; the tape needs them to
+  // keep a word like OE3PAN free of blanks around the figure.
+  decoder.onEvent(evt => { if (evt.type === "shift") rxLog.pushShift({stream: 1, t: evt.t}); });
+  decoder2.onEvent(evt => { if (evt.type === "shift") rxLog.pushShift({stream: 2, t: evt.t}); });
 
-  // kap.13.4 (grilled 2026-08-29): on every squelch close->open transition,
-  // insert a line break into the RX log -- reuses rtty-codec.js's Decoder's
-  // existing onEvent() hook, no codec change needed. The throttle and the
-  // "skip while the log is still empty" rule (and why that skip must not
-  // consume the throttle window) live in the module.
-  decoder.onEvent(evt => {
-    if (evt.type !== "squelch" || !evt.open || !effective.squelchNewlineEnabled) return;
-    rxLog.squelchBreak();
-  });
+  // §21: the squelch-open line break (kap.13.4) is gone -- the tape starts a
+  // new row with a rule after any pause that would leave a row empty.
+
+  function setSecondDecoder(on) {
+    settings.secondDecoder = !!on;
+    saveSettings();
+    // A DEC 2 that sat out a while restarts clean, not from stale audio --
+    // and on DEC 1's sample clock: it was not fed meanwhile, so its own count
+    // lags, and the tape lines the two columns up by that count.
+    if (on) { decoder2.reset(); decoder2.totalSamples = decoder.totalSamples; }
+    rxLog.setDual(settings.secondDecoder);
+  }
 
   // CLEAR pill (RX summary row): wipes the log itself, not the decoder state --
   // squelch/AFC/tone tracking all live in the decoder/settings and must keep
@@ -671,7 +693,7 @@
     // AFC nudges only the decoder's own runtime tone offset --
     // settings.toneHz itself, and therefore this station's own TX tone and the
     // solid mark/space overlay lines, never move.
-    onOffset: offsetHz => decoder.setToneOffset(effective.toneHz + offsetHz),
+    onOffset: offsetHz => setDecoderTone(effective.toneHz + offsetHz),
     charDurationMs: RttyCodec.CHAR_DURATION_MS,
   });
 
@@ -1368,12 +1390,8 @@
       applyEffective();
     });
 
-    // kap.13.4 (grilled 2026-08-29): see decoder.onEvent() above for what this drives.
-    dom.rttySquelchNewlineEnabled.addEventListener("change", () => {
-      settings.squelchNewlineEnabled = dom.rttySquelchNewlineEnabled.checked;
-      saveSettings();
-      applyEffective();
-    });
+    // §21: DEC 2 beside DEC 1 in the RX tape.
+    dom.rttySecondDecoder.addEventListener("change", () => setSecondDecoder(dom.rttySecondDecoder.checked));
 
     // AFC (grilled 2026-08-28, 3rd session). Turning it off resets the
     // detector immediately, same reasoning as setToneFromSpaceHz()'s own
@@ -1439,7 +1457,7 @@
     // setToneFromSpaceHz() uses on the way back in.
     renderToneField();
     dom.rttyTxPolarity.value = settings.txPolarity;
-    dom.rttySquelchNewlineEnabled.checked = settings.squelchNewlineEnabled;
+    dom.rttySecondDecoder.checked = settings.secondDecoder;
     dom.rttyUsos.checked = settings.usos;
     // The radio's own Mark Frequency, for the models it cannot be read from
     // (and as the fallback for a read that times out on the ones it can).

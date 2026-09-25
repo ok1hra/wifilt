@@ -4,8 +4,8 @@
  *
  * A small movable palette carrying the minimum of RTTY-ICOM that a contest
  * operator actually watches while logging: the waterfall, the live spectrum,
- * and the decoded text. Fixed narrow width; the height is dragged, and the
- * extra height goes entirely to the RX log.
+ * and the decoded text. Both edges are dragged (width since §21, for the
+ * two-column RX tape); everything added goes to the RX log.
  *
  * WHY IT EXISTS AT ALL. Clicking a decoded word in the RTTY pop-up hands it to
  * QRPLog and puts the caret in Call or Exch -- and then the operator's Enter
@@ -56,14 +56,13 @@
   var SESSION_PING_MS = 5000, SESSION_RETRY_MS = 3000, SESSION_PROBE_MS = 250;
   var SESSION_TOKEN_KEY = 'js8lan.session.token.v1';
   var RX_LOG_MAX_CHARS = 6000;   // a palette, not the page: less scrollback
-  // Silence long enough to count as a new reception, for the RX log's own
-  // separator -- see decoder.onChar() below for why this palette cannot use
-  // the squelch edge the full page uses. Three seconds is about eighteen
-  // Baudot characters at 45.45 Bd, so it never breaks mid-transmission.
-  var RX_GAP_BREAK_MS = 3000;
   // 320 is spectrum.js's own minWidth, so the waterfall's backing store is
   // never stretched. At the 500-2700 Hz base window that is 6.9 Hz/px, and a
-  // 170 Hz shift lands 25 px apart -- comfortably clickable.
+  // 170 Hz shift lands 25 px apart -- comfortably clickable. It is the default
+  // AND the floor: since §21 the width can be dragged wider for the RX tape's
+  // two columns (about 17 characters each at 320 px), never narrower. The
+  // default stays narrow on purpose -- the operator already cut this palette
+  // down once for taking more of the contest log than it had earned.
   var PANEL_W = 320;
   // The blocks above the RX log never change height, so the palette's own
   // height minus these two IS the decoded-text window -- which is what makes
@@ -77,7 +76,7 @@
   var DEFAULT_H = SCOPE_H + CHROME_H + 128;
   var MIN_H = SCOPE_H + CHROME_H + 67;
 
-  var open = false, pos = null, height = DEFAULT_H;
+  var open = false, pos = null, height = DEFAULT_H, width = PANEL_W;
   // px from the viewport's BOTTOM edge to the palette's bottom edge: the
   // vertical anchor everything else is derived from, see place(). `placed` is
   // the {y, h} place() last wrote, so syncGap() can tell the operator's own
@@ -102,6 +101,7 @@
         open = !!v.open;
         if (typeof v.x === 'number' && typeof v.y === 'number') pos = { x: v.x, y: v.y };
         if (typeof v.height === 'number') height = v.height;
+        if (typeof v.width === 'number') width = v.width;
         // Older stores hold only the top. They stay readable: place() derives
         // the gap from that top once, against the window it is opened in.
         if (typeof v.gap === 'number') gap = v.gap;
@@ -113,7 +113,7 @@
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify({
         open: open, x: pos ? pos.x : null, y: pos ? pos.y : null,
-        height: height, gap: gap
+        height: height, width: width, gap: gap
       }));
     } catch (_) {}
   }
@@ -125,6 +125,12 @@
     var maxH = Math.max(MIN_H, global.innerHeight - 20);
     height = Math.min(Math.max(MIN_H, Math.round(height)), maxH);
     return height;
+  }
+
+  function clampWidth() {
+    var maxW = Math.max(PANEL_W, global.innerWidth - 20);
+    width = Math.min(Math.max(PANEL_W, Math.round(width)), maxW);
+    return width;
   }
 
   function clamp(p) {
@@ -248,10 +254,21 @@
     effective = base === stored ? Object.assign({}, stored) : base;
     effective.squelchDb = 0;
     if (decoder) {
-      decoder.setReverse(effective.reverse);
-      decoder.setSquelchDb(effective.squelchDb);
-      decoder.setUsos(effective.usos);
-      decoder.setToneOffset(effective.toneHz + (afc ? afc.offsetHz() : 0));
+      [decoder, decoder2].forEach(function (d) {
+        d.setReverse(effective.reverse);
+        d.setSquelchDb(effective.squelchDb);
+        d.setUsos(effective.usos);
+        d.setToneOffset(effective.toneHz + (afc ? afc.offsetHz() : 0));
+      });
+      // DEC 2 on/off follows the full page's SETTINGS. One that sat out
+      // restarts clean and on DEC 1's sample clock -- it was not fed
+      // meanwhile, and the tape lines the columns up by that clock.
+      if (effective.secondDecoder && !dec2On) {
+        decoder2.reset();
+        decoder2.totalSamples = decoder.totalSamples;
+      }
+      dec2On = !!effective.secondDecoder;
+      rxLog.setDual(dec2On);
     }
     if (scope) scope.drawOverlay();
     renderState();
@@ -283,8 +300,6 @@
     },
     onChange: function () { applyEffective(); }
   });
-
-  var lastCharMs = 0;
 
   // ── the radio this palette listens to ─────────────────────────────────────
   //
@@ -505,12 +520,14 @@
     // the waterfall would show our own signal as if it were received.
     if (session && session.ptt) return;
     if (decoder) decoder.pushSamples(samples);
+    if (decoder2 && dec2On) decoder2.pushSamples(samples);
     if (scope) scope.ingest(samples);
   }
 
   // ── decode, scope, AFC, transmit ──────────────────────────────────────────
 
-  var decoder = null, scope = null, rxLog = null, afc = null, afskTx = null;
+  var decoder = null, decoder2 = null, dec2On = false;
+  var scope = null, rxLog = null, afc = null, afskTx = null;
   var gainStore = null, modLevelClient = null, modLevel = 0;
 
   function buildEngine() {
@@ -518,6 +535,13 @@
       toneHz: effective.toneHz, reverse: effective.reverse,
       squelchDb: effective.squelchDb, usos: effective.usos
     });
+    // DEC 2, the page's own second decoder (rtty.js has the reasoning).
+    decoder2 = new RttyCodec.Decoder(RX_AUDIO_RATE, {
+      toneHz: effective.toneHz, reverse: effective.reverse,
+      squelchDb: effective.squelchDb, usos: effective.usos,
+      bitDecision: 'integrate', dpll: true
+    });
+    dec2On = !!effective.secondDecoder;
 
     rxLog = RttyRxLog.create({
       el: document.getElementById('rttyPanelRx'),
@@ -526,23 +550,25 @@
       // is light and defines neither --muted nor --panel2, while this palette
       // carries the dark ones the full page uses.
       floorRgb: RttyRxLog.floorRgbFrom(el),
+      dual: dec2On,
       onToken: onTokenClicked
     });
 
-    // The full page separates receptions on the squelch's close->open edge.
-    // With squelch permanently off here that edge never comes (threshold 0
-    // means rtty-codec.js's gate reads as open from the first evaluation and
-    // never closes), so the separator is driven by SILENCE instead: a gap with
-    // no decoded character at all, which is what a real pause in the audio
-    // produces. Independent of any setting, and it is the only break this
-    // palette can have. Honest about its limits: with the gate open, noise
-    // itself decodes into characters, so the gap mostly appears when the audio
-    // path is genuinely quiet (this station transmitting, or a dead band).
+    // Receptions are separated by the tape itself (§21): a pause that would
+    // leave a row empty becomes a rule. That replaced this palette's own 3 s
+    // silence break, which only existed because its squelch is always off.
     decoder.onChar(function (ch, meta) {
-      var now = Date.now();
-      if (lastCharMs && now - lastCharMs >= RX_GAP_BREAK_MS) rxLog.squelchBreak();
-      lastCharMs = now;
-      rxLog.pushChar(ch, meta);
+      rxLog.pushChar(ch, Object.assign({}, meta, { stream: 1 }));
+    });
+    decoder2.onChar(function (ch, meta) {
+      rxLog.pushChar(ch, Object.assign({}, meta, { stream: 2 }));
+    });
+    // shifts print nothing but take air time -- the tape needs them (rtty.js)
+    decoder.onEvent(function (evt) {
+      if (evt.type === 'shift') rxLog.pushShift({ stream: 1, t: evt.t });
+    });
+    decoder2.onEvent(function (evt) {
+      if (evt.type === 'shift') rxLog.pushShift({ stream: 2, t: evt.t });
     });
 
     afc = RttyAfc.createTracker({
@@ -553,7 +579,10 @@
       },
       markSpace: function () { return RttyScope.expectedMarkSpaceHz(effective); },
       squelchOpen: function () { return decoder.squelchOpen; },
-      onOffset: function (offsetHz) { decoder.setToneOffset(effective.toneHz + offsetHz); },
+      onOffset: function (offsetHz) {
+        decoder.setToneOffset(effective.toneHz + offsetHz);
+        decoder2.setToneOffset(effective.toneHz + offsetHz);
+      },
       charDurationMs: RttyCodec.CHAR_DURATION_MS
     });
 
@@ -773,6 +802,7 @@
     el.className = 'rtty-panel';
     el.id = 'rttyPanel';
     el.style.height = clampSize() + 'px';
+    el.style.width = clampWidth() + 'px';
     el.innerHTML =
       '<div class="rtty-panel-head" id="rttyPanelHead">' +
         '<span class="rtty-panel-title">RTTY</span>' +
@@ -843,6 +873,7 @@
       new ResizeObserver(function () {
         if (!open || !el) return;
         height = el.offsetHeight;
+        width = el.offsetWidth;
         // The browser's own handle grows the palette DOWNWARD from a fixed top,
         // so the bottom edge has moved: re-anchor to where the operator left it.
         syncGap();
@@ -912,6 +943,7 @@
     global.addEventListener('resize', function () {
       if (!el || !open) return;
       el.style.height = clampSize() + 'px';
+      el.style.width = clampWidth() + 'px';
       place();                     // from the bottom gap, which stays as it was
       if (scope) scope.resize();
       save();
@@ -962,7 +994,7 @@
     echoTx: function (text) { if (rxLog) rxLog.echoTx(text); },
     abort: function () { if (afskTx) afskTx.abort('operator'); },
     getState: function () {
-      return { open: open, held: sessionHeld, height: height, radio: radio,
+      return { open: open, held: sessionHeld, height: height, width: width, radio: radio,
                // What it is actually listening on (the FSK override and the
                // always-off squelch included), and separately what the shared
                // store holds -- telling those two apart is the whole point.

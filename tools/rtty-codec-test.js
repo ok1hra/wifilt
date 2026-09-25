@@ -71,6 +71,22 @@ const clean = withLead(toFloat(new RttyCodec.Encoder(8000).encode(TEXT)));
 check("clean round trip with the default decoder", decode(clean, {}) === TEXT, decode(clean, {}));
 check("clean round trip with squelch off", decode(clean, {squelchDb: 0}) === TEXT);
 check("clean round trip with USOS off", decode(clean, {usos: false}) === TEXT);
+// DEC 2 (§21): integrating bit decision + DPLL, same everything else
+const DEC2 = {bitDecision: "integrate", dpll: true};
+check("DEC 2 round trip, clean", decode(clean, DEC2) === TEXT, decode(clean, DEC2));
+{
+  // both decoders stamp each character with its start-bit sample; fed the
+  // same samples, the same character gets (nearly) the same t in both
+  const t1 = [], t2 = [];
+  const d1 = new RttyCodec.Decoder(8000, {}), d2 = new RttyCodec.Decoder(8000, DEC2);
+  d1.onChar((ch, m) => t1.push(m.t)); d2.onChar((ch, m) => t2.push(m.t));
+  d1.pushSamples(clean); d2.pushSamples(clean);
+  const spb = 8000 / RttyCodec.BAUD;
+  check("both decoders give every character a start time", t1.length === TEXT.length && t2.length === TEXT.length);
+  check("and the same character's start differs by under half a bit",
+    t1.every((t, i) => Math.abs(t - t2[i]) < spb / 2),
+    JSON.stringify(t1.map((t, i) => Math.round(t - t2[i]))));
+}
 
 // The squelch averages over about a character, so on a signal that keys
 // straight into a start bit it opens inside that start bit; the first
@@ -157,6 +173,9 @@ check("clean round trip with USOS off", decode(clean, {usos: false}) === TEXT);
   check("in-range level survives", n({squelchDb: 7}).squelchDb === 7);
   check("out-of-range level falls back to default", n({squelchDb: 27}).squelchDb === 3 && n({squelchDb: -2}).squelchDb === 3);
   check("0 means off", n({squelchDb: 0}).squelchDb === 0);
+  check("the second decoder defaults on", d.secondDecoder === true && n({v: 1}).secondDecoder === true);
+  check("and an explicit off survives", n({secondDecoder: false}).secondDecoder === false);
+  check("the squelch-open marker is gone from the store", !("squelchNewlineEnabled" in n({squelchNewlineEnabled: true})));
 }
 
 console.log(`RTTY CODEC ${fail ? "FAIL" : "PASS"} ${pass}/${pass + fail}`);

@@ -140,13 +140,41 @@ body.radio-transmitting .rtty-scope::after {
 /* ---- RX log: append-only, click-to-tune-QRPlog tokens (kap.5), same
    "scrolling log" shape as data.html's #binTransferLog. ---- */
 .rtty-rx-log {
-  height: 220px; overflow-y: auto; padding: 8px 10px; background: var(--panel2);
+  height: 220px; overflow-y: auto; padding: 0 10px 8px; background: var(--panel2);
   font: 13px/1.55 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  white-space: pre-wrap; word-break: break-word; color: var(--text);
+  color: var(--text);
 }
-.rtty-rx-log:empty::before { content: "Waiting for signal…"; color: var(--muted); }
+/* §21: the two-column tape rtty-rxlog.js lays out -- DEC 1 | DEC 2, one row
+   per stretch of audio, so the same character from both decoders sits on the
+   same row at the same position. The column rule is a 1 px gradient in the
+   row's own background, centred in the gap, so every row draws its piece and
+   they join into one line. Kept identical to log.css's palette rules. */
+.rtty-tape-head {
+  position: sticky; top: 0; z-index: 1;
+  display: grid; grid-template-columns: 1fr 1fr; column-gap: 14px;
+  padding: 5px 0 3px; margin-bottom: 4px; background: var(--panel2);
+  border-bottom: 1px solid var(--line);
+  font: 700 10px/1.2 system-ui, sans-serif; letter-spacing: .08em; color: var(--muted);
+}
+.rtty-tape-head span { cursor: help; }
+.rtty-tape-empty { color: var(--muted); padding-top: 8px; }
+.rtty-tape-row {
+  display: grid; grid-template-columns: 1fr 1fr; column-gap: 14px;
+  background: linear-gradient(var(--line), var(--line)) 50% 0 / 1px 100% no-repeat;
+}
+.rtty-tape-cell { min-width: 0; white-space: pre-wrap; word-break: break-all; }
+.rtty-tape-single .rtty-tape-head { display: none; }
+.rtty-tape-single .rtty-tape-row { grid-template-columns: 1fr; background: none; }
+.rtty-tape-single .rtty-tape-s2 { display: none; }
+/* empty rows skipped for a pause: one thin rule instead of blank lines */
+.rtty-tape-gap { border-top: 1px dashed var(--line); margin-top: 4px; padding-top: 4px; }
+/* only there to measure how many characters fit a column */
+.rtty-tape-probe { visibility: hidden; height: 0; overflow: hidden; }
+/* a slot the two columns disagree on -- faint, so the text colour (signal
+   strength) still reads through */
+.rtty-diff { background: rgba(240, 180, 40, .17); border-radius: 2px; }
 .rtty-tok {
-  cursor: pointer; border-radius: 3px; padding: 0 1px;
+  cursor: pointer; border-radius: 3px;
 }
 /* Hover marks the word and changes nothing else (operator, 2026-09-08). It used
    to repaint the token cyan and light its background too, which fought the one
@@ -155,7 +183,7 @@ body.radio-transmitting .rtty-scope::after {
    Underline says "clickable" without spending the colour channel twice. Kept
    identical to the QRPLog palette's own rule (log.css) -- two views of one
    RTTY, one behaviour. */
-.rtty-tok:hover { text-decoration: underline; }
+.rtty-tok:hover, .rtty-tok.hover { text-decoration: underline; }
 /* kap.13 (grilled 2026-08-29): one span per decoded RX character, coloured by
    that character's own meta.snrDb (rtty.js's rxCharColorForSnr()). Set as a
    custom property rather than `color` directly. Nothing overrides it any more

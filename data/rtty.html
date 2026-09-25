@@ -9,7 +9,7 @@
      genuinely RTTY's, same split as wspr.css/mercury.css.
      docs/rtty-implementace.md -- grilled 2026-08-27. -->
 <link rel="stylesheet" href="/data.css?v=8e737d99">
-<link rel="stylesheet" href="/rtty.css?v=4f045718">
+<link rel="stylesheet" href="/rtty.css?v=06845e7c">
 <!-- ?popup=1 strips this page down to the modem itself, hiding both nav
      bars. QRPLOG's RTTY button opened it that way until 2026-09-07, when it
      became an in-page palette instead (data/log-rtty-panel.js); the switch is
@@ -225,12 +225,12 @@
         <small class="rtty-squelch-live" id="rttySquelchLive">3 dB</small>
         <small>Above the noise. 3 dB keeps pure noise silent at any audio level.</small>
       </label>
-      <!-- kap.13.4, grilled 2026-08-29: reuses rtty-codec.js's Decoder's
-           existing (until now unwired) onEvent() squelch open/close hook --
-           no codec change needed. -->
-      <label>Squelch-open marker
-        <input id="rttySquelchNewlineEnabled" type="checkbox">
-        <small>Inserts a line break into the RX log each time squelch opens from silence, at most once per ~2 s.</small>
+      <!-- §21 (2026-09-25): a second decoder beside the first in the RX log.
+           Replaced the kap.13.4 "Squelch-open marker" here: the two-column
+           tape starts a new row with a rule after a pause by itself. -->
+      <label>Second decoder
+        <input id="rttySecondDecoder" type="checkbox">
+        <small>Shows DEC 2 beside DEC 1 in the RX log, row for row. DEC 2 averages each bit instead of reading its centre and copies better in noise, static and next to another station; click whichever copy of a word came through.</small>
       </label>
       <label>Unshift on space (USOS)
         <input id="rttyUsos" type="checkbox">
@@ -339,11 +339,11 @@
 
 <script src="/lan-gate.js?v=e297f7ab"></script>
 <script src="/fw-version.js?v=b29c5317"></script>
-<script src="/rtty-codec.js?v=ec0b566f"></script>
+<script src="/rtty-codec.js?v=f902ad99"></script>
 <script src="/rtty-afc.js?v=b1330905"></script>
 <script src="/trxnet-peers.js?v=ba918aaf"></script>
 <script src="/rtty-presets.js?v=5ec21ec3"></script>
-<script src="/rtty-settings.js?v=49cc396c"></script>
+<script src="/rtty-settings.js?v=ea820699"></script>
 <script src="/spectrum.js?v=7fafbbb5"></script>
 <!-- js8-aud1.js: the shared AUD1 RX+TX contract, unchanged, same file
      wspr.html loads directly (no Worker here, unlike Mercury). js8-tx.js is
@@ -382,8 +382,8 @@
      drifting copies of all three. Load order: rtty.js consumes them. -->
 <script src="/rtty-fsk-sync.js?v=49b392d8"></script>
 <script src="/rtty-scope.js?v=c2f2337f"></script>
-<script src="/rtty-rxlog.js?v=b8bfe16f"></script>
+<script src="/rtty-rxlog.js?v=add3f023"></script>
 <script src="/rtty-afsk-tx.js?v=121d6342"></script>
-<script src="/rtty.js?v=d3e0d165"></script>
+<script src="/rtty.js?v=7d9afa48"></script>
 </body>
 </html>

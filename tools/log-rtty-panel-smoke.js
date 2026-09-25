@@ -552,6 +552,39 @@ const PAGE_SCRIPT = `
       window.RttyPanel.getState().stored.squelchDb > 0,
       String(window.RttyPanel.getState().stored.squelchDb));
 
+    // §21: the RX log is the two-column tape, DEC 2 following the full
+    // page's "Second decoder" setting live.
+    check("the palette's RX log is the two-column tape",
+      !!$("rttyPanelRx").querySelector(".rtty-tape-head") &&
+        !$("rttyPanelRx").classList.contains("rtty-tape-single"));
+    {
+      const st = JSON.parse(localStorage.getItem("wifilt.data.rtty-settings") || "{}");
+      localStorage.setItem("wifilt.data.rtty-settings", JSON.stringify(Object.assign({}, st, {secondDecoder: false})));
+      window.dispatchEvent(new StorageEvent("storage", {key: "wifilt.data.rtty-settings"}));
+      await sleep(120);
+      check("turning the second decoder off on the page makes the palette one column",
+        $("rttyPanelRx").classList.contains("rtty-tape-single"));
+      localStorage.setItem("wifilt.data.rtty-settings", JSON.stringify(Object.assign({}, st, {secondDecoder: true})));
+      window.dispatchEvent(new StorageEvent("storage", {key: "wifilt.data.rtty-settings"}));
+      await sleep(120);
+      check("and back on, two columns again",
+        !$("rttyPanelRx").classList.contains("rtty-tape-single"));
+    }
+    // Width: dragged wider for the two columns, never below 320, remembered.
+    {
+      const panelEl = $("rttyPanel");
+      check("the palette can be resized in both directions",
+        getComputedStyle(panelEl).resize === "both" && getComputedStyle(panelEl).minWidth === "320px",
+        getComputedStyle(panelEl).resize + " / " + getComputedStyle(panelEl).minWidth);
+      panelEl.style.width = "480px";
+      await sleep(150);
+      const saved = JSON.parse(localStorage.getItem("wifilt-rtty-panel") || "{}");
+      check("a wider palette is remembered", window.RttyPanel.getState().width === 480 && saved.width === 480,
+        window.RttyPanel.getState().width + " / " + saved.width);
+      panelEl.style.width = "320px";
+      await sleep(150);
+    }
+
     // A radio that cannot be asked (an unverified model, or a read that times
     // out) must still land somewhere sane, and must SAY that it guessed.
     await fetch("/set-civ-mute?v=1");

@@ -107,7 +107,7 @@
     return {v: SCHEMA_VERSION, toneHz: 1500, reverse: false,
             squelchDb: SQUELCH_DB_DEFAULT, usos: true, rfPercent: null, txPolarity: "normal",
             afcEnabled: false, afcRateHzPerChar: 60, afcMaxDeviationHz: 60,
-            squelchNewlineEnabled: false, fskMarkHz: 2125};
+            secondDecoder: true, fskMarkHz: 2125};
   }
 
   function normalize(input) {
@@ -148,10 +148,11 @@
       afcMaxDeviationHz: Number.isFinite(afcMaxDeviationHz) &&
         afcMaxDeviationHz >= AFC_MAX_DEVIATION_MIN_HZ && afcMaxDeviationHz <= AFC_MAX_DEVIATION_HARD_CAP_HZ
         ? afcMaxDeviationHz : d.afcMaxDeviationHz,
-      // kap.13.4 (default flipped to OFF 2026-08-29, operator feedback after
-      // first trying it on) -- same `=== true` gate as reverse/afcEnabled
-      // above: missing/malformed input reads as "off".
-      squelchNewlineEnabled: source.squelchNewlineEnabled === true,
+      // §21: DEC 2 beside DEC 1 in the RX tape. On unless explicitly off, so
+      // every existing store gets it (same gate as `usos`). The old
+      // squelchNewlineEnabled is simply not carried over: the tape's own
+      // pause rule replaced that marker.
+      secondDecoder: source.secondDecoder !== false,
       // Not a range check like the others: only Icom's own three values mean
       // anything, and a fourth number would put the decoder somewhere the
       // radio's FSK modem never transmits -- silently, which is the class of

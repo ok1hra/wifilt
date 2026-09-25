@@ -873,9 +873,12 @@ coming back to that log offers it filled in and you only need to tick the box ag
 
 In `RTTY`, `RTTY-R`, `USB-D` and `LSB-D` a **RTTY** button appears in the bottom bar, next to
 the TRX buttons. It opens a small window that floats over the log: a waterfall with the live
-spectrum above it, and the decoded text below. Drag its title bar to move it, drag its bottom
-edge to make it taller — the extra height goes to the decoded text, the waterfall stays as it
-is. Where you put it and how tall you made it are remembered.
+spectrum above it, and the decoded text below. Drag its title bar to move it, drag its corner
+to make it taller or wider (never narrower than it opens) — the extra room goes to the decoded
+text, the waterfall stays as it is. Where you put it and how big you made it are remembered.
+The decoded text is the same two-column tape as on the full page, **DEC 1** beside **DEC 2**
+([section 6.4](#64-rx--the-decoded-text)); at the default width each column holds about 17
+characters, so widening the palette is worth it in a contest.
 
 Decoded characters are shaded by how strongly each one came through: dim grey when the tone
 pair was barely above the noise, white for a solid signal, and **green for an exceptionally
@@ -914,8 +917,9 @@ today) and when the radio does not answer in time. Nothing is ever written to th
 — the reading is one-way.
 
 **Squelch is always off in the palette**, whatever the full page is set to, so a level dialled
-in there can never quietly swallow a weak caller here. A gap of a few seconds with nothing
-decoded starts a new block of text, which is what separates one station from the next.
+in there can never quietly swallow a weak caller here. A pause long enough to leave a whole
+row empty starts a new row with a thin dashed rule, which is what separates one station from
+the next.
 
 Every other RTTY setting — tone, shift, polarity, squelch level, AFC, NORMAL/REVERSE and the
 transmit-gain calibration — lives on the full RTTY-ICOM page under the **DATA** tab
@@ -2582,16 +2586,34 @@ Mercury, even though the LAN audio path is itself duplex.
 
 ### 6.4 RX — the decoded text
 
-Decoded characters are appended as clickable word tokens and shaded per character by how
-strongly each one came through: dim grey when the tone pair was barely above the noise,
-white for a solid signal, and **green for an exceptionally strong one** (from about 20 dB —
-white is already the brightest a screen has, so the top of the scale moves in hue rather
-than in brightness).
+**Two decoders, side by side.** The log is split into two columns, **DEC 1** and **DEC 2**,
+both decoding the same audio. DEC 1 reads each bit at its centre; DEC 2 averages over the
+middle of each bit and keeps the rhythm of the characters, which copies better in noise,
+static crashes and next to another station, while DEC 1 holds up better in deep fading. They
+fail on different words: in simulation, a callsign came through right in at least one column
+about 77 % of the time against 54 % for DEC 1 alone. **You pick whichever copy came through,
+by clicking it.** Hover a column label for the same explanation.
+
+The log is laid out like a teleprinter tape, in time: each row is a stretch of audio as wide
+as a column, and every character sits at the position of the moment it was received. So the
+same character from both decoders is always on the same row at the same place, and where the
+columns **disagree** — a different letter, or a letter only one of them caught — the DEC 2
+copy gets a faint amber background (DEC 1 stays unmarked as the reference), so the eye goes
+straight to the words worth comparing. A pause
+long enough to leave a whole row empty is not drawn as blank rows: the next reception starts
+on a fresh row under a thin dashed rule. *Second decoder* in SETTINGS turns DEC 2 off, and
+the log goes back to one column.
+
+Characters are shaded by how strongly each one came through: dim grey when the tone pair was
+barely above the noise, white for a solid signal, and **green for an exceptionally strong
+one** (from about 20 dB — white is already the brightest a screen has, so the top of the
+scale moves in hue rather than in brightness).
 
 **Click a word and it is handed to QRPLog** — into whichever field the log's cursor is in,
 *Call* or *Exch*. Unlike a DX cluster spot, it does **not** switch the log to S&P: a word out
-of an RTTY stream is "insert this", not "start a new QSO". Dragging across the text selects it
-for copying instead and hands over nothing.
+of an RTTY stream is "insert this", not "start a new QSO". A word the row edge split in two is
+still handed over whole. Dragging across the text selects it for copying instead and hands
+over nothing.
 
 Behind the text is a decoder built to separate the signal from the noise: its tone filters
 are narrow enough to keep a station 300 Hz away out, it follows each tone's own strength
@@ -2601,11 +2623,10 @@ simulation, about 1 dB better in plain noise, 6–7 dB better in selective fadin
 in static crashes, and a neighbouring station can be about 12 dB louder than before without
 breaking the copy.
 
-**CLEAR** empties the log. With *Squelch-open marker* enabled in SETTINGS, a line break is
-inserted each time the squelch opens from silence, at most once every couple of seconds, so
-separate receptions do not run together.
+**CLEAR** empties the log.
 
-Your own transmissions are echoed into the same log as they go out — including macros sent
+Your own transmissions are echoed into the same log as they go out, as a row of their own
+written into both columns, so both decoders line up again after it — including macros sent
 from QRPLog over real FSK, which are bit-banged by the interface itself and would otherwise
 never appear anywhere on screen.
 
@@ -2628,7 +2649,7 @@ macros build the whole exchange for you — [section 3.5](#35-cw-and-rtty-macros
 |---|---|
 | **TX polarity** | `Normal` / `Reverse` — what this station's own AFSK transmits. Independent of the RX-only NORMAL/REVERSE pill in the header. |
 | **Squelch level** | 1–10 dB **above the noise**, default 3. The decoder measures the noise itself (in RTTY one of the two tones is always off, so the quieter filter is the noise), so the same setting means the same thing however loud the radio's LAN audio is. At 3 dB pure noise prints nothing and no readable signal is lost; raise it only if noise bursts still print. This only sets the level for when squelch *is* on; on/off is the header's SQL pill. |
-| **Squelch-open marker** | inserts a line break in the RX log each time squelch opens from silence, at most once per ~2 s |
+| **Second decoder** | on by default: shows DEC 2 beside DEC 1 in the RX log ([section 6.4](#64-rx--the-decoded-text)). The QRPLog palette follows it too. |
 | **Unshift on space (USOS)** | on by default: after a space the decoder returns to letters, so one corrupted FIGURES shift garbles a word instead of the rest of the line. Turn it off for a station whose numbers come out as letters after a space — `599 PPQ` instead of `599 001` — which means it sends figures after a space without repeating FIGURES. This station's own transmissions always repeat FIGURES after a space, AFSK and FSK alike, so they read correctly either way. |
 | **Default TX/RX tone** | the lower of the two tones, in Hz, 500–2700. One number serves both receive and transmit. |
 | **AFC** | nudges the *decoder's* frequency to follow another station's drift on short messages such as a lone callsign. **This station's own transmit tone never moves.** |
