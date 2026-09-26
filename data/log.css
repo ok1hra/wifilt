@@ -2108,7 +2108,7 @@ body {
 /* Heatsink temperature, coloured by which fan stage the amplifier has reached
    -- the thresholds and these colours' HUES are the full web console's own
    (see PA_FAN_ON in pa-panel.js), so one reading means one thing on both
-   screens. Each is the console's colour at 70% intensity: at 46px the
+   screens. Each is the console's colour at 70% intensity: at this size the
    console's own values made the temperature by far the loudest thing on the
    panel, louder than the power it is there to accompany. The darkest, cool
    grey, is still 3.07:1 -- enough for digits this size.
@@ -2117,17 +2117,17 @@ body {
    nonetheless the hotter step, which is the console's design and worth not
    "fixing" here. Grey below the first fan step is the point: a cold amplifier
    should not draw the eye at all. */
-/* As tall as the two lamp rows beside it -- the DIGITS, not the font: the ink
-   of a digit is only about two thirds of the font size, which is why 20px
-   looked like a label next to a 30px block. Measured in Chrome (Courier New,
-   or the metric-identical Liberation Mono): 46px gives digits 31px tall, and
-   the fixed 30px line keeps the row exactly the lamps' height so the panel does
-   not grow by the other 16px of the font. The glyphs are then centred on the
-   line box by the font's ascent and descent, not by the digits, which leaves
-   them 3.5px high; `top` puts them back on the lamps. */
+/* Centred on the two lamp rows beside it -- the DIGITS, not the font: the ink
+   of a digit is only about two thirds of the font size. Measured in Chrome
+   (Courier New, or the metric-identical Liberation Mono): 35px gives digits
+   23px tall against the lamps' 30px. (46px filled the full 30 and was too
+   loud; 20px looked like a label.) The fixed 30px line keeps the row exactly
+   the lamps' height so the panel does not grow by the rest of the font. The
+   glyphs are centred on the line box by the font's ascent and descent, not by
+   the digits, which leaves them 2.5px high; `top` puts them back on centre. */
 .pa-temp {
-  font-size: 46px; font-weight: 700; line-height: 30px; height: 30px;
-  position: relative; top: 3.5px;
+  font-size: 35px; font-weight: 700; line-height: 30px; height: 30px;
+  position: relative; top: 2.5px;
   color: #9ca1a7; white-space: nowrap;
 }
 /* The unit takes the number's colour: with the digits dimmed, the panel's
@@ -2211,7 +2211,7 @@ body {
 .pa-panel.pa-stale .pa-band { color: #7c8797 !important; }
 /* The temperature darker than that: its live colours are already dimmed, and
    the stale grey must not be brighter than a live cool reading. It is the held
-   power readings' grey -- an old number, like them -- and at 46px its 3.2:1
+   power readings' grey -- an old number, like them -- and at 35px its 3.2:1
    is plainly legible. */
 .pa-panel.pa-stale .pa-temp { color: #646f7f !important; }
 .pa-panel.pa-stale .pa-led.on { background: #171b22; color: #4a5666; }

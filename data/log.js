@@ -1502,8 +1502,22 @@ function startClock() {
 // because tuning the amplifier is not working a spot. It is the same command
 // the DXC band map below issues, which is why that one now calls it too rather
 // than keeping its own copy of the two endpoints.
+//
+// logFrequency() joined them 2026-09-26 for the DXC pane's BAND by TRX filter,
+// which follows the band being LOGGED -- so, unlike frequency(), it also
+// answers from the manual field while the TRX is disconnected. It reads that
+// field rather than app.frequency, because a disconnect leaves app.frequency
+// holding the radio's last value, and an empty field has to read as "unknown"
+// there, not as the band the radio was on before it went away. frequency()
+// keeps its connected-only meaning: the PA palette must not follow a typed
+// number.
 window.LogRadio = {
   frequency: () => (app.connected ? app.frequency : 0),
+  logFrequency: () => {
+    if (app.connected) return app.frequency || 0;
+    const hz = Math.round(parseFloat(sbManualFreq.value.replace(',', '.')) * 1000);
+    return hz > 0 ? hz : 0;
+  },
   tx:        () => !!app.tx,
   mode:      () => app.mode,
   activeTrx: () => app.activeTrx,

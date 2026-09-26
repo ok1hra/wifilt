@@ -500,7 +500,7 @@ const PAGE_SCRIPT = `
     const stale4 = worstContrast(["paBand"]);
     check("...and they stay readable while greyed",
       stale4 >= 4, "worst contrast " + stale4.toFixed(2) + ":1");
-    // The temperature is 46px bold, so it gets the large-text floor -- and its
+    // The temperature is 35px bold, so it gets the large-text floor -- and its
     // stale grey must not outshine a live cool reading, whose colour is dimmed.
     const staleT = worstContrast(["paTemp"]);
     check("the stale temperature, large, stays legible",
@@ -569,8 +569,11 @@ const PAGE_SCRIPT = `
     const ink = digitInk();
     check("the temperature stands to the right of the lamps",
       tR.left > lR.right, tR.left + " vs " + lR.right);
-    check("its digits span both lamp rows, top to bottom",
-      Math.abs(ink.top - lR.top) <= 1.5 && Math.abs(ink.bottom - lR.bottom) <= 1.5,
+    // 35px: digits about 23px tall, centred on the 30px of lamps -- well past
+    // either row alone, so they read as belonging to both.
+    check("its digits are centred on both lamp rows, taller than either",
+      Math.abs((ink.top + ink.bottom) / 2 - (lR.top + lR.bottom) / 2) <= 1 &&
+      ink.bottom - ink.top >= 21 && ink.bottom - ink.top <= 25,
       "digits " + ink.top.toFixed(1) + ".." + ink.bottom.toFixed(1) +
       ", lamps " + lR.top.toFixed(1) + ".." + lR.bottom.toFixed(1));
     const unitEl = document.querySelector("#paTemp .pa-temp-u");

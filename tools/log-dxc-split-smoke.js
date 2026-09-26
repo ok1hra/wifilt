@@ -50,6 +50,12 @@ let wsConns = [];        // live sockets, at most one by construction
 let wsOpens = 0;         // accepted upgrades ever -- the storm detector
 let clusterCmds = [];    // text frames the "cluster" received
 
+// Per-TRX radio frequency and reachability, for section 17 (BAND by TRX). Every
+// earlier section relies on 14074000 Hz -- the band map's window is derived
+// from it -- so section 17 puts these back before it ends.
+const fxHz = {1: 14074000, 2: 14074000, 3: 14074000};
+const fxDown = {1: false, 2: false, 3: false};
+
 function wsEncode(text) {
   const payload = Buffer.from(text, "utf8");
   const head = payload.length < 126 ? Buffer.from([0x81, payload.length])
@@ -138,13 +144,20 @@ const server = http.createServer((request, response) => {
   //   const note = t => fetch("/note?t=" + encodeURIComponent(t));
   // into the page script and await it between sections.
   if (url.pathname === "/note") { console.log("  ..  " + (url.searchParams.get("t") || "")); return json({ok: true}); }
+  if (url.pathname === "/fixture-trx") {
+    const n = Number(url.searchParams.get("trx")) || 1;
+    if (url.searchParams.has("hz")) fxHz[n] = Number(url.searchParams.get("hz")) || 0;
+    if (url.searchParams.has("down")) fxDown[n] = url.searchParams.get("down") === "1";
+    return json({ok: true, hz: fxHz, down: fxDown});
+  }
   if (url.pathname === "/ws-push") { clusterPush(url.searchParams.get("line") || ""); return json({ok: true}); }
 
+  if (url.pathname === "/state" && fxDown[1]) { response.writeHead(503).end(); return; }
   if (url.pathname === "/state") return json({
     connected: true, catHealthy: true, audioReady: true, lanStatus: "linked",
     btStatus: "LAN linked", wifiStatus: "WiFi STA", radioTransport: "lan",
     fullCat: true, wifiRssi: -55, fwRev: "20260907", bdSupported: false,
-    power: true, frequency: 14074000, mode: "USB", filter: 1,
+    power: true, frequency: fxHz[1], mode: "USB", filter: 1,
     radioAddress: "a4", transceiverType: "IC-705", radioName: "IC-705",
     tx: false, ritRaw: 0, smeterRaw: 0, powerMeterRaw: 0, afGain: 100,
     keySpeed: 20, rfPower: 128, rfPowerSeen: true, supplyVolts: 13.8, swr: 1.1,
@@ -155,8 +168,10 @@ const server = http.createServer((request, response) => {
     gpsGrid: "JO70UC12", gpsFixAgeMs: 4000, gpsSel: 1,
   });
 
+  const oi3Trx = Number(url.searchParams.get("trx")) || 2;
+  if (url.pathname === "/oi3/state" && fxDown[oi3Trx]) { response.writeHead(503).end(); return; }
   if (url.pathname === "/oi3/state") return json({
-    connected: true, power: true, frequency: 14074000, mode: "USB",
+    connected: true, power: true, frequency: fxHz[oi3Trx], mode: "USB",
     tx: false, dxcConnected: true, radioName: "TRX2",
   });
   if (url.pathname === "/setup-data.json") return json({trx1transport: "civ"});
@@ -614,6 +629,16 @@ const PAGE_SCRIPT = `
     s = await stats();
     check("a second instance opens NO extra cluster socket",
       s.opens === 0 && s.live === 1, JSON.stringify(s));
+    // BAND by TRX lives in the split pane only. This instance stands in for
+    // the external window and even has a parent.LogRadio to find -- exactly
+    // the case the EMBED gate, not the lookup, has to refuse.
+    second.contentDocument.getElementById("freqFilterBtn").click();
+    await sleep(80);
+    check("an external DXC window draws no BAND by TRX switch",
+      !second.contentDocument.querySelector("#freqMenu [data-band-by-trx]")
+      && second.contentDocument.getElementById("freqMenu").classList.contains("on"),
+      second.contentDocument.getElementById("freqMenu").innerHTML.slice(-160));
+    second.contentDocument.getElementById("freqFilterBtn").click();
 
     await fetch("/ws-push?line=" + encodeURIComponent(
       "DX de OK1AAA:     7015.0  VK3QQQ       up 2                  " + nowZ()));
@@ -1194,6 +1219,136 @@ const PAGE_SCRIPT = `
         ? Math.round(lastRow.getBoundingClientRect().bottom) + " vs wrap "
           + Math.round(wrapEl.getBoundingClientRect().bottom) : "no rows"));
     pane.getElementById("scrollToggle").click();    // auto-scroll back on
+
+    // ---- 17. BAND by TRX: the pane follows the band QRPlog is working -----
+    // Grilled 2026-09-26. An OVERLAY on the manual band set, never a rewrite
+    // of it; driven by LogRadio.logFrequency() polled once a second; an
+    // unknown band holds the last one in grey with a "?". Every step goes
+    // through the real paths: the fixture's /state, the TRX buttons' own
+    // Alt+digit hotkey, the manual frequency field.
+    {
+      const fx = q => fetch("/fixture-trx?" + q);
+      const pd  = () => $("logDxcFrame").contentDocument;
+      const btn = () => pd().getElementById("freqFilterBtn");
+      const menuOpen = () => pd().getElementById("freqMenu").classList.contains("on");
+      const openMenu = async () => { if (!menuOpen()) { btn().click(); await sleep(60); } };
+      const sw  = () => pd().querySelector("#freqMenu [data-band-by-trx]");
+      const shown = call => !!pd().querySelector('#body tr[data-dx="' + call + '"]');
+      const altDigit = n => document.dispatchEvent(new KeyboardEvent("keydown",
+        {key: String(n), code: "Digit" + n, altKey: true, bubbles: true}));
+
+      localStorage.removeItem("dxcEBandByTrx");
+      for (const [call, khz] of [["BB20A", "14025.0"], ["BB40A", " 7010.0"], ["BB9XX", " 3850.0"]])
+        await fetch("/ws-push?line=" + encodeURIComponent(
+          "DX de OK9AAA:    " + khz + "  " + call + "        test                  " + nowZ()));
+      await until(() => shown("BB20A") && shown("BB40A") && shown("BB9XX"), 6000,
+        "the three BAND by TRX spots to render").catch(() => {});
+      check("with the switch off every band shows, out-of-plan spots included",
+        shown("BB20A") && shown("BB40A") && shown("BB9XX"),
+        pd().getElementById("body").textContent.slice(0, 160));
+
+      // A hand-picked set to come back to: 17m off.
+      await openMenu();
+      pd().querySelector('#freqMenu [data-band-filter="17m"]').click();
+      await sleep(60);
+      check("the pane's band menu carries the BAND by TRX switch, off by default",
+        !!sw() && !sw().checked, sw() ? sw().parentNode.textContent : "no switch");
+      await until(() => /TRX1 · 20m$/.test(sw().parentNode.textContent.trim()), 4000,
+        "the switch label to name TRX1 and 20m").catch(() => {});
+      check("its label names the active TRX and its band even while off",
+        /TRX1 · 20m$/.test(sw().parentNode.textContent.trim()), sw().parentNode.textContent.trim());
+
+      sw().click();
+      await sleep(80);
+      check("switched on, the header shows the band instead of kHz",
+        btn().textContent === "20m" && btn().classList.contains("active")
+        && !btn().classList.contains("stale"), btn().textContent + " " + btn().className);
+      check("the menu stays open across the toggle",
+        menuOpen(), pd().getElementById("freqMenu").className);
+      check("and the table shows the TRX band alone",
+        shown("BB20A") && !shown("BB40A") && !shown("BB9XX"),
+        [shown("BB20A"), shown("BB40A"), shown("BB9XX")].join());
+      const boxes = () => Array.from(pd().querySelectorAll("#freqMenu [data-band-filter]"));
+      check("the manual checkboxes are locked, showing only that band",
+        boxes().every(b => b.disabled && b.checked === (b.getAttribute("data-band-filter") === "20m")),
+        boxes().filter(b => b.checked).map(b => b.getAttribute("data-band-filter")).join());
+      check("and so are All on / All off",
+        Array.from(pd().querySelectorAll("#freqMenu [data-band-action]")).every(b => b.disabled));
+      check("the switch survives F5: it is stored under the pane's prefix",
+        localStorage.getItem("dxcEBandByTrx") === "1" && localStorage.getItem("dxcBandByTrx") === null,
+        String(localStorage.getItem("dxcEBandByTrx")));
+
+      // Retuning the radio moves the filter.
+      await fx("trx=1&hz=7074000");
+      await until(() => btn().textContent === "40m", 6000, "the header to follow the retune")
+        .catch(() => {});
+      check("retuning the TRX to 40m moves the filter with it",
+        btn().textContent === "40m" && shown("BB40A") && !shown("BB20A"),
+        btn().textContent + " " + [shown("BB20A"), shown("BB40A")].join());
+      check("the open menu follows too",
+        menuOpen() && boxes().filter(b => b.checked).map(b => b.getAttribute("data-band-filter")).join() === "40m",
+        boxes().filter(b => b.checked).map(b => b.getAttribute("data-band-filter")).join());
+
+      // Alt+2: TRX2 on 20m.
+      await fx("trx=2&hz=14030000");
+      altDigit(2);
+      await until(() => btn().textContent === "20m" && /TRX2/.test(sw().parentNode.textContent),
+        6000, "the pane to follow Alt+2").catch(() => {});
+      check("Alt+2 selects the band of TRX2",
+        btn().textContent === "20m" && shown("BB20A") && !shown("BB40A")
+        && /TRX2 · 20m$/.test(sw().parentNode.textContent.trim()),
+        btn().textContent + " / " + sw().parentNode.textContent.trim());
+
+      // TRX2 goes away: hold 20m, grey, with a "?".
+      await fx("trx=2&down=1");
+      await until(() => btn().textContent === "20m?", 6000, "the held band to turn grey")
+        .catch(() => {});
+      check("a TRX that goes away holds the last band, grey and with a ?",
+        btn().textContent === "20m?" && btn().classList.contains("stale") && shown("BB20A"),
+        btn().textContent + " " + btn().className);
+
+      // ...and a manual frequency is the band being logged.
+      const man = $("sbManualFreq");
+      man.value = "7012";
+      man.dispatchEvent(new Event("input", {bubbles: true}));
+      await until(() => btn().textContent === "40m", 4000, "the manual frequency to count")
+        .catch(() => {});
+      check("with the TRX disconnected the manual frequency picks the band",
+        btn().textContent === "40m" && !btn().classList.contains("stale") && shown("BB40A"),
+        btn().textContent + " " + btn().className);
+      man.value = "";
+      man.dispatchEvent(new Event("input", {bubbles: true}));
+      await fx("trx=2&down=0&hz=14074000");
+
+      // Back on TRX1, reopen the pane: the switch and the band are both back.
+      altDigit(1);
+      await until(() => btn().textContent === "40m" && /TRX1/.test(sw().parentNode.textContent),
+        6000, "the pane to follow Alt+1").catch(() => {});
+      LogDxcSplit.close();
+      await sleep(300);
+      $("tabDxc").click();
+      await until(() => $("logDxcFrame") && $("logDxcFrame").contentDocument
+        && $("logDxcFrame").contentDocument.getElementById("freqFilterBtn")
+        && btn().textContent === "40m", 8000, "the reopened pane to follow TRX1 again").catch(() => {});
+      check("a reopened pane comes back with the switch on and following TRX1",
+        btn().textContent === "40m", btn() ? btn().textContent : "no pane");
+
+      // Off: the hand-picked set returns untouched.
+      await openMenu();
+      sw().click();
+      await sleep(80);
+      const on = id => pd().querySelector('#freqMenu [data-band-filter="' + id + '"]').checked;
+      check("switching it off gives back the manual set exactly (17m still off)",
+        !on("17m") && on("20m") && on("40m") && boxes().every(b => !b.disabled),
+        boxes().filter(b => !b.checked).map(b => b.getAttribute("data-band-filter")).join());
+      check("and the header says kHz again",
+        btn().textContent === "kHz", btn().textContent);
+      btn().click();
+
+      await fx("trx=1&hz=14074000");
+      localStorage.removeItem("dxcEBandByTrx");
+      localStorage.removeItem("dxcEFreqFilter");
+    }
   } catch (error) {
     check("the test script ran to the end", false, String(error && error.stack || error));
   }
