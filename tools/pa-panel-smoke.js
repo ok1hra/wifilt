@@ -262,6 +262,9 @@ const PAGE_SCRIPT = `
       !Array.from(document.querySelectorAll("#paVals .pa-val")).some(shown) &&
       txt("paFw") + txt("paSwr") + txt("paRef") === "" && $("paVals").offsetHeight > 0,
       JSON.stringify(txt("paFw") + txt("paSwr") + txt("paRef")) + " h=" + $("paVals").offsetHeight);
+    check("and so are the bars",
+      !(parseFloat($("paBarFw").style.width) || 0) && !(parseFloat($("paBarRef").style.width) || 0),
+      $("paBarFw").style.width + " / " + $("paBarRef").style.width);
 
     // ---- 3. power: peaks, no decimals, and null is not zero ---------------
     await setPa(base({flags:F.ON|F.LINK|F.OPERATE|F.FULL|F.TX,
@@ -354,10 +357,19 @@ const PAGE_SCRIPT = `
       txt("paFw") + " / " + JSON.stringify(txt("paSwr")));
 
     // Half as tall again as they were (5 px), rounded to a whole pixel.
-    check("the power bars are 8 px each",
+    // Odd, so the arrowhead has a single middle row to end on.
+    check("the power bars are 9 px each",
       document.querySelectorAll(".pa-bar").length === 2 &&
-      Array.from(document.querySelectorAll(".pa-bar")).every(b => b.offsetHeight === 8),
+      Array.from(document.querySelectorAll(".pa-bar")).every(b => b.offsetHeight === 9),
       Array.from(document.querySelectorAll(".pa-bar")).map(b => b.offsetHeight).join(","));
+    // Arrowheads cut out of the bar's own width: forward pointing right, its
+    // point at the right edge; reflected pointing left, its point at the left.
+    const clipFw = getComputedStyle($("paBarFw")).clipPath;
+    const clipRef = getComputedStyle($("paBarRef")).clipPath;
+    check("forward power ends in a head pointing right, its point on the reading",
+      /polygon/.test(clipFw) && /100% 50%/.test(clipFw), clipFw);
+    check("reflected power ends in a head pointing left",
+      /polygon/.test(clipRef) && /0px 50%|0 50%/.test(clipRef), clipRef);
 
     // ---- 3a. temperature --------------------------------------------------
     // /pa-temp is °C x 100 and arrived on 2026-09-08. The base fixture above
@@ -424,13 +436,35 @@ const PAGE_SCRIPT = `
     check("STANDBY switches to the exciter's own range",
       Math.abs(barW("paBarFw") - 50) < 1, barW("paBarFw") + "%");
 
-    await setPa(base({flags:F.ON|F.LINK|F.OPERATE|F.FULL, fwdPk:0, refPk:1000}));
+    // 1 W forward keeps this a live sample; at 0 W the bars would be showing
+    // the held over instead (below).
+    await setPa(base({flags:F.ON|F.LINK|F.OPERATE|F.FULL, fwdPk:10, refPk:1000}));
     check("reflected power has a scale of its own, not the forward one",
       Math.abs(barW("paBarRef") - 50) < 1, barW("paBarRef") + "%");
-    await setPa(base({flags:F.ON|F.LINK|F.OPERATE|F.FULL, fwdPk:null, refPk:null}));
-    check("no reading leaves both bars empty",
-      barW("paBarFw") === 0 && barW("paBarRef") === 0,
+    // After the over the bars stay where they were, like the digits above
+    // them, and turn the same dark grey.
+    const HELD_BAR = "rgb(100, 111, 127)";
+    const barCol = id => getComputedStyle($(id)).backgroundColor;
+    check("while keyed the bars are in their own colours",
+      barCol("paBarFw") !== HELD_BAR && barCol("paBarRef") !== HELD_BAR,
+      barCol("paBarFw") + " / " + barCol("paBarRef"));
+    await setPa(base({flags:F.ON|F.LINK|F.OPERATE|F.FULL, fwdPk:6000, refPk:600}));
+    await setPa(base({flags:F.ON|F.LINK|F.OPERATE|F.FULL, fwdPk:0, refPk:0}));
+    check("on receive the bars keep the last over's lengths",
+      Math.abs(barW("paBarFw") - 50) < 1 && barW("paBarRef") > 0,
       barW("paBarFw") + "/" + barW("paBarRef"));
+    check("in dark grey, both of them",
+      barCol("paBarFw") === HELD_BAR && barCol("paBarRef") === HELD_BAR,
+      barCol("paBarFw") + " / " + barCol("paBarRef"));
+    // Held on the scale the over was drawn on: 600 W sent in FULL is half a bar,
+    // and dropping to HALF on receive must not stretch it to a full one.
+    await setPa(base({flags:F.ON|F.LINK|F.OPERATE, fwdPk:0, refPk:0}));
+    check("a held bar keeps the full scale it was drawn on",
+      Math.abs(barW("paBarFw") - 50) < 1, barW("paBarFw") + "%");
+    await setPa(base({flags:F.ON|F.LINK|F.OPERATE|F.FULL, fwdPk:null, refPk:null}));
+    check("an expired peak holds them too, never drops them to nothing",
+      Math.abs(barW("paBarFw") - 50) < 1 && barCol("paBarFw") === HELD_BAR,
+      barW("paBarFw") + "% " + barCol("paBarFw"));
     await setPa(base({flags:F.ON|F.LINK|F.OPERATE|F.FULL, fwdPk:60000, refPk:0}));
     check("a reading over full scale is clamped, not spilled",
       barW("paBarFw") === 100, barW("paBarFw") + "%");
@@ -505,16 +539,42 @@ const PAGE_SCRIPT = `
     const r1 = document.querySelectorAll("#paLeds .pa-led-row")[1].getBoundingClientRect();
     check("really two rows on screen, not one wrapped",
       r1.top >= r0.bottom - 0.5, r0.bottom + " / " + r1.top);
-    // The temperature beside both rows, larger than anything else down there.
+    // The temperature beside both rows, as tall as they are. Judged on the INK
+    // of the digits, not the element's box: a digit is about two thirds of its
+    // font size, and "20px, box centred on the lamps" passed a check like this
+    // while looking like a label beside them. The baseline comes from a
+    // zero-size marker in the text, the ink height from canvas metrics.
     await setPa(base({flags:F.ON|F.LINK, temp:4500}));
     const tR = rect("paTemp"), lR = rect("paLeds");
+    const digitInk = () => {
+      const t = $("paTemp"), mk = document.createElement("span");
+      mk.style.cssText = "display:inline-block;width:0;height:0;vertical-align:baseline";
+      t.insertBefore(mk, t.firstChild);
+      const base = mk.getBoundingClientRect().top;
+      t.removeChild(mk);
+      const cs = getComputedStyle(t), cx = document.createElement("canvas").getContext("2d");
+      cx.font = cs.fontWeight + " " + cs.fontSize + " " + cs.fontFamily;
+      const m = cx.measureText("0123456789");
+      return {top: base - m.actualBoundingBoxAscent, bottom: base + m.actualBoundingBoxDescent};
+    };
+    const ink = digitInk();
     check("the temperature stands to the right of the lamps",
       tR.left > lR.right, tR.left + " vs " + lR.right);
-    check("centred across both lamp rows",
-      Math.abs((tR.top + tR.bottom) / 2 - (lR.top + lR.bottom) / 2) < 2,
-      (tR.top + tR.bottom) / 2 + " vs " + (lR.top + lR.bottom) / 2);
-    check("and enlarged to 20 px", getComputedStyle($("paTemp")).fontSize === "20px",
-      getComputedStyle($("paTemp")).fontSize);
+    check("its digits span both lamp rows, top to bottom",
+      Math.abs(ink.top - lR.top) <= 1.5 && Math.abs(ink.bottom - lR.bottom) <= 1.5,
+      "digits " + ink.top.toFixed(1) + ".." + ink.bottom.toFixed(1) +
+      ", lamps " + lR.top.toFixed(1) + ".." + lR.bottom.toFixed(1));
+    check("and the row stays exactly the lamps' height -- the big font adds nothing",
+      Math.abs($("paLeds").parentNode.getBoundingClientRect().height - lR.height) < 0.5,
+      $("paLeds").parentNode.getBoundingClientRect().height + " vs " + lR.height);
+    // Three digits is past the 90 °C protection, so a fault -- which is exactly
+    // when it must not spill out of the panel.
+    await setPa(base({flags:F.ON|F.LINK, temp:10500}));
+    const t3 = rect("paTemp"), ind3 = $("paLeds").parentNode.getBoundingClientRect();
+    check("a three-digit temperature still fits beside the lamps",
+      txt("paTemp") === "105 °C" && t3.left > rect("paLeds").right && t3.right <= ind3.right + 0.5,
+      txt("paTemp") + ": " + t3.left.toFixed(1) + ".." + t3.right.toFixed(1) +
+      " in .." + ind3.right.toFixed(1));
     check("REV 2 is reported when the flag says so",
       (await setPa(base({flags:F.ON|F.LINK|F.REV2}))) === undefined &&
       txt("paRevTag") === "REV 2.0", txt("paRevTag"));

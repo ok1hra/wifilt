@@ -134,7 +134,7 @@
   var pending   = {};    // what -> {want, until, from}
   var settledAt = {};    // what -> when the amplifier last CONFIRMED it
   var note    = '';      // one line of trouble, shown under the buttons
-  var held    = null;    // the last transmission's readings, {fw, rf, swr}
+  var held    = null;    // the last transmission's readings, {fw, rf, swr, fwMax}
   var heldKeyed = false; // was the last sample a transmitting one
   // TUNE+ runs in the firmware (/pa.json "tp"); these only follow it.
   var tpAskedAt = 0;     // a start/stop is on its way: '…' until the state moves
@@ -629,17 +629,30 @@
   // answering 0 on the last sample of an over must not wipe the reading it gave
   // a moment earlier -- nor may one over's SWR survive into the next, so it
   // starts afresh when a new one begins.
+  //
+  // The bars are held with them, on the full scale they were drawn on: a held
+  // 600 W is half a bar because the over was in FULL, and must stay half a bar
+  // after the operator drops to HALF on receive.
   function noteHeld() {
     var fw = watts(state ? state.fwdPk : null);
     var keyed = !!fw;
     if (keyed) {
       var rf = watts(state.refPk), swr = state.swr;
-      if (!heldKeyed || !held) held = { fw: fw, rf: rf, swr: 0 };
+      if (!heldKeyed || !held) held = { fw: fw, rf: rf, swr: 0, fwMax: 0 };
       held.fw = fw;
       held.rf = rf;
+      held.fwMax = fwFullScale(flags());
       if (swr) held.swr = swr;
     }
     heldKeyed = keyed;
+  }
+
+  // Full scale follows the mode the amplifier is actually in -- 1200 W in
+  // FULL, 600 W in HALF -- because a fixed 1200 W scale would make a full-power
+  // HALF transmission look like half a job. In STANDBY the numbers are the
+  // exciter's, so the range drops to its 100 W.
+  function fwFullScale(f) {
+    return !(f & F.OPERATE) ? 100 : (f & F.FULL) ? 1200 : 600;
   }
 
   function render() {
@@ -663,7 +676,7 @@
     // in dark grey (see noteHeld), and is blank only before the first over this
     // page has seen -- blank, not removed, so the panel keeps its height.
     var keyed = !!fw;
-    var shownVals = keyed ? { fw: fw, rf: rf, swr: state.swr } : held;
+    var shownVals = keyed ? { fw: fw, rf: rf, swr: state.swr, fwMax: fwFullScale(f) } : held;
     var valsEl = document.getElementById('paVals');
     valsEl.classList.toggle('pa-vals-idle', !shownVals);
     valsEl.classList.toggle('pa-vals-held', !keyed && !!shownVals);
@@ -672,19 +685,17 @@
       (shownVals && shownVals.rf !== null) ? shownVals.rf : '';
     valsEl.title = (!keyed && shownVals) ? 'The last transmission' : '';
 
-    // Two bars, no scale. Full scale follows the mode the amplifier is actually
-    // in -- 1200 W in FULL, 600 W in HALF -- because a fixed 1200 W scale would
-    // make a full-power HALF transmission look like half a job. In STANDBY the
-    // numbers are the exciter's, so the range drops to its 100 W.
+    // Two bars, no scale (full scale: fwFullScale). They carry the peak, the
+    // same figure as the digits, not the instantaneous reading the full
+    // console's bars use. At two samples a second the instantaneous value is
+    // mostly the gaps between syllables: the bar would sit near zero through an
+    // entire SSB over. The console can afford it because it sees every packet;
+    // this cannot.
     //
-    // They carry the peak, the same figure as the digits, not the instantaneous
-    // reading the full console's bars use. At two samples a second the
-    // instantaneous value is mostly the gaps between syllables: the bar would
-    // sit near zero through an entire SSB over. The console can afford it
-    // because it sees every packet; this cannot.
-    var fwMax = !(f & F.OPERATE) ? 100 : (f & F.FULL) ? 1200 : 600;
-    setBarWidth('paBarFw',  fw, fwMax);
-    setBarWidth('paBarRef', rf, PA_REF_MAX);
+    // And like the digits they outlive the over, in the same dark grey.
+    setBarWidth('paBarFw',  shownVals ? shownVals.fw : null, shownVals ? shownVals.fwMax : 0);
+    setBarWidth('paBarRef', shownVals ? shownVals.rf : null, PA_REF_MAX);
+    el.querySelector('.pa-bars').classList.toggle('pa-bars-held', !keyed && !!shownVals);
 
     renderSegScale();
 

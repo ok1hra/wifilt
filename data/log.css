@@ -1981,14 +1981,32 @@ body {
    dot near the right-hand end meaning "near the top of the band" must not look
    like "nearly full power". */
 .pa-bars { display: flex; flex-direction: column; gap: 0; margin: 1px 0 2px; }
-.pa-bar  { position: relative; height: 8px; background: #171b22; overflow: hidden; }
+/* 9px, an odd height, so the arrowhead has ONE middle row to end on. The head
+   is 45 degrees -- each row out from the middle one pixel shorter -- and its
+   POINT is the reading: the bar's width is the value, and the head is cut out
+   of that width rather than added to it, so 600 W of 1200 puts the point at
+   exactly half way. Below 4.5px of width the polygon's shoulders fall left of
+   the box and only the point shows, a clipped tip rather than a squashed one.
+   The unlit ground stays square: it is the scale, not the reading. */
+.pa-bar  { position: relative; height: 9px; background: #171b22; overflow: hidden; }
 .pa-bar i {
   position: absolute; top: 0; bottom: 0; width: 0;
   transition: width 0.12s linear;
 }
-.pa-bar-fw  { left: 0;  background: var(--pa-fw); }
-.pa-bar-ref { right: 0; background: var(--pa-rev); }
-.pa-panel.pa-stale .pa-bar i { background: #3a424e; }
+.pa-bar-fw  {
+  left: 0;  background: var(--pa-fw);
+  clip-path: polygon(0 0, calc(100% - 4.5px) 0, 100% 50%, calc(100% - 4.5px) 100%, 0 100%);
+}
+.pa-bar-ref {
+  right: 0; background: var(--pa-rev);
+  clip-path: polygon(4.5px 0, 100% 0, 100% 100%, 4.5px 100%, 0 50%);
+}
+/* After the over the bars stay, at the length they had, in the same dark grey
+   as the held digits above them. This replaced the stale greying the bars used
+   to have (#3a424e): the peaks expire two seconds after telemetry stops, long
+   before the fifteen that make it stale, so a stale panel is always showing
+   held bars -- and one grey for "the last over" is one thing to learn. */
+.pa-bars-held .pa-bar i { background: #646f7f; }
 
 /* The tuner's segments of the band the radio is on. A blind scale on purpose:
    at ~27 px a segment there is no room for numbers, and what is being read off
@@ -2088,9 +2106,18 @@ body {
    nonetheless the hotter step, which is the console's design and worth not
    "fixing" here. Grey below the first fan step is the point: a cold amplifier
    should not draw the eye at all. */
+/* As tall as the two lamp rows beside it -- the DIGITS, not the font: the ink
+   of a digit is only about two thirds of the font size, which is why 20px
+   looked like a label next to a 30px block. Measured in Chrome (Courier New,
+   or the metric-identical Liberation Mono): 46px gives digits 31px tall, and
+   the fixed 30px line keeps the row exactly the lamps' height so the panel does
+   not grow by the other 16px of the font. The glyphs are then centred on the
+   line box by the font's ascent and descent, not by the digits, which leaves
+   them 3.5px high; `top` puts them back on the lamps. */
 .pa-temp {
-  font-size: 20px; font-weight: 700; line-height: 1; color: #dfe6ef;
-  white-space: nowrap;
+  font-size: 46px; font-weight: 700; line-height: 30px; height: 30px;
+  position: relative; top: 3.5px;
+  color: #dfe6ef; white-space: nowrap;
 }
 /* The unit is the panel's usual dimmed one; it does not take the fan-stage
    colour, which belongs to the number. */
@@ -2164,10 +2191,10 @@ body {
    reported from the shack once, when the greying was #49535f and 2.09:1
    against the panel. 4.49:1 is still visibly quieter than a live reading (13:1)
    and than the dimmed labels beside it (5.5:1), which is all the dimming has to
-   do -- the status line, the dot and the greyed bars already say NO DATA three
-   other ways. (The power row is not in this list: its peaks expire after two
-   seconds without telemetry, long before the fifteen that make it stale, so by
-   then it is showing the held readings in their own darker grey.) */
+   do -- the status line and the dot already say NO DATA. (The power row and
+   bars are not in this list: their peaks expire after two seconds without
+   telemetry, long before the fifteen that make it stale, so by then they are
+   showing the held readings in their own darker grey.) */
 .pa-panel.pa-stale .pa-temp,
 .pa-panel.pa-stale .pa-band { color: #7c8797 !important; }
 .pa-panel.pa-stale .pa-led.on { background: #171b22; color: #4a5666; }
