@@ -3155,17 +3155,11 @@ function renderDupeView(bundle, frag) {
 
   const body = document.createElement('div');
   body.className = 'dv-body';
-  // Pushes a short list down to the bottom edge, next to the input row. Shrinks
-  // to nothing as soon as the rows overflow, so a long list still scrolls.
-  const spacer = document.createElement('div');
-  spacer.className = 'dv-spacer';
-  body.appendChild(spacer);
 
   // The column legend -- the view's own, not the journal's, which is underneath
-  // and says something else. It lives INSIDE the scroller, below the spacer, so
-  // it stays with the rows it labels when a short list is pushed to the bottom;
-  // left in the header it ended up half a window away from them. Sticky, so a
-  // list long enough to scroll still has it at the top. Being inside also means
+  // and says something else. It lives INSIDE the scroller so it stays with the
+  // rows it labels. Sticky, so a list long enough to scroll still has it at the
+  // top. Being inside also means
   // it scrolls sideways with the rows for free -- no translateX to keep in step.
   const cols = document.createElement('div');
   cols.className = 'dv-cols';

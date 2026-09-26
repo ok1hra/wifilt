@@ -728,7 +728,7 @@
     var tempC = (state && state.temp !== null && state.temp !== undefined)
       ? state.temp / 100 : null;
     tempEl.innerHTML = tempC === null ? ''
-      : (Math.round(tempC) + '<span class="pa-temp-u"> °C</span>');
+      : (Math.round(tempC) + '<span class="pa-temp-u">°C</span>');
     tempEl.className = 'pa-temp' + (tempC === null ? '' : ' ' + tempClass(tempC, f));
     tempEl.title = tempC === null
       ? 'The amplifier is not reporting a temperature'

@@ -492,20 +492,34 @@ body {
 }
 
 /* ── The DUPE view ────────────────────────────────────────────────────────
-   Covers the whole journal while the call in the form is an exact match.
+   Shown over the journal while the call in the form is an exact match.
    Absolute rather than in the flow on two counts: the journal underneath keeps
    its rows and its scroll position, so nothing has to be re-rendered when the
    view goes away, and nothing below the journal changes height, so JournalBottom
    never has to put the last QSO back.
 
+   Only as tall as its rows, and hung from the journal's BOTTOM edge, next to the
+   fields being typed in. It used to cover the whole journal even for a single
+   duplicate -- a screen of dark red to say one thing. The journal stays readable
+   above it; the newest QSOs are the ones underneath, deliberately: while the
+   view is up the question is whether to call this station, not what was logged
+   a minute ago. A list too long for the window grows to the journal's full
+   height and scrolls, as it always did.
+
    Opaque on purpose. A translucent view over a list of QSOs reads as two lists. */
 .log-dupe-view {
   position: absolute;
-  inset: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-height: 100%;
   z-index: 5;
   display: flex;
   flex-direction: column;
   background: #1a0000;
+  /* Its top edge now runs across journal rows; without a line of its own the
+     header's dark red meets the row above it as a smudge. */
+  border-top: 1px solid #551111;
   font-family: var(--font-mono);
   overflow: hidden;   /* the rows are wider than a narrow window; .dv-body scrolls */
 }
@@ -552,9 +566,8 @@ body {
 
 /* The view's own column legend. The journal's is underneath and says something
    else -- there is no LOG column over there.
-   Inside the scroller, below the spacer, so it travels with the rows it labels
-   when a short list is pushed to the bottom -- and sticky, so a list long enough
-   to scroll still has it at the top. It needs its own background for the rows
+   Inside the scroller, so it stays with the rows it labels -- and sticky, so a
+   list long enough to scroll still has it at the top. It needs its own background for the rows
    passing under it, and it scrolls sideways with them for free. */
 .dv-cols {
   position: sticky;
@@ -570,22 +583,14 @@ body {
   letter-spacing: 0.06em;
 }
 
+/* Its own height, not the view's: the view is as tall as this is, up to the
+   journal, and past that this is the part that gives way and scrolls. */
 .dv-body {
-  flex: 1;
+  flex: 0 1 auto;
   min-height: 0;
   overflow: auto;
   padding: 3px 0;
-  /* A flex column so the spacer below can push a short list down. */
-  display: flex;
-  flex-direction: column;
 }
-
-/* Two or three duplicates do not fill the window, and left at the top they sit
-   a screen away from the fields being typed in -- the operator has to look up,
-   read, and look back down. The same spacer the journal uses for the same
-   reason pins them to the BOTTOM instead, where the eye already is. It
-   collapses to nothing once the rows overflow, so scrolling up still works. */
-.dv-spacer { flex: 1; min-width: 100%; }
 
 .dv-row {
   display: flex;
@@ -1970,7 +1975,7 @@ body {
 .pa-vals-held .pa-val-v,
 .pa-vals-held .pa-val-u { color: #646f7f; }
 
-/* Two bars, touching, unlabelled and without a frame. Forward power grows from
+/* Two bars, 2px apart, unlabelled and without a frame. Forward power grows from
    the left, reflected from the right, so the two never read as one continuous
    quantity -- and the gap between them closing is itself the thing worth
    noticing. The unlit ground stays visible so full scale is always readable.
@@ -1980,7 +1985,7 @@ body {
    a third bargraph marker, which is the one misreading that would matter -- a
    dot near the right-hand end meaning "near the top of the band" must not look
    like "nearly full power". */
-.pa-bars { display: flex; flex-direction: column; gap: 0; margin: 1px 0 2px; }
+.pa-bars { display: flex; flex-direction: column; gap: 2px; margin: 1px 0 2px; }
 /* 9px, an odd height, so the arrowhead has ONE middle row to end on. The head
    is 45 degrees -- each row out from the middle one pixel shorter -- and its
    POINT is the reading: the bar's width is the value, and the head is cut out
@@ -2001,12 +2006,14 @@ body {
   right: 0; background: var(--pa-rev);
   clip-path: polygon(4.5px 0, 100% 0, 100% 100%, 4.5px 100%, 0 50%);
 }
-/* After the over the bars stay, at the length they had, in the same dark grey
-   as the held digits above them. This replaced the stale greying the bars used
-   to have (#3a424e): the peaks expire two seconds after telemetry stops, long
-   before the fifteen that make it stale, so a stale panel is always showing
-   held bars -- and one grey for "the last over" is one thing to learn. */
-.pa-bars-held .pa-bar i { background: #646f7f; }
+/* After the over the bars stay, at the length they had, in the held digits'
+   grey at half intensity (#646f7f halved): a solid block of that grey
+   outweighed the numbers above it, and a bar is the louder of the two at any
+   given colour. This replaced the stale greying the bars used to have
+   (#3a424e): the peaks expire two seconds after telemetry stops, long before
+   the fifteen that make it stale, so a stale panel is always showing held
+   bars. */
+.pa-bars-held .pa-bar i { background: #32383f; }
 
 /* The tuner's segments of the band the radio is on. A blind scale on purpose:
    at ~27 px a segment there is no room for numbers, and what is being read off
@@ -2099,8 +2106,12 @@ body {
 .pa-band.pa-band-mismatch { color: #ff5c5c; }
 
 /* Heatsink temperature, coloured by which fan stage the amplifier has reached
-   -- the thresholds and these exact colours are the full web console's own (see
-   PA_FAN_ON in pa-panel.js), so one reading means one thing on both screens.
+   -- the thresholds and these colours' HUES are the full web console's own
+   (see PA_FAN_ON in pa-panel.js), so one reading means one thing on both
+   screens. Each is the console's colour at 70% intensity: at 46px the
+   console's own values made the temperature by far the loudest thing on the
+   panel, louder than the power it is there to accompany. The darkest, cool
+   grey, is still 3.07:1 -- enough for digits this size.
    The steps are a HUE ramp toward the trip colour, not a brightness ramp:
    yellow 50deg -> sand 39deg -> red 0deg. Sand looks calmer than yellow and is
    nonetheless the hotter step, which is the console's design and worth not
@@ -2117,16 +2128,18 @@ body {
 .pa-temp {
   font-size: 46px; font-weight: 700; line-height: 30px; height: 30px;
   position: relative; top: 3.5px;
-  color: #dfe6ef; white-space: nowrap;
+  color: #9ca1a7; white-space: nowrap;
 }
-/* The unit is the panel's usual dimmed one; it does not take the fan-stage
-   colour, which belongs to the number. */
-.pa-temp .pa-temp-u { font-size: 10px; font-weight: 400; color: var(--pa-dim); }
-.pa-temp.t-cool { color: #8e9aab; }
-.pa-temp.t-warm { color: #3ddc84; }
-.pa-temp.t-hot  { color: #f5d048; }
-.pa-temp.t-vhot { color: #e3c88b; }
-.pa-temp.t-trip { color: #ff5c5c; }
+/* The unit takes the number's colour: with the digits dimmed, the panel's
+   usual dim label grey would be brighter than a cool reading, a unit outshining
+   its number. 16px, and a margin rather than a space: a space at this size
+   would push 105 °C out of the panel. */
+.pa-temp .pa-temp-u { font-size: 16px; font-weight: 400; margin-left: 3px; }
+.pa-temp.t-cool { color: #636c78; }
+.pa-temp.t-warm { color: #2b9a5c; }
+.pa-temp.t-hot  { color: #ac9232; }
+.pa-temp.t-vhot { color: #9f8c61; }
+.pa-temp.t-trip { color: #b24040; }
 
 /* LEDs: every bit TrxNet carries, lit or not. An indicator that disappears when
    it goes out teaches you nothing about what the panel can tell you. */
@@ -2195,8 +2208,12 @@ body {
    bars are not in this list: their peaks expire after two seconds without
    telemetry, long before the fifteen that make it stale, so by then they are
    showing the held readings in their own darker grey.) */
-.pa-panel.pa-stale .pa-temp,
 .pa-panel.pa-stale .pa-band { color: #7c8797 !important; }
+/* The temperature darker than that: its live colours are already dimmed, and
+   the stale grey must not be brighter than a live cool reading. It is the held
+   power readings' grey -- an old number, like them -- and at 46px its 3.2:1
+   is plainly legible. */
+.pa-panel.pa-stale .pa-temp { color: #646f7f !important; }
 .pa-panel.pa-stale .pa-led.on { background: #171b22; color: #4a5666; }
 
 .pa-note { font-size: 10px; color: #ff9a9a; line-height: 1.35; }

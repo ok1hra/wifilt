@@ -5,7 +5,7 @@
 // against a seeded IndexedDB.
 //
 // It replaced one panel below the journal with two surfaces: a DUPE view that
-// covers the journal whole, and a floating palette of partial matches. What
+// hangs from the journal's bottom edge, as tall as its rows, and a floating palette of partial matches. What
 // makes it worth a harness of its own is that almost none of it is visible in
 // the code that renders it:
 //
@@ -248,6 +248,11 @@ const PAGE_SCRIPT = `
     // the ADIF-importer shape: no frequencyHz at all, "14.0740 MHz" as text
     await LogDB.addQso(qso(main.id, "OK1IMPORT", {displayOnly: "14.0740 MHz"}));
 
+    // A call worked often enough to overflow any window, for the DUPE view's
+    // ceiling. No O, K or 1 in it, so no fragment the later checks type can
+    // pull it into the palette.
+    for (let i = 0; i < 40; i++) await LogDB.addQso(qso(main.id, "ZZ9ZZZ", {hz: 7032000}));
+
     LogManager.activateLog(main);
     await sleep(500);
 
@@ -294,10 +299,16 @@ const PAGE_SCRIPT = `
     // ---- 3. the DUPE view -------------------------------------------------
     await arm("OK1ABC");
     check("Space on an exact match opens the DUPE view", viewUp(), "");
-    check("the DUPE view covers the journal header too",
-      Math.abs(view().getBoundingClientRect().top - $("logJournal").getBoundingClientRect().top) < 2,
-      Math.round(view().getBoundingClientRect().top) + " vs " +
-      Math.round($("logJournal").getBoundingClientRect().top));
+    // As tall as its rows and hung from the journal's bottom edge. It used to
+    // cover the whole journal for a single duplicate.
+    {
+      const vr = view().getBoundingClientRect(), jr = $("logJournal").getBoundingClientRect();
+      check("the DUPE view sits on the journal's bottom edge",
+        Math.abs(vr.bottom - jr.bottom) < 2, Math.round(vr.bottom) + " vs " + Math.round(jr.bottom));
+      check("...and a short list leaves the journal above it readable",
+        vr.top - jr.top > jr.height / 2,
+        "view " + Math.round(vr.height) + " px of a " + Math.round(jr.height) + " px journal");
+    }
 
     let rows = viewRows();
     check("the DUPE view lists the active log's QSOs", rows.length === 3, String(rows.length));
@@ -315,9 +326,8 @@ const PAGE_SCRIPT = `
       rows[0].querySelector(".jcol-log").textContent.indexOf("DUPEMAIN") !== -1,
       rows[0].querySelector(".jcol-log").textContent);
 
-    // Three rows do not fill the window. Left at the top they would sit a
-    // screen away from the fields being typed in; the spacer pushes them down
-    // to the bottom edge instead, where the eye already is.
+    // Three rows do not fill the window, and the view is no taller than they
+    // are: nothing between the last row and the input row but the view's edge.
     {
       const bodyEl = view().querySelector(".dv-body");
       const last = rows[rows.length - 1].getBoundingClientRect();
@@ -335,6 +345,10 @@ const PAGE_SCRIPT = `
       check("...and the column legend came down with them",
         Math.abs(first.top - legend.bottom) < 6,
         Math.round(legend.bottom) + " vs first row " + Math.round(first.top));
+      const head = view().querySelector(".dv-head").getBoundingClientRect();
+      check("...and the header sits right on top of the legend",
+        Math.abs(legend.top - head.bottom) < 6,
+        Math.round(head.bottom) + " vs legend " + Math.round(legend.top));
     }
 
     // The mode cell: same mode keeps the row's colour, a different one does not.
@@ -373,6 +387,26 @@ const PAGE_SCRIPT = `
     await fetch("/setAud1?role=");
     await fetch("/setMode?mode=CW");
     await sleep(900);
+
+    // A list longer than the window: the view stops at the journal's full
+    // height and the rows scroll, newest in sight.
+    await arm("ZZ9ZZZ");
+    {
+      const vr = view().getBoundingClientRect(), jr = $("logJournal").getBoundingClientRect();
+      const bodyEl = view().querySelector(".dv-body");
+      check("a long list grows the view to the journal's full height, no further",
+        viewRows().length === 40 && Math.abs(vr.top - jr.top) < 2 && Math.abs(vr.bottom - jr.bottom) < 2,
+        viewRows().length + " rows, " + Math.round(vr.top) + "-" + Math.round(vr.bottom) +
+        " vs journal " + Math.round(jr.top) + "-" + Math.round(jr.bottom));
+      check("...and scrolls inside it, parked on the newest row",
+        bodyEl.scrollHeight > bodyEl.clientHeight + 1 &&
+        bodyEl.scrollTop + bodyEl.clientHeight >= bodyEl.scrollHeight - 2,
+        bodyEl.scrollTop + "+" + bodyEl.clientHeight + " of " + bodyEl.scrollHeight);
+      const legend = view().querySelector(".dv-cols").getBoundingClientRect();
+      const br = bodyEl.getBoundingClientRect();
+      check("...with the column legend still stuck to its top",
+        Math.abs(legend.top - br.top) < 5, Math.round(legend.top) + " vs " + Math.round(br.top));   // .dv-body padding
+    }
 
     // ---- 4. the global switches are separate ------------------------------
     await arm("OK1ABC");

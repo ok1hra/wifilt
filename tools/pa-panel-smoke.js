@@ -358,6 +358,10 @@ const PAGE_SCRIPT = `
 
     // Half as tall again as they were (5 px), rounded to a whole pixel.
     // Odd, so the arrowhead has a single middle row to end on.
+    const barRows = Array.from(document.querySelectorAll(".pa-bar")).map(b => b.getBoundingClientRect());
+    check("the two bars do not touch: 2 px apart",
+      Math.abs(barRows[1].top - barRows[0].bottom - 2) < 0.5,
+      (barRows[1].top - barRows[0].bottom) + " px");
     check("the power bars are 9 px each",
       document.querySelectorAll(".pa-bar").length === 2 &&
       Array.from(document.querySelectorAll(".pa-bar")).every(b => b.offsetHeight === 9),
@@ -387,10 +391,10 @@ const PAGE_SCRIPT = `
     await setPa(base({flags:F.ON|F.LINK|F.OPERATE, temp:null}));
     check("and an explicit null does too", txt("paTemp") === "", txt("paTemp"));
     await setPa(base({flags:F.ON|F.LINK|F.OPERATE, temp:0}));
-    check("but 0 °C is a reading, not a blank", txt("paTemp") === "0 °C", txt("paTemp"));
+    check("but 0 °C is a reading, not a blank", txt("paTemp") === "0°C", txt("paTemp"));
 
     await setPa(base({flags:F.ON|F.LINK|F.OPERATE, temp:5849}));
-    check("°C x 100 is shown as whole degrees", txt("paTemp") === "58 °C", txt("paTemp"));
+    check("°C x 100 is shown as whole degrees", txt("paTemp") === "58°C", txt("paTemp"));
 
     // The colours are the fan schedule, manual 18.17, exactly as the full web
     // console draws it -- one reading meaning one thing on both screens.
@@ -442,8 +446,8 @@ const PAGE_SCRIPT = `
     check("reflected power has a scale of its own, not the forward one",
       Math.abs(barW("paBarRef") - 50) < 1, barW("paBarRef") + "%");
     // After the over the bars stay where they were, like the digits above
-    // them, and turn the same dark grey.
-    const HELD_BAR = "rgb(100, 111, 127)";
+    // them, in a grey half as bright as theirs.
+    const HELD_BAR = "rgb(50, 56, 63)";      // the held digits' grey, halved
     const barCol = id => getComputedStyle($(id)).backgroundColor;
     check("while keyed the bars are in their own colours",
       barCol("paBarFw") !== HELD_BAR && barCol("paBarRef") !== HELD_BAR,
@@ -492,10 +496,15 @@ const PAGE_SCRIPT = `
     // power row went blank with the peaks -- and they keep their last values.
     await setPa(base({present:true, flags:F.ON|F.LINK, ageMs:20000, band:20, temp:4500}));
     check("stale telemetry keeps the last band and temperature",
-      txt("paBand") === "20 m" && txt("paTemp") === "45 °C", txt("paBand") + " / " + txt("paTemp"));
-    const stale4 = worstContrast(["paTemp", "paBand"]);
+      txt("paBand") === "20 m" && txt("paTemp") === "45°C", txt("paBand") + " / " + txt("paTemp"));
+    const stale4 = worstContrast(["paBand"]);
     check("...and they stay readable while greyed",
       stale4 >= 4, "worst contrast " + stale4.toFixed(2) + ":1");
+    // The temperature is 46px bold, so it gets the large-text floor -- and its
+    // stale grey must not outshine a live cool reading, whose colour is dimmed.
+    const staleT = worstContrast(["paTemp"]);
+    check("the stale temperature, large, stays legible",
+      staleT >= 3, "contrast " + staleT.toFixed(2) + ":1");
 
     // The trap this panel walked into on real hardware: the daemon publishes
     // only from its STATUS handler, so a SWITCHED-OFF amplifier sends nothing at
@@ -564,6 +573,12 @@ const PAGE_SCRIPT = `
       Math.abs(ink.top - lR.top) <= 1.5 && Math.abs(ink.bottom - lR.bottom) <= 1.5,
       "digits " + ink.top.toFixed(1) + ".." + ink.bottom.toFixed(1) +
       ", lamps " + lR.top.toFixed(1) + ".." + lR.bottom.toFixed(1));
+    const unitEl = document.querySelector("#paTemp .pa-temp-u");
+    check("°C is 16px, in the number's own colour",
+      !!unitEl && getComputedStyle(unitEl).fontSize === "16px" &&
+      getComputedStyle(unitEl).color === getComputedStyle($("paTemp")).color,
+      unitEl ? getComputedStyle(unitEl).fontSize + " " + getComputedStyle(unitEl).color +
+               " vs " + getComputedStyle($("paTemp")).color : "(missing)");
     check("and the row stays exactly the lamps' height -- the big font adds nothing",
       Math.abs($("paLeds").parentNode.getBoundingClientRect().height - lR.height) < 0.5,
       $("paLeds").parentNode.getBoundingClientRect().height + " vs " + lR.height);
@@ -572,7 +587,7 @@ const PAGE_SCRIPT = `
     await setPa(base({flags:F.ON|F.LINK, temp:10500}));
     const t3 = rect("paTemp"), ind3 = $("paLeds").parentNode.getBoundingClientRect();
     check("a three-digit temperature still fits beside the lamps",
-      txt("paTemp") === "105 °C" && t3.left > rect("paLeds").right && t3.right <= ind3.right + 0.5,
+      txt("paTemp") === "105°C" && t3.left > rect("paLeds").right && t3.right <= ind3.right + 0.5,
       txt("paTemp") + ": " + t3.left.toFixed(1) + ".." + t3.right.toFixed(1) +
       " in .." + ind3.right.toFixed(1));
     check("REV 2 is reported when the flag says so",
