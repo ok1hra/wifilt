@@ -181,6 +181,12 @@ const PAGE_SCRIPT = `
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const $ = id => document.getElementById(id);
   const txt = id => { const e = $(id); return e ? e.textContent.trim() : "(missing)"; };
+  // What the operator can actually see: in the layout, and not hidden by
+  // visibility -- the power row goes blank on receive that way, keeping its
+  // height, so display and the DOM text alone would both say "there".
+  const shown = el => !!el && el.getClientRects().length > 0
+                      && getComputedStyle(el).visibility !== "hidden";
+  const rect = id => $(id).getBoundingClientRect();
 
   // Contrast, WCAG relative luminance. Here because the one thing this panel
   // must never do with a value is print it where it cannot be read: every
@@ -250,6 +256,12 @@ const PAGE_SCRIPT = `
     await sleep(120);
     check("clicking the button opens the palette",
       !!$("paPanel") && $("paPanel").style.display !== "none");
+    // Nothing has been transmitted since the page loaded, so there is nothing
+    // to hold: the power row is blank -- no zeros, no dashes -- but there.
+    check("before the first over the power row is blank",
+      !Array.from(document.querySelectorAll("#paVals .pa-val")).some(shown) &&
+      txt("paFw") + txt("paSwr") + txt("paRef") === "" && $("paVals").offsetHeight > 0,
+      JSON.stringify(txt("paFw") + txt("paSwr") + txt("paRef")) + " h=" + $("paVals").offsetHeight);
 
     // ---- 3. power: peaks, no decimals, and null is not zero ---------------
     await setPa(base({flags:F.ON|F.LINK|F.OPERATE|F.FULL|F.TX,
@@ -257,31 +269,113 @@ const PAGE_SCRIPT = `
     check("forward power shows the peak, rounded to whole watts",
       txt("paFw") === "910", txt("paFw"));
     check("reflected power likewise", txt("paRef") === "80", txt("paRef"));
-    check("SWR is shown to one decimal", txt("paSwr") === "SWR 1.3", txt("paSwr"));
+    check("SWR is shown to one decimal", txt("paSwr") === "1.3", txt("paSwr"));
+    check("while keyed, all three readings are on screen",
+      shown($("paFw")) && shown($("paSwr")) && shown($("paRef")));
+    // FW at the left edge, SWR in the middle, REV at the right edge.
+    const rowR = rect("paVals"), fwR = rect("paFw"), swrR = rect("paSwrBox"), refR = rect("paRef");
+    check("FW sits left of SWR, and SWR left of REV",
+      fwR.right < swrR.left && swrR.right < refR.left,
+      [fwR.right, swrR.left, swrR.right, refR.left].map(Math.round).join(","));
+    check("and SWR is centred in the row",
+      Math.abs((swrR.left + swrR.right) / 2 - (rowR.left + rowR.right) / 2) < 1.5,
+      Math.round(swrR.left + swrR.right) / 2 + " vs " + (rowR.left + rowR.right) / 2);
+    const keyedRowH = $("paVals").offsetHeight;
+
+    // The widest the row ever gets: four digits of forward power, three of
+    // reflected, and SWR 10.0 -- still inside the panel, still apart.
+    await setPa(base({flags:F.ON|F.LINK|F.OPERATE|F.FULL|F.TX,
+                      fwdPk:11804, refPk:1204, swr:1000}));
+    const wRow = rect("paVals");
+    const box = sel => document.querySelector(sel).getBoundingClientRect();
+    const wa = box(".pa-val-fw"), wb = box(".pa-val-swr"), wc = box(".pa-val-rev");
+    check("the widest readings still fit the row without touching",
+      wa.left >= wRow.left - 0.5 && wc.right <= wRow.right + 0.5 &&
+      wa.right < wb.left && wb.right < wc.left &&
+      $("paVals").scrollWidth <= $("paVals").clientWidth,
+      [wa.left, wa.right, wb.left, wb.right, wc.left, wc.right, wRow.left, wRow.right]
+        .map(Math.round).join(","));
+
+    // Receiving: the daemon keeps publishing and the peak comes back as 0 W,
+    // not null. The row does not empty itself -- that read as the panel dropping
+    // out, right above the bars -- it keeps the last over's readings, in one
+    // dark grey, until the next over.
+    const HELD_GREY = "rgb(100, 111, 127)";
+    const heldGrey = () => Array.from(document.querySelectorAll(
+        "#paVals .pa-val-k, #paVals .pa-val-v, #paVals .pa-val-u"))
+      .filter(shown).every(e => getComputedStyle(e).color === HELD_GREY);
+    await setPa(base({flags:F.ON|F.LINK|F.OPERATE, fwd:0, ref:0, fwdPk:0, refPk:0, swr:0}));
+    check("on receive (FW 0) the row keeps the last over's readings",
+      txt("paFw") === "1180" && txt("paSwr") === "10.0" && txt("paRef") === "120" &&
+      shown($("paFw")) && shown($("paSwr")) && shown($("paRef")),
+      txt("paFw") + " / " + txt("paSwr") + " / " + txt("paRef"));
+    check("all of it -- labels, numbers, units -- in the one dark grey",
+      $("paVals").classList.contains("pa-vals-held") && heldGrey(),
+      getComputedStyle($("paFw")).color + " / " + getComputedStyle($("paSwr")).color);
+    const heldC = worstContrast(["paFw", "paSwr", "paRef"]);
+    check("dark, but not so dark it vanishes",
+      heldC >= 3 && heldC < 4, "contrast " + heldC.toFixed(2) + ":1");
+    check("not a dash, and not 0 W", !/—/.test(txt("paVals")) && txt("paFw") !== "0", txt("paVals"));
+    check("and the row keeps its height, so the panel does not jump",
+      $("paVals").offsetHeight === keyedRowH && keyedRowH > 0,
+      $("paVals").offsetHeight + " vs " + keyedRowH);
 
     await setPa(base({flags:F.ON|F.LINK|F.OPERATE, fwdPk:null, refPk:null, swr:0}));
-    check("an expired peak reads as a dash, never as 0 W",
-      txt("paFw") === "—" && txt("paRef") === "—", txt("paFw") + "/" + txt("paRef"));
-    check("SWR 0 (no answer) is a dash too", txt("paSwr") === "SWR —", txt("paSwr"));
+    check("an expired peak keeps the held readings too, never 0 W",
+      txt("paFw") === "1180" && $("paVals").classList.contains("pa-vals-held"), txt("paVals"));
 
-    await setPa(base({flags:F.ON|F.LINK|F.OPERATE, swr:65535}));
-    check("SWR 65535 is infinity, not a number", txt("paSwr") === "SWR ∞", txt("paSwr"));
+    // Keyed, but with nothing reflected: that is the good news, and it shows --
+    // live, in colour, not in the held grey.
+    await setPa(base({flags:F.ON|F.LINK|F.OPERATE|F.TX, fwdPk:1000, refPk:0, swr:100}));
+    check("REV 0 W while keyed is shown, not hidden",
+      shown($("paRef")) && txt("paRef") === "0", txt("paRef"));
+    check("and a live reading is back in colour",
+      !$("paVals").classList.contains("pa-vals-held") &&
+      getComputedStyle($("paFw")).color !== HELD_GREY, getComputedStyle($("paFw")).color);
+
+    await setPa(base({flags:F.ON|F.LINK|F.OPERATE|F.TX, fwdPk:1000, refPk:10, swr:0}));
+    check("keyed with SWR 0 (no answer) leaves the middle empty",
+      !shown($("paSwrBox")) && txt("paSwr") === "" && shown($("paFw")), txt("paSwr"));
+
+    await setPa(base({flags:F.ON|F.LINK|F.OPERATE|F.TX, fwdPk:1000, refPk:10, swr:65535}));
+    check("SWR 65535 is infinity, not a number", txt("paSwr") === "∞", txt("paSwr"));
+
+    // The last sample of an over often carries no SWR -- the drive is already
+    // falling. The held reading is the last real one, not that 0.
+    await setPa(base({flags:F.ON|F.LINK|F.OPERATE|F.TX, fwdPk:1000, refPk:10, swr:0}));
+    await setPa(base({flags:F.ON|F.LINK|F.OPERATE, fwdPk:0, refPk:0, swr:0}));
+    check("the held SWR is the over's last real reading, not its final 0",
+      txt("paSwr") === "∞" && shown($("paSwr")), txt("paSwr"));
+    // ...but it belongs to that over. The next one starts without it.
+    await setPa(base({flags:F.ON|F.LINK|F.OPERATE|F.TX, fwdPk:2000, refPk:10, swr:0}));
+    await setPa(base({flags:F.ON|F.LINK|F.OPERATE, fwdPk:0, refPk:0, swr:0}));
+    check("a new over does not inherit the previous one's SWR",
+      txt("paFw") === "200" && txt("paSwr") === "" && !shown($("paSwrBox")),
+      txt("paFw") + " / " + JSON.stringify(txt("paSwr")));
+
+    // Half as tall again as they were (5 px), rounded to a whole pixel.
+    check("the power bars are 8 px each",
+      document.querySelectorAll(".pa-bar").length === 2 &&
+      Array.from(document.querySelectorAll(".pa-bar")).every(b => b.offsetHeight === 8),
+      Array.from(document.querySelectorAll(".pa-bar")).map(b => b.offsetHeight).join(","));
 
     // ---- 3a. temperature --------------------------------------------------
     // /pa-temp is °C x 100 and arrived on 2026-09-08. The base fixture above
     // deliberately does NOT carry it: that is a daemon older than the topic,
     // which publishes the other five perfectly and this one never. It has to be
-    // a dash and not 0 °C, the same null-is-not-zero rule the power readings
+    // blank and not 0 °C, the same null-is-not-zero rule the power readings
     // follow -- an amplifier that has said nothing about its heatsink must not
     // read as a cold one.
     const tempCls = () => $("paTemp").className;
     await setPa(base({flags:F.ON|F.LINK|F.OPERATE}));
-    check("an amplifier that never reported a temperature shows a dash",
-      txt("paTemp") === "—", txt("paTemp"));
+    check("an amplifier that never reported a temperature shows nothing",
+      txt("paTemp") === "", txt("paTemp"));
+    check("and says why on hover", /not reporting a temperature/.test($("paTemp").title),
+      $("paTemp").title);
     await setPa(base({flags:F.ON|F.LINK|F.OPERATE, temp:null}));
-    check("and an explicit null does too", txt("paTemp") === "—", txt("paTemp"));
+    check("and an explicit null does too", txt("paTemp") === "", txt("paTemp"));
     await setPa(base({flags:F.ON|F.LINK|F.OPERATE, temp:0}));
-    check("but 0 °C is a reading, not a dash", txt("paTemp") === "0 °C", txt("paTemp"));
+    check("but 0 °C is a reading, not a blank", txt("paTemp") === "0 °C", txt("paTemp"));
 
     await setPa(base({flags:F.ON|F.LINK|F.OPERATE, temp:5849}));
     check("°C x 100 is shown as whole degrees", txt("paTemp") === "58 °C", txt("paTemp"));
@@ -360,8 +454,13 @@ const PAGE_SCRIPT = `
     // the DOM and invisible on screen" -- reported from the shack as the panel
     // showing no value and not even a dash. Measured rather than eyeballed,
     // because being unable to see it is the whole failure.
-    const stale4 = worstContrast(["paFw", "paRef", "paSwr", "paTemp", "paBand"]);
-    check("...and the dashes stay readable while it does",
+    // The band and the temperature are what is left on screen by then -- the
+    // power row went blank with the peaks -- and they keep their last values.
+    await setPa(base({present:true, flags:F.ON|F.LINK, ageMs:20000, band:20, temp:4500}));
+    check("stale telemetry keeps the last band and temperature",
+      txt("paBand") === "20 m" && txt("paTemp") === "45 °C", txt("paBand") + " / " + txt("paTemp"));
+    const stale4 = worstContrast(["paTemp", "paBand"]);
+    check("...and they stay readable while greyed",
       stale4 >= 4, "worst contrast " + stale4.toFixed(2) + ":1");
 
     // The trap this panel walked into on real hardware: the daemon publishes
@@ -396,6 +495,26 @@ const PAGE_SCRIPT = `
     const lit = leds.filter(l => l.classList.contains("on")).map(l => l.textContent);
     check("ALARM and TUNE are lit, the rest dark",
       lit.length === 2 && lit.includes("ALARM") && lit.includes("TUNE"), lit.join(","));
+    // Two fixed rows: what is happening over the modes it is in.
+    const ledRows = Array.from(document.querySelectorAll("#paLeds .pa-led-row"))
+      .map(r => Array.from(r.children).map(l => l.textContent).join(" "));
+    check("the lamps sit in two rows, ALARM TX TUNE over CONTEST BEEP",
+      ledRows.length === 2 && ledRows[0] === "ALARM TX TUNE" && ledRows[1] === "CONTEST BEEP",
+      ledRows.join(" | "));
+    const r0 = document.querySelectorAll("#paLeds .pa-led-row")[0].getBoundingClientRect();
+    const r1 = document.querySelectorAll("#paLeds .pa-led-row")[1].getBoundingClientRect();
+    check("really two rows on screen, not one wrapped",
+      r1.top >= r0.bottom - 0.5, r0.bottom + " / " + r1.top);
+    // The temperature beside both rows, larger than anything else down there.
+    await setPa(base({flags:F.ON|F.LINK, temp:4500}));
+    const tR = rect("paTemp"), lR = rect("paLeds");
+    check("the temperature stands to the right of the lamps",
+      tR.left > lR.right, tR.left + " vs " + lR.right);
+    check("centred across both lamp rows",
+      Math.abs((tR.top + tR.bottom) / 2 - (lR.top + lR.bottom) / 2) < 2,
+      (tR.top + tR.bottom) / 2 + " vs " + (lR.top + lR.bottom) / 2);
+    check("and enlarged to 20 px", getComputedStyle($("paTemp")).fontSize === "20px",
+      getComputedStyle($("paTemp")).fontSize);
     check("REV 2 is reported when the flag says so",
       (await setPa(base({flags:F.ON|F.LINK|F.REV2}))) === undefined &&
       txt("paRevTag") === "REV 2.0", txt("paRevTag"));
@@ -408,6 +527,30 @@ const PAGE_SCRIPT = `
     await setPa(base({flags:F.ON|F.LINK, band:40}));
     check("a band the radio is not on IS flagged",
       $("paBand").classList.contains("pa-band-mismatch"), txt("paBand"));
+    // In the status line, in the panel's true centre whatever the status text
+    // beside it says.
+    await setPa(base({flags:F.ON|F.LINK|F.REV2, band:15}));
+    const stR = $("paStatusText").closest(".pa-status").getBoundingClientRect();
+    const bR = rect("paBand");
+    check("the band sits between the status and REV, centred",
+      Math.abs((bR.left + bR.right) / 2 - (stR.left + stR.right) / 2) < 1.5 &&
+      bR.left > rect("paStatusText").right && bR.right < rect("paRevTag").left,
+      (bR.left + bR.right) / 2 + " vs " + (stR.left + stR.right) / 2);
+    await setPa(base({flags:F.LINK, band:15}));
+    const bR2 = rect("paBand");
+    check("and stays put when the status text changes length",
+      Math.abs(bR2.left - bR.left) < 0.5, bR.left + " -> " + bR2.left);
+    // The longest thing the status can say. It is wider than a third of the
+    // panel, and the band must step aside rather than print over it -- seen on
+    // the first screenshot as "NO DATA 20 s40 m".
+    await setPa(base({flags:F.ON|F.LINK, band:40, ageMs:125000}));
+    check("a long NO DATA never runs into the band",
+      rect("paStatusText").right + 3 <= rect("paBand").left,
+      txt("paStatusText") + ": " + rect("paStatusText").right + " / " + rect("paBand").left);
+    check("and the band still fits inside the panel",
+      rect("paBand").right <= $("paStatusText").closest(".pa-status").getBoundingClientRect().right + 0.5);
+    await setPa(base({flags:F.ON|F.LINK, band:0}));
+    check("an unknown band is blank, not a dash", txt("paBand") === "", txt("paBand"));
 
     // ---- 7. buttons show state, and a click sends the OTHER value ---------
     await setPa(base({flags:F.ON|F.LINK|F.OPERATE|F.FULL}));
@@ -765,8 +908,15 @@ const PAGE_SCRIPT = `
       getComputedStyle($("paSegScale")).boxShadow !== "none",
       getComputedStyle($("paSegScale")).boxShadow);
 
+    check("and the scale says NO SEGMENTS -- the frequency is known, the band is the problem",
+      shown($("paSegMsg")) && txt("paSegMsg") === "NO SEGMENTS", txt("paSegMsg"));
+    const rowHNoSeg = $("paSegRow").offsetHeight;
+
     await setFreq(5300000);
     check("60 m is not drawn as the top of 80 m", segs().length === 0, String(segs().length));
+    await setFreq(14075000);
+    check("the words do not change the row's height",
+      $("paSegRow").offsetHeight === rowHNoSeg, rowHNoSeg + " vs " + $("paSegRow").offsetHeight);
 
     // Transmitting. Retuning the radio out from under a keyed amplifier is the
     // expensive mistake this whole panel exists to prevent.
@@ -792,7 +942,16 @@ const PAGE_SCRIPT = `
       String(segs().length));
     check("and says the radio is not connected",
       /not connected/.test($("paSegDown").title), $("paSegDown").title);
+    check("and says NO FREQ over the scale, so it cannot pass for a broken one",
+      shown($("paSegMsg")) && txt("paSegMsg") === "NO FREQ", txt("paSegMsg"));
+    const mR = rect("paSegMsg"), scR = rect("paSegScale");
+    check("laid over the middle of the scale",
+      Math.abs((mR.left + mR.right) / 2 - (scR.left + scR.right) / 2) < 1.5 &&
+      Math.abs((mR.top + mR.bottom) / 2 - (scR.top + scR.bottom) / 2) < 1.5,
+      [mR.left, mR.right, scR.left, scR.right].map(Math.round).join(","));
     await setFreq(14075000);
+    check("and the words go once there is a frequency again",
+      !shown($("paSegMsg")) && !$("paSegDot").hidden);
 
     // ---- 16. the scale must not steal the caret either ---------------------
     // The scale is a DIV, not a button, so it slips straight past a mousedown
@@ -825,6 +984,11 @@ const PAGE_SCRIPT = `
 
     await setPa(base({flags:F.ON|F.LINK, trx1:"IC-7610", tunePlus:false, tunePlusWhy:"no_oi3", tp:idle}));
     check("the title names the radio the amplifier follows", txt("paName") === "PA.01/IC-7610", txt("paName"));
+    check("the radio half, slash included, is grey and the name is not",
+      txt("paNameTrx") === "/IC-7610" &&
+      getComputedStyle($("paNameTrx")).color === getComputedStyle($("paClose")).color &&
+      getComputedStyle($("paNameAmp")).color !== getComputedStyle($("paNameTrx")).color,
+      getComputedStyle($("paNameAmp")).color + " / " + getComputedStyle($("paNameTrx")).color);
     check("without an OI3 the key stays plain TUNE", txt("paBtnTune") === "TUNE", txt("paBtnTune"));
     check("and an ordinary station is not told about TUNE+", !/TUNE[+]/.test($("paBtnTune").title), $("paBtnTune").title);
 

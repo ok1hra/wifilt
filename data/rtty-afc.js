@@ -158,5 +158,107 @@
     return {tick, reset, offsetHz: () => offsetHz, targetHz: () => targetHz};
   }
 
-  return {findOffset, nextTarget, createTracker};
+  // AUTOTUNE, QRPLog palette (grilled 2026-09-26, docs/rtty-implementace.md
+  // kap. 23). The tracker above moves the DECODER onto a signal; this moves
+  // the DIAL, so the signal lands on the markers and a reply goes out exactly
+  // where the other station is. It is fed the raw findOffset() of every fresh
+  // FFT frame -- not the tracker's offset, which is slewed, clamped and dead
+  // whenever AFC is switched off (its default).
+  //
+  // Two states only, on purpose (operator, 2026-09-26: a grey/amber/green
+  // pill flickering with every noisy frame was unreadable). SYNCED = at least
+  // five recent samples agree; that offset is remembered as the last sync.
+  // When the station stops and the detector is left chasing noise the pill
+  // goes back to grey, but the last sync stays: a press applies it. It is
+  // forgotten only when the dial it was measured on is gone.
+  //
+  // Samples are DECIMATED to one per sampleIntervalMs (operator, 2026-09-26:
+  // a sync must take at least 2 s). The live FFT tap it reads refreshes every
+  // 16 ms over a 512 ms window, so undecimated "four agreeing samples" were
+  // ~65 ms of 97 %-overlapping windows -- one measurement seen four times.
+  // At 500 ms apart the windows barely overlap, and stableCount samples span
+  // at least (stableCount - 1) * sampleIntervalMs = 2 s.
+  const AUTOTUNE = Object.freeze({
+    sampleIntervalMs: 500,
+    maxSamples: 10,     // = maxAgeMs / sampleIntervalMs
+    maxAgeMs: 5000,     // how long samples count towards a sync
+    stableCount: 5,
+    toleranceHz: 10,    // samples this close to each other = one steady signal
+    deadBandHz: 5,      // already on the markers -- leave the dial alone
+    holdoffMs: 1000,    // after a retune the 512 ms FFT still holds the old position
+  });
+
+  function median(values) {
+    const sorted = values.slice().sort((a, b) => a - b);
+    const mid = sorted.length >> 1;
+    return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  }
+
+  // samples = [{t, hz}] -> {count, synced, syncHz}. The largest cluster, not
+  // the whole buffer: one frame caught on a neighbour or on noise must
+  // neither drop a sync nor drag its offset. syncHz is the median of that
+  // cluster, or null when fewer than stableCount samples agree.
+  function summarizeOffsets(samples, {
+    nowMs,
+    maxAgeMs = AUTOTUNE.maxAgeMs,
+    stableCount = AUTOTUNE.stableCount,
+    toleranceHz = AUTOTUNE.toleranceHz,
+  } = {}) {
+    const hz = (samples || []).filter(s => Number.isFinite(s.hz) &&
+      !(nowMs - s.t > maxAgeMs)).map(s => s.hz);
+    let best = [];
+    for (const centre of hz) {
+      const cluster = hz.filter(v => Math.abs(v - centre) <= toleranceHz);
+      if (cluster.length > best.length) best = cluster;
+    }
+    const synced = best.length >= stableCount;
+    return {count: hz.length, synced, syncHz: synced ? median(best) : null};
+  }
+
+  // The rolling buffer and the remembered sync, clock injected so the
+  // holdoff and ageing are testable without waiting.
+  //   observe(hz)      one fresh frame's findOffset() result; null is
+  //                    ignored, and so is anything within sampleIntervalMs
+  //                    of the last sample taken
+  //   clear(holdoffMs) the dial moved: forget samples AND the last sync;
+  //                    ignore frames for holdoffMs
+  //   summary()        {count, synced, syncHz, lastSyncHz}
+  //   decide()         {action: 'none'|'on-mark'|'tune', offsetHz} from the
+  //                    last sync, whether or not it is still current
+  function createAutotune({now = () => Date.now()} = {}) {
+    let samples = [], holdoffUntil = 0, lastSyncHz = null, lastTakenMs = null;
+    function observe(hz) {
+      const t = now();
+      if (t < holdoffUntil || !Number.isFinite(hz)) return;
+      // Throttled on TAKEN samples, not on frames: a frame without a pair (a
+      // gap between characters) does not use up the slot, the next one with
+      // a pair is taken instead.
+      if (lastTakenMs !== null && t - lastTakenMs < AUTOTUNE.sampleIntervalMs) return;
+      lastTakenMs = t;
+      samples.push({t, hz});
+      if (samples.length > AUTOTUNE.maxSamples) samples.shift();
+    }
+    function clear(holdoffMs) {
+      samples = [];
+      lastSyncHz = null;
+      lastTakenMs = null;
+      holdoffUntil = holdoffMs > 0 ? now() + holdoffMs : 0;
+    }
+    function summary() {
+      const t = now();
+      samples = samples.filter(s => !(t - s.t > AUTOTUNE.maxAgeMs));
+      const s = summarizeOffsets(samples, {nowMs: t});
+      if (s.synced) lastSyncHz = s.syncHz;
+      return Object.assign(s, {lastSyncHz});
+    }
+    function decide() {
+      const s = summary();
+      if (s.lastSyncHz === null) return {action: 'none', offsetHz: null};
+      if (Math.abs(s.lastSyncHz) < AUTOTUNE.deadBandHz) return {action: 'on-mark', offsetHz: s.lastSyncHz};
+      return {action: 'tune', offsetHz: s.lastSyncHz};
+    }
+    return {observe, clear, summary, decide};
+  }
+
+  return {findOffset, nextTarget, createTracker, AUTOTUNE, summarizeOffsets, createAutotune};
 });

@@ -112,4 +112,79 @@ decoder.pushSamples(Float32Array.from(encoded, sample => sample / 32767));
 assert.strictEqual(decoded, integrationText,
   `acquired offset did not restore decoding: ${JSON.stringify(decoded)}`);
 
+// ---- AUTOTUNE buffer (QRPLog palette, kap. 23) -----------------------------
+{
+  const {AUTOTUNE, summarizeOffsets, createAutotune} = RttyAfc;
+  const STEP = AUTOTUNE.sampleIntervalMs;
+  let clock = 100000;
+  const at = createAutotune({now: () => clock});
+  const tick = (hz, ms = STEP) => { at.observe(hz); clock += ms; };
+  const feed = list => list.forEach(hz => tick(hz));
+
+  assert.deepStrictEqual(at.decide(), {action: "none", offsetHz: null},
+    "nothing synced must not tune");
+  tick(null);
+  assert.strictEqual(at.summary().count, 0, "a frame without a pair is not a sample");
+
+  // Decimation: the live tap delivers a frame every 16 ms; only one per
+  // sampleIntervalMs is taken, and a frame without a pair does not use the slot.
+  const start = clock;
+  for (let i = 0; i < 40; i++) tick(40, 16);
+  assert.strictEqual(at.summary().count, 2,
+    `640 ms of 16 ms frames are two samples, not forty: ${at.summary().count}`);
+  at.clear(0);
+  clock = start;
+
+  // THE requirement: no sync in under 2 s of steady signal, sync at 2 s.
+  let syncedAfterMs = null;
+  for (let ms = 0; ms <= 4000; ms += 16) {
+    at.observe(40);
+    if (syncedAfterMs === null && at.summary().synced) syncedAfterMs = ms;
+    clock += 16;
+  }
+  assert.ok(syncedAfterMs >= 2000 && syncedAfterMs < 2100,
+    `a steady signal syncs after 2 s, not before: ${syncedAfterMs} ms`);
+  at.clear(0);
+
+  feed([41, 39, 40, 41]);
+  assert.ok(!at.summary().synced, "four samples (1.5 s) are not a sync yet");
+  tick(95);   // one frame on a neighbour
+  assert.ok(!at.summary().synced, "an outlier does not count towards a sync");
+  tick(42);
+  let s = at.summary();
+  assert.ok(s.synced && s.syncHz === 41,
+    `five within ±${AUTOTUNE.toleranceHz} Hz sync, the outlier ignored: ${JSON.stringify(s)}`);
+  tick(-120);
+  assert.ok(at.summary().synced, "a noise frame after a sync does not drop it");
+
+  for (let i = 0; i < 20; i++) tick(40);
+  assert.strictEqual(at.summary().count, AUTOTUNE.maxSamples, "the buffer is capped");
+
+  clock += AUTOTUNE.maxAgeMs + 1;   // the station stopped; only noise since
+  feed([7, -60, 130]);
+  s = at.summary();
+  assert.ok(!s.synced && s.lastSyncHz === 40,
+    `with the signal gone it is no longer synced, but the last sync is kept: ${JSON.stringify(s)}`);
+  assert.deepStrictEqual(at.decide(), {action: "tune", offsetHz: 40},
+    "a press applies the last sync");
+
+  feed([-30, -32, -31, -31, -30]);
+  assert.strictEqual(at.decide().offsetHz, -31, "a new sync replaces the old one");
+
+  at.clear(AUTOTUNE.holdoffMs);
+  assert.strictEqual(at.summary().lastSyncHz, null, "a dial move forgets the last sync");
+  tick(40, AUTOTUNE.holdoffMs / 2);
+  assert.strictEqual(at.summary().count, 0, "frames inside the holdoff are ignored");
+  clock += AUTOTUNE.holdoffMs;
+  feed([3, -2, 1, 2, 0]);
+  assert.strictEqual(at.decide().action, "on-mark",
+    `under ${AUTOTUNE.deadBandHz} Hz the dial is left alone`);
+
+  assert.deepStrictEqual(summarizeOffsets([], {nowMs: 0}),
+    {count: 0, synced: false, syncHz: null});
+  assert.strictEqual(summarizeOffsets([10, 20, 12, 18].map(hz => ({t: 0, hz})),
+    {nowMs: 0, stableCount: 4}).syncHz, 15,
+    "an even cluster takes the mean of the middle two");
+}
+
 console.log("RTTY AFC smoke: PASS");

@@ -40,6 +40,9 @@ const sessionPosts = [];          // every /js8/session/* body, in order
 let lanConfigured = true;         // does the saved setup have ICOM-LAN?
 let claimRefused = false;         // make /js8/session/claim answer 409
 let radioMode = "USB-D";          // what /state reports, switchable mid-run
+let radioFreq = 14085000;         // moved by a setFrequency, as a radio would
+let radioTx = false;              // what /state reports as tx (AUTOTUNE, 7f)
+const cmdPosts = [];              // every non-civ.read /cmd body (AUTOTUNE, 7f)
 
 // The firmware's civ.read, as a fixture: ONE armed slot and a sequence counter
 // the caller polls until it moves (wifilt.ino's civReadArm/civReadSeq). The
@@ -90,6 +93,9 @@ const server = http.createServer((request, response) => {
   if (url.pathname === "/set-civ-mark") { civAnswers["1A050050"] = url.searchParams.get("v"); return json({ok: true}); }
   if (url.pathname === "/civ-reads") return json({reads: civReads});
   if (url.pathname === "/set-claim-refused") { claimRefused = url.searchParams.get("v") === "1"; return json({ok: true}); }
+  if (url.pathname === "/set-tx") { radioTx = url.searchParams.get("v") === "1"; return json({ok: true}); }
+  if (url.pathname === "/cmd-posts") return json(cmdPosts);
+  if (url.pathname === "/cmd-posts/clear") { cmdPosts.length = 0; return json({ok: true}); }
   if (url.pathname === "/session-posts") return json(sessionPosts);
   if (url.pathname === "/session-posts/clear") { sessionPosts.length = 0; return json({ok: true}); }
 
@@ -118,9 +124,9 @@ const server = http.createServer((request, response) => {
     connected: true, catHealthy: true, audioReady: true, lanStatus: "linked",
     btStatus: "LAN linked", wifiStatus: "WiFi STA", radioTransport: "lan",
     fullCat: true, wifiRssi: -55, fwRev: "20260907", bdSupported: false,
-    power: true, frequency: 14085000, mode: radioMode, filter: 1,
+    power: true, frequency: radioFreq, mode: radioMode, filter: 1,
     radioAddress: "a4", transceiverType: "IC-705", radioName: "IC-705",
-    tx: false, ritRaw: 0, smeterRaw: 0, powerMeterRaw: 0, afGain: 100,
+    tx: radioTx, ritRaw: 0, smeterRaw: 0, powerMeterRaw: 0, afGain: 100,
     keySpeed: 20, rfPower: 128, rfPowerSeen: true, supplyVolts: 13.8, swr: 1.1,
     preamp: 0, vox: 0, dxcConnected: false,
   });
@@ -129,7 +135,11 @@ const server = http.createServer((request, response) => {
     return readBody(body => {
       let parsed = {};
       try { parsed = JSON.parse(body); } catch (_) {}
-      if (parsed.type !== "civ.read") return json({ok: true});
+      if (parsed.type !== "civ.read") {
+        cmdPosts.push({radio: url.searchParams.get("radio"), body: parsed});
+        if (parsed.type === "setFrequency") radioFreq = Number(parsed.frequency) || radioFreq;
+        return json({ok: true});
+      }
       civReads++;
       const before = civSeq;
       const command = String(parsed.data || "").toUpperCase();
@@ -657,6 +667,170 @@ const PAGE_SCRIPT = `
     await fetch("/set-mode?v=USB-D");
     await sleep(1300);
 
+    // ---- 7f. AUTOTUNE: S&P only, real FSK only, dial by the last sync -----
+    // Samples are injected through autotuneObserve(): no FFT frame ever
+    // arrives here (no AUD1), and the FFT -> findOffset hop plus the buffer
+    // arithmetic are tools/rtty-afc-smoke.js's. What this covers is the part
+    // only a browser shows: visibility, the two looks, the dial command that
+    // goes out, and that the caret never leaves Call.
+    {
+      const pill = $("rttyPanelAutotune");
+      const setFreqs = async () => (await (await fetch("/cmd-posts")).json())
+        .filter(p => p.body.type === "setFrequency");
+      const freqNow = () => window.RttyPanel.getState().radio.frequency;
+      const at = () => window.RttyPanel.getState().autotune;
+      const green = () => pill.classList.contains("at-green");
+      // Spaced like the real feed: the palette takes one sample per 500 ms,
+      // so anything closer would be (rightly) dropped.
+      const observe = async list => {
+        for (const hz of list) { window.RttyPanel.autotuneObserve(hz); await sleep(520); }
+      };
+      const altT = () => document.dispatchEvent(new KeyboardEvent("keydown",
+        {key: "t", code: "KeyT", altKey: true, bubbles: true, cancelable: true}));
+
+      setRunMode("RUN");
+      await sleep(100);
+      check("AUTOTUNE: in RUN the pill is not there", pill.hidden);
+      setRunMode("SP");
+      await sleep(100);
+      check("AUTOTUNE: in S&P it is", !pill.hidden);
+      check("AUTOTUNE: right-aligned, between the status and the close button",
+        pill.previousElementSibling.id === "rttyPanelState" &&
+          pill.nextElementSibling.id === "rttyPanelClose" &&
+          pill.getBoundingClientRect().right > $("rttyPanelState").getBoundingClientRect().right,
+        pill.previousElementSibling.id + " / " + pill.nextElementSibling.id);
+      check("AUTOTUNE: the whole header still fits a 320 px palette",
+        $("rttyPanelClose").getBoundingClientRect().right <= $("rttyPanel").getBoundingClientRect().right,
+        $("rttyPanelClose").getBoundingClientRect().right + " vs " + $("rttyPanel").getBoundingClientRect().right);
+      // The colour IS the state: nothing may repaint it under the pointer.
+      const hoverRules = [];
+      for (const sheet of document.styleSheets) {
+        let rules = [];
+        try { rules = sheet.cssRules; } catch (_) {}
+        for (const rule of rules)
+          if (rule.selectorText && /rtty-panel-autotune[^,]*:hover/.test(rule.selectorText))
+            hoverRules.push(rule.selectorText);
+      }
+      check("AUTOTUNE: no hover style that would hide its colour", hoverRules.length === 0,
+        JSON.stringify(hoverRules));
+      check("AUTOTUNE: in USB-D it is greyed, saying why",
+        pill.disabled && /RTTY/.test(pill.title), pill.title);
+
+      await fetch("/set-mode?v=RTTY");
+      await sleep(2400);
+      check("AUTOTUNE: in RTTY it is usable", !pill.disabled, pill.title);
+      check("AUTOTUNE: grey while not synced", !green(), pill.className);
+
+      await fetch("/cmd-posts/clear");
+      pill.click();
+      await sleep(200);
+      check("AUTOTUNE: a press before any sync moves nothing",
+        (await setFreqs()).length === 0, JSON.stringify(await setFreqs()));
+      check("AUTOTUNE: and says so, in red",
+        /no sync/.test($("rttyPanelState").textContent) &&
+          $("rttyPanelState").classList.contains("at-bad"),
+        JSON.stringify($("rttyPanelState").textContent));
+
+      for (let i = 0; i < 30; i++) { window.RttyPanel.autotuneObserve(40); await sleep(16); }
+      check("AUTOTUNE: 16 ms frames are decimated -- half a second is one sample, not thirty",
+        at().count === 1, JSON.stringify(at()));
+      await sleep(520);
+      await observe([39, 41]);
+      check("AUTOTUNE: three samples are still grey -- there is no in-between colour",
+        !green() && pill.className === "rtty-panel-autotune", pill.className);
+      await observe([95]);
+      check("AUTOTUNE: a stray sample does not count", !green());
+      await observe([40]);
+      check("AUTOTUNE: four agreeing (1.5 s) are not yet a sync", !green(), JSON.stringify(at()));
+      await observe([41]);
+      check("AUTOTUNE: five that agree (2 s) turn it green -- synced", green(), JSON.stringify(at()));
+      await observe([-150]);
+      check("AUTOTUNE: a noise frame does not knock it off green", green(), JSON.stringify(at()));
+
+      // The station stops: its samples age out, the pill goes grey, the sync stays.
+      await sleep(5300);
+      check("AUTOTUNE: with the signal gone it goes grey again", !green(), JSON.stringify(at()));
+      check("AUTOTUNE: but the last sync is kept", at().lastSyncHz === 40, JSON.stringify(at()));
+      check("AUTOTUNE: and the tooltip says a press would apply it",
+        /last sync \\(dial − ?40 Hz\\)/.test(pill.title), pill.title);
+
+      inpCall.focus();
+      const md = new MouseEvent("mousedown", {bubbles: true, cancelable: true});
+      pill.dispatchEvent(md);
+      check("AUTOTUNE: pressing it does not take the caret out of Call",
+        md.defaultPrevented && document.activeElement === inpCall,
+        "prevented=" + md.defaultPrevented + " active=" + (document.activeElement && document.activeElement.id));
+      const dialBefore = freqNow();
+      await fetch("/cmd-posts/clear");
+      pill.click();
+      await sleep(300);
+      let moves = await setFreqs();
+      check("AUTOTUNE: a grey press applies the last sync to the LAN radio's dial",
+        moves.length === 1 && moves[0].radio === "lan" &&
+          Number(moves[0].body.frequency) === dialBefore - 40,
+        dialBefore + " -> " + JSON.stringify(moves));
+      check("AUTOTUNE: the status line reports the move",
+        /AT − ?40 Hz/.test($("rttyPanelState").textContent) &&
+          !$("rttyPanelState").classList.contains("at-bad"),
+        JSON.stringify($("rttyPanelState").textContent));
+      check("AUTOTUNE: and the sync of the old dial is gone",
+        at().count === 0 && at().lastSyncHz === null && !green(), JSON.stringify(at()));
+      window.RttyPanel.autotuneObserve(40);
+      check("AUTOTUNE: right after a retune, frames are ignored (the FFT still holds the old dial)",
+        at().count === 0);
+
+      await sleep(2400);          // the new dial seen by /state, plus its holdoff
+      check("AUTOTUNE: the new dial reached the palette's own state", freqNow() === dialBefore - 40,
+        String(freqNow()));
+
+      // Our own transmission blocks it, but must not throw the sync away.
+      await observe([-30, -32, -31, -31, -30]);
+      check("AUTOTUNE: a new sync", green() && at().lastSyncHz === -31, JSON.stringify(at()));
+      await fetch("/set-tx?v=1");
+      await sleep(1300);
+      check("AUTOTUNE: greyed out while transmitting", pill.disabled && /transmitting/.test(pill.title),
+        pill.title);
+      await fetch("/set-tx?v=0");
+      await sleep(1300);
+      check("AUTOTUNE: and the sync survived our own transmission",
+        !pill.disabled && window.RttyPanel.getState().autotune.lastSyncHz === -31,
+        JSON.stringify(at()));
+      await fetch("/cmd-posts/clear");
+      altT();
+      await sleep(300);
+      moves = await setFreqs();
+      check("AUTOTUNE: Alt+T in S&P does the same",
+        moves.length === 1 && Number(moves[0].body.frequency) === dialBefore - 40 + 31,
+        JSON.stringify(moves));
+      check("AUTOTUNE: and the caret is still in Call", document.activeElement === inpCall);
+
+      await sleep(2400);
+      await fetch("/cmd-posts/clear");
+      await observe([2, 3, -1, 1, 0]);
+      pill.click();
+      await sleep(200);
+      check("AUTOTUNE: a signal already on the markers leaves the dial alone",
+        (await setFreqs()).length === 0 && /on mark/.test($("rttyPanelState").textContent),
+        JSON.stringify($("rttyPanelState").textContent));
+
+      await observe([40, 40, 40, 40, 40]);
+      setRunMode("RUN");
+      await sleep(100);
+      altT();
+      await sleep(200);
+      check("AUTOTUNE: Alt+T in RUN does nothing", (await setFreqs()).length === 0,
+        JSON.stringify(await setFreqs()));
+      check("AUTOTUNE: and going to RUN forgot the sync",
+        at().count === 0 && at().lastSyncHz === null, JSON.stringify(at()));
+
+      await sleep(3100);          // the "on mark" flash has let go of the line
+      check("AUTOTUNE: the status line goes back to mode and mark afterwards",
+        / 2125$/.test($("rttyPanelState").textContent),
+        JSON.stringify($("rttyPanelState").textContent));
+      await fetch("/set-mode?v=USB-D");
+      await sleep(1300);
+    }
+
     // ---- 8. held elsewhere: the card, and TAKE OVER ------------------------
     await fetch("/set-claim-refused?v=1");
     await clearPosts();
@@ -724,7 +898,7 @@ server.listen(0, "127.0.0.1", () => {
       `exit ${code} ${chromeErrors.slice(-400)}`]]});
   });
   timer = setTimeout(() => finish({checks: [["the page reported within the timeout", false,
-    "no /result was posted"]]}), 90000);
+    "no /result was posted"]]}), 150000);
 });
 
 process.on("SIGINT",  () => finish({checks: [["interrupted", false, "SIGINT"]]}));

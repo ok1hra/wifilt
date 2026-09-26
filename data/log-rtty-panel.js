@@ -318,8 +318,13 @@
     fetch('/state?radio=lan', { cache: 'no-store', signal: AbortSignal.timeout(4000) })
       .then(function (r) { return r.json(); })
       .then(function (d) {
-        radio.frequency = Number(d.frequency) || 0;
-        radio.mode = String(d.mode || '').trim();
+        var frequency = Number(d.frequency) || 0, mode = String(d.mode || '').trim();
+        // AUTOTUNE's offsets are relative to the dial they were measured on:
+        // a knob turn, a band map click or our own retune makes them stale.
+        if (autotune && (frequency !== radio.frequency || mode !== radio.mode))
+          autotune.clear(RttyAfc.AUTOTUNE.holdoffMs);
+        radio.frequency = frequency;
+        radio.mode = mode;
         radio.tx = !!d.tx;
         radio.rfPower = Number(d.rfPower) || 0;
         radio.rfPowerSeen = d.rfPowerSeen === true;
@@ -443,6 +448,7 @@
     // to the next /state poll, is also what makes taking the session BACK
     // re-read: the edge has to actually fall for the next one to rise.
     fskSync.observe(radio.mode, false);
+    if (autotune) autotune.clear(0);
     if (open) scheduleSessionRetry();
     renderState(info && info.owner ? String(info.owner) : '');
   }
@@ -472,6 +478,7 @@
     sessionHeld = false;
     closeAudio();
     fskSync.observe(radio.mode, false);   // same reasoning as loseSession()
+    if (autotune) autotune.clear(0);
     // keepalive so the release still goes out while the tab is being torn down
     try {
       fetch('/js8/session/release', {
@@ -529,6 +536,7 @@
 
   var decoder = null, decoder2 = null, dec2On = false;
   var scope = null, rxLog = null, afc = null, afskTx = null, streamFeed = null;
+  var autotune = null;
   var gainStore = null, modLevelClient = null, modLevel = 0;
 
   function buildEngine() {
@@ -591,6 +599,7 @@
       },
       charDurationMs: RttyCodec.CHAR_DURATION_MS
     });
+    autotune = RttyAfc.createAutotune();
 
     scope = RttyScope.create({
       scopeEl: document.getElementById('rttyPanelScope'),
@@ -604,7 +613,7 @@
       settings: function () { return effective; },
       afcOffsetHz: function () { return afc.offsetHz(); },
       radio: function () { return radio; },
-      onFrame: function () { afc.tick(); },
+      onFrame: function () { afc.tick(); autotuneTick(); },
       onTune: onScopeTune
     });
 
@@ -664,15 +673,9 @@
   // USB-D/LSB-D move the audio tone instead. The palette has no tone field to
   // update, so it writes the setting and redraws.
   function onScopeTune(lowHz) {
-    if (radio.mode === 'RTTY' || radio.mode === 'RTTY-R') {
+    if (isFskMode()) {
       var referenceLowHz = effective.toneHz - RttyCodec.SHIFT_HZ / 2;
-      var newDialHz = Math.round((radio.frequency || 0) + (referenceLowHz - lowHz));
-      if (newDialHz <= 0) return;
-      fetch('/cmd?radio=lan', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'setFrequency', frequency: String(newDialHz) })
-      }).catch(function () {});
-      afc.reset();
+      setDial(Math.round((radio.frequency || 0) + (referenceLowHz - lowHz)));
       return;
     }
     var clamped = Math.max(RttySettings.TONE_MIN_HZ,
@@ -687,6 +690,133 @@
     stored = RttySettings.save(localStorage, stored);
     applyEffective();
     afc.reset();
+  }
+
+  function isFskMode() { return radio.mode === 'RTTY' || radio.mode === 'RTTY-R'; }
+
+  // Real FSK: the dial is the only thing that moves a received signal. Shared
+  // by click-to-tune and AUTOTUNE. Silent on failure, like the page's own
+  // requestFrequency(): the next /state poll shows what the radio really did.
+  // An AFC offset or an AUTOTUNE sample measured around the OLD dial is
+  // meaningless once it has jumped.
+  function setDial(newDialHz) {
+    if (!(newDialHz > 0)) return false;   // no radio frequency known yet
+    fetch('/cmd?radio=lan', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'setFrequency', frequency: String(newDialHz) })
+    }).catch(function () {});
+    afc.reset();
+    autotune.clear(RttyAfc.AUTOTUNE.holdoffMs);
+    return true;
+  }
+
+  // ── AUTOTUNE (S&P only; grilled 2026-09-26, docs/rtty-implementace.md
+  //    kap. 23) ────────────────────────────────────────────────────────────
+  //
+  // Retunes the dial so the station being received sits on the markers. The
+  // buffer fills in the background from the raw pair detector, independent
+  // of the AFC switch, over the same ±afcMaxDeviationHz window the full
+  // page's SETTINGS give AFC. Two looks only (operator, 2026-09-26: a
+  // grey/amber/green pill flickering with every noisy frame was unreadable):
+  // GREEN once four samples agree -- a sync -- and grey otherwise. A press
+  // applies the LAST sync even when the pill has gone grey again, because a
+  // caller's short transmission is often over before the key is reached and
+  // the detector is by then chasing noise. The sync is forgotten only when
+  // the dial it belongs to is gone (rtty-afc.js createAutotune()).
+  //
+  // Real FSK only: in USB-D/LSB-D click-to-tune moves the audio tone, and
+  // the sideband decides the sign of a dial move. The sign here is the one
+  // click-to-tune uses -- dial and audio pitch move together, confirmed on
+  // the air in RTTY (2026-08-30). In RTTY-R that is NOT yet verified.
+
+  var runMode = 'RUN', lastAutotuneValues = null, autotuneMarkHz = null;
+  var autotuneFlash = null, autotuneFlashTimer = null, autotuneClass = '';
+
+  // '' when usable; otherwise why not -- shown as the pill's title.
+  function autotuneBlock() {
+    if (runMode !== 'SP') return 'S&P only';
+    if (!sessionHeld) return 'no radio audio';
+    if (!isFskMode()) return 'RTTY or RTTY-R only (real FSK moves the dial)';
+    if (radio.tx || (afskTx && afskTx.busy())) return 'transmitting';
+    return '';
+  }
+
+  function autotuneTick() {
+    if (!autotune) return;
+    // Blocked means "do not measure now", not "forget": our own TX, say,
+    // leaves the dial where it was and the last sync still valid. Whatever
+    // does invalidate it (dial, mode, RUN, session) clears it where it happens.
+    if (autotuneBlock()) { renderAutotune(); return; }
+    var markSpace = RttyScope.expectedMarkSpaceHz(effective);
+    // The markers themselves moved (the radio's mark frequency was read, or
+    // polarity flipped): offsets against the old ones are stale.
+    if (markSpace[0] !== autotuneMarkHz) { autotuneMarkHz = markSpace[0]; autotune.clear(0); }
+    var values = scope.waterfall.state().liveValues;
+    // Fresh frames only, same identity test as the AFC tracker's.
+    if (values && values !== lastAutotuneValues) {
+      lastAutotuneValues = values;
+      autotune.observe(RttyAfc.findOffset(values, {
+        lowHz: scope.waterfall.lowHz, highHz: scope.waterfall.highHz,
+        markHz: markSpace[0], spaceHz: markSpace[1],
+        maxDeviationHz: effective.afcMaxDeviationHz, prominenceDb: 8
+      }));
+    }
+    renderAutotune();
+  }
+
+  function flashAutotune(text, bad) {
+    autotuneFlash = { text: text, bad: !!bad };
+    clearTimeout(autotuneFlashTimer);
+    autotuneFlashTimer = setTimeout(function () {
+      autotuneFlash = null;
+      renderState();
+    }, 3000);
+    renderState();
+  }
+
+  // The press, and Alt+T. Returns whether the dial was moved.
+  function runAutotune() {
+    if (!open || !autotune || autotuneBlock()) return false;
+    var decision = autotune.decide();
+    if (decision.action === 'none') { flashAutotune('no sync', true); return false; }
+    if (decision.action === 'on-mark') { flashAutotune('on mark'); return false; }
+    var shiftHz = -Math.round(decision.offsetHz);
+    if (!setDial(Math.round(radio.frequency) + shiftHz)) {
+      flashAutotune('no dial', true);
+      return false;
+    }
+    flashAutotune('AT ' + (shiftHz > 0 ? '+' : '−') + Math.abs(shiftHz) + ' Hz');
+    renderAutotune();
+    return true;
+  }
+
+  function setRunMode(mode) {
+    runMode = mode === 'SP' ? 'SP' : 'RUN';
+    if (runMode !== 'SP' && autotune) autotune.clear(0);
+    renderAutotune();
+  }
+
+  // Touches the DOM only when the pill's look actually changes: this runs on
+  // every animation frame.
+  function renderAutotune() {
+    if (!el) return;
+    var pill = document.getElementById('rttyPanelAutotune');
+    var block = autotuneBlock();
+    var s = autotune && !block ? autotune.summary() : { synced: false, lastSyncHz: null };
+    var look = runMode !== 'SP' ? 'hidden' : block ? 'blocked' : s.synced ? 'green' : 'idle';
+    var last = s.lastSyncHz === null ? null : -Math.round(s.lastSyncHz);
+    var key = look + '|' + block + '|' + last;
+    if (key === autotuneClass) return;
+    autotuneClass = key;
+    pill.hidden = look === 'hidden';
+    pill.disabled = look === 'blocked';
+    pill.classList.toggle('at-green', look === 'green');
+    pill.title = block ? 'AUTOTUNE: ' + block
+      : 'AUTOTUNE (Alt+T): move the dial so the received signal sits on the markers. ' +
+        (look === 'green' ? 'Green: synced on a steady signal.'
+          : last !== null ? 'Searching -- a press applies the last sync (dial ' +
+              (last > 0 ? '+' : '\u2212') + Math.abs(last) + ' Hz).'
+          : 'Not synced yet -- nothing to apply.');
   }
 
   // ── handing a word to the log ─────────────────────────────────────────────
@@ -797,8 +927,12 @@
     // operator wonders whether it is merely parked on the wrong tone.
     var fskLabel = fskSync.active()
       ? ' ' + fskSync.markHz() + (fskSync.fromRadio() ? '' : '?') : '';
-    document.getElementById('rttyPanelState').textContent =
-      !sessionHeld ? 'no audio' : (live ? (radio.mode || '') : 'connecting…') + fskLabel;
+    var stateEl = document.getElementById('rttyPanelState');
+    // An AUTOTUNE result holds the line for three seconds, then it goes back.
+    stateEl.textContent = autotuneFlash ? autotuneFlash.text
+      : !sessionHeld ? 'no audio' : (live ? (radio.mode || '') : 'connecting…') + fskLabel;
+    stateEl.classList.toggle('at-bad', !!(autotuneFlash && autotuneFlash.bad));
+    renderAutotune();
   }
 
   // ── build ─────────────────────────────────────────────────────────────────
@@ -824,6 +958,9 @@
           '<button type="button" data-zoom="400">400%</button>' +
         '</span>' +
         '<span class="rtty-panel-state" id="rttyPanelState"></span>' +
+        // Right-aligned beside the close button; hidden in RUN (S&P only).
+        '<button class="rtty-panel-autotune" id="rttyPanelAutotune" type="button" hidden>' +
+          'AUTOTUNE</button>' +
         '<button class="rtty-panel-close" id="rttyPanelClose" type="button" ' +
           'title="Close (releases the radio audio)">×</button>' +
       '</div>' +
@@ -865,6 +1002,8 @@
       .addEventListener('click', function () { afskTx.abort('operator'); });
     document.getElementById('rttyPanelRx')
       .addEventListener('pointerdown', onRxPointerDown);
+    document.getElementById('rttyPanelAutotune')
+      .addEventListener('click', function () { runAutotune(); });
     document.getElementById('rttyPanelZoom').addEventListener('click', function (e) {
       var pill = e.target.closest('button');
       if (pill) applyZoom(Number(pill.dataset.zoom));
@@ -902,6 +1041,8 @@
     if (open && !el) build();
     if (el) el.style.display = open ? '' : 'none';
     if (open) {
+      // log.js pushes every RUN/S&P change; this covers the ones before build.
+      if (global.LogRadio && global.LogRadio.runMode) runMode = global.LogRadio.runMode();
       reloadSettings();
       place();
       scope.resize();
@@ -982,7 +1123,7 @@
     mount();
 
   // What log.js and the smoke harness may ask of this palette. Narrow on
-  // purpose: three questions and two commands, nothing about internals.
+  // purpose: a few questions and commands, nothing about internals.
   global.RttyPanel = {
     setOpen: setOpen,
     isOpen: function () { return open; },
@@ -999,6 +1140,13 @@
     // has ever been opened: there is no RX log to write into yet.
     echoTx: function (text) { if (rxLog) rxLog.echoTx(text); },
     abort: function () { if (afskTx) afskTx.abort('operator'); },
+    // log.js's setRunMode() and Alt+T.
+    setRunMode: setRunMode,
+    autotune: runAutotune,
+    // Harness only: the AUD1 stream cannot be started under test (port 83 is
+    // privileged), so no FFT frame ever arrives there. The FFT -> findOffset
+    // hop is the AFC tracker's own, covered by tools/rtty-afc-smoke.js.
+    autotuneObserve: function (hz) { if (autotune) { autotune.observe(hz); renderAutotune(); } },
     getState: function () {
       return { open: open, held: sessionHeld, height: height, width: width, radio: radio,
                // What it is actually listening on (the FSK override and the
@@ -1007,7 +1155,8 @@
                settings: effective, stored: stored,
                fsk: { active: fskSync.active(), markHz: fskSync.markHz(),
                       fromRadio: fskSync.fromRadio(), reverse: fskSync.reverse() },
-               zoom: scope ? scope.zoom() : 100 };
+               zoom: scope ? scope.zoom() : 100,
+               autotune: autotune ? autotune.summary() : null, runMode: runMode };
     }
   };
 

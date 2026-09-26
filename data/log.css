@@ -745,6 +745,7 @@ body {
   user-select: none;
   letter-spacing: 0.06em;
   flex-shrink: 0;
+  margin-left: auto;   /* held right by the hint's flex:1 until it moved out */
 }
 
 /* ── Status bar + input row — light, seamless (no border between them) ────── */
@@ -1010,12 +1011,19 @@ body {
 
 .btn-action-hidden { display: none; }
 
+/* Red showHint() messages, right-aligned on the macro-preview line
+   (.log-msg-line). One line only: a message too long for the space the
+   preview leaves is cut with an ellipsis, never wrapped -- wrapping is what
+   used to make the light frame taller while a hint was up. */
 .log-hint-area {
-  flex: 1;
-  font-size: 15px;
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 14px;
   color: var(--conn-fail);
-  padding-left: 10px;
-  min-height: 26px;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .hk-sep td { padding-top: 6px; border-top: 1px solid #444; }
@@ -1728,11 +1736,23 @@ input.mx-serial-bad           { border-color: var(--conn-fail); }
 
 /* ── Macro preview ───────────────────────────────────────────────────────── */
 
-.macro-preview {
+/* A fixed height, not a min-height: the macro text and the hint come and go,
+   and a line that grew a few px whenever either appeared moved the input row
+   above it (and the Alt+K palette's home, which is measured off that row). */
+.log-msg-line {
   flex-shrink: 0;
-  min-height: 22px;
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  height: 26px;
+  line-height: 17px;
   padding: 1px 10px 8px;
   background: var(--light-bg);
+}
+
+.macro-preview {
+  flex: 1 1 auto;
+  min-width: 0;
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 14px;
@@ -1817,7 +1837,7 @@ body {
 .kbd-open #dupePanel     { order: 1; }
 .kbd-open .log-statusbar { order: 2; }
 .kbd-open .log-btn-bar   { order: 3; }
-.kbd-open .macro-preview { order: 4; }
+.kbd-open .log-msg-line  { order: 4; }
 .kbd-open .log-input-row { order: 5; }
 
 /* Mini button bar: keep TRX + RUN/S&P, drop LOG/BACKUP/help and spacers */
@@ -1836,13 +1856,13 @@ body {
 
 /* Keep the whole input row on screen: let it wrap (Exch drops to its own line
    instead of overflowing off the right edge) and drop the non-essential
-   extras (hint text, global toggle, prev-exch, azimuth arrow). */
+   extras (global toggle, prev-exch, azimuth arrow). The hint text is no
+   longer in this row -- it shares the macro-preview line and stays. */
 .kbd-open .log-input-row {
   flex-wrap: wrap;
   row-gap: 6px;
 }
 .kbd-open .log-az-indicator,
-.kbd-open .log-hint-area,
 .kbd-open .log-global-search-label,
 .kbd-open #btnPrevEx { display: none; }
 
@@ -1902,6 +1922,9 @@ body {
   margin-right: auto; color: #dfe6ef;
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* The radio it follows, slash included: a footnote to the name, and the part
+   the ellipsis eats first when the two do not fit. */
+.pa-head-trx { color: var(--pa-dim); }
 .pa-close {
   background: none; border: none; color: var(--pa-dim);
   font-family: inherit; font-size: 13px; line-height: 1;
@@ -1911,14 +1934,41 @@ body {
 
 .pa-body { padding: 6px 8px 8px; display: flex; flex-direction: column; gap: 5px; }
 
-/* Power readings. The unit is dimmed so the eye lands on the number. */
-.pa-vals { display: flex; gap: 8px; }
-.pa-val  { flex: 1; display: flex; align-items: baseline; gap: 4px; }
+/* Power readings: FW at the left edge, SWR in the true centre, REV at the right
+   edge -- a grid rather than space-between, so SWR does not wander sideways as
+   the watts gain and lose digits. The unit is dimmed so the eye lands on the
+   number.
+
+   On receive the row keeps the last over's readings, all of it in one dark
+   grey (.pa-vals-held) -- darker than the labels are when live, so a held
+   reading can never pass for a live one. #646f7f is 3.2:1 against the panel:
+   quieter than the stale grey below (4.49:1) because this one is old on
+   purpose, and well clear of the 2.09:1 that once made values invisible.
+   Before the first over there is nothing to hold and the row is hidden, not
+   removed (.pa-vals-idle), so the panel does not jump when the radio keys.
+   The explicit height is what holds it -- with every child hidden the row
+   would otherwise still be sized by them, but only by accident. */
+.pa-vals {
+  display: grid; grid-template-columns: 1fr auto 1fr; align-items: baseline;
+  gap: 6px; height: 20px;
+}
+.pa-val  { display: flex; align-items: baseline; gap: 3px; white-space: nowrap; }
+.pa-val-fw  { justify-self: start; }
+.pa-val-swr { justify-self: center; }
+.pa-val-rev { justify-self: end; }
+.pa-vals-idle .pa-val,
+.pa-val.pa-val-none { visibility: hidden; }
 .pa-val-k { font-size: 10px; letter-spacing: 0.08em; color: var(--pa-dim); }
-.pa-val-v { font-size: 17px; font-weight: 700; margin-left: auto; }
+/* 15px, not the 17px these had when there were only two: 1180 W, SWR 10.0 and
+   120 W side by side overran the row by 6px at 17. */
+.pa-val-v { font-size: 15px; font-weight: 700; }
 .pa-val-u { font-size: 10px; font-weight: 400; color: var(--pa-dim); }
 .pa-val-fw  .pa-val-v { color: var(--pa-fw); }
-.pa-val-rev .pa-val-v { color: var(--pa-rev); }
+.pa-val-rev .pa-val-v,
+.pa-val-swr .pa-val-v { color: var(--pa-rev); }
+.pa-vals-held .pa-val-k,
+.pa-vals-held .pa-val-v,
+.pa-vals-held .pa-val-u { color: #646f7f; }
 
 /* Two bars, touching, unlabelled and without a frame. Forward power grows from
    the left, reflected from the right, so the two never read as one continuous
@@ -1931,7 +1981,7 @@ body {
    dot near the right-hand end meaning "near the top of the band" must not look
    like "nearly full power". */
 .pa-bars { display: flex; flex-direction: column; gap: 0; margin: 1px 0 2px; }
-.pa-bar  { position: relative; height: 5px; background: #171b22; overflow: hidden; }
+.pa-bar  { position: relative; height: 8px; background: #171b22; overflow: hidden; }
 .pa-bar i {
   position: absolute; top: 0; bottom: 0; width: 0;
   transition: width 0.12s linear;
@@ -1968,8 +2018,9 @@ body {
    a band the amplifier has no segments on) would otherwise be an invisible void
    rather than a visibly empty scale, and "the preview vanished" is exactly how
    that reads. */
+.pa-seg-wrap { position: relative; flex: 1 1 auto; }
 .pa-seg-scale {
-  position: relative; flex: 1 1 auto;
+  position: relative;
   height: 7px; background: #171b22;
   box-shadow: inset 0 0 0 1px var(--pa-line);
   cursor: pointer; overflow: hidden;
@@ -2004,9 +2055,27 @@ body {
 }
 .pa-panel.pa-stale .pa-seg-dot { background: #8b97a8; }
 
-.pa-sub { display: flex; align-items: baseline; gap: 8px; font-size: 11px; }
-.pa-swr { color: var(--pa-rev); font-weight: 700; }
-.pa-band { margin-left: auto; font-weight: 700; color: #dfe6ef; }
+/* Why the scale is empty: NO FREQ (the radio gives none) or NO SEGMENTS (it
+   does, but the amplifier has no divisions on that band). Laid over the middle
+   of the trough on a patch of the panel's own background, so the scale reads
+   as interrupted by the words rather than struck through them. 8px is a pixel
+   taller than the scale; the row's height is the arrows', so nothing moves. */
+.pa-seg-msg {
+  position: absolute; top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 0 4px; background: #1b2028;
+  font-size: 8px; line-height: 1; letter-spacing: 0.12em; white-space: nowrap;
+  color: var(--pa-dim); cursor: default;
+}
+.pa-seg-msg[hidden] { display: none; }
+
+/* The band sits in the middle of the status line, in the panel's true centre
+   rather than the middle of whatever space the status text leaves -- that text
+   runs from ON to NO DATA 12 s, and the band would drift with it. The one
+   exception is that last case: NO DATA with an age is wider than a third of the
+   panel, and there the band steps right rather than print over it (see the
+   minmax() on .pa-status). */
+.pa-band { font-size: 11px; font-weight: 700; color: #dfe6ef; justify-self: center; }
 /* The amplifier standing on a different band than the radio is the expensive
    mistake this panel can catch, so it is the one thing drawn in alarm colours. */
 .pa-band.pa-band-mismatch { color: #ff5c5c; }
@@ -2019,7 +2088,13 @@ body {
    nonetheless the hotter step, which is the console's design and worth not
    "fixing" here. Grey below the first fan step is the point: a cold amplifier
    should not draw the eye at all. */
-.pa-temp { font-weight: 700; color: #dfe6ef; }
+.pa-temp {
+  font-size: 20px; font-weight: 700; line-height: 1; color: #dfe6ef;
+  white-space: nowrap;
+}
+/* The unit is the panel's usual dimmed one; it does not take the fan-stage
+   colour, which belongs to the number. */
+.pa-temp .pa-temp-u { font-size: 10px; font-weight: 400; color: var(--pa-dim); }
 .pa-temp.t-cool { color: #8e9aab; }
 .pa-temp.t-warm { color: #3ddc84; }
 .pa-temp.t-hot  { color: #f5d048; }
@@ -2028,10 +2103,15 @@ body {
 
 /* LEDs: every bit TrxNet carries, lit or not. An indicator that disappears when
    it goes out teaches you nothing about what the panel can tell you. */
-/* Sized to fit all five on one row at the panel's width. Wrapping to a second
-   row costs more height than the lamps are worth on a palette that is meant to
-   stay out of the way. */
-.pa-leds { display: flex; flex-wrap: wrap; gap: 2px; }
+/* Two fixed rows -- what is happening (ALARM, TX, TUNE) over the modes it is in
+   (CONTEST, BEEP) -- with the temperature standing beside both. The rows are
+   built as rows, never wrapped: a lamp that moved to the other line when the
+   temperature gained a digit would defeat the point of lamps that stay put. */
+.pa-ind {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+}
+.pa-leds { display: flex; flex-direction: column; gap: 2px; }
+.pa-led-row { display: flex; gap: 2px; }
 .pa-led {
   padding: 1px 3px; border-radius: 3px;
   font-size: 9px; font-weight: 700; letter-spacing: 0;
@@ -2043,11 +2123,16 @@ body {
 .pa-led.on.r { background: #ff5c5c; }
 .pa-led.on.c { background: #4fd6e8; }
 
-.pa-status { display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--pa-dim); }
+.pa-status {
+  display: grid; align-items: center; gap: 5px;
+  grid-template-columns: minmax(max-content, 1fr) auto minmax(max-content, 1fr);
+  font-size: 10px; color: var(--pa-dim);
+}
+.pa-status-l { display: flex; align-items: center; gap: 5px; min-width: 0; white-space: nowrap; }
 .pa-dot { width: 7px; height: 7px; border-radius: 50%; background: #ff5c5c; flex: none; }
 .pa-dot.ok { background: var(--pa-fw); }
 .pa-dot.warn { background: #f5d048; }
-.pa-rev-tag { margin-left: auto; }
+.pa-rev-tag { justify-self: end; white-space: nowrap; }
 
 .pa-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
 .pa-btn {
@@ -2073,16 +2158,16 @@ body {
 
 /* Telemetry has stopped arriving. The numbers stay -- they were true once and
    the panel says how long ago -- but nothing pretends to be live. */
-/* Stale means "the last thing heard", not "nothing" -- and every one of these
-   is a dash when there is no reading, which is a thin glyph at 11px. The old
-   #49535f put it at 2.09:1 against the panel, where the dash is there in the
-   DOM and simply cannot be seen: the panel looked like it had stopped printing
-   values at all. 4.49:1 is still visibly quieter than a live reading (13:1) and
-   than the dimmed labels beside it (5.5:1), which is all the dimming has to do
-   -- the status line, the dot and the greyed bars already say NO DATA three
-   other ways. */
-.pa-panel.pa-stale .pa-val-v,
-.pa-panel.pa-stale .pa-swr,
+/* Stale means "the last thing heard", not "nothing": the band and the
+   temperature keep their last values, greyed, so a panel that has lost its
+   telemetry never looks like one that has stopped printing values at all --
+   reported from the shack once, when the greying was #49535f and 2.09:1
+   against the panel. 4.49:1 is still visibly quieter than a live reading (13:1)
+   and than the dimmed labels beside it (5.5:1), which is all the dimming has to
+   do -- the status line, the dot and the greyed bars already say NO DATA three
+   other ways. (The power row is not in this list: its peaks expire after two
+   seconds without telemetry, long before the fifteen that make it stale, so by
+   then it is showing the held readings in their own darker grey.) */
 .pa-panel.pa-stale .pa-temp,
 .pa-panel.pa-stale .pa-band { color: #7c8797 !important; }
 .pa-panel.pa-stale .pa-led.on { background: #171b22; color: #4a5666; }
@@ -2178,6 +2263,19 @@ body {
   margin-left: auto; font-weight: 400; color: var(--muted);
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* AUTOTUNE (S&P only, log-rtty-panel.js). The zoom pills' shape, pushed to
+   the right edge by the state line's margin-left:auto. Two looks only: grey,
+   and green once synced on a steady signal. Deliberately NO hover change --
+   the colour is the state, and a hover tint made it unreadable under the
+   pointer. */
+.rtty-panel-autotune {
+  border: 1px solid var(--line); border-radius: 999px; padding: 1px 5px;
+  background: var(--panel2); color: var(--muted); flex: none;
+  font: 700 9px/1.5 var(--font-mono); letter-spacing: .02em; cursor: pointer;
+}
+.rtty-panel-autotune.at-green { border-color: #4cd964; background: #143a1c; color: #4cd964; }
+.rtty-panel-autotune:disabled { opacity: .4; cursor: default; }
+.rtty-panel-state.at-bad { color: var(--red); }
 .rtty-panel-close {
   background: none; border: none; color: var(--muted);
   font: 13px/1 var(--font-mono); padding: 1px 3px; cursor: pointer;

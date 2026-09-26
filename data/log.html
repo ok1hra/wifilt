@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>QRPLog — WIFILT</title>
-  <link rel="stylesheet" href="/log.css?v=f4130901">
+  <link rel="stylesheet" href="/log.css?v=e0b1c57e">
 </head>
 <body>
   <!-- Split shell (2026-09-07). Everything the log itself is lives in the RIGHT
@@ -245,14 +245,20 @@
         </div>
       </div>
       <button id="btnPrevEx" class="btn-action btn-action-hidden" type="button" title="Re-send previous exchange">prev exch</button>
-      <div class="log-hint-area" id="logHint" aria-live="assertive"></div>
       <label class="log-global-search-label" title="Search for duplicates and partial matches across all logs, not just the active one">
         <input type="checkbox" id="chkGlobalSearch"> global
       </label>
     </div>
 
-    <!-- Macro preview — shows what Enter would send, aligned with Call field -->
-    <div id="macroPreview" class="macro-preview"></div>
+    <!-- One line under the inputs: on the left the macro preview (what Enter
+         would send, aligned with the Call field), on the right the red
+         showHint() messages. The hint used to sit in the input row itself,
+         where a longer message wrapped and made the light frame taller for
+         the two seconds it was up; here it is one line and never grows it. -->
+    <div class="log-msg-line">
+      <div id="macroPreview" class="macro-preview"></div>
+      <div class="log-hint-area" id="logHint" aria-live="assertive"></div>
+    </div>
 
     <!-- Bottom button bar -->
     <div class="log-btn-bar">
@@ -346,6 +352,7 @@
             <tr><td><kbd>Alt+W</kbd></td><td>Clear form</td></tr>
             <tr><td><kbd>Alt+G</kbd></td><td>Toggle the <em>global</em> switch on the input row — duplicates searched across all logs, or just this one</td></tr>
             <tr><td><kbd>Alt+K</kbd></td><td>Type a message and send it — CW, or RTTY on a new line. <kbd>Enter</kbd> sends, <kbd>Esc</kbd> discards it and stops a transmission in progress</td></tr>
+            <tr><td><kbd>Alt+T</kbd></td><td>RTTY palette, S&amp;P only: <em>AUTOTUNE</em> — move the dial so the received signal sits on the markers (real FSK, RTTY/RTTY-R)</td></tr>
             <tr><td><kbd>Alt+Enter</kbd></td><td>Log QSO without sending memory</td></tr>
             <tr><td><kbd>Alt++</kbd></td><td>Larger text in the logged QSOs below — numpad <kbd>+</kbd> too</td></tr>
             <tr><td><kbd>Alt+-</kbd></td><td>Smaller text in the logged QSOs below — numpad <kbd>-</kbd> too. The size is remembered</td></tr>
@@ -366,11 +373,11 @@
   <script src="/dxcc.js?v=c56ee081"></script>
   <script src="/log-db.js?v=4d465b7e"></script>
   <script src="/station-identity.js?v=a1a20249"></script>
-  <script src="/log.js?v=9e999a4a"></script>
+  <script src="/log.js?v=9938ff2d"></script>
   <!-- After log.js: it reads window.LogRadio (for setRunMode) and log.js reads
        window.LogDxcSplit only from inside a channel callback, never at load. -->
   <script src="/log-dxc-split.js?v=295ebac7"></script>
-  <script src="/pa-panel.js?v=cb37afa2"></script>
+  <script src="/pa-panel.js?v=3e350efa"></script>
 
   <!-- RTTY palette (2026-09-07). Everything above /log.js is what the log
        itself needs; everything below is the palette's, loaded after log.js
@@ -384,7 +391,7 @@
        for civPercent() -- the same two single-function borrows rtty.html
        documents in its own script list. -->
   <script src="/rtty-codec.js?v=f902ad99"></script>
-  <script src="/rtty-afc.js?v=b1330905"></script>
+  <script src="/rtty-afc.js?v=ec376292"></script>
   <script src="/rtty-settings.js?v=ea820699"></script>
   <script src="/spectrum.js?v=7fafbbb5"></script>
   <script src="/js8-aud1.js?v=c44fe09c"></script>
@@ -399,6 +406,6 @@
   <script src="/rtty-rxlog.js?v=add3f023"></script>
   <script src="/rtty-afsk-tx.js?v=998de20c"></script>
   <script src="/rtty-stream-feed.js?v=855b19dd"></script>
-  <script src="/log-rtty-panel.js?v=6d63be64"></script>
+  <script src="/log-rtty-panel.js?v=677e55ec"></script>
 </body>
 </html>

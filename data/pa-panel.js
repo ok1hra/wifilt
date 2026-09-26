@@ -134,6 +134,8 @@
   var pending   = {};    // what -> {want, until, from}
   var settledAt = {};    // what -> when the amplifier last CONFIRMED it
   var note    = '';      // one line of trouble, shown under the buttons
+  var held    = null;    // the last transmission's readings, {fw, rf, swr}
+  var heldKeyed = false; // was the last sample a transmitting one
   // TUNE+ runs in the firmware (/pa.json "tp"); these only follow it.
   var tpAskedAt = 0;     // a start/stop is on its way: '…' until the state moves
   var tpLastSt  = null;  // last tp.st seen, to notice a run finishing
@@ -235,15 +237,24 @@
     el.id = 'paPanel';
     el.innerHTML =
       '<div class="pa-head" id="paHead">' +
-        '<span class="pa-head-name" id="paName">PA</span>' +
+        // The amplifier white, the radio it follows grey: the name is what the
+        // palette is, the radio is a footnote to it. Two spans rather than
+        // markup built from the names, which come from the config.
+        '<span class="pa-head-name" id="paName"><span id="paNameAmp">PA</span>' +
+          '<span class="pa-head-trx" id="paNameTrx"></span></span>' +
         '<button class="pa-close" id="paClose" type="button" title="Close">&#10005;</button>' +
       '</div>' +
       '<div class="pa-body">' +
-        '<div class="pa-vals">' +
+        // FW, SWR and REV together, because they are the three readings of one
+        // transmission. On receive they stay, greyed, until the next one; see
+        // noteHeld().
+        '<div class="pa-vals pa-vals-idle" id="paVals">' +
           '<span class="pa-val pa-val-fw"><span class="pa-val-k">FW</span>' +
-            '<span class="pa-val-v" id="paFw">&mdash;</span><span class="pa-val-u">W</span></span>' +
+            '<span class="pa-val-v" id="paFw"></span><span class="pa-val-u">W</span></span>' +
+          '<span class="pa-val pa-val-swr" id="paSwrBox"><span class="pa-val-k">SWR</span>' +
+            '<span class="pa-val-v" id="paSwr"></span></span>' +
           '<span class="pa-val pa-val-rev"><span class="pa-val-k">REV</span>' +
-            '<span class="pa-val-v" id="paRef">&mdash;</span><span class="pa-val-u">W</span></span>' +
+            '<span class="pa-val-v" id="paRef"></span><span class="pa-val-u">W</span></span>' +
         '</div>' +
         '<div class="pa-bars">' +
           '<div class="pa-bar"><i id="paBarFw" class="pa-bar-fw"></i></div>' +
@@ -256,20 +267,25 @@
         // frequency itself is already on the log's own status bar.
         '<div class="pa-seg-row" id="paSegRow">' +
           '<button class="pa-seg-arrow" id="paSegDown" type="button" data-seg="-1">&#9664;</button>' +
-          '<div class="pa-seg-scale" id="paSegScale">' +
-            '<span class="pa-seg-track" id="paSegTrack"></span>' +
-            '<i class="pa-seg-dot" id="paSegDot" hidden></i>' +
+          '<div class="pa-seg-wrap">' +
+            '<div class="pa-seg-scale" id="paSegScale">' +
+              '<span class="pa-seg-track" id="paSegTrack"></span>' +
+              '<i class="pa-seg-dot" id="paSegDot" hidden></i>' +
+            '</div>' +
+            '<span class="pa-seg-msg" id="paSegMsg" hidden></span>' +
           '</div>' +
           '<button class="pa-seg-arrow" id="paSegUp" type="button" data-seg="1">&#9654;</button>' +
         '</div>' +
-        '<div class="pa-sub">' +
-          '<span class="pa-swr" id="paSwr">SWR &mdash;</span>' +
-          '<span class="pa-band" id="paBand">&mdash;</span>' +
-          '<span class="pa-temp" id="paTemp">&mdash;</span>' +
+        // The lamps in two rows, and the heatsink temperature large beside them:
+        // it is the one reading here that changes slowly and matters a lot.
+        '<div class="pa-ind">' +
+          '<div class="pa-leds" id="paLeds"></div>' +
+          '<span class="pa-temp" id="paTemp"></span>' +
         '</div>' +
-        '<div class="pa-leds" id="paLeds"></div>' +
-        '<div class="pa-status"><span class="pa-dot" id="paDot"></span>' +
-          '<span id="paStatusText">&mdash;</span>' +
+        '<div class="pa-status">' +
+          '<span class="pa-status-l"><span class="pa-dot" id="paDot"></span>' +
+            '<span id="paStatusText">&mdash;</span></span>' +
+          '<span class="pa-band" id="paBand"></span>' +
           '<span class="pa-rev-tag" id="paRevTag"></span></div>' +
         '<div class="pa-btns">' +
           '<button class="pa-btn st-off" id="paBtnOn"      type="button" data-cmd="on">OFF</button>' +
@@ -603,20 +619,58 @@
     return 't-cool';
   }
 
+  // The power row outlives the transmission: the last readings stay on screen,
+  // greyed, until the next one. A row that emptied itself two seconds after
+  // every over read as the panel dropping out, right above the bars -- and
+  // "what did that last over do" is exactly the question asked on receive.
+  //
+  // Noted on every poll, open or not, so a panel opened after an over still
+  // has it. SWR only ever from a sample that carried one: the amplifier
+  // answering 0 on the last sample of an over must not wipe the reading it gave
+  // a moment earlier -- nor may one over's SWR survive into the next, so it
+  // starts afresh when a new one begins.
+  function noteHeld() {
+    var fw = watts(state ? state.fwdPk : null);
+    var keyed = !!fw;
+    if (keyed) {
+      var rf = watts(state.refPk), swr = state.swr;
+      if (!heldKeyed || !held) held = { fw: fw, rf: rf, swr: 0 };
+      held.fw = fw;
+      held.rf = rf;
+      if (swr) held.swr = swr;
+    }
+    heldKeyed = keyed;
+  }
+
   function render() {
     if (!el) return;
     var f = flags(), stale = isStale(), live = !!(state && state.present);
 
     el.classList.toggle('pa-stale', stale);
     // PA.01/IC-7610: the amplifier, and the radio whose /hz it follows.
-    document.getElementById('paName').textContent =
-      ((state && state.name) ? state.name.toUpperCase() : 'PA') +
-      ((state && state.trx1) ? '/' + state.trx1 : '');
+    document.getElementById('paNameAmp').textContent =
+      (state && state.name) ? state.name.toUpperCase() : 'PA';
+    document.getElementById('paNameTrx').textContent =
+      (state && state.trx1) ? '/' + state.trx1 : '';
 
     var fw = watts(state ? state.fwdPk : null);
     var rf = watts(state ? state.refPk : null);
-    document.getElementById('paFw').textContent  = fw === null ? '—' : fw;
-    document.getElementById('paRef').textContent = rf === null ? '—' : rf;
+
+    // Keyed or not is forward power alone. The daemon keeps publishing on
+    // receive, so "receiving" arrives as FW 0, not as null, and "FW 0 W REV 0 W"
+    // through every RX period would be noise; REV 0 W while keyed, though, is
+    // the good news and shows. Not keyed, the row shows the last over's readings
+    // in dark grey (see noteHeld), and is blank only before the first over this
+    // page has seen -- blank, not removed, so the panel keeps its height.
+    var keyed = !!fw;
+    var shownVals = keyed ? { fw: fw, rf: rf, swr: state.swr } : held;
+    var valsEl = document.getElementById('paVals');
+    valsEl.classList.toggle('pa-vals-idle', !shownVals);
+    valsEl.classList.toggle('pa-vals-held', !keyed && !!shownVals);
+    document.getElementById('paFw').textContent  = shownVals ? shownVals.fw : '';
+    document.getElementById('paRef').textContent =
+      (shownVals && shownVals.rf !== null) ? shownVals.rf : '';
+    valsEl.title = (!keyed && shownVals) ? 'The last transmission' : '';
 
     // Two bars, no scale. Full scale follows the mode the amplifier is actually
     // in -- 1200 W in FULL, 600 W in HALF -- because a fixed 1200 W scale would
@@ -635,31 +689,35 @@
     renderSegScale();
 
     // SWR: 0 means the amplifier did not answer, 65535 means infinite. Neither
-    // is a number to print.
-    var swrEl = document.getElementById('paSwr'), swr = state ? state.swr : null;
-    swrEl.textContent = 'SWR ' + (
-      (swr === null || swr === undefined || swr === 0) ? '—'
-      : swr >= 65535 ? '∞'
-      : (swr / 100).toFixed(1));
+    // is a number to print; the first leaves the middle of the row empty.
+    var swr = shownVals ? shownVals.swr : null;
+    var swrKnown = !!swr;
+    document.getElementById('paSwrBox').classList.toggle('pa-val-none', !swrKnown);
+    document.getElementById('paSwr').textContent = !swrKnown ? ''
+      : swr >= 65535 ? '∞' : (swr / 100).toFixed(1);
 
+    // Unknown is blank, not a dash: the status line beside it already says why
+    // (OFFLINE, NO DATA), and while telemetry is merely stale the last band
+    // stays, greyed.
     var bandEl = document.getElementById('paBand');
     var band = state ? state.band : null;
     bandEl.textContent = (band === null || band === undefined || band === 0)
-      ? '—' : band + ' m';
+      ? '' : band + ' m';
     bandEl.classList.toggle('pa-band-mismatch', bandMismatch(band));
     bandEl.title = bandMismatch(band)
       ? 'The amplifier is on a different band than the radio' : '';
 
-    // Beside SWR and the band, because it is a NUMBER and those are the numbers.
-    // Not in the LED row below: that row's whole trick is staying exactly as
-    // wide whatever happens, and a value that runs 9 °C to 105 °C would make it
-    // reflow. Null rather than 0 whenever no /pa-temp has arrived -- a daemon
-    // older than 2026-09-08 publishes the other five topics and never this one,
-    // so "no reading" has to be distinguishable from "cold".
+    // Beside the lamps, in its own column: a value that runs 9 °C to 105 °C
+    // must not share a row with them, or that row would reflow as it changed.
+    // Null rather than 0 whenever no /pa-temp has arrived -- a daemon older than
+    // 2026-09-08 publishes the other five topics and never this one, so "no
+    // reading" has to be distinguishable from "cold". No reading is blank; the
+    // tooltip says why.
     var tempEl = document.getElementById('paTemp');
     var tempC = (state && state.temp !== null && state.temp !== undefined)
       ? state.temp / 100 : null;
-    tempEl.textContent = tempC === null ? '—' : (Math.round(tempC) + ' °C');
+    tempEl.innerHTML = tempC === null ? ''
+      : (Math.round(tempC) + '<span class="pa-temp-u"> °C</span>');
     tempEl.className = 'pa-temp' + (tempC === null ? '' : ' ' + tempClass(tempC, f));
     tempEl.title = tempC === null
       ? 'The amplifier is not reporting a temperature'
@@ -667,16 +725,20 @@
          .join(' / ') + ' °C, protection at ' + PA_TEMP_MAX + ' °C');
 
     // Every flag TrxNet carries, lit or dark. The dark ones stay in place so
-    // the row never reflows and the eye learns where to look.
-    var leds = [
+    // the rows never reflow and the eye learns where to look. What is happening
+    // on the first row, the modes it is in on the second.
+    var leds = [[
       ['ALARM',   f & F.ALARM,   'r'],
       ['TX',      f & F.TX,      'r'],
-      ['TUNE',    f & F.TUNE,    'y'],
+      ['TUNE',    f & F.TUNE,    'y']
+    ], [
       ['CONTEST', f & F.CONTEST, 'c'],
       ['BEEP',    f & F.BEEP,    'c']
-    ];
-    document.getElementById('paLeds').innerHTML = leds.map(function (l) {
-      return '<span class="pa-led' + (l[1] ? ' on ' + l[2] : '') + '">' + l[0] + '</span>';
+    ]];
+    document.getElementById('paLeds').innerHTML = leds.map(function (row) {
+      return '<div class="pa-led-row">' + row.map(function (l) {
+        return '<span class="pa-led' + (l[1] ? ' on ' + l[2] : '') + '">' + l[0] + '</span>';
+      }).join('') + '</div>';
     }).join('');
 
     // The three layers that are easy to confuse, told apart in one line: is the
@@ -879,6 +941,14 @@
     var why = !hz ? 'The radio is not connected, so there is no frequency to place'
             : !at ? 'The amplifier has no tuning segments on this band'
             : '';
+    // An empty scale says nothing about WHY it is empty, and the two reasons
+    // point at different things to fix -- the radio, or the band -- so it says.
+    var msg = document.getElementById('paSegMsg');
+    if (msg) {
+      msg.textContent = !hz ? 'NO FREQ' : !at ? 'NO SEGMENTS' : '';
+      msg.hidden = !!(hz && at);
+      msg.title = why;
+    }
     if (why) {
       if (segKey) { track.innerHTML = ''; segKey = ''; segView = null; }
       dot.hidden = true;
@@ -995,6 +1065,7 @@
       .then(function (r) { return r.json(); })
       .then(function (d) {
         state = d;
+        noteHeld();
         reapPending();
         reapTunePlus();
         renderButton();
@@ -1038,7 +1109,7 @@
   global.PaPanel = {
     setOpen: setOpen,
     isOpen: function () { return open; },
-    apply: function (d) { state = d; reapPending(); reapTunePlus(); renderButton(); if (open) render(); },
+    apply: function (d) { state = d; noteHeld(); reapPending(); reapTunePlus(); renderButton(); if (open) render(); },
     getState: function () { return state; }
   };
 

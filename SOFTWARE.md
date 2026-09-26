@@ -910,6 +910,22 @@ has no audio stage to move; in `USB-D`/`LSB-D` it moves the audio tone instead. 
 **100% / 200% / 400%** buttons in the title bar zoom the waterfall in around the tone as it
 stands when you press them, for picking a station out of a crowded band.
 
+**AUTOTUNE** (`Alt+T`), at the right of the title bar, exists **in S&P only** — in RUN it is
+not there. You have found a station by ear or on the band map, but it does not sit exactly on
+the two marker lines: press AUTOTUNE and the radio's dial moves so that it does, which also
+puts your reply exactly on the other station's frequency. It measures all the time, from the
+same mark-and-space pair detection AFC uses and over the same range (**AFC max deviation** on
+the full page), whether AFC itself is on or off. The pill has two colours only: it turns
+**green** when five measurements taken half a second apart agree — it has **synced** on a
+steady signal, which takes **at least two seconds** of it — and is **grey** otherwise. A stray measurement from noise or a neighbour neither makes it green nor knocks it
+off. When the station stops, the pill goes grey again but the last sync is kept, and a press
+applies it — so a caller who has already finished can still be tuned onto. The sync is
+forgotten only when the dial moves for any other reason, the mode changes or you go to RUN;
+your own transmission does not clear it. The title bar then shows what it did for three
+seconds: `AT −37 Hz` (how far the dial moved), `on mark` (closer than 5 Hz, left alone) or, in
+red, `no sync` (nothing to apply yet). It works in `RTTY`/`RTTY-R` only — in `USB-D`/`LSB-D` it
+is greyed out, as it is with no audio or while transmitting.
+
 In `USB-D`/`LSB-D` the palette is also what transmits: your macro goes out as audio through
 the radio's network link, echoed into the decoded text as it goes, with a progress strip and
 an **ABORT** button while it runs (`Esc` does the same). In `RTTY`/`RTTY-R` the interface keys
@@ -1092,16 +1108,20 @@ else is invented.
 The button only exists once the amplifier's NET_ID is set in
 [SETUP → TrxNet](#95-trxnet). The title names the amplifier and the radio it follows —
 `PA.01/IC-7610` — which is always **TRX1**, the only radio whose frequency this interface
-publishes; the second half is TRX1's label from the log settings.
+publishes; the second half, drawn grey, is TRX1's label from the log settings.
 
 | Reading | |
 |---|---|
-| **FW** / **REV** with two bars | forward and reflected **peak** power in watts. The forward bar's full scale follows the amplifier's actual state — 1200 W in FULL, 600 W in HALF, and the exciter's 100 W in STANDBY — so a full-power HALF transmission does not read as half a job. |
-| **SWR** | `—` when the amplifier did not answer, `∞` when it reports infinite |
-| Band | the amplifier's own band, in metres. **It turns amber when it disagrees with the radio.** |
-| Temperature | the heatsink, coloured by which fan stage it has reached. The steps move with CONTEST mode, because the amplifier's own fan schedule does; the tooltip gives the numbers and the protection threshold. |
-| **ALARM · TX · TUNE · CONTEST · BEEP** | every flag TrxNet carries, lit or dark. The dark ones stay in place so the row never moves under your eye. |
-| The status line | three things that are easy to confuse, told apart: `OFFLINE` (the amplifier's daemon is not on the network), `NO DATA` with an age (it is, but nothing is arriving), `NO LINK` (it is there but has no serial link to the amplifier), `OFF`, or `ON` — plus the amplifier's `REV 1.0` / `REV 2.0`. |
+| **FW** · **SWR** · **REV**, top row | forward **peak** power at the left, SWR in the middle, reflected **peak** power at the right. **On receive the row keeps the last transmission's readings in dark grey** until the next one, when it turns live and coloured again; the held SWR is the last one the amplifier actually reported during that transmission. Before the first transmission since the page was opened there is nothing to hold and the row is blank (it keeps its height, so the panel does not jump when you key). `REV 0 W` while keyed is shown — that is the good news. The middle stays empty while keyed if the amplifier did not answer with an SWR; `∞` means it reports infinite. |
+| Two bars | the same forward and reflected peaks, forward growing from the left and reflected from the right. The forward bar's full scale follows the amplifier's actual state — 1200 W in FULL, 600 W in HALF, and the exciter's 100 W in STANDBY — so a full-power HALF transmission does not read as half a job. |
+| **ALARM · TX · TUNE** / **CONTEST · BEEP** | every flag TrxNet carries, lit or dark, in two fixed rows: what is happening over the modes it is in. The dark ones stay in place so the rows never move under your eye. |
+| Temperature, large, beside the lamps | the heatsink, coloured by which fan stage it has reached. The steps move with CONTEST mode, because the amplifier's own fan schedule does; the tooltip gives the numbers and the protection threshold. Empty when the amplifier does not report a temperature (a daemon older than 2026-09-08). |
+| The status line | three things that are easy to confuse, told apart: `OFFLINE` (the amplifier's daemon is not on the network), `NO DATA` with an age (it is, but nothing is arriving), `NO LINK` (it is there but has no serial link to the amplifier), `OFF`, or `ON` — then the band in the middle, and the amplifier's `REV 1.0` / `REV 2.0` at the right. |
+| Band, in the status line | the amplifier's own band, in metres. **It turns red when it disagrees with the radio.** Empty when the amplifier has not reported one. |
+
+An empty value is never a fault on its own: the status line always says what state the
+amplifier is in, and while telemetry is merely late (`NO DATA`) the band and temperature keep
+their last values, greyed.
 
 #### The tuning-segment scale
 
@@ -1128,8 +1148,9 @@ page of a band is pinned to its end, so it never shrinks to one lonely segment.
 The arrows go dead **while the radio is transmitting** — retuning out from under a keyed
 amplifier is exactly the mistake this panel is here to prevent — and also when there is
 nothing to draw: no frequency from the radio, or a band the amplifier has no segments for
-(60 m, 4 m, 2 m, 70 cm). The row stays where it is in all those cases, empty, and the arrows'
-tooltips say which it is.
+(60 m, 4 m, 2 m, 70 cm). The row stays where it is in all those cases, and the empty scale
+says which of the two it is: **`NO FREQ`** (the radio gives no frequency) or **`NO SEGMENTS`**
+(it does, but the amplifier has no divisions on that band). The arrows' tooltips say the same.
 
 > The segments are the ones in the amplifier's **user manual §19**, and they are wider than
 > the band: 160 m starts at 1785 kHz and 10 m at 27950 kHz, because the amplifier will tune
@@ -1210,6 +1231,7 @@ The **?** button opens this list.
 | `Alt+W` | clear the form |
 | `Alt+G` | toggle the **global** switch on the input row |
 | `Alt+K` | type a message and send it — CW, or RTTY on a new line ([section 3.4](#34-working-a-station)) |
+| `Alt+T` | S&P, RTTY palette open: **AUTOTUNE** — move the dial so the received signal sits on the markers ([section 3.6](#36-the-rtty-palette)) |
 | `Alt+Enter` | log the QSO without sending a macro |
 | `Alt++` / `Alt+-` | text size of the logged QSOs below — the numpad `+` / `-` work too |
 | `Esc` (dialog open) | close the dialog |

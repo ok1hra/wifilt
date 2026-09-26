@@ -276,16 +276,32 @@ const PAGE_SCRIPT = `
         body.scrollTop === top0 && lastRowVisible(), lastRowWhere());
     }
 
-    // The hint sits flex:1 in a row whose height is set by the 20px inputs, so
-    // it has to wrap past about three lines before the row grows at all. The
-    // message is therefore longer than anything showHint() sends: what is under
-    // test is a taller input row, and this is how you get one at this width.
-    await trigger("a hint message tall enough to grow the input row",
-      () => { $("logHint").textContent =
+    // The hint used to sit flex:1 in the input row, where a long message
+    // wrapped and grew the row. It now shares the macro-preview line and is
+    // cut to one line, so even this deliberately over-long message must leave
+    // the journal's height exactly where it was.
+    {
+      const before = body.clientHeight;
+      $("logHint").textContent =
         "Duplicate QSO with OK1AAA on 20m CW logged at 12:31 UTC, exchange 014 -- " +
         "press Alt+Enter to log it anyway, or Alt+W to clear the form and carry on. " +
-        "The same call was also worked on 40m CW at 09:12 UTC and on 15m SSB at 11:48 UTC."; },
-      () => { $("logHint").textContent = ""; });
+        "The same call was also worked on 40m CW at 09:12 UTC and on 15m SSB at 11:48 UTC.";
+      await settle();
+      const after = body.clientHeight;
+      check("a long hint stays on one line and never changes the journal's height",
+        after === before && $("logHint").getBoundingClientRect().height < 30,
+        before + " -> " + after + ", hint " +
+        Math.round($("logHint").getBoundingClientRect().height) + "px");
+      const line = document.querySelector(".log-msg-line").getBoundingClientRect();
+      const hb = $("logHint").getBoundingClientRect();
+      check("and sits right-aligned on the macro-preview line, under the inputs",
+        $("logHint").parentElement.classList.contains("log-msg-line") &&
+          Math.abs(hb.right - (line.right - 10)) < 1.5 &&
+          line.top >= document.querySelector(".log-input-row").getBoundingClientRect().bottom - 0.5,
+        JSON.stringify([Math.round(hb.right), Math.round(line.right)]));
+      $("logHint").textContent = "";
+      await settle();
+    }
 
     // The divider dragged far enough to wrap the input row: a height change
     // driven by WIDTH, which is the one cause no list of "things that grow the

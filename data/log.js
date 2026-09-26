@@ -1510,6 +1510,7 @@ window.LogRadio = {
   focusedField: () => focusedLogField(),
   insertWord: (word, trx, field) => insertWordIntoLog(word, trx, field),
   setRunMode: (m) => setRunMode(m),
+  runMode:    () => app.runMode,
   workSpot:   (call, trx) => workDxcSpot(call, trx),
   tuneTo:     (hz, reqId) => tuneActiveTrx(hz, reqId),
 };
@@ -1872,6 +1873,8 @@ function setRunMode(mode) {
   btnCallQ.classList.toggle('btn-action-hidden', mode !== 'RUN');
   btnCheck.classList.toggle('btn-action-hidden', mode !== 'SP');
   updateMacroPreview();
+  // The RTTY palette's AUTOTUNE exists in S&P only.
+  if (window.RttyPanel && window.RttyPanel.setRunMode) window.RttyPanel.setRunMode(mode);
 }
 
 btnRunMode.addEventListener('click', () => {
@@ -2152,6 +2155,15 @@ document.addEventListener('keydown', e => {
       return m && !m.classList.contains('lm-hidden');
     });
     if (!dialogOpen) openFreeTx();
+    return;
+  }
+  // Alt+T — the RTTY palette's AUTOTUNE: retune the dial onto the received
+  // signal. S&P only, like the pill; the palette refuses it itself when it is
+  // closed or cannot (wrong mode, no audio, transmitting). The caret stays put.
+  if (altHotkey(e, ['KeyT'], 't')) {
+    e.preventDefault();
+    if (app.runMode === 'SP' && window.RttyPanel && window.RttyPanel.autotune)
+      window.RttyPanel.autotune();
     return;
   }
   // Alt+Enter — log current QSO without sending any memory
