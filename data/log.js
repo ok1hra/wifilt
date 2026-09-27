@@ -2172,6 +2172,14 @@ document.addEventListener('keydown', e => {
     if (!dialogOpen) openFreeTx();
     return;
   }
+  // Alt+S — the statistics palette (log-stats.js): QSOs per band and mode,
+  // multipliers out of EXCH. Opens and closes without moving the caret; Esc is
+  // deliberately not its way out -- Esc stays the transmission abort.
+  if (altHotkey(e, ['KeyS'], 's')) {
+    e.preventDefault();
+    if (window.LogStats) window.LogStats.toggle();
+    return;
+  }
   // Alt+T — the RTTY palette's AUTOTUNE: retune the dial onto the received
   // signal. S&P only, like the pill; the palette refuses it itself when it is
   // closed or cannot (wrong mode, no audio, transmitting). The caret stays put.
@@ -4116,6 +4124,7 @@ function onActiveLogChanged(log) {
   // the picker changes what the LOG column should read.
   _logMetaCache = null;
   refreshCallSearch();
+  if (window.LogStats) window.LogStats.refresh();
 }
 
 LogManager.onLogChanged(onActiveLogChanged);
@@ -4130,6 +4139,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible') return;
   invalidateSearchCaches();
   refreshCallSearch();
+  if (window.LogStats) window.LogStats.refresh();
 });
 
 // ── Macro editor (MACROS button) ──────────────────────────────────────────────

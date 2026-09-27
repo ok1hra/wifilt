@@ -41,7 +41,8 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
  · [3.13 Radio selection](#313-radio-selection)
  · [3.14 PA — the linear amplifier](#314-pa--the-linear-amplifier)
  · [3.15 Export and backup](#315-export-and-backup)
- · [3.16 Keyboard shortcuts](#316-keyboard-shortcuts)
+ · [3.16 Statistics](#316-statistics)
+ · [3.17 Keyboard shortcuts](#317-keyboard-shortcuts)
 
 **[4. DXC — DX cluster](#4-dxc--dx-cluster)**
  · [4.1 Connecting](#41-connecting)
@@ -1218,7 +1219,35 @@ is not a reason to refuse to switch an amplifier off.
 exports are in the log manager. Everything else — restore, import, device-to-device sync —
 is on the [LOGSYNC](#10-logsync) page.
 
-### 3.16 Keyboard shortcuts
+### 3.16 Statistics
+
+`Alt+S` opens a small palette with the score so far in the active log; `Alt+S` again, or its
+**✕**, closes it. Opening it leaves the caret in Call, and `Esc` does not close it — `Esc`
+stays the transmission abort. It can be dragged by its title bar; where you leave it, and
+whether it was open, are remembered, so it is back after a reload.
+
+The top row names the bands the log has QSOs on, in frequency order, with **Σ** on the
+right; a **?** column appears only for QSOs with no usable frequency. Below it the QSO count
+per band. **Duplicates are not counted**: one QSO per callsign, band and mode, the first one
+logged. CW-R counts as CW, RTTY-R as RTTY, USB and LSB as SSB. A log in one mode has one
+**QSO** row; a log in several has a row per mode and a **QSO** total under them.
+
+The drop-down below picks the multipliers, read from the EXCH field — each QSO gives at most
+one, the **last** matching word of its exchange:
+
+| Choice | A multiplier is | Counted from |
+|---|---|---|
+| US/VE states | a word of 2–3 letters (`MA`, `ON`, `ENY`) | only stations the DXCC table puts in the USA, Alaska, Hawaii or Canada |
+| Zones | a number of 1–2 digits; `2` and `02` are the same zone, `0` is none | every QSO |
+
+The **MULT** row gives the distinct multipliers on each band, and its **Σ** is those added
+up — what a contest that counts multipliers per band scores. Under it, every distinct
+multiplier in the whole log, separated by spaces. There is no list of valid states behind
+it, so a mistyped exchange shows up in that list as it is. The choice is remembered per log:
+an ARRL DX log keeps states, a CQ WW log keeps zones. The palette counts again after every
+QSO logged, edited or deleted, and when the tab comes back to the front.
+
+### 3.17 Keyboard shortcuts
 
 ![Keyboard shortcuts](img/qrplog-keyboard-shortcuts.png)
 
@@ -1231,6 +1260,7 @@ The **?** button opens this list.
 | `Alt+W` | clear the form |
 | `Alt+G` | toggle the **global** switch on the input row |
 | `Alt+K` | type a message and send it — CW, or RTTY on a new line ([section 3.4](#34-working-a-station)) |
+| `Alt+S` | open / close the statistics palette ([section 3.16](#316-statistics)) |
 | `Alt+T` | S&P, RTTY palette open: **AUTOTUNE** — move the dial so the received signal sits on the markers ([section 3.6](#36-the-rtty-palette)) |
 | `Alt+Enter` | log the QSO without sending a macro |
 | `Alt++` / `Alt+-` | text size of the logged QSOs below — the numpad `+` / `-` work too |

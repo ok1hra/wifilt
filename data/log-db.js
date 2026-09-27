@@ -126,6 +126,21 @@
 
   // ── QSOs ───────────────────────────────────────────────────────────────────
 
+  // Told after every QSO write that went through THIS document -- the Alt+S
+  // statistics palette recounts from it. Called from the writers themselves,
+  // beside the call index upkeep and for the same reason: a writer added later
+  // cannot forget to announce itself. Writes from other tabs (LOGSYNC, the JS8
+  // page) never arrive here; QRPLog catches those on visibilitychange.
+  const _qsoWriteListeners = [];
+
+  function onQsoWrite(cb) { if (typeof cb === 'function') _qsoWriteListeners.push(cb); }
+
+  function _notifyQsoWrite() {
+    for (let i = 0; i < _qsoWriteListeners.length; i++) {
+      try { _qsoWriteListeners[i](); } catch (_) {}
+    }
+  }
+
   function addQso(qso) {
     qso.createdAtUtc = qso.createdAtUtc || new Date().toISOString();
     return tx('qso', 'readwrite', s => s.add(qso)).then(newId => {
@@ -134,6 +149,7 @@
       // QSO comes through here -- and a search armed in S&P has to see the
       // station that was just worked without paying for a whole rebuild.
       if (_callIndex && !qso.deleted && qso.call) _callIndex.push(_indexRecord(qso));
+      _notifyQsoWrite();
       return qso;
     });
   }
@@ -153,7 +169,7 @@
     // at all (it was deleted and is coming back). Edits are rare; the next
     // search pays for one getAll and every later one is free again.
     invalidateCallIndex();
-    return tx('qso', 'readwrite', s => s.put(qso));
+    return tx('qso', 'readwrite', s => s.put(qso)).then(r => { _notifyQsoWrite(); return r; });
   }
 
   function getQsosForLog(logId) {
@@ -162,7 +178,7 @@
 
   function deleteQso(id) {
     invalidateCallIndex();
-    return tx('qso', 'readwrite', s => s.delete(id));
+    return tx('qso', 'readwrite', s => s.delete(id)).then(r => { _notifyQsoWrite(); return r; });
   }
 
   // Exact dupe check, one log, straight off the index. Kept as its own entry
@@ -374,6 +390,7 @@
     createLog, getLogs, getLog, updateLog, deleteLog,
     // qso
     addQso, getQso, updateQso, getQsosForLog, deleteQso, findDupes, matchCalls, invalidateCallIndex, commitQso,
+    onQsoWrite, hzOf: _hzOf,
     // settings
     getSetting, setSetting, getAllSettings,
     // runtime state

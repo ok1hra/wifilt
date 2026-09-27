@@ -2443,3 +2443,75 @@ body {
   font: 700 11px/1 var(--font-mono); cursor: pointer;
 }
 .rtty-panel-busy button:hover { background: #4a3016; color: #fff; }
+
+/* ── Statistics palette (Alt+S, log-stats.js) ───────────────────────────────
+   The PA palette's frame and type, so the floating palettes read as one set.
+   Under the other palettes (PA 90, RTTY 91, CALL 92, Alt+K 93): it is only
+   ever looked at, never typed into. Width is the table's own -- min-content,
+   so the multiplier list wraps under the columns instead of widening them. */
+.st-panel {
+  position: fixed;
+  z-index: 89;
+  width: min-content;
+  min-width: 190px;
+  max-width: calc(100vw - 16px);
+  background: #1b2028;
+  border: 1px solid #2f3745;
+  border-radius: 7px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.55);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: #dfe6ef;
+  user-select: none;
+}
+.st-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 6px 4px 8px;
+  border-bottom: 1px solid #2f3745;
+  cursor: move;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
+  color: #dfe6ef;
+}
+.st-title { margin-right: auto; }
+.st-close {
+  background: none; border: none; color: #8b97a8;
+  font-family: inherit; font-size: 13px; line-height: 1;
+  padding: 1px 3px; cursor: pointer;
+}
+.st-close:hover { color: #ff5c5c; }
+.st-body { padding: 4px 6px 6px; overflow-x: auto; }
+.st-empty { color: #8b97a8; padding: 4px 2px; white-space: nowrap; }
+.st-empty[hidden], .st-table[hidden] { display: none; }
+
+.st-table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.st-table th, .st-table td {
+  padding: 2px 6px;
+  text-align: right;
+  white-space: nowrap;
+}
+.st-table thead th { color: #8b97a8; font-weight: 700; font-size: 11px; border-bottom: 1px solid #2f3745; }
+.st-table .st-lbl { text-align: left; color: #8b97a8; font-weight: 700; font-size: 11px; padding-left: 2px; }
+.st-table .st-sum { font-weight: 700; border-left: 1px solid #2f3745; }
+.st-table tr.st-total td, .st-table tr.st-total th { border-top: 1px solid #2f3745; font-weight: 700; }
+.st-table tr.st-total .st-lbl { color: #dfe6ef; }
+.st-zero { color: #4a5666; }
+
+.st-sel-row td { text-align: left; padding: 6px 2px 3px; }
+.st-select {
+  background: #232936; color: #dfe6ef;
+  border: 1px solid #2f3745; border-radius: 4px;
+  font: inherit; font-size: 11px;
+  padding: 1px 4px;
+}
+.st-mult td, .st-mult th { color: #F5B027; }
+.st-mult .st-lbl { color: #F5B027; }
+.st-table td.st-list {
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  color: #dfe6ef;
+  padding: 3px 2px 0;
+  line-height: 1.45;
+  user-select: text;
+}
+.st-list-n { color: #8b97a8; }
