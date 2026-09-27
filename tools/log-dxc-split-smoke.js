@@ -150,6 +150,10 @@ const server = http.createServer((request, response) => {
     if (url.searchParams.has("down")) fxDown[n] = url.searchParams.get("down") === "1";
     return json({ok: true, hz: fxHz, down: fxDown});
   }
+  // Many lines in ONE WebSocket message, the way a busy RBN feed delivers
+  // them. Section 18 needs hundreds of rows without hundreds of round trips.
+  if (url.pathname === "/ws-push-batch" && request.method === "POST")
+    return readBody(body => { clusterPush(body); json({ok: true}); });
   if (url.pathname === "/ws-push") { clusterPush(url.searchParams.get("line") || ""); return json({ok: true}); }
 
   if (url.pathname === "/state" && fxDown[1]) { response.writeHead(503).end(); return; }
@@ -263,6 +267,10 @@ const PAGE_SCRIPT = `
   function realClick(node, init) {
     node.dispatchEvent(new PointerEvent("pointerdown", Object.assign({bubbles: true}, init)));
     node.dispatchEvent(new MouseEvent("mousedown", Object.assign({bubbles: true}, init)));
+    // The release too: the table holds its redraw while a button is down
+    // (dxc.html releaseTablePress) and would otherwise wait out its 1.5 s cap.
+    node.dispatchEvent(new PointerEvent("pointerup", Object.assign({bubbles: true}, init)));
+    node.dispatchEvent(new MouseEvent("mouseup", Object.assign({bubbles: true}, init)));
     node.dispatchEvent(new MouseEvent("click", Object.assign({bubbles: true}, init)));
   }
 
@@ -1349,6 +1357,149 @@ const PAGE_SCRIPT = `
       localStorage.removeItem("dxcEBandByTrx");
       localStorage.removeItem("dxcEFreqFilter");
     }
+
+    // ---- 18. the row under the pointer stays put while the operator aims --
+    // Reported 2026-09-27: on a busy feed the row slid away between aiming
+    // and clicking, because every spot arrives at the bottom and auto-scroll
+    // follows it. Pointer on a CLICKABLE field (kHz or call) and moving there
+    // in the last 4 s = that row is re-seated after every redraw. Elsewhere in
+    // the table nothing is anchored. Off a link the anchor lasts a 400 ms grace
+    // (the way to the next row's link crosses other cells); leaving the table,
+    // or 4 s without movement, lets go and the list follows the band again.
+    {
+      const pd  = $("logDxcFrame").contentDocument;
+      const wrap = pd.querySelector(".wrap");
+      const NL = String.fromCharCode(10);
+      const total = () => Number((pd.getElementById("cnt").textContent.split("/")[1]) || 0);
+      const atBottom = () => wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight <= 2;
+      let seq = 0;
+      const batch = async n => {
+        const lines = [];
+        for (let i = 0; i < n; i++) {
+          seq++;
+          lines.push("DX de OK9AAA:    " + (14000 + (seq % 300)).toFixed(1) + "  W" + seq + "AIM"
+            + "        aim                   " + nowZ());
+        }
+        const before = total();
+        await fetch("/ws-push-batch", {method: "POST", body: lines.join(NL)});
+        await until(() => total() >= Math.min(500, before + n) && total() !== before || total() === 500,
+          20000, "a batch of " + n + " spots to render").catch(() => {});
+        await sleep(30);
+      };
+      // The row in the middle of the view, and the centre of one of its cells.
+      const midRow = () => {
+        const r = wrap.getBoundingClientRect();
+        const el = pd.elementFromPoint(r.left + 20, r.top + r.height / 2);
+        const tr = el && el.closest("tr[data-k]");
+        return tr ? {tr, k: tr.getAttribute("data-k")} : null;
+      };
+      const centre = node => { const r = node.getBoundingClientRect();
+        return {x: r.left + r.width / 2, y: r.top + r.height / 2}; };
+      const spot = (row, sel) => centre(row.tr.querySelector(sel));
+      const rowTop = k => { const tr = pd.querySelector('#body tr[data-k="' + k + '"]');
+        return tr ? tr.getBoundingClientRect().top : null; };
+      const held = (k, top0) => rowTop(k) !== null && Math.abs(rowTop(k) - top0) <= 1;
+      const move = p => pd.elementFromPoint(p.x, p.y).dispatchEvent(
+        new PointerEvent("pointermove", {bubbles: true, clientX: p.x, clientY: p.y}));
+      const wheel = p => pd.elementFromPoint(p.x, p.y).dispatchEvent(
+        new WheelEvent("wheel", {bubbles: true, clientX: p.x, clientY: p.y, deltaY: -120}));
+      const leave = async () => { wrap.dispatchEvent(new PointerEvent("pointerleave", {bubbles: false}));
+        await sleep(40); };
+      const bottomDetail = () => wrap.scrollHeight + " " + wrap.scrollTop + " " + wrap.clientHeight;
+
+      check("auto-scroll is on for this section",
+        !pd.getElementById("cnt").classList.contains("scroll-off"));
+      await batch(40);
+      check("the table is long enough to scroll", wrap.scrollHeight > wrap.clientHeight + 40,
+        wrap.scrollHeight + " vs " + wrap.clientHeight);
+
+      // Control: without the pointer, the newest spot is at the bottom edge.
+      await batch(1);
+      check("with no pointer over it the table follows the newest spot", atBottom(), bottomDetail());
+
+      // On the frequency link.
+      let row = midRow(), p = spot(row, ".freq-link"), top0 = rowTop(row.k);
+      move(p);
+      await batch(5);
+      check("aiming at a frequency: five new spots do not move its row",
+        held(row.k, top0) && pd.elementFromPoint(p.x, p.y).closest(".freq-link")
+        && pd.elementFromPoint(p.x, p.y).closest("tr[data-k]").getAttribute("data-k") === row.k,
+        top0 + " -> " + rowTop(row.k));
+      check("and the table is no longer pinned to the bottom", !atBottom());
+      await leave();
+      check("leaving the table lets go at once: back at the newest spot", atBottom(), bottomDetail());
+
+      // On the callsign link.
+      row = midRow(); p = spot(row, ".dx-link"); top0 = rowTop(row.k);
+      move(p);
+      await batch(3);
+      check("aiming at a callsign holds its row too", held(row.k, top0), top0 + " -> " + rowTop(row.k));
+      await leave();
+
+      // Anywhere else in the row anchors nothing.
+      row = midRow();
+      move(spot(row, "td.c-time"));
+      await batch(1);
+      check("the pointer on a non-clickable cell does not anchor", atBottom(), bottomDetail());
+      await leave();
+
+      // Off a link: a short grace, then let go.
+      row = midRow(); top0 = rowTop(row.k);
+      move(spot(row, ".freq-link"));
+      const offAt = Date.now();
+      move(spot(row, "td.c-time"));
+      await fetch("/ws-push?line=" + encodeURIComponent(
+        "DX de OK9AAA:    14123.0  W9GRACE        aim                   " + nowZ()));
+      await until(() => !!pd.querySelector('#body tr[data-dx="W9GRACE"]'), 3000, "the grace spot")
+        .catch(() => {});
+      const inGrace = Date.now() - offAt < 380;
+      check("moving off a link keeps the anchor for a short grace",
+        !inGrace || held(row.k, top0), (Date.now() - offAt) + " ms, " + top0 + " -> " + rowTop(row.k));
+      await sleep(450);
+      check("and after the grace it lets go", atBottom(), bottomDetail());
+      await leave();
+
+      // The wheel: over a link it anchors, elsewhere it does not.
+      wrap.scrollTop -= 120;
+      await sleep(30);
+      row = midRow(); p = spot(row, ".freq-link"); top0 = rowTop(row.k);
+      wheel(p);
+      await batch(3);
+      check("a wheel turn over a link holds the row", held(row.k, top0), top0 + " -> " + rowTop(row.k));
+      await leave();
+      wrap.scrollTop -= 120;
+      await sleep(30);
+      row = midRow();
+      wheel(spot(row, "td.c-time"));
+      await batch(1);
+      check("a wheel turn elsewhere does not", atBottom(), bottomDetail());
+
+      // A parked pointer lets go by itself.
+      row = midRow();
+      move(spot(row, ".freq-link"));
+      await batch(1);
+      check("a fresh aim holds again", !atBottom());
+      await sleep(4300);
+      check("four seconds without movement let go", atBottom(), bottomDetail());
+      await batch(1);
+      check("and new spots are followed again", atBottom());
+      await leave();
+
+      // Removal at the TOP: fill to the 500-row cap first, then aim and push
+      // past it so the oldest rows are dropped while the anchor is live. The
+      // fill is not aimed: one render per line takes long enough to outlast
+      // the 4 s window on its own.
+      if (total() < 490) await batch(490 - total());
+      await sleep(200);
+      row = midRow(); top0 = rowTop(row.k);
+      move(spot(row, ".freq-link"));
+      await batch(20);
+      check("at the 500-row cap the rows dropped at the top do not move it either",
+        total() === 500 && held(row.k, top0), total() + " rows, " + top0 + " -> " + rowTop(row.k));
+      await leave();
+      pd.getElementById("clear").click();
+      await sleep(100);
+    }
   } catch (error) {
     check("the test script ran to the end", false, String(error && error.stack || error));
   }
@@ -1392,13 +1543,14 @@ try { new Function(PAGE_SCRIPT); } catch (error) {
 server.listen(0, "127.0.0.1", () => {
   port = server.address().port;
   launchChrome(1280, 900);
-  // One budget for BOTH Chrome passes, against a run that takes about 20 s. The
+  // One budget for BOTH Chrome passes, against a run that takes about 90 s since
+  // section 18 fills the table to its 500-row cap (one render per line). The
   // margin is deliberate and it is not a performance allowance: when the page
   // script fails to PARSE, nothing reports and this timer is the only thing
   // that ends the run -- so every second of it is a second of not knowing why.
   // That is what the new Function(PAGE_SCRIPT) check above is for.
   timer = setTimeout(() => finish({checks: [["the page reported within the timeout", false,
-    "no /result was posted"]], hard: true}), 120000);
+    "no /result was posted"]], hard: true}), 240000);
 });
 
 process.on("SIGINT",  () => finish({checks: [["interrupted", false, "SIGINT"]], hard: true}));

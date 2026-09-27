@@ -1634,6 +1634,7 @@ function applyState(data) {
   renderStatusBar();
   renderConnStatus();
   try { _updateDxcBand(app.connected ? app.frequency : 0, app.dxcConnected); } catch (_) {}
+  followRadioInSearch();
 }
 
 function applyDisconnected() {
@@ -3027,8 +3028,30 @@ function disarmCallSearch() {
   CallPalette.hide();
 }
 
+// Both surfaces colour by the band the radio is on (and the DUPE Mode cell by
+// its mode) as of the moment they were rendered -- and until 2026-09-27 nothing
+// rendered them again when that changed. The visible case: every DXC spot and
+// every RTTY word goes through insertWordIntoLog() -> selectTrx() -> the TRX
+// button's click, which zeroes app.frequency even for the TRX already active,
+// and armCallSearch() then renders at once, against no band at all. Every
+// same-band duplicate came up amber, and stayed amber after the next /state
+// put the frequency back. A QSY with the view open went stale the same way.
+// So remember what the last render was asked against, and render again when
+// the radio no longer says the same.
+let _searchRadioKey = '';
+
+function radioSearchKey() {
+  return (_bandFromHz(app.frequency) || '') + '|' + liveModeKey();
+}
+
+function followRadioInSearch() {
+  if (!_searchArmed) return;
+  if (radioSearchKey() !== _searchRadioKey) refreshCallSearch();
+}
+
 function refreshCallSearch() {
   if (!_searchArmed) return;
+  _searchRadioKey = radioSearchKey();
   const token = ++_searchToken;
   const log   = LogManager.getActiveLog();
   const frag  = inpCall.value.trim().toUpperCase();
@@ -3089,8 +3112,9 @@ function liveModeKey() {
 
 // ── The DUPE view ────────────────────────────────────────────────────────────
 //
-// position:absolute over the WHOLE of .log-journal, its own header included.
-// Two things fall out of covering the header rather than sharing it: the view
+// position:absolute inside .log-journal, hung from its bottom edge and only as
+// tall as its rows (up to the whole journal), with a header of its own.
+// Two things fall out of having its own header rather than sharing it: the view
 // can carry a LOG column the journal has no room for, and it owes nothing to
 // syncJournalHScroll, which translates the journal header by the body's
 // scrollLeft. Underneath, the journal is not touched at all -- its rows, its
@@ -4596,6 +4620,7 @@ function init() {
     if (hz > 0) {
       app.frequency = hz;
       if (inpCall.value.trim()) updateDxccFromCall();
+      followRadioInSearch();
     }
   });
   sbManualFreq.addEventListener('blur', () => {
@@ -4608,6 +4633,7 @@ function init() {
     const d = rstDefault(app.mode);
     if (d && !app.rstSentDirty) inpRst.value     = d;
     if (d && !app.rstRcvdDirty) inpRstRcvd.value = d;
+    followRadioInSearch();
   });
 
   // Start WebSocket for macros
@@ -4895,8 +4921,33 @@ function _renderDxcLine(freqHz) {
   _svgLine.setAttribute('x2', String(x));
 }
 
+// The same trap as the DXC table (dxc.html, releaseTablePress): every spot
+// update clears and redraws these, and a redraw between press and release takes
+// the clicked marker away, so the click tunes nothing. Held while a button is
+// down on a marker -- the only thing on the map a click acts on -- and run after
+// the click.
+let _dxcPress = false, _dxcRedrawHeld = false, _dxcPressTimer = 0;
+
+function _releaseDxcPress() {
+  if (!_dxcPress) return;
+  _dxcPress = false;
+  clearTimeout(_dxcPressTimer);
+  if (_dxcRedrawHeld) { _dxcRedrawHeld = false; _renderDxcSpots(); }
+}
+
+dxcBandBox.addEventListener('pointerdown', e => {
+  if (!e.target.closest('g[data-call]')) return;
+  _dxcPress = true;
+  clearTimeout(_dxcPressTimer);
+  _dxcPressTimer = setTimeout(_releaseDxcPress, 1500);
+});
+// After the click, which is dispatched after pointerup -- not in it.
+window.addEventListener('pointerup',     () => setTimeout(_releaseDxcPress, 0), true);
+window.addEventListener('pointercancel', () => setTimeout(_releaseDxcPress, 0), true);
+
 function _renderDxcSpots() {
   if (!_svgSpots || _dxcBandStart < 0) return;
+  if (_dxcPress) { _dxcRedrawHeld = true; return; }
   _dxcClear(_svgSpots);
 
   const visible = _dxcSpots.filter(s => {

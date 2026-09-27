@@ -39,6 +39,8 @@ let finished = false, chrome = null, timer = null;
 const commands = [];
 let currentMode = "CW";
 let currentTx = false;
+let currentFreq = 14025000;
+let stateDelayMs = 0;     // a real ESP32 answers /state slower than IndexedDB does
 let aud1 = {held: false, role: ""};
 
 function stateJson() {
@@ -46,7 +48,7 @@ function stateJson() {
     connected: true, catHealthy: true, audioReady: false, lanStatus: "linked",
     btStatus: "LAN linked", wifiStatus: "WiFi STA", radioTransport: "lan",
     fullCat: true, wifiRssi: -55, fwRev: "20260810", bdSupported: false,
-    power: true, frequency: 14025000, mode: currentMode, filter: 1,
+    power: true, frequency: currentFreq, mode: currentMode, filter: 1,
     radioAddress: "a4", transceiverType: "IC-705", radioName: "IC-705",
     tx: currentTx, ritRaw: 0, smeterRaw: 0, powerMeterRaw: 0, afGain: 100,
     keySpeed: 20, rfPower: 128, rfPowerSeen: true, supplyVolts: 13.8, swr: 1.1,
@@ -107,6 +109,7 @@ const server = http.createServer((request, response) => {
   if (url.pathname === "/commands") return json(commands);
   if (url.pathname === "/commands/clear") { commands.length = 0; return json({ok: true}); }
   if (url.pathname === "/setMode") { currentMode = url.searchParams.get("mode") || "CW"; return json({ok: true}); }
+  if (url.pathname === "/setFreq") { currentFreq = Number(url.searchParams.get("hz")) || 0; return json({ok: true}); }
   if (url.pathname === "/setTx")   { currentTx = url.searchParams.get("tx") === "1"; return json({ok: true}); }
   if (url.pathname === "/setAud1") {
     const role = url.searchParams.get("role") || "";
@@ -114,7 +117,12 @@ const server = http.createServer((request, response) => {
     return json({ok: true});
   }
   if (url.pathname === "/js8/session") return json(aud1);
-  if (url.pathname === "/state") return json(stateJson());
+  if (url.pathname === "/setStateDelay") { stateDelayMs = Number(url.searchParams.get("ms")) || 0; return json({ok: true}); }
+  if (url.pathname === "/state") {
+    if (!stateDelayMs) return json(stateJson());
+    setTimeout(() => json(stateJson()), stateDelayMs);
+    return;
+  }
   if (url.pathname === "/dxcinfo") return json({locator: "JO70", call: "OK1HRA"});
   if (url.pathname === "/log-config") {
     return json({
@@ -319,6 +327,17 @@ const PAGE_SCRIPT = `
       rows.filter(x => x.className.indexOf("dv-band") !== -1).length === 1 &&
       rows.filter(x => x.className.indexOf("dv-other") !== -1).length === 2,
       rows.map(x => x.className).join(" | "));
+    // The class is not the colour: a later rule can win the cascade and paint
+    // a same-band row amber while its class still says dv-band.
+    {
+      const red = rows.find(x => x.className.indexOf("dv-band") !== -1);
+      const amb = rows.find(x => x.className.indexOf("dv-other") !== -1);
+      const c = el => getComputedStyle(el.querySelector(".jcol-call")).color;
+      check("a same-band row is really painted red",
+        red && c(red) === "rgb(221, 51, 0)", red ? c(red) : "no red row");
+      check("...and another band's row really amber",
+        amb && c(amb) === "rgb(245, 176, 39)", amb ? c(amb) : "no amber row");
+    }
     check("the newest QSO is the red one, at the bottom",
       rows[rows.length - 1].className.indexOf("dv-band") !== -1,
       rows[rows.length - 1].className);
@@ -407,6 +426,37 @@ const PAGE_SCRIPT = `
       check("...with the column legend still stuck to its top",
         Math.abs(legend.top - br.top) < 5, Math.round(legend.top) + " vs " + Math.round(br.top));   // .dv-body padding
     }
+
+    // The colours are the radio's band AT RENDER TIME. A DXC spot or an RTTY
+    // word arrives through insertWordIntoLog(), whose selectTrx() clicks the TRX
+    // button -- and that click zeroes app.frequency even for the TRX already
+    // active. The view rendered against no band and stayed all amber after
+    // /state put the frequency back (found on air 2026-09-27, GM5WXA on 40m).
+    const redRows = () => viewRows().filter(x => x.className.indexOf("dv-band") !== -1)
+      .map(x => x.querySelector(".jcol-freq").textContent);
+    // Locally /state answers before IndexedDB does and hides the race; on the
+    // device it is the other way round, so answer it late here too.
+    await fetch("/setStateDelay?ms=300");
+    await sleep(900);
+    insertWordIntoLog("OK1ABC", 1);
+    const zeroed = app.frequency;
+    await sleep(150);
+    check("handing a word over renders against no band at first (the trap is live)",
+      zeroed === 0 && viewUp() && redRows().length === 0,
+      "app.frequency " + zeroed + ", red: " + (redRows().join(",") || "none"));
+    await sleep(1100);
+    await fetch("/setStateDelay?ms=0");
+    check("...and the same-band row is red again once /state is back",
+      redRows().join(",") === "14.025.00", redRows().join(",") || "none red");
+
+    // A QSY with the view open moves the red row with it.
+    await fetch("/setFreq?hz=7032000");
+    await sleep(1100);
+    check("a QSY with the view open re-colours it for the new band",
+      redRows().join(",") === "7.032.00", redRows().join(",") || "none red");
+    await fetch("/setFreq?hz=14025000");
+    await sleep(1100);
+    check("...and back", redRows().join(",") === "14.025.00", redRows().join(",") || "none red");
 
     // ---- 4. the global switches are separate ------------------------------
     await arm("OK1ABC");

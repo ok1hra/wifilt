@@ -1398,6 +1398,15 @@ differ. While the toolbar is collapsed the spot counter turns amber whenever aut
 scrolling is stopped — **Stop scroll** is one of the controls that are put away, and a
 frozen list with no visible reason is easy to mistake for a dead cluster.
 
+You do not need **Stop scroll** just to hit a row on a busy feed. While the mouse is on a
+clickable field — a frequency or a callsign — and has moved (or the wheel turned) there in
+the last 4 seconds, that row stays exactly where it is: new spots still arrive, below the
+visible part, and rows dropped at the top no longer shift it. The rest of the table does not
+hold anything, so resting the mouse on the Info or Spotter column leaves the list moving.
+Moving off a link keeps the row for a moment (0.4 s), enough to slide to the link in the
+next row; after that, or after 4 seconds without movement, or as soon as the mouse leaves
+the table, the list jumps back to the newest spot and follows it again.
+
 The command box is a full telnet prompt — `sh/dx`, `set/filter`, `dx 14025 DL1XYZ` and
 anything else your cluster understands.
 
