@@ -603,6 +603,28 @@ const PAGE_SCRIPT = `
     check("the palette's RX log is the two-column tape",
       !!$("rttyPanelRx").querySelector(".rtty-tape-head") &&
         !$("rttyPanelRx").classList.contains("rtty-tape-single"));
+    // The hold while aiming at a word (2026-09-28) lives in rtty-rxlog.js and
+    // is tested in rtty-page-smoke.js; what is the palette's own is its CSS in
+    // log.css -- the empty last row and the amber frame.
+    {
+      const rx = $("rttyPanelRx"), tapeBody = rx.querySelector(".rtty-tape-body");
+      const probe = tapeBody.appendChild(document.createElement("div"));
+      probe.className = "rtty-tape-row";
+      probe.textContent = "X";
+      const lineH = probe.getBoundingClientRect().height;
+      const pad = parseFloat(getComputedStyle(tapeBody).paddingBottom);
+      probe.remove();
+      check("the palette's tape ends in one empty row", pad >= lineH, pad + " px vs row " + lineH);
+      const borderBefore = getComputedStyle(rx).borderTopWidth;
+      putToken("OK1ABC").dispatchEvent(new PointerEvent("pointermove", {bubbles: true}));
+      check("moving onto a word frames the palette's tape in amber, not with a border",
+        rx.classList.contains("rtty-tape-aiming") &&
+          /255, 191, 105/.test(getComputedStyle(rx).boxShadow) &&
+          getComputedStyle(rx).borderTopWidth === borderBefore,
+        getComputedStyle(rx).boxShadow);
+      rx.dispatchEvent(new PointerEvent("pointerleave"));
+      check("and leaving it drops the frame", !rx.classList.contains("rtty-tape-aiming"));
+    }
     {
       const st = JSON.parse(localStorage.getItem("wifilt.data.rtty-settings") || "{}");
       localStorage.setItem("wifilt.data.rtty-settings", JSON.stringify(Object.assign({}, st, {secondDecoder: false})));

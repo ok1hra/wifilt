@@ -904,7 +904,9 @@ mark-versus-space ratio, not a calibrated signal-to-noise figure.
 **Click a word in the decoded text and it lands in the field you were typing in** — Call or
 Exch, whichever had the cursor — with the cursor still there, so your next `Enter` sends
 whatever macro is next in the QSO. Dragging across the text selects it for copying instead,
-and changes nothing in the log.
+and changes nothing in the log. While you aim at a word the text holds still for up to 2
+seconds (amber frame) so it cannot shift under the click
+([section 6.4](#64-rx--the-decoded-text)).
 
 Click the waterfall to tune. In `RTTY`/`RTTY-R` that moves the radio's dial, because real FSK
 has no audio stage to move; in `USB-D`/`LSB-D` it moves the audio tone instead. The
@@ -2730,6 +2732,15 @@ scale moves in hue rather than in brightness).
 of an RTTY stream is "insert this", not "start a new QSO". A word the row edge split in two is
 still handed over whole. Dragging across the text selects it for copying instead and hands
 over nothing.
+
+**The text holds still while you aim at a word.** New text normally pushes the log up a row
+at a time, and that can happen just as you click, so the word below the one you aimed at goes
+into the log. While the mouse is on a word and has moved there (or you have scrolled with the
+wheel) in the last 2 seconds, the log does not move. It gets a thin amber frame, and new text
+goes into the empty row the log always keeps at the bottom for this. Moving off a word keeps
+the log still for a moment (0.4 s), long enough to reach the next word or the next row. After
+that, after 2 seconds without movement, or as soon as the mouse leaves the log, it jumps to the
+newest text and follows it again. The same applies in the QRPLog palette.
 
 Behind the text is a decoder built to separate the signal from the noise: its tone filters
 are narrow enough to keep a station 300 Hz away out, it follows each tone's own strength

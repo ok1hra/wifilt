@@ -95,6 +95,8 @@
   const CHAR_SAMPLES = 8000 / 45.45 * 7.5;
   const BURST_GAP_CHARS = 3;     // a pause this long ends a burst
   const MIN_COLUMN_CHARS = 8;
+  // Holding the tape still while the operator aims at a word (see aimTouch()).
+  const AIM_MS = 2000, AIM_GRACE_MS = 400;
 
   function cssVarRgb(name, fallbackHex, element) {
     const host = element || document.documentElement;
@@ -445,10 +447,69 @@
       renderCell(row, 2, visible);
     }
 
-    function scrollToEnd() { el.scrollTop = el.scrollHeight; }
+    // ---- the tape stands still while the operator aims -----------------------
+    // Characters fill a row in place, so the tape only moves when a NEW row
+    // starts: scrollToEnd() then slides everything up one line. At 45 Bd that
+    // is every few seconds, often enough that the line shifted between aiming
+    // at a word and pressing the button, and the operator logged the word one
+    // row below (2026-09-28). Same idea as the DX cluster's anchor (dxc.html
+    // aimTouch), shorter: while the pointer is on a clickable word AND has
+    // moved (or pressed, or turned the wheel) there in the last AIM_MS, the
+    // tape does not follow the newest text. A parked mouse lets go after
+    // AIM_MS -- in QRPlog it rests on this palette while the operator types
+    // the exchange, and the tape must keep following the band then.
+    //
+    // For the text that arrives meanwhile to have somewhere to go, the tape
+    // always ends in one empty row (CSS padding on .rtty-tape-body, one line
+    // plus a pause rule): normally that is just blank space at the bottom,
+    // while held a new row grows into it without moving anything above. More
+    // than that during one hold goes below the edge and shows on release.
+    //
+    // Moving off a word keeps the hold for AIM_GRACE_MS, enough to cross the
+    // blanks to the next word or the next row; moving on off-word never
+    // extends it. Leaving the tape lets go at once. Letting go is a jump to the
+    // newest text. The frame (.rtty-tape-aiming) is amber on purpose: red is
+    // this station's TX. It must never be a border -- a border changes the
+    // column width and that re-lays the whole tape, exactly the jump this is
+    // here to prevent.
+    let aimUntil = 0, aimTimer = 0;
+    const aiming = () => aimUntil > Date.now();
+    function aimArm(ms) {
+      clearTimeout(aimTimer);
+      aimTimer = setTimeout(releaseAim, ms + 20);
+    }
+    function aimTouch() {
+      aimUntil = Date.now() + AIM_MS;
+      el.classList.add("rtty-tape-aiming");
+      aimArm(AIM_MS);
+    }
+    function aimGrace() {
+      const until = Date.now() + AIM_GRACE_MS;
+      if (aimUntil <= until) return;
+      aimUntil = until;
+      aimArm(AIM_GRACE_MS);
+    }
+    // Ends a hold without scrolling -- for whatever re-lays the tape anyway.
+    function dropAim() {
+      const was = aimUntil;
+      aimUntil = 0;
+      clearTimeout(aimTimer);
+      aimTimer = 0;
+      el.classList.remove("rtty-tape-aiming");
+      return was;
+    }
+    function releaseAim() {
+      if (!dropAim()) return;
+      if (charCount > maxChars) trim();   // held back while the operator aimed
+      else scrollToEnd();
+    }
+
+    function scrollToEnd() { if (!aiming()) el.scrollTop = el.scrollHeight; }
 
     // Re-lay everything from the event list (width change, mode change, trim).
+    // The rows are rebuilt, so a hold has nothing left to hold.
     function relayout() {
+      dropAim();
       (layout ? layout.rows : []).forEach(r => { if (r.echo) (r.echo.timers || []).forEach(clearTimeout); });
       body.textContent = "";
       layout = freshLayout();
@@ -491,7 +552,8 @@
       charCount++;
       const row = applyChar(layout, e);
       renderRow(row);
-      if (charCount > maxChars) trim();
+      // a trim re-lays the whole tape: not under a word being aimed at
+      if (charCount > maxChars && !aiming()) trim();
       scrollToEnd();
     }
 
@@ -544,6 +606,7 @@
     // Wipes the log itself, not the decoder state -- squelch/AFC/tone tracking
     // all live in the decoder/settings and must keep running exactly as before.
     function clear() {
+      dropAim();
       (layout ? layout.rows : []).forEach(r => { if (r.echo) (r.echo.timers || []).forEach(clearTimeout); });
       events = [];
       charCount = 0;
@@ -582,9 +645,18 @@
       el.querySelectorAll(".rtty-tok.hover").forEach(n => n.classList.remove("hover"));
       hoverTok = null;
     };
+    const onAim = event => {
+      const t = event.target;
+      if (t && t.closest && t.closest(".rtty-tok")) aimTouch();
+      else if (aiming()) aimGrace();
+    };
     el.addEventListener("click", onClick);
     el.addEventListener("mouseover", onOver);
     el.addEventListener("mouseleave", onLeave);
+    el.addEventListener("pointermove", onAim);
+    el.addEventListener("pointerdown", onAim);
+    el.addEventListener("wheel", onAim, {passive: true});
+    el.addEventListener("pointerleave", releaseAim);
 
     const resizeObserver = typeof ResizeObserver === "function" && !fixedColumnChars
       ? new ResizeObserver(() => { if (layout || events.length) ensureLayout(); }) : null;
@@ -595,6 +667,11 @@
       el.removeEventListener("click", onClick);
       el.removeEventListener("mouseover", onOver);
       el.removeEventListener("mouseleave", onLeave);
+      el.removeEventListener("pointermove", onAim);
+      el.removeEventListener("pointerdown", onAim);
+      el.removeEventListener("wheel", onAim);
+      el.removeEventListener("pointerleave", releaseAim);
+      dropAim();
       if (resizeObserver) resizeObserver.disconnect();
       (layout ? layout.rows : []).forEach(r => { if (r.echo) (r.echo.timers || []).forEach(clearTimeout); });
       lastEcho = null;
@@ -605,6 +682,7 @@
       lastEcho: () => lastEcho,
       forgetEcho: () => { lastEcho = null; },
       columnChars: () => columnChars,
+      aiming,
       // what each column shows, row by row -- for tests and for reading back
       rowsText: () => (layout ? layout.rows : []).map(r => {
         if (r.echo) return {echo: r.echo.text, gap: r.gap};

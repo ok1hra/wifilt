@@ -170,6 +170,14 @@ body.radio-transmitting .rtty-scope::after {
 .rtty-tape-gap { border-top: 1px dashed var(--line); margin-top: 4px; padding-top: 4px; }
 /* only there to measure how many characters fit a column */
 .rtty-tape-probe { visibility: hidden; height: 0; overflow: hidden; }
+/* The tape always ends in one empty row -- a line plus room for a pause rule
+   -- where new text goes while rtty-rxlog.js holds the tape still for an aim
+   at a word. The frame while held is a box-shadow, never a border: a border
+   narrows the columns and re-lays the whole tape. The heading is sticky over
+   the log's top edge, so it carries its own piece of the line. */
+.rtty-tape-body:not(:empty) { padding-bottom: calc(1.55em + 9px); padding-bottom: calc(1lh + 9px); }
+.rtty-tape-aiming { box-shadow: inset 0 0 0 1px var(--amber); }
+.rtty-tape-aiming .rtty-tape-head { box-shadow: inset 0 1px 0 var(--amber); }
 /* a slot the two columns disagree on -- faint, so the text colour (signal
    strength) still reads through */
 .rtty-diff { background: rgba(240, 180, 40, .17); border-radius: 2px; }

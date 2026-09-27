@@ -2386,6 +2386,10 @@ body {
 .rtty-panel-rx.rtty-tape-single .rtty-tape-s2 { display: none; }
 .rtty-panel-rx .rtty-tape-gap { border-top: 1px dashed var(--line); margin-top: 3px; padding-top: 3px; }
 .rtty-panel-rx .rtty-tape-probe { visibility: hidden; height: 0; overflow: hidden; }
+/* the empty last row and the amber hold frame -- see rtty.css */
+.rtty-panel-rx .rtty-tape-body:not(:empty) { padding-bottom: calc(1.5em + 7px); padding-bottom: calc(1lh + 7px); }
+.rtty-panel-rx.rtty-tape-aiming { box-shadow: inset 0 0 0 1px var(--amber); }
+.rtty-panel-rx.rtty-tape-aiming .rtty-tape-head { box-shadow: inset 0 1px 0 var(--amber); }
 .rtty-panel-rx .rtty-diff { background: rgba(240, 180, 40, .17); border-radius: 2px; }
 .rtty-panel-rx .rtty-tok { cursor: pointer; border-radius: 3px; }
 /* Hover marks the word and changes nothing else (operator, 2026-09-08). It used

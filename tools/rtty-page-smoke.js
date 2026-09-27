@@ -535,6 +535,127 @@ const PAGE_SCRIPT = `
       tape.querySelectorAll(".rtty-diff").length > 0 && tl.rowsText()[0].dec2 === "CQ TEST OK1HRA 5NNK",
       String(tape.querySelectorAll(".rtty-diff").length));
 
+    // ---- 9b. the tape holds still while a word is aimed at (2026-09-28) ----
+    // A new row slid the whole tape up one line between aiming and clicking.
+    // Mounted with the page's own .rtty-rx-log class, so it scrolls with the
+    // real CSS (220 px) and gets the real empty last row.
+    const aimEl = document.createElement("div");
+    aimEl.className = "rtty-rx-log";
+    aimEl.style.width = "900px";
+    document.body.appendChild(aimEl);
+    const aimLog = RttyRxLog.create({el: aimEl, maxChars: 5000, columnChars: 20,
+      floorRgb: [40, 40, 40], onToken: () => {}});
+    let aimT = 1000000;
+    const aimFeed = text => Array.from(text).forEach(ch => {
+      aimLog.pushChar(ch, {stream: 1, t: aimT, snrDb: 12});
+      aimLog.pushChar(ch, {stream: 2, t: aimT + 40, snrDb: 12});
+      aimT += CS;
+    });
+    // exactly one row's worth (20 slots), so every call starts exactly one new row
+    const newRow = () => aimFeed("CQ TEST DL" + String(Math.floor(aimT) % 10000).padStart(4, "0") + " TEST ");
+    for (let i = 0; i < 30; i++) newRow();
+    const aimRows = () => aimEl.querySelectorAll(".rtty-tape-body .rtty-tape-row");
+    const lastRowEl = () => aimRows()[aimRows().length - 1];
+    const rowH = lastRowEl().getBoundingClientRect().height;
+    const freeBelow = () => aimEl.getBoundingClientRect().bottom - lastRowEl().getBoundingClientRect().bottom;
+    check("the tape overflows its box, so there is something to scroll",
+      aimEl.scrollHeight > aimEl.clientHeight + 100, aimEl.scrollHeight + " vs " + aimEl.clientHeight);
+    check("followed to the end, the tape keeps one empty row below the text",
+      freeBelow() >= rowH - 1, freeBelow().toFixed(1) + " px free, row " + rowH.toFixed(1));
+    // A word in the middle of what is on screen.
+    const midWord = () => {
+      const box = aimEl.getBoundingClientRect();
+      return Array.from(aimEl.querySelectorAll(".rtty-tape-s1 .rtty-tok"))
+        .find(n => n.getBoundingClientRect().top > box.top + 80);
+    };
+    const pointer = (type, target) => target.dispatchEvent(new PointerEvent(type, {bubbles: true}));
+    let aimWord = midWord();
+    const wordTop = aimWord.getBoundingClientRect().top, scrollBefore = aimEl.scrollTop;
+    pointer("pointermove", aimWord);
+    check("moving onto a word holds the tape, with the amber frame",
+      aimLog.aiming() && aimEl.classList.contains("rtty-tape-aiming"));
+    check("the frame is not a border (a border would re-lay the columns)",
+      getComputedStyle(aimEl).borderTopWidth === "0px" && getComputedStyle(aimEl).boxShadow !== "none",
+      getComputedStyle(aimEl).borderTopWidth + " / " + getComputedStyle(aimEl).boxShadow);
+    const rowsBefore = aimRows().length;
+    newRow();
+    check("a new row arrives while held", aimRows().length === rowsBefore + 1,
+      rowsBefore + " -> " + aimRows().length);
+    check("and the word under the pointer does not move",
+      aimEl.scrollTop === scrollBefore && Math.abs(aimWord.getBoundingClientRect().top - wordTop) < 0.5,
+      aimEl.scrollTop + " vs " + scrollBefore);
+    check("the new row grew into the empty row, fully on screen",
+      lastRowEl().getBoundingClientRect().bottom <= aimEl.getBoundingClientRect().bottom + 0.5,
+      freeBelow().toFixed(1));
+    aimLog.echoTx("TU 599");
+    check("this station's own echo does not scroll it either", aimEl.scrollTop === scrollBefore);
+    // Parked: let go after 2 s without movement, and jump to the newest text.
+    await sleep(1200);
+    check("still held 1.2 s after the last movement", aimLog.aiming());
+    pointer("pointermove", aimWord);
+    await sleep(1200);
+    check("a movement on the word renews the hold", aimLog.aiming() && aimEl.scrollTop === scrollBefore);
+    await sleep(1000);
+    check("2 s after the last movement it lets go and follows the newest text",
+      !aimLog.aiming() && !aimEl.classList.contains("rtty-tape-aiming") &&
+        aimEl.scrollTop + aimEl.clientHeight >= aimEl.scrollHeight - 1,
+      aimEl.scrollTop + "+" + aimEl.clientHeight + " vs " + aimEl.scrollHeight);
+    // Only a word holds; a blank or the echo does not start anything.
+    const echoChar = aimEl.querySelector(".rtty-tx-echo .rtty-tx-char");
+    pointer("pointermove", echoChar);
+    check("the pointer on this station's own echo holds nothing", !aimLog.aiming());
+    // Off a word: a short grace, enough to reach the next one.
+    aimWord = midWord();
+    pointer("pointermove", aimWord);
+    pointer("pointermove", echoChar);
+    const scrollHeld = aimEl.scrollTop;
+    newRow();
+    check("moving off the word keeps the hold for a moment",
+      aimLog.aiming() && aimEl.scrollTop === scrollHeld);
+    await sleep(250);
+    pointer("pointermove", echoChar);
+    await sleep(250);
+    check("off-word movement does not extend the grace, it ends at 0.4 s",
+      !aimLog.aiming() && aimEl.scrollTop + aimEl.clientHeight >= aimEl.scrollHeight - 1);
+    // Leaving the tape lets go at once.
+    pointer("pointermove", midWord());
+    aimEl.dispatchEvent(new PointerEvent("pointerleave"));
+    check("leaving the tape lets go at once",
+      !aimLog.aiming() && aimEl.scrollTop + aimEl.clientHeight >= aimEl.scrollHeight - 1);
+    // The wheel over a word counts as aiming (scrolling back to an older call).
+    aimEl.scrollTop = 0;
+    const topWord = aimEl.querySelector(".rtty-tape-s1 .rtty-tok");
+    topWord.dispatchEvent(new WheelEvent("wheel", {bubbles: true, deltaY: -100}));
+    newRow();
+    check("the wheel over a word holds the tape where it was scrolled to",
+      aimLog.aiming() && aimEl.scrollTop === 0, String(aimEl.scrollTop));
+    aimEl.dispatchEvent(new PointerEvent("pointerleave"));
+    // A trim re-lays every row, so it waits for the hold to end.
+    const trimEl = document.body.appendChild(document.createElement("div"));
+    trimEl.className = "rtty-rx-log";
+    const trimLog = RttyRxLog.create({el: trimEl, maxChars: 200, columnChars: 20, onToken: () => {}});
+    let trimT = 0;
+    const trimFeed = n => { for (let i = 0; i < n; i++) trimLog.pushChar(i % 5 === 4 ? " " : "E", {stream: 1, t: trimT += CS}); };
+    trimFeed(190);
+    const heldRowEl = trimEl.querySelector(".rtty-tape-body .rtty-tape-row:nth-child(3)");
+    pointer("pointermove", heldRowEl.querySelector(".rtty-tok"));
+    trimFeed(40);
+    check("no trim while held -- the aimed-at row keeps its nodes",
+      trimLog.aiming() && heldRowEl.isConnected, String(trimLog.rowsText().length));
+    trimEl.dispatchEvent(new PointerEvent("pointerleave"));
+    check("and the trim runs on release", !heldRowEl.isConnected && trimLog.rowsText().length < 12,
+      String(trimLog.rowsText().length));
+    // A re-layout (DEC 2 on/off, width) ends a hold -- nothing is left to hold.
+    pointer("pointermove", midWord());
+    aimLog.setDual(false);
+    check("DEC 2 on/off ends the hold", !aimLog.aiming() && !aimEl.classList.contains("rtty-tape-aiming"));
+    aimLog.setDual(true);
+    pointer("pointermove", midWord());
+    aimLog.clear();
+    check("CLEAR ends the hold", !aimLog.aiming());
+    aimLog.destroy(); trimLog.destroy();
+    aimEl.remove(); trimEl.remove();
+
     // ---- 10. squelch in dB above the noise, USOS switch, v1 migration -----
     // The page booted from a v1 store with squelchThreshold 40 (a raw
     // magnitude). 40 dB would be a nonsense level on the new scale; the
