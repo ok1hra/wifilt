@@ -1930,6 +1930,10 @@ body {
 /* The radio it follows, slash included: a footnote to the name, and the part
    the ellipsis eats first when the two do not fit. */
 .pa-head-trx { color: var(--pa-dim); }
+/* Amber when the radio is not a settled fact: the amplifier has not said which
+   radio it follows, names one this interface does not have, or follows
+   whichever moved last (no --trxnet-freq-from). The tooltip says which. */
+.pa-head-trx.pa-head-trx-warn { color: var(--amber); }
 .pa-close {
   background: none; border: none; color: var(--pa-dim);
   font-family: inherit; font-size: 13px; line-height: 1;

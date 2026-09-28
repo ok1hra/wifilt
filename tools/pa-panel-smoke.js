@@ -79,7 +79,18 @@ const server = http.createServer((request, response) => {
     return;
   }
 
-  if (url.pathname === "/pa.json") return json(paJson || paState({present: false}));
+  // The radio the amplifier follows rides along in /pa.json, the way the
+  // firmware sends it: by default TRX1, pinned, at the fixture's own radio
+  // frequency and TX state. A test that sets any of these itself wins -- that is
+  // how the amplifier gets put behind TRX2 while the log stays on TRX1.
+  if (url.pathname === "/pa.json") {
+    const pa = Object.assign({trx: 1, trxLabel: "TRX1", src: "705.01",
+                              hz: radioFreq, trxTx: radioTx},
+                             paJson || paState({present: false}));
+    if (typeof pa.flags === "number" && pa.pinned !== false) pa.flags |= 0x800;
+    delete pa.pinned;
+    return json(pa);
+  }
 
   if (url.pathname === "/set-cmd-404") { paCmd404 = url.searchParams.get("v") === "1"; return json({ok: true}); }
   if (url.pathname === "/pa/cmd" && request.method === "POST") {
@@ -135,6 +146,21 @@ const server = http.createServer((request, response) => {
     });
     return;
   }
+  // TRX2/3's retune route, into the same list: which of the two routes a click
+  // took is exactly what says which radio it retuned.
+  if (url.pathname === "/oi3/set-hz" && request.method === "POST") {
+    let body = "";
+    request.on("data", c => { body += c; });
+    request.on("end", () => {
+      try { catCommands.push(Object.assign({route: "oi3"}, JSON.parse(body))); }
+      catch (_) { catCommands.push({raw: body}); }
+      json({ok: true});
+    });
+    return;
+  }
+  if (url.pathname === "/oi3/state") {
+    return json({connected: true, frequency: 7013000, mode: "CW", dxcConnected: false});
+  }
   if (url.pathname === "/state") {
     return json({
       connected: true, catHealthy: true, audioReady: false, lanStatus: "linked",
@@ -151,7 +177,7 @@ const server = http.createServer((request, response) => {
   if (url.pathname === "/log-config") {
     return json({
       trx1Label: "TRX1", trx2Label: "TRX2", trx3Label: "TRX3",
-      trx2enabled: false, trx3enabled: false, blockedDxcc: "",
+      trx2enabled: true, trx3enabled: false, blockedDxcc: "",
     });
   }
   if (url.pathname === "/identity") return json({call: "OK1HRA", grid: "JO70"});
@@ -215,11 +241,12 @@ const PAGE_SCRIPT = `
   const F = { TUNE:1, OPERATE:2, TX:4, ALARM:8, FULL:16, CONTEST:32, BEEP:64,
               ON:256, LINK:512, REV2:1024 };
 
-  // Push a /pa.json into the fixture and wait for the page's own poll to take
-  // it -- going through the real fetch path, not by poking internals.
+  // Push a /pa.json into the fixture and hand the page what the fixture now
+  // serves for it -- the radio fields included, the way the firmware sends
+  // them -- rather than waiting out the poll.
   async function setPa(obj) {
     await fetch("/set-pa", {method:"POST", body: JSON.stringify(obj)});
-    window.PaPanel.apply(obj);
+    window.PaPanel.apply(await (await fetch("/pa.json")).json());
     await sleep(60);
   }
   async function commandsSince() {
@@ -230,9 +257,8 @@ const PAGE_SCRIPT = `
   async function clearCat() { await fetch("/cat-commands/clear"); }
 
   // Move the radio and wait for the page to believe it. Deliberately the long way
-  // round: log.js polls /state twice a second and the palette reads log.js, so
-  // this is the real path a real retune takes -- and the only one that proves the
-  // bridge between the two files is intact.
+  // round: the palette polls /pa.json twice a second, and that is the real path
+  // a real retune takes.
   async function setFreq(hz) {
     await fetch("/set-freq?v=" + hz);
     await sleep(1300);
@@ -786,11 +812,19 @@ const PAGE_SCRIPT = `
     check("TUNE sends 1, it is not a toggle",
       cmds.length === 1 && cmds[0].what === "tune" && cmds[0].value === 1,
       JSON.stringify(cmds));
+    // The bare key gives no carrier. An amplifier that never raises TUNE has
+    // most likely had no drive, and the note has to say THAT first -- the old
+    // "check --trxnet-allow" sent an operator to a daemon that was fine.
+    await sleep(7200);
+    check("a TUNE the amplifier did not follow asks for a carrier first",
+      /needs a carrier/.test(txt("paNote")) &&
+      txt("paNote").indexOf("carrier") < txt("paNote").indexOf("--trxnet"), txt("paNote"));
+    check("and the bare TUNE key says so before it is pressed",
+      /key a carrier/.test($("paBtnTune").title), $("paBtnTune").title);
 
     // The radio keying is the other state in which the amplifier ignores TUNE.
-    // This reads log.js's own /state poll, so it also proves the bridge between
-    // the two is live -- window.app is invisible to a widget, and reaching for
-    // it would leave this check permanently, quietly green.
+    // The radio in front of the amplifier, from /pa.json (trxTx) -- not the
+    // log's own TRX, which section 18 keeps apart from it.
     await fetch("/set-tx?v=1");
     await sleep(900);
     await setPa(base({flags:F.ON|F.LINK|F.OPERATE}));
@@ -1060,7 +1094,7 @@ const PAGE_SCRIPT = `
     const tuneCmds = async () => (await commandsSince()).filter(c => c.what === "tune" || c.what === "tuneplus");
     const idle = {st:"idle", why:"", swr:0, ageMs:60000};
 
-    await setPa(base({flags:F.ON|F.LINK, trx1:"IC-7610", tunePlus:false, tunePlusWhy:"no_oi3", tp:idle}));
+    await setPa(base({flags:F.ON|F.LINK, trxLabel:"IC-7610", tunePlus:false, tunePlusWhy:"no_oi3", tp:idle}));
     check("the title names the radio the amplifier follows", txt("paName") === "PA.01/IC-7610", txt("paName"));
     check("the radio half, slash included, is grey and the name is not",
       txt("paNameTrx") === "/IC-7610" &&
@@ -1070,10 +1104,10 @@ const PAGE_SCRIPT = `
     check("without an OI3 the key stays plain TUNE", txt("paBtnTune") === "TUNE", txt("paBtnTune"));
     check("and an ordinary station is not told about TUNE+", !/TUNE[+]/.test($("paBtnTune").title), $("paBtnTune").title);
 
-    await setPa(base({flags:F.ON|F.LINK, trx1:"IC-7610", tunePlus:false, tunePlusWhy:"oi3_old", tp:idle}));
+    await setPa(base({flags:F.ON|F.LINK, trxLabel:"IC-7610", tunePlus:false, tunePlusWhy:"oi3_old", tp:idle}));
     check("an OI3 without remote TUNE is named as the reason", /older/.test($("paBtnTune").title), $("paBtnTune").title);
 
-    await setPa(base({flags:F.ON|F.LINK, trx1:"IC-7610", tunePlus:true, tunePlusWhy:"", tp:idle}));
+    await setPa(base({flags:F.ON|F.LINK, trxLabel:"IC-7610", tunePlus:true, tunePlusWhy:"", tp:idle}));
     check("with the OI3 there the key reads TUNE+", txt("paBtnTune") === "TUNE+", txt("paBtnTune"));
     check("and is enabled", !$("paBtnTune").disabled, $("paBtnTune").title);
     await clearCommands();
@@ -1084,11 +1118,11 @@ const PAGE_SCRIPT = `
       tc.length === 1 && tc[0].what === "tuneplus" && tc[0].value === 1, JSON.stringify(tc));
     check("and the key shows the request is out", txt("paBtnTune") === "…", txt("paBtnTune"));
 
-    await setPa(base({flags:F.ON|F.LINK|F.TX, trx1:"IC-7610", tunePlus:true, tp:{st:"carrier", why:"", swr:0, ageMs:200}}));
+    await setPa(base({flags:F.ON|F.LINK|F.TX, trxLabel:"IC-7610", tunePlus:true, tp:{st:"carrier", why:"", swr:0, ageMs:200}}));
     check("carrier up reads CARRIER", txt("paBtnTune") === "CARRIER", txt("paBtnTune"));
     check("drawn as a run in progress", $("paBtnTune").classList.contains("st-tp"), $("paBtnTune").className);
     await fetch("/set-tx?v=1");
-    await setPa(base({present:false, flags:F.ON|F.LINK|F.TX|F.TUNE, trx1:"IC-7610", tunePlus:true,
+    await setPa(base({present:false, flags:F.ON|F.LINK|F.TX|F.TUNE, trxLabel:"IC-7610", tunePlus:true,
                       tp:{st:"tuning", why:"", swr:0, ageMs:900}}));
     await sleep(1300);
     check("tuning reads TUNING", txt("paBtnTune") === "TUNING", txt("paBtnTune"));
@@ -1103,19 +1137,19 @@ const PAGE_SCRIPT = `
     await fetch("/set-tx?v=0");
     await sleep(1300);
 
-    await setPa(base({flags:F.ON|F.LINK, trx1:"IC-7610", tunePlus:true, tp:{st:"done", why:"", swr:130, ageMs:300}}));
+    await setPa(base({flags:F.ON|F.LINK, trxLabel:"IC-7610", tunePlus:true, tp:{st:"done", why:"", swr:130, ageMs:300}}));
     check("a finished tune reports the SWR", /Tuned.*SWR 1[.]3/.test(txt("paNote")), txt("paNote"));
     check("and the key is TUNE+ again", txt("paBtnTune") === "TUNE+", txt("paBtnTune"));
 
-    await setPa(base({flags:F.ON|F.LINK, trx1:"IC-7610", tunePlus:true,
+    await setPa(base({flags:F.ON|F.LINK, trxLabel:"IC-7610", tunePlus:true,
                       tp:{st:"fail", why:"The amplifier did not start tuning.", swr:0, ageMs:300}}));
     check("a failed tune says why", /did not start tuning/.test(txt("paNote")), txt("paNote"));
 
-    await setPa(base({flags:F.LINK, trx1:"IC-7610", tunePlus:true, tp:idle}));
+    await setPa(base({flags:F.LINK, trxLabel:"IC-7610", tunePlus:true, tp:idle}));
     check("TUNE+ is greyed out with the amplifier OFF", $("paBtnTune").disabled, $("paBtnTune").title);
     check("and says to switch it on", /ON first/.test($("paBtnTune").title), $("paBtnTune").title);
 
-    await setPa(base({flags:F.ON|F.LINK, trx1:"IC-7610", tunePlus:true, tp:idle}));
+    await setPa(base({flags:F.ON|F.LINK, trxLabel:"IC-7610", tunePlus:true, tp:idle}));
     await fetch("/set-cmd-error?code=trx_tx");
     $("paBtnTune").click();
     await sleep(200);
@@ -1126,12 +1160,12 @@ const PAGE_SCRIPT = `
     // A tune that ended long ago must not be reported as news.
     $("paBtnTune").click();
     await sleep(150);
-    await setPa(base({flags:F.ON|F.LINK, trx1:"IC-7610", tunePlus:true, tp:{st:"done", why:"", swr:110, ageMs:60000}}));
+    await setPa(base({flags:F.ON|F.LINK, trxLabel:"IC-7610", tunePlus:true, tp:{st:"done", why:"", swr:110, ageMs:60000}}));
     check("a stale result is not replayed", txt("paNote") === "", txt("paNote"));
 
     // The radio's own tuner, switched off on OFF -> ON by the firmware.
-    await setPa(base({flags:F.ON|F.LINK, trx1:"IC-7610", tunePlus:true, tp:idle, atuOff:null}));
-    await setPa(base({flags:F.ON|F.LINK, trx1:"IC-7610", tunePlus:true, tp:idle,
+    await setPa(base({flags:F.ON|F.LINK, trxLabel:"IC-7610", tunePlus:true, tp:idle, atuOff:null}));
+    await setPa(base({flags:F.ON|F.LINK, trxLabel:"IC-7610", tunePlus:true, tp:idle,
                       atuOff:{ok:false, why:"trxnet", ageMs:100}}));
     check("a tuner that could not be switched off is reported",
       /NOT switched off/.test(txt("paNote")) && /TrxNet/.test(txt("paNote")), txt("paNote"));
@@ -1139,6 +1173,148 @@ const PAGE_SCRIPT = `
     const ev = new MouseEvent("mousedown", {bubbles:true, cancelable:true});
     $("paBtnTune").dispatchEvent(ev);
     check("mousedown on TUNE+ is cancelled, so the caret cannot leave Call", ev.defaultPrevented);
+
+    // ---- 18. the radio the amplifier follows, not the one being logged -----
+    // The amplifier's daemon says whose /hz it follows (/pa-src); the firmware
+    // turns that into trx/trxLabel/hz/trxTx. Everything that means "the radio"
+    // has to come from there. It used to come from the log's active TRX, and
+    // with the amplifier behind another radio the scale drew the wrong radio's
+    // band and a click retuned the wrong radio -- with nothing looking wrong.
+    await setFreq(14025000);                    // the LOGGED radio, TRX1, on 20 m
+    await setPa(base({flags:F.ON|F.LINK, band:40, trx:2, trxLabel:"IC-7300",
+                      src:"OI3.02", hz:7013000, trxTx:false, tunePlus:false,
+                      tunePlusWhy:"no_oi3", tp:idle}));
+    check("the title names the amplifier's radio, not the log's",
+      txt("paName") === "PA.01/IC-7300", txt("paName"));
+    check("in the ordinary grey, the source being pinned",
+      !$("paNameTrx").classList.contains("pa-head-trx-warn") && $("paName").title === "",
+      $("paNameTrx").className + " / " + $("paName").title);
+    // 7013 kHz is the third centre on 40 m: one page of six, the third filled.
+    check("the scale is drawn from the amplifier's radio (40 m), not the log's (20 m)",
+      segs().length === 6 && onIdx() === 2 && Number(segs()[2].dataset.centre) === 7013,
+      segs().length + " segs, filled " + onIdx());
+    check("so the amplifier on 40 m is no band mismatch while the log is on 20 m",
+      !$("paBand").classList.contains("pa-band-mismatch"), $("paBand").className);
+    await clearCat();
+    segs()[4].click();
+    await sleep(120);
+    cat = await catSince();
+    check("a click retunes THAT radio, TRX2, over its own route",
+      cat.length === 1 && cat[0].route === "oi3" && cat[0].trx === 2 && cat[0].hz === 7063000,
+      JSON.stringify(cat));
+    await clearCat();
+    $("paSegUp").click();
+    await sleep(120);
+    cat = await catSince();
+    check("and so does an arrow, from that radio's frequency",
+      cat.length === 1 && cat[0].trx === 2 && cat[0].hz === 7038000, JSON.stringify(cat));
+
+    // The logged radio transmitting is not the amplifier's radio transmitting.
+    await fetch("/set-tx?v=1");
+    await sleep(900);
+    await setPa(base({flags:F.ON|F.LINK, band:40, trx:2, trxLabel:"IC-7300",
+                      src:"OI3.02", hz:7013000, trxTx:false}));
+    check("TRX1 keying does not lock the scale of an amplifier behind TRX2",
+      !$("paSegDown").disabled && !$("paSegUp").disabled, $("paSegUp").title);
+    check("nor its TUNE", !$("paBtnTune").disabled, $("paBtnTune").title);
+    await fetch("/set-tx?v=0");
+    await sleep(900);
+    // The amplifier's own TX bit: it sees the PTT line whatever the radio's
+    // transport lets this interface read, and a TrxNet TRX2 carries no TX state.
+    await setPa(base({flags:F.ON|F.LINK|F.TX, band:40, trx:2, trxLabel:"IC-7300",
+                      src:"OI3.02", hz:7013000, trxTx:false}));
+    check("the amplifier keyed locks the arrows even with no TX state from the radio",
+      $("paSegDown").disabled && $("paSegUp").disabled, $("paSegUp").title);
+    await clearCat();
+    segs()[1].click();
+    await sleep(80);
+    check("and a click on the scale sends nothing", (await catSince()).length === 0,
+      JSON.stringify(await catSince()));
+    check("and TUNE is held", $("paBtnTune").disabled, $("paBtnTune").title);
+    await setPa(base({flags:F.ON|F.LINK, band:20, trx:2, trxLabel:"IC-7300",
+                      src:"OI3.02", hz:7013000, trxTx:false}));
+    check("the amplifier on 20 m with its own radio on 40 m IS the mismatch",
+      $("paBand").classList.contains("pa-band-mismatch"), $("paBand").className);
+
+    // No radio to name. Three causes, three different things to fix.
+    await setPa(base({flags:F.ON|F.LINK, trx:0, trxLabel:null, src:null, hz:0}));
+    check("a daemon that predates /pa-src: the scale says NO PA SOURCE",
+      shown($("paSegMsg")) && txt("paSegMsg") === "NO PA SOURCE", txt("paSegMsg"));
+    check("with the arrows dead and the reason on them",
+      $("paSegDown").disabled && $("paSegUp").disabled && /predates/.test($("paSegUp").title),
+      $("paSegUp").title);
+    check("the title says it does not know, in amber",
+      txt("paName") === "PA.01/?" && $("paNameTrx").classList.contains("pa-head-trx-warn"),
+      txt("paName") + " " + $("paNameTrx").className);
+    check("amber against the grey it replaces",
+      getComputedStyle($("paNameTrx")).color !== getComputedStyle($("paClose")).color,
+      getComputedStyle($("paNameTrx")).color);
+    await clearCat();
+    for (const sg of segs()) sg.click();
+    $("paSegUp").click();
+    await sleep(80);
+    check("and nothing anywhere retunes a guessed radio", (await catSince()).length === 0,
+      JSON.stringify(await catSince()));
+    // Not even the LOGGED radio, which is what the old scale fell back to.
+    check("the logged radio's frequency is not drawn in its place",
+      segs().length === 0 && $("paSegDot").hidden, String(segs().length));
+
+    await setPa(base({flags:F.ON|F.LINK, trx:0, trxLabel:null, src:"", hz:0}));
+    check("a daemon that follows no radio says what it needs",
+      txt("paSegMsg") === "NO PA SOURCE" && /--trxnet-subscribe/.test($("paSegMsg").title),
+      $("paSegMsg").title);
+
+    await setPa(base({flags:F.ON|F.LINK, trx:0, trxLabel:null, src:"OI3.07", hz:0}));
+    check("a radio this interface does not have is named, not hidden",
+      txt("paName") === "PA.01/OI3.07" && txt("paSegMsg") === "UNKNOWN TRX",
+      txt("paName") + " / " + txt("paSegMsg"));
+    check("and the tooltip says why it cannot be drawn",
+      /OI3[.]07, which is not one of this interface/.test($("paName").title), $("paName").title);
+
+    // A source that is only "whoever moved last".
+    await setPa(base({flags:F.ON|F.LINK, pinned:false, trx:1, trxLabel:"IC-7610",
+                      src:"705.01", hz:14025000}));
+    check("an unpinned source is drawn, but in amber",
+      txt("paName") === "PA.01/IC-7610" && $("paNameTrx").classList.contains("pa-head-trx-warn"),
+      txt("paName") + " " + $("paNameTrx").className);
+    check("naming the setting that pins it", /--trxnet-freq-from/.test($("paName").title),
+      $("paName").title);
+    check("and the scale still works from it", segs().length === 6 && onIdx() === 1,
+      segs().length + " / " + onIdx());
+    await clearCat();
+    segs()[0].click();
+    await sleep(80);
+    cat = await catSince();
+    check("TRX1 retunes over its own route, /cmd",
+      cat.length === 1 && cat[0].type === "setFrequency" && cat[0].frequency === 13975000,
+      JSON.stringify(cat));
+
+    // TUNE+ and the tuner-off note name the amplifier's radio too.
+    await setPa(base({flags:F.ON|F.LINK, trx:2, trxLabel:"IC-7300", src:"OI3.02",
+                      hz:7013000, tunePlus:false, tunePlusWhy:"oi3_other", tp:idle}));
+    check("TUNE+ withheld when the OI3 keys a different radio, and says so",
+      txt("paBtnTune") === "TUNE" && /not on the radio the amplifier follows/.test($("paBtnTune").title),
+      $("paBtnTune").title);
+    await setPa(base({flags:F.ON|F.LINK, trx:0, src:null, hz:0, tunePlus:false,
+                      tunePlusWhy:"no_src", tp:idle}));
+    check("and when nobody knows which radio that is",
+      /not known which radio/.test($("paBtnTune").title), $("paBtnTune").title);
+    await setPa(base({flags:F.ON|F.LINK, trx:2, trxLabel:"IC-7300", src:"OI3.02",
+                      hz:7013000, tunePlus:false, tp:idle, atuOff:null}));
+    await setPa(base({flags:F.ON|F.LINK, trx:2, trxLabel:"IC-7300", src:"OI3.02", hz:7013000,
+                      tunePlus:false, tp:idle, atuOff:{ok:false, trx:2, why:"trxnet", ageMs:100}}));
+    check("a tuner that could not be switched off names the radio it was meant for",
+      /TRX2 is on TrxNet/.test(txt("paNote")), txt("paNote"));
+    // A second attempt has to be a second attempt: the palette reports each one
+    // once, and tells them apart by when they happened. The fixture's ageMs
+    // never grows, so every poll of it reads as a fresh attempt; clear it first,
+    // or the first one keeps being "now" and the second is never new.
+    await setPa(base({flags:F.ON|F.LINK, trx:0, src:null, hz:0, tunePlus:false, tp:idle, atuOff:null}));
+    await sleep(2600);
+    await setPa(base({flags:F.ON|F.LINK, trx:0, src:null, hz:0, tunePlus:false, tp:idle,
+                      atuOff:{ok:false, trx:0, why:"nosrc", ageMs:100}}));
+    check("and one that was not sent for want of a radio says that",
+      /not known which radio the amplifier follows/.test(txt("paNote")), txt("paNote"));
   } catch (error) {
     check("the test script ran to the end", false, String(error && error.stack || error));
   }

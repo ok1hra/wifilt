@@ -1110,8 +1110,24 @@ else is invented.
 
 The button only exists once the amplifier's NET_ID is set in
 [SETUP → TrxNet](#95-trxnet). The title names the amplifier and the radio it follows —
-`PA.01/IC-7610` — which is always **TRX1**, the only radio whose frequency this interface
-publishes; the second half, drawn grey, is TRX1's label from the log settings.
+`PA.01/IC-7610`. **Which radio that is, the amplifier's daemon says** (its
+`--trxnet-freq-from` setting, published as `/pa-src`), and it need not be the TRX the log is
+on: with the amplifier behind TRX2 the palette shows TRX2, its tuning scale draws TRX2 and a
+click on the scale retunes TRX2, while you keep logging on TRX1. The second half of the title
+is that radio's label from the log settings, drawn grey — or **amber** when the answer is not
+settled:
+
+| Title | |
+|---|---|
+| `PA.01/IC-7610`, grey | the amplifier follows this radio, fixed by `--trxnet-freq-from` |
+| `PA.01/IC-7610`, amber | it follows this radio only because it retuned it last — the daemon has no `--trxnet-freq-from`, so the next frequency from another radio takes the amplifier with it |
+| `PA.01/OI3.07`, amber | it follows a device that is none of this interface's TRX slots |
+| `PA.01/?`, amber | it does not say — its daemon predates `/pa-src` — or follows no radio at all |
+
+The tooltip on the title says which, and what to set. A peer name maps onto a TRX this way:
+this interface's own name (`705.xx`) is **TRX1**; an `OI3.xx` configured as a TrxNet TRX slot
+is that slot; the RTTY page's external FSK keyer, when it is no slot of its own, is **TRX1**
+(it sits on TRX1's CI-V bus).
 
 | Reading | |
 |---|---|
@@ -1136,55 +1152,64 @@ own display gives a frequency, not which of its 127 divisions of the bands that 
 falls in.
 
 The scale is deliberately blind — no numbers. What is read off it is *which box am I in and
-how far to its edge*, and the frequency itself is already in the log's status bar. The filled
-segment is the one the radio is standing in; hovering any segment gives its centre.
+how far to its edge*. The dot is **the amplifier's radio** (see the title above), not the TRX
+the log is on. The filled segment is the one that radio is standing in; hovering any segment
+gives its centre.
 
 | | |
 |---|---|
-| **◀ ▶** | retune the **selected TRX** to the nearest segment centre below or above. Standing a couple of kHz off a centre, the arrow pointing at it lands *on* it — so one press is usually all it takes before TUNE. At the band's first or last segment the arrow greys out. |
+| **◀ ▶** | retune **the amplifier's radio** to the nearest segment centre below or above — whichever TRX the log is on. Standing a couple of kHz off a centre, the arrow pointing at it lands *on* it — so one press is usually all it takes before TUNE. At the band's first or last segment the arrow greys out. |
 | Clicking a segment | retunes straight to that segment's centre. On 80 m, with 29 segments, this is the difference between one click and twenty-eight. |
 
 Six segments are shown at a time and the scale pages when the dot leaves — it holds still
 while you tune about inside a page, so it never crawls under your hand on the VFO. The last
 page of a band is pinned to its end, so it never shrinks to one lonely segment.
 
-The arrows go dead **while the radio is transmitting** — retuning out from under a keyed
+The arrows go dead **while that radio is transmitting** — or the amplifier reports TX, which
+it sees on its PTT line whatever radio is in front of it; retuning out from under a keyed
 amplifier is exactly the mistake this panel is here to prevent — and also when there is
-nothing to draw: no frequency from the radio, or a band the amplifier has no segments for
-(60 m, 4 m, 2 m, 70 cm). The row stays where it is in all those cases, and the empty scale
-says which of the two it is: **`NO FREQ`** (the radio gives no frequency) or **`NO SEGMENTS`**
-(it does, but the amplifier has no divisions on that band). The arrows' tooltips say the same.
+nothing to draw. The row stays where it is in all those cases, and the empty scale says why:
+
+| | |
+|---|---|
+| **`NO PA SOURCE`** | the amplifier does not say which radio it follows, or follows none. Nothing is guessed — in particular the log's own TRX is not drawn in its place, since a click would retune a radio that is not in front of the amplifier. |
+| **`UNKNOWN TRX`** | it follows a device that is none of this interface's TRX slots |
+| **`NO FREQ`** | the amplifier's radio gives no frequency (not connected) |
+| **`NO SEGMENTS`** | it does, but the amplifier has no divisions on that band (60 m, 4 m, 2 m, 70 cm) |
+
+The arrows' tooltips say the same.
 
 > The segments are the ones in the amplifier's **user manual §19**, and they are wider than
 > the band: 160 m starts at 1785 kHz and 10 m at 27950 kHz, because the amplifier will tune
-> there. They also carry no notion of *which* radio the amplifier is following — the
-> interface publishes the frequency of **TRX1** only, so on TRX2/TRX3 the scale shows where
-> that radio is, which need not be where the amplifier went. The band reading above turns
-> amber when the two disagree.
+> there. The band reading above turns red when the amplifier's band disagrees with its
+> radio's frequency — now a real fault, not a sign that you are logging on another TRX.
 
 Four buttons, each showing the state it is in rather than the state it would move to:
 
 | Button | |
 |---|---|
-| **OFF / ON** | mains power. Switching it **ON** also switches **TRX1's own antenna tuner off** (CI-V `1C 01 00`) — the amplifier's manual asks for it, and two tuners hunting on one line fight each other. That goes out at once, not after the seven seconds the amplifier takes to come up; if TRX1 cannot take it (it is on TrxNet, or not connected) the line under the buttons says so. |
+| **OFF / ON** | mains power. Switching it **ON** also switches **the amplifier's radio's own antenna tuner off** (CI-V `1C 01 00`) — the amplifier's manual asks for it, and two tuners hunting on one line fight each other. That goes out at once, not after the seven seconds the amplifier takes to come up; if that radio cannot take it (it is on TrxNet, or not connected), or it is not known which radio it is, the line under the buttons says so. |
 | **STANDBY / OPERATE** | in line, or bypassed |
 | **PWR-L / PWR-H** | half or full power |
-| **TUNE** | runs the tuner. It works in STANDBY — tuning runs at low power — but **not while the radio is keying**: the amplifier locks the whole RF path while TX is asserted. You provide the carrier yourself. |
+| **TUNE** | runs the tuner. It works in STANDBY — tuning runs at low power — but **not while the amplifier's radio is keying**: the amplifier locks the whole RF path while TX is asserted. You provide the carrier yourself. |
 | **TUNE+** | shown instead of TUNE when the whole tune can be done from here — see below. |
 
 #### TUNE+
 
-When this station's **external FSK keyer** (an OI3 set on the RTTY page, FSK output →
-TrxNet) is on the network and says it can, TUNE becomes **TUNE+** and one click does the
-whole job the amplifier's manual describes:
+When an **OI3 keyer on the radio the amplifier follows** is on the network and says it can,
+TUNE becomes **TUNE+** and one click does the whole job the amplifier's manual describes. The
+keyer is the OI3 the amplifier itself follows (its daemon's `--trxnet-freq-from OI3.xx`) —
+no other setting needed. Only when the amplifier follows this interface itself does the RTTY
+page's **external FSK keyer** (FSK output → TrxNet) stand in, and then only if it keys that
+same radio:
 
-1. TRX1's own tuner goes off;
-2. the keyer switches TRX1 to CW at its low tune power (20 % by default), raises PTT and
+1. the radio's own tuner goes off;
+2. the keyer switches its radio to CW at its low tune power (20 % by default), raises PTT and
    keys a steady carrier;
 3. only then the amplifier's TUNE key — carrier first, as the manual asks;
 4. the button reads **CARRIER**, then **TUNING** while the amplifier's TUNE flag is lit;
-5. when the flag goes out the carrier drops and the keyer puts TRX1 back to the mode, filter
-   and power it had. The line under the buttons says `Tuned — SWR 1.3`.
+5. when the flag goes out the carrier drops and the keyer puts the radio back to the mode,
+   filter and power it had. The line under the buttons says `Tuned — SWR 1.3`.
 
 It tunes **where the radio stands** — to tune a segment's centre, click it on the scale
 first. The amplifier's OPERATE/STANDBY state is left as it is.
@@ -1199,7 +1224,15 @@ not leave the carrier up — and the keyer itself drops the carrier if the inter
 for 2.5 s.
 
 Without such a keyer the button stays **TUNE**; its tooltip says why when there is a keyer
-that is absent or whose firmware predates this.
+that is absent or whose firmware predates this — or that keys a different radio than the one
+the amplifier follows (the FSK keyer's radio is TRX1, or the TRX slot configured with its
+NET_ID), or when it is not known which radio the amplifier follows. A carrier from a radio
+that is not in front of the amplifier would leave it tuning on nothing. A run also ends if the
+amplifier moves to another radio while it is going.
+
+The bare **TUNE** only presses the amplifier's key — the carrier is yours. Pressed with no
+drive, the amplifier does not start, and the line under the buttons says so and asks for a
+carrier first.
 
 > **A command is not a confirmation.** The amplifier's daemon accepts commands only if it was
 > started to, and silently drops them if this device is not on its allow list — neither
@@ -3381,7 +3414,7 @@ TrxNet is a peer-to-peer link between RemoteQTH devices on the same network.
 | **Own NET_ID** | this device's identity, two hex digits. **`00` disables TrxNet.** Must be unique on the network. The device name is derived from it. **Use IP last octet** fills it from the address the device was given. |
 | **UDP port** | discovery and CoAP port; every device on the network must use the same one. Default `5683`. |
 | **Priority prefixes** | space-separated device-name prefixes kept in the peer table when it fills up. Default `OI3 ANT`; empty turns priority off. |
-| **Linear amplifier NET_ID** | the peer NET_ID of an EXPERT 1K-FA reachable over TrxNet as `PA.XX`, two hex digits. **`00` = no amplifier.** Set it and QRPLog grows the **PA** button described in [section 3.14](#314-pa--the-linear-amplifier). The amplifier's own daemon has to be started so it accepts commands, and this device's name has to be on its allow list if it uses one. |
+| **Linear amplifier NET_ID** | the peer NET_ID of an EXPERT 1K-FA reachable over TrxNet as `PA.XX`, two hex digits. **`00` = no amplifier.** Set it and QRPLog grows the **PA** button described in [section 3.14](#314-pa--the-linear-amplifier). The amplifier's own daemon has to be started so it accepts commands, and this device's name has to be on its allow list if it uses one. Which radio the amplifier follows is set **on the daemon**, with `--trxnet-freq-from` naming the one peer in front of it; the palette takes it from there. |
 
 **Network devices** below lists the peers seen right now, live.
 

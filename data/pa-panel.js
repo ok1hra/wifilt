@@ -3,7 +3,7 @@
  * pa-panel.js — the linear amplifier, on the contest log
  *
  * A small movable palette showing everything TrxNet carries about an EXPERT
- * 1K-FA (six topics, nothing more is on the wire) and offering the four
+ * 1K-FA (seven topics, nothing more is on the wire) and offering the four
  * commands it accepts. The firmware does the TrxNet half and serves it as
  * /pa.json; this file is only the window onto it.
  *
@@ -67,7 +67,7 @@
   var F = {
     TUNE: 1 << 0, OPERATE: 1 << 1, TX: 1 << 2, ALARM: 1 << 3,
     FULL: 1 << 4, CONTEST: 1 << 5, BEEP: 1 << 6,
-    ON: 1 << 8, LINK: 1 << 9, REV2: 1 << 10
+    ON: 1 << 8, LINK: 1 << 9, REV2: 1 << 10, PINNED: 1 << 11
   };
 
   // Metres -> the Hz span the amplifier would be on. Used only to colour the
@@ -260,11 +260,11 @@
           '<div class="pa-bar"><i id="paBarFw" class="pa-bar-fw"></i></div>' +
           '<div class="pa-bar"><i id="paBarRef" class="pa-bar-ref"></i></div>' +
         '</div>' +
-        // The tuner's divisions of the band the radio is on, with the dot where
-        // the radio actually is. Deliberately blind -- no numbers: at 27 px a
-        // segment there is no room for any, and what the operator needs from it is
-        // "which box am I in and how far to the next one", not a reading. The
-        // frequency itself is already on the log's own status bar.
+        // The tuner's divisions of the band the radio is on -- the radio in
+        // front of the amplifier, see paTrx() -- with the dot where that radio
+        // actually is. Deliberately blind -- no numbers: at 27 px a segment
+        // there is no room for any, and what the operator needs from it is
+        // "which box am I in and how far to the next one", not a reading.
         '<div class="pa-seg-row" id="paSegRow">' +
           '<button class="pa-seg-arrow" id="paSegDown" type="button" data-seg="-1">&#9664;</button>' +
           '<div class="pa-seg-wrap">' +
@@ -468,9 +468,11 @@
   }
 
   function tunePlusWhyText(code) {
-    return code === 'no_oi3'     ? 'FSK output is not set to an external OI3 (RTTY settings).'
+    return code === 'no_oi3'     ? 'the amplifier does not follow an OI3 keyer, and FSK output is not set to one (RTTY settings).'
          : code === 'oi3_absent' ? 'the OI3 keyer is not on the network.'
          : code === 'oi3_old'    ? 'the OI3 keyer has not announced remote TUNE — its firmware may be older.'
+         : code === 'no_src'     ? 'it is not known which radio the amplifier follows.'
+         : code === 'oi3_other'  ? 'the OI3 keyer is not on the radio the amplifier follows.'
          : 'unknown reason.';
   }
 
@@ -495,10 +497,12 @@
     if (a && typeof a.ageMs === 'number') {
       var at = Math.round((Date.now() - a.ageMs) / 1000);
       if (atuLastAt !== null && Math.abs(at - atuLastAt) > 1 && a.ageMs < FRESH_MS && !a.ok) {
+        var trxName = 'TRX' + (a.trx || 1);
         note = 'The radio\'s own tuner was NOT switched off: ' + (
-          a.why === 'trxnet'  ? 'TRX1 is on TrxNet, which carries frequency only.'
-        : a.why === 'noaddr'  ? 'TRX1 has no CI-V address.'
-        : 'TRX1 is not connected.');
+          a.why === 'nosrc'   ? 'it is not known which radio the amplifier follows.'
+        : a.why === 'trxnet'  ? trxName + ' is on TrxNet, which carries frequency only.'
+        : a.why === 'noaddr'  ? trxName + ' has no CI-V address.'
+        : trxName + ' is not connected.');
       }
       if (atuLastAt === null || Math.abs(at - atuLastAt) > 1) atuLastAt = at;
     } else if (atuLastAt === null) {
@@ -525,10 +529,19 @@
         // Two very different faults hid behind one message for three rounds of
         // this: a daemon that refused the command, and an interface that never
         // managed to send it. /pa.json now reports which, so say which.
+        // TUNE gets its own sentence. The bare key only presses the amplifier's
+        // TUNE; without drive from the radio the amplifier does not start, and
+        // that -- not a daemon ignoring commands -- is by far the likelier
+        // reason. Blaming --trxnet-allow sent the operator to check a daemon
+        // that had taken the command perfectly well.
         note = (state && state.txFailed && p.txFailedAt !== undefined
                 && state.txFailed > p.txFailedAt)
           ? 'This interface could not put the command on TrxNet (the amplifier ' +
             'dropped out of its peer table, or the send queue is full).'
+          : what === 'tune'
+          ? 'The amplifier did not start tuning. It needs a carrier: key the ' +
+            'radio (CW or RTTY), then TUNE. If it still does not, check its ' +
+            'daemon runs with --trxnet-subscribe and --trxnet-allow names this device.'
           : 'Sent, but the amplifier did not follow. Check that its daemon runs ' +
             'with --trxnet-subscribe and that its --trxnet-allow list names this ' +
             'device.';
@@ -597,7 +610,7 @@
   // ordinary place to tune from.
   function whyDisabled(f, live, stale, needsQuietRadio) {
     if (!live)  return 'The amplifier is not on the network.';
-    if (needsQuietRadio && radioTx())
+    if (needsQuietRadio && paTx())
       return 'The radio is transmitting — the amplifier locks the RF path while TX is asserted.';
     return '';
   }
@@ -663,8 +676,7 @@
     // PA.01/IC-7610: the amplifier, and the radio whose /hz it follows.
     document.getElementById('paNameAmp').textContent =
       (state && state.name) ? state.name.toUpperCase() : 'PA';
-    document.getElementById('paNameTrx').textContent =
-      (state && state.trx1) ? '/' + state.trx1 : '';
+    renderHeadTrx(live, stale);
 
     var fw = watts(state ? state.fwdPk : null);
     var rf = watts(state ? state.refPk : null);
@@ -803,7 +815,8 @@
       setBtn('paBtnTune', pending.tune ? '…' : 'TUNE',
              (f & F.TUNE) ? 'st-on' : 'st-off', !!pending.tune,
              whyDisabled(f, live, stale, true),
-             hint || ((tpNo && tpNo !== 'no_oi3') ? 'TUNE+ unavailable: ' + tunePlusWhyText(tpNo) : ''));
+             hint || ((tpNo && tpNo !== 'no_oi3') ? 'TUNE+ unavailable: ' + tunePlusWhyText(tpNo)
+                                                  : 'Presses the amplifier\'s TUNE — key a carrier from the radio first'));
     }
 
     var noteEl = document.getElementById('paNote');
@@ -819,20 +832,74 @@
     syncGap();
   }
 
-  // window.LogRadio is log.js's deliberate, narrow export -- `const app` at the
-  // top level of a classic script never lands on window, so reaching for
-  // window.app here would silently read undefined and this check would be dead
-  // while looking alive.
-  function radioHz() {
-    return (global.LogRadio && global.LogRadio.frequency()) || 0;
+  // ── the radio the amplifier follows ─────────────────────────────────────
+  //
+  // Not the TRX the log is on. The amplifier's daemon says which peer's /hz it
+  // follows (/pa-src), the firmware maps that onto its own TRX slots, and
+  // /pa.json carries the result: trx, its label, its frequency and TX state.
+  // Everything here that means "the radio" -- the title, the scale, the band
+  // check, the TX guards and the radio a click on the scale retunes -- reads
+  // this. It used to read the log's active TRX, and on a station where that was
+  // not the radio in front of the amplifier, the scale drew the wrong radio and
+  // a click retuned it.
+  //
+  // trx 0 means there is no radio to name, and then nothing is guessed.
+  function paTrx() {
+    return (state && state.trx) || 0;
   }
-  function radioTx() {
-    return !!(global.LogRadio && global.LogRadio.tx());
+  function paHz() {
+    return paTrx() ? (state.hz || 0) : 0;
+  }
+  // The radio's own TX where the firmware can read it, and the amplifier's TX
+  // bit always: it sees the PTT line whatever transport the radio is on.
+  function paTx() {
+    return !!(state && (state.trxTx || (flags() & F.TX)));
+  }
+
+  // Why there is no radio to name, as a sentence. Three different fixes: the
+  // daemon is too old to say, it says it follows nothing, or it names a radio
+  // this interface does not have.
+  function noSourceWhy() {
+    var src = state ? state.src : null;
+    if (src === null || src === undefined)
+      return 'The amplifier does not say which radio it follows — its daemon predates /pa-src';
+    if (src === '')
+      return 'The amplifier follows no radio — its daemon needs --trxnet-subscribe, ' +
+             'and --trxnet-freq-from naming the radio in front of it';
+    return 'The amplifier follows ' + src + ', which is not one of this interface\'s radios';
+  }
+
+  // PA.01/IC-7610 -- or /OI3.07 for a radio that is not one of ours, or /? when
+  // nothing is known. Amber whenever the name is not a settled fact: no radio
+  // to name, or one the daemon picked only because it moved last (PINNED
+  // clear: without --trxnet-freq-from the next /hz from another radio takes
+  // the amplifier with it).
+  function renderHeadTrx(live, stale) {
+    var el2 = document.getElementById('paNameTrx');
+    var head = document.getElementById('paName');
+    var text = '', warn = false, why = '';
+    if (state && state.present) {
+      if (paTrx()) {
+        text = '/' + (state.trxLabel || ('TRX' + paTrx()));
+        if (live && !stale && !(flags() & F.PINNED)) {
+          warn = true;
+          why = 'The amplifier follows whichever radio retuned it last — ' +
+                'name the one in front of it with --trxnet-freq-from';
+        }
+      } else {
+        text = '/' + (state.src ? state.src : '?');
+        warn = true;
+        why = noSourceWhy();
+      }
+    }
+    el2.textContent = text;
+    el2.classList.toggle('pa-head-trx-warn', warn);
+    head.title = why;
   }
 
   function bandMismatch(band) {
     if (!band || !BAND_HZ[band]) return false;
-    var hz = radioHz();
+    var hz = paHz();
     if (!hz) return false;
     var r = BAND_HZ[band];
     return hz < r[0] || hz > r[1];
@@ -943,21 +1010,25 @@
     var dot   = document.getElementById('paSegDot');
     if (!track || !dot) return;
 
-    var hz = radioHz();
+    var trx = paTrx();
+    var hz = paHz();
     var at = segLocate(hz);
     // The row never goes away and never changes height, the same discipline as
     // the LED row and the numbers above it: the panel floats over a contest log,
     // and something that appears and disappears would move everything under it.
     // An empty scale with dead arrows is the honest version of "nothing to show".
-    var why = !hz ? 'The radio is not connected, so there is no frequency to place'
+    var why = !trx ? noSourceWhy()
+            : !hz ? 'The radio is not connected, so there is no frequency to place'
             : !at ? 'The amplifier has no tuning segments on this band'
             : '';
-    // An empty scale says nothing about WHY it is empty, and the two reasons
-    // point at different things to fix -- the radio, or the band -- so it says.
+    // An empty scale says nothing about WHY it is empty, and the reasons point
+    // at different things to fix -- the amplifier's daemon, the radio, or the
+    // band -- so it says.
     var msg = document.getElementById('paSegMsg');
     if (msg) {
-      msg.textContent = !hz ? 'NO FREQ' : !at ? 'NO SEGMENTS' : '';
-      msg.hidden = !!(hz && at);
+      msg.textContent = !trx ? ((state && state.src) ? 'UNKNOWN TRX' : 'NO PA SOURCE')
+                      : !hz ? 'NO FREQ' : !at ? 'NO SEGMENTS' : '';
+      msg.hidden = !why;
       msg.title = why;
     }
     if (why) {
@@ -1009,7 +1080,7 @@
     // Retuning the radio out from under a keyed amplifier is precisely the
     // expensive mistake this panel is here to prevent, so TX kills both arrows --
     // the same reason TUNE is held while the radio is transmitting.
-    var txWhy = radioTx() ? 'The radio is transmitting' : '';
+    var txWhy = paTx() ? 'The radio is transmitting' : '';
     setSegArrow('paSegDown', segNeighbour(at.list, khz, -1), txWhy);
     setSegArrow('paSegUp',   segNeighbour(at.list, khz,  1), txWhy);
   }
@@ -1019,9 +1090,12 @@
   //
   // Deliberately NOT part of onButtonClick. That one belongs to the amplifier's
   // commands and to their pending/settled machinery, which exists because the
-  // daemon never answers. A retune needs none of it: /state comes back with the
-  // new frequency half a second later and the dot moves, which is the
+  // daemon never answers. A retune needs none of it: /pa.json comes back with
+  // the new frequency half a second later and the dot moves, which is the
   // confirmation.
+  //
+  // It retunes the radio the AMPLIFIER follows (paTrx()), whichever TRX the log
+  // is on -- the scale is drawn from that radio, so a click must land on it.
   function onSegClick(e) {
     var arrow = e.target.closest('.pa-seg-arrow');
     var seg   = e.target.closest('.pa-seg');
@@ -1029,14 +1103,14 @@
 
     if (arrow) {
       if (arrow.disabled || !segView) return;
-      khz = segNeighbour(segView.list, radioHz() / 1000, Number(arrow.dataset.seg));
+      khz = segNeighbour(segView.list, paHz() / 1000, Number(arrow.dataset.seg));
     } else if (seg) {
-      if (radioTx() || !segView) return;
+      if (paTx() || !segView) return;
       khz = Number(seg.dataset.centre);
     }
-    if (!khz) return;
-    if (global.LogRadio && global.LogRadio.tuneTo) {
-      global.LogRadio.tuneTo(Math.round(khz * 1000), 'pa-seg');
+    if (!khz || !paTrx()) return;
+    if (global.LogRadio && global.LogRadio.tuneTrx) {
+      global.LogRadio.tuneTrx(paTrx(), Math.round(khz * 1000), 'pa-seg');
     }
   }
 

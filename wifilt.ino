@@ -683,6 +683,12 @@ struct PaState {
   bool     tempSeen;
   uint16_t fwdPk, refPk;
   uint32_t fwdPkAt, refPkAt;
+  // /pa-src: the peer whose /hz the amplifier follows, as its daemon says.
+  // srcSeen apart from src[0] for the same reason as tempSeen: a daemon older
+  // than 2026-09-28 never sends it, and "it has not said" must not read as "it
+  // follows no radio" -- the palette tells the operator which one to fix.
+  char     src[TRXNET_MAX_DEVICE_NAME];
+  bool     srcSeen;
 };
 PaState paState = {};
 char    paPeerName[TRXNET_MAX_DEVICE_NAME] = "";  // "PA.xx", empty when unset
@@ -710,15 +716,19 @@ uint32_t paTxLastMs = 0;   // when the last attempt was made
 
 // /pa-flags bits this file acts on (the palette documents all of them).
 #define PA_F_TUNE   0x0001
+#define PA_F_TX     0x0004
 #define PA_F_ALARM  0x0008
 #define PA_F_ON     0x0100
 #define PA_F_LINK   0x0200
 
 // TUNE+ -- the whole amplifier tune, run from here rather than from the
 // palette so it finishes (or stops the carrier) even if the tab is closed.
-// The carrier comes from the OI3 keyer that does this station's FSK: it sits
-// on TRX1's CI-V bus, and its low-power TUNE (/s-lptune) keys CW at TunePower
-// %, then restores power, mode and filter itself. Sequence, per the EXPERT
+// The carrier comes from an OI3 keyer -- the one the amplifier follows when
+// that is an OI3, otherwise the one that does this station's FSK, which sits
+// on TRX1's CI-V bus (see tpOi3Name()) -- and its low-power TUNE (/s-lptune)
+// keys CW at TunePower %, then restores power, mode and filter itself. That
+// radio has to be the one the amplifier follows (/pa-src), or the carrier goes
+// out on a radio that is not in front of it -- tunePlusAvailable(). Sequence, per the EXPERT
 // manual section d: carrier first, then the amplifier's TUNE key, then wait
 // for its TUNE flag to fall. See paTunePlusTick().
 //
@@ -746,23 +756,29 @@ bool             tpOk      = false;   // how STOPPING should end
 const char*      tpWhy     = "";      // sentence for the palette; string literals only
 uint16_t         tpSwr     = 0;       // amplifier's SWR as the TUNE flag fell
 volatile uint8_t tpReq     = 0;       // TP_REQ_*, set by the web handler
-// OI3's /lptune, as heard from the FSK keyer only. lpGot latches every state
+// OI3's /lptune, as heard from the TUNE+ keyer only (tpOi3Name()). lpGot latches every state
 // that arrived since the last tick -- OI3 sends "3 aborted" and "0 restored"
 // back to back, and a plain last-value would lose the abort.
 volatile uint8_t lpGot     = 0;
 bool             lpSeen    = false;   // it has ever announced /lptune ...
 char             lpFrom[TRXNET_MAX_DEVICE_NAME] = "";   // ... under this name
 uint32_t         lpAskedAt = 0;       // last /s-lptune 3 (state query)
+// The keyer a run was started on. Everything for that run -- keepalives, the
+// stop, its /lptune -- stays with it even if tpOi3Name() would now answer
+// another: that OI3 is the one holding the carrier.
+char             tpRunOi3[TRXNET_MAX_DEVICE_NAME] = "";
 #define TP_QUERY_MS      5000   // how often to ask an OI3 that has not announced itself
 
 // Switching the radio's own tuner off (CI-V 1C 01 00) when the amplifier is
 // switched on and before every TUNE+: the EXPERT manual asks for it, and two
 // tuners hunting on one line fight each other. Fire and forget -- the result
-// reported is only whether the frame could be sent.
+// reported is only whether the frame could be sent. It goes to the radio the
+// amplifier follows (paTrxSlot()), never to a guessed one.
 volatile bool    paAtuOffPending = false;
 uint32_t         atuAt  = 0;          // 0 = never tried
 bool             atuOk  = false;
 const char*      atuWhy = "";
+int8_t           atuSlot = -1;        // the slot it was sent to, -1 = none
 
 int incomingByte = 0;   // for incoming serial data
 
@@ -1225,14 +1241,20 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void onPaRef(const char* from, const uint8_t* data, size_t len);
   void onPaSwr(const char* from, const uint8_t* data, size_t len);
   void onPaBand(const char* from, const uint8_t* data, size_t len);
+  void onPaSrc(const char* from, const uint8_t* data, size_t len);
+  int  paTrxSlot(void);
+  int  paPeerSlot(const char* name);
+  uint32_t paTrxHz(int slot);
+  bool paTrxTx(int slot);
   void paSubscribeTopics(void);
   void paPublishPending(void);
   void onOi3LpTune(const char* from, const uint8_t* data, size_t len);
   bool tpOi3Name(char* out, size_t n);
+  bool fskOi3Name(char* out, size_t n);
   bool tunePlusAvailable(const char** why);
   bool paPeerActive(const char* name);
   void paTunePlusTick(void);
-  void trx1AtuOff(void);
+  void paAtuOff(void);
   void handlePaJson(void);
   void handlePaCmd(void);
   static const char* trxnetModeToString(uint8_t civMode);
@@ -2255,7 +2277,7 @@ void handleTrxTopics(){
 // them.
 void handlePaJson(){
   String j;
-  j.reserve(640);
+  j.reserve(800);
   j += "{";
   const char* state = "ok";
   if (APmode && !WiFiStationReady()) state = "ap";
@@ -2266,9 +2288,29 @@ void handlePaJson(){
 
   bool present = strcmp(state, "ok") == 0 && paPeerActive(paPeerName);
   j += ",\"present\":"; j += present ? "true" : "false";
-  // The radio the amplifier follows, for the palette's title (PA.01/IC-7610).
-  // TRX1 by definition: that is the only /hz this interface publishes.
-  j += ",\"trx1\":\""; j += configJsonEscape(g_lcTrx1Label); j += "\"";
+  // The radio the amplifier follows, as its daemon says (/pa-src) and mapped
+  // onto this interface's slots: the palette's title, its tuning scale and
+  // the radio a click on that scale retunes all come from here, never from
+  // whichever TRX the log happens to be on. It used to be "TRX1 by
+  // definition" -- and on a station whose amplifier stands behind another
+  // radio, the scale showed that other radio's neighbour and retuned it.
+  //
+  // trx 0 = not one of ours: src null (the daemon predates /pa-src), empty
+  // (it follows no radio), or a name no slot here answers to. The palette
+  // then refuses to draw or tune rather than guess.
+  int paSlot = paTrxSlot();
+  j += ",\"trx\":"; j += paSlot + 1;
+  j += ",\"src\":";
+  if (paState.srcSeen) { j += "\""; j += configJsonEscape(String(paState.src)); j += "\""; }
+  else j += "null";
+  if (paSlot >= 0) {
+    const String& label = paSlot == 0 ? g_lcTrx1Label : paSlot == 1 ? g_lcTrx2Label : g_lcTrx3Label;
+    j += ",\"trxLabel\":\""; j += configJsonEscape(label); j += "\"";
+    j += ",\"hz\":";    j += paTrxHz(paSlot);
+    j += ",\"trxTx\":"; j += paTrxTx(paSlot) ? "true" : "false";
+  } else {
+    j += ",\"trxLabel\":null,\"hz\":0,\"trxTx\":false";
+  }
 
   uint32_t now = millis();
   if (paState.seen) {
@@ -2318,6 +2360,7 @@ void handlePaJson(){
   j += ",\"atuOff\":";
   if (atuAt) {
     j += "{\"ok\":"; j += atuOk ? "true" : "false";
+    j += ",\"trx\":"; j += atuSlot + 1;
     j += ",\"why\":\""; j += atuWhy;
     j += "\",\"ageMs\":"; j += (uint32_t)(now - atuAt); j += "}";
   } else j += "null";
@@ -2365,7 +2408,11 @@ void handlePaCmd(){
     else if (!paPeerActive(paPeerName))               err = "pa_absent";
     else if ((paState.flags & (PA_F_ON | PA_F_LINK)) != (PA_F_ON | PA_F_LINK))
                                                       err = "pa_off";
-    else if (stateTx)                                 err = "trx_tx";
+    // The radio in front of the amplifier, not TRX1: tunePlusAvailable() has
+    // just made sure there is one. The amplifier's own TX bit too -- it sees
+    // the PTT line whatever this interface can or cannot read from the radio.
+    else if (paTrxTx(paTrxSlot()) || (paState.flags & PA_F_TX))
+                                                      err = "trx_tx";
     if (err) {
       String e = String("{\"error\":\"") + err + "\"}";
       webServer.send(409, "application/json", e);
@@ -7717,7 +7764,10 @@ static int trxnetPeerSlot(const char* from) {
         || radioSlots[slot].netId == 0x00 || radioSlots[slot].netId == 0xff)
       continue;
     snprintf(expected, sizeof(expected), "OI3.%02x", radioSlots[slot].netId);
-    if (strcmp(from, expected) == 0) return slot;
+    // Case-blind: a name off the wire is always "OI3.0a", but the amplifier
+    // repeats its --trxnet-freq-from as typed until the first /hz, and the
+    // daemon itself matches that setting without regard to case.
+    if (strcasecmp(from, expected) == 0) return slot;
   }
   return -1;
 }
@@ -7805,7 +7855,7 @@ void onTrxMode(const char* from, const uint8_t* data, size_t len) {
 
 // ---- Linear amplifier telemetry --------------------------------------------
 //
-// Five topics from PA.xx. Every one of them checks the sender: trxnetPeerSlot()
+// Seven topics from PA.xx. Every one of them checks the sender: trxnetPeerSlot()
 // above is hard-wired to "OI3." and answers a different question (which radio
 // slot), so the amplifier needs its own matcher rather than a widening of that.
 static bool paIsOurAmp(const char* from) {
@@ -7867,11 +7917,66 @@ void onPaTemp(const char* from, const uint8_t* data, size_t len) {
   paNoteRx();
 }
 
-// Register the amplifier's six topics and build the name we accept them from.
+// Which radio the amplifier follows, by name -- see paTrxSlot(). Empty is a
+// real answer (it follows none), so it is stored like any other.
+void onPaSrc(const char* from, const uint8_t* data, size_t len) {
+  if (!paIsOurAmp(from)) return;
+  size_t n = len < sizeof(paState.src) - 1 ? len : sizeof(paState.src) - 1;
+  memcpy(paState.src, data, n);
+  paState.src[n] = '\0';
+  paState.srcSeen = true;
+  paNoteRx();
+}
+
+// A peer name onto one of this interface's radio slots, 0..2, or -1.
+//
+//   this device ("705.xx")  -> TRX1: the only /hz it publishes is TRX1's.
+//   OI3.xx set up in a slot  -> that slot (TrxNet transport, that NET_ID).
+//   the FSK OI3 otherwise    -> TRX1: it sits on TRX1's CI-V bus, the same
+//                               assumption TUNE+ has always made.
+//   anything else            -> -1, a radio this interface does not know.
+int paPeerSlot(const char* name) {
+  if (!name || !name[0]) return -1;
+  if (trxNetEnabled && strcasecmp(name, trxDeviceName) == 0) return 0;
+  int slot = trxnetPeerSlot(name);
+  if (slot >= 0) return slot;
+  char oi3[TRXNET_MAX_DEVICE_NAME];
+  if (fskOi3Name(oi3, sizeof(oi3)) && strcasecmp(name, oi3) == 0) return 0;
+  return -1;
+}
+
+// The slot of the radio the amplifier follows, or -1 when there is none to
+// name: the daemon never said (older than /pa-src), follows no radio, or
+// follows one this interface does not have. Never a guess -- a wrong answer
+// here retunes the wrong radio from the palette's scale.
+int paTrxSlot(void) {
+  if (PA_NET_ID == 0x00 || !paState.srcSeen) return -1;
+  return paPeerSlot(paState.src);
+}
+
+// That radio's frequency, 0 when it is not connected -- the same meaning
+// QRPLog's own frequency has, so the scale says NO FREQ for the same reasons.
+uint32_t paTrxHz(int slot) {
+  if (slot < 0 || slot > 2 || !radioSlotConnected((uint8_t)slot)) return 0;
+  return slot == 0 ? (uint32_t)frequency : (uint32_t)g_trxFreq[slot - 1];
+}
+
+// Is that radio transmitting, as far as this interface can tell: TRX1 always,
+// TRX2/3 only when it is the LAN radio. A TrxNet or CI-V TRX2/3 carries no TX
+// state here, which is why the palette and the TUNE+ gate also read the
+// amplifier's own TX bit.
+bool paTrxTx(int slot) {
+  if (slot == 0) return stateTx;
+  if (slot > 0 && slot <= 2 && (uint8_t)slot == lanRadioSlotIndex()) return lanRadioSnap.tx;
+  return false;
+}
+
+// Register the amplifier's seven topics and build the name we accept them from.
 // Called from both places that call net.begin() -- boot and WiFi reconnect --
 // because subscriptions do not survive a re-begin any more than the peer table
-// does. Subscribing with no amplifier configured would be six of the sixteen
-// slots spent on packets that can never be accepted.
+// does. Subscribing with no amplifier configured would be seven of the sixteen
+// slots spent on packets that can never be accepted. With them the device is
+// at eleven: /hz /mode /s-hz, these seven, and /lptune.
 //
 // Sixteen, not eight: TRXNET_MAX_SUBS became per-board in the library on
 // 2026-09-08 (ESP32 16, AVR 8) when /pa-temp made this device want a ninth.
@@ -7887,6 +7992,7 @@ void paSubscribeTopics(void) {
   net.subscribe("/swr",      onPaSwr);
   net.subscribe("/band",     onPaBand);
   net.subscribe("/pa-temp",  onPaTemp);
+  net.subscribe("/pa-src",   onPaSrc);
   // TUNE+'s carrier source. Here rather than beside /hz because TUNE+ exists
   // only for the amplifier, and this is the one function both net.begin()
   // sites already call. The sender is checked in the callback.
@@ -7906,10 +8012,10 @@ bool paPeerActive(const char* name) {
 }
 
 // The OI3 that keys this station's FSK -- which makes it the one on TRX1's
-// CI-V bus, and so the one that can give the amplifier a carrier. Its name
-// comes from the RTTY page's external-FSK setting, read live so a change there
-// needs no restart.
-bool tpOi3Name(char* out, size_t n) {
+// CI-V bus (or TRX2/3's, when that slot is TrxNet with this NET_ID; see
+// paPeerSlot()). Its name comes from the RTTY page's external-FSK setting, read
+// live so a change there needs no restart.
+bool fskOi3Name(char* out, size_t n) {
   if (g_lcFskOutputMode != "trxnet") return false;
   long id = strtol(g_lcFskNetId.c_str(), nullptr, 16);
   if (id <= 0 || id > 255) return false;
@@ -7917,42 +8023,87 @@ bool tpOi3Name(char* out, size_t n) {
   return true;
 }
 
+// The OI3 that gives TUNE+ its carrier. First choice is the one the amplifier
+// itself follows (/pa-src): an OI3 whose /hz retunes the amplifier is by
+// definition the keyer on the radio in front of it, and that is the only
+// radio a tuning carrier is any use from. Only when the amplifier follows
+// something else -- this interface itself, 705.xx -- does the RTTY page's FSK
+// keyer stand in, and tunePlusAvailable() then checks it keys the same radio.
+//
+// Until 2026-09-29 it was the FSK keyer alone, which left a station whose
+// amplifier stands behind an OI3 radio -- but whose RTTY does not go out as
+// FSK through that OI3 -- with no TUNE+ at all, and the bare TUNE key pressed
+// with no carrier did nothing.
+bool tpOi3Name(char* out, size_t n) {
+  const char* src = paState.src;
+  if (paTrxSlot() >= 0 && strncasecmp(src, "OI3.", 4) == 0) {
+    char* end = nullptr;
+    long id = strtol(src + 4, &end, 16);
+    if (end && *end == '\0' && end != src + 4 && id > 0 && id <= 255) {
+      // Normalised: the daemon repeats --trxnet-freq-from as typed until the
+      // first /hz, and a peer is matched by its exact name on the wire.
+      snprintf(out, n, "OI3.%02x", (unsigned)id);
+      return true;
+    }
+  }
+  return fskOi3Name(out, n);
+}
+
 // Whether the palette may offer TUNE+ instead of the bare TUNE key, and why
 // not as a short code when it may not.
 bool tunePlusAvailable(const char** why) {
   char oi3[TRXNET_MAX_DEVICE_NAME];
   const char* w = "";
-  if (!tpOi3Name(oi3, sizeof(oi3)))       w = "no_oi3";      // FSK not external
+  if (!tpOi3Name(oi3, sizeof(oi3)))       w = "no_oi3";      // no OI3 to ask at all
   else if (!paPeerActive(oi3))            w = "oi3_absent";
   else if (!lpSeen || strcmp(lpFrom, oi3) != 0)
                                           w = "oi3_old";     // never announced /lptune
+  // The carrier has to come out of the radio in front of the amplifier. The
+  // OI3 keys the radio on its own bus; when the amplifier follows another --
+  // or has not said which it follows -- a TUNE+ would key a radio that is not
+  // driving it, and the amplifier would tune on nothing.
+  else if (paTrxSlot() < 0)               w = "no_src";
+  else if (paPeerSlot(oi3) != paTrxSlot())
+                                          w = "oi3_other";
   if (why) *why = w;
   return w[0] == '\0';
 }
 
 void onOi3LpTune(const char* from, const uint8_t* data, size_t len) {
   char oi3[TRXNET_MAX_DEVICE_NAME];
-  if (len < 1 || data[0] > 7 || !tpOi3Name(oi3, sizeof(oi3)) || strcmp(from, oi3) != 0) return;
+  if (len < 1 || data[0] > 7) return;
+  bool running = tpState >= TP_START && tpState <= TP_STOPPING;
+  if (running && strcmp(from, tpRunOi3) == 0) {
+    lpGot |= (uint8_t)(1u << data[0]);   // the run's own keyer, whatever is current
+    return;
+  }
+  if (!tpOi3Name(oi3, sizeof(oi3)) || strcmp(from, oi3) != 0) return;
   lpGot |= (uint8_t)(1u << data[0]);
   lpSeen = true;
   strncpy(lpFrom, oi3, sizeof(lpFrom) - 1);
   lpFrom[sizeof(lpFrom) - 1] = '\0';
 }
 
-// CI-V 1C 01 00 -- internal antenna tuner OFF -- to TRX1 by whatever carries
-// its CAT. A TrxNet TRX1 cannot take it: that transport forwards frequency
-// only, on purpose (catWriteFrameSlot).
-void trx1AtuOff(void) {
+// CI-V 1C 01 00 -- internal antenna tuner OFF -- to the radio the amplifier
+// follows (paTrxSlot()), by whatever carries that slot's CAT. A TrxNet slot
+// cannot take it: that transport forwards frequency only, on purpose
+// (catWriteFrameSlot). No slot, no frame: switching off the tuner of a radio
+// that is not in front of the amplifier helps nothing, so it is reported
+// instead of guessed at.
+void paAtuOff(void) {
   atuAt = millis();
-  if (radioSlots[0].transport == RADIO_TRXNET) { atuOk = false; atuWhy = "trxnet"; return; }
-  if (radioSlots[0].transport == RADIO_CIV && radio_address == 0x00) {
-    atuOk = false; atuWhy = "noaddr"; return;
-  }
-  uint8_t frame[] = {START_BYTE, START_BYTE, radio_address, CONTROLLER_ADDRESS,
+  int slot = paTrxSlot();
+  atuSlot = (int8_t)slot;
+  if (slot < 0) { atuOk = false; atuWhy = "nosrc"; return; }
+  RadioTransport transport = radioSlots[slot].transport;
+  if (transport == RADIO_TRXNET) { atuOk = false; atuWhy = "trxnet"; return; }
+  uint8_t addr = slot == 0 ? radio_address : radioSlots[slot].civAddr;
+  if (transport == RADIO_CIV && addr == 0x00) { atuOk = false; atuWhy = "noaddr"; return; }
+  uint8_t frame[] = {START_BYTE, START_BYTE, addr, CONTROLLER_ADDRESS,
                      0x1C, 0x01, 0x00, STOP_BYTE};
-  atuOk  = catWriteFrame(frame, sizeof(frame), true);
+  atuOk  = catWriteFrameSlot((uint8_t)slot, frame, sizeof(frame));
   atuWhy = atuOk ? "" : "offline";
-  if (Debug || !atuOk) Serial.printf("PA| TRX1 tuner off %s\n", atuOk ? "sent" : atuWhy);
+  if (Debug || !atuOk) Serial.printf("PA| TRX%d tuner off %s\n", slot + 1, atuOk ? "sent" : atuWhy);
 }
 
 static void tpEnter(uint8_t st) { tpState = st; tpStateAt = millis(); }
@@ -7995,8 +8146,10 @@ void paTunePlusTick(void) {
 
   if (req == TP_REQ_START && (tpState == TP_IDLE || tpState >= TP_DONE)) {
     if (!haveOi3) return;                 // setting changed since the handler looked
-    trx1AtuOff();
+    paAtuOff();
     tpOk = false; tpWhy = ""; tpSwr = 0;
+    strncpy(tpRunOi3, oi3, sizeof(tpRunOi3) - 1);
+    tpRunOi3[sizeof(tpRunOi3) - 1] = '\0';
     tpSend(oi3, 1);
     tpKaAt = now;
     tpEnter(TP_START);
@@ -8004,6 +8157,12 @@ void paTunePlusTick(void) {
   }
   if (tpState < TP_START || tpState > TP_STOPPING) return;
   uint32_t inState = now - tpStateAt;
+  // From here on the run talks to ITS keyer. The carrier is only any use
+  // while that keyer's radio is still the one the amplifier follows; the
+  // amplifier moving to another radio mid-run (or losing its source) ends it.
+  bool keyerMoved = paPeerSlot(tpRunOi3) != paTrxSlot();
+  strncpy(oi3, tpRunOi3, sizeof(oi3) - 1);
+  oi3[sizeof(oi3) - 1] = '\0';
 
   if (tpState == TP_STOPPING) {
     if (got & 0x01)                  tpEnter(tpOk ? TP_DONE : TP_FAIL);
@@ -8018,7 +8177,8 @@ void paTunePlusTick(void) {
   // OI3's own restore then puts the radio back.
   const char* abortWhy = nullptr;
   if (req == TP_REQ_STOP)                         abortWhy = "Stopped.";
-  else if (!haveOi3)                              abortWhy = "External FSK (OI3) is no longer set up.";
+  else if (keyerMoved)                            abortWhy = "The amplifier no longer follows the radio being keyed.";
+  else if (!haveOi3)                              abortWhy = "The OI3 keyer is no longer set up.";
   else if (paState.flags & PA_F_ALARM)            abortWhy = "Amplifier ALARM.";
   else if (!paPeerActive(paPeerName))             abortWhy = "The amplifier left the network.";
   else if (now - paState.lastRxMs > TP_PA_SILENT_MS)
@@ -8027,7 +8187,7 @@ void paTunePlusTick(void) {
   else if (tpState != TP_START && (got & 0x01))   abortWhy = "OI3 dropped the carrier.";
   if (abortWhy) {
     if (tpState == TP_START && (got & 0x04)) { tpWhy = "OI3 refused: something else is transmitting."; tpEnter(TP_FAIL); return; }
-    tpStop(haveOi3 ? oi3 : nullptr, false, abortWhy, got);
+    tpStop(oi3, false, abortWhy, got);    // the run's keyer is always known
     return;
   }
 
@@ -8068,7 +8228,7 @@ void paTunePlusTick(void) {
 // belongs to the daemon. TRX_CON because a lost command to a kilowatt is worth
 // a retransmit, and publishTo() to a single peer costs one pending slot.
 void paPublishPending(void) {
-  if (paAtuOffPending) { paAtuOffPending = false; trx1AtuOff(); }
+  if (paAtuOffPending) { paAtuOffPending = false; paAtuOff(); }
   if (!paPendingCmd || !trxNetEnabled || paPeerName[0] == '\0') return;
   uint8_t cmds = paPendingCmd, vals = paPendingVals;
   paPendingCmd = 0;

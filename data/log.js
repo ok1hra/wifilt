@@ -1503,6 +1503,11 @@ function startClock() {
 // the DXC band map below issues, which is why that one now calls it too rather
 // than keeping its own copy of the two endpoints.
 //
+// tuneTrx() joined them 2026-09-28, when that scale stopped following the
+// log's active TRX: it now tunes the radio the AMPLIFIER follows, which the
+// firmware learns from the amplifier's daemon and which need not be the one
+// being logged on. tuneTo() stays for callers that do mean the active TRX.
+//
 // logFrequency() joined them 2026-09-26 for the DXC pane's BAND by TRX filter,
 // which follows the band being LOGGED -- so, unlike frequency(), it also
 // answers from the manual field while the TRX is disconnected. It reads that
@@ -1527,19 +1532,24 @@ window.LogRadio = {
   runMode:    () => app.runMode,
   workSpot:   (call, trx) => workDxcSpot(call, trx),
   tuneTo:     (hz, reqId) => tuneActiveTrx(hz, reqId),
+  tuneTrx:    (trx, hz, reqId) => tuneTrx(trx, hz, reqId),
 };
 
-// Put the selected TRX on a frequency. Two endpoints, because TRX1 is this
-// box's own radio and TRX2/3 are peers reached over TrxNet -- the split every
+// Put the selected TRX on a frequency.
+function tuneActiveTrx(hz, reqId) {
+  return tuneTrx(app.activeTrx, hz, reqId);
+}
+
+// Put TRX 1, 2 or 3 on a frequency. Two endpoints, because TRX1 is this box's
+// own radio and TRX2/3 are peers reached over TrxNet -- the split every
 // command in this file has to make.
 //
 // Returns whether anything was sent, so a caller can tell "refused" from
 // "done": an unconfigured OI3 slot has no route at all, and a caller that
 // assumed success would leave its own UI claiming a retune that never left.
-function tuneActiveTrx(hz, reqId) {
-  const trxNum = app.activeTrx;
+function tuneTrx(trxNum, hz, reqId) {
   const freqHz = Math.round(Number(hz) || 0);
-  if (!freqHz) return false;
+  if (!freqHz || (trxNum !== 1 && trxNum !== 2 && trxNum !== 3)) return false;
 
   if (trxNum === 2 && !app.trxOi3[1]) return false;   // TRX2 not configured
   if (trxNum === 3 && !app.trxOi3[2]) return false;   // TRX3 not configured
