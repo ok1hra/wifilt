@@ -716,6 +716,7 @@ uint32_t paTxLastMs = 0;   // when the last attempt was made
 
 // /pa-flags bits this file acts on (the palette documents all of them).
 #define PA_F_TUNE   0x0001
+#define PA_F_OPERATE 0x0002
 #define PA_F_TX     0x0004
 #define PA_F_ALARM  0x0008
 #define PA_F_ON     0x0100
@@ -2408,6 +2409,8 @@ void handlePaCmd(){
     else if (!paPeerActive(paPeerName))               err = "pa_absent";
     else if ((paState.flags & (PA_F_ON | PA_F_LINK)) != (PA_F_ON | PA_F_LINK))
                                                       err = "pa_off";
+    // Tuning is done in STANDBY only -- never with the amplifier in line.
+    else if (paState.flags & PA_F_OPERATE)            err = "pa_operate";
     // The radio in front of the amplifier, not TRX1: tunePlusAvailable() has
     // just made sure there is one. The amplifier's own TX bit too -- it sees
     // the PTT line whatever this interface can or cannot read from the radio.
@@ -2438,6 +2441,12 @@ void handlePaCmd(){
   }
   if (!paPeerActive(paPeerName)) {
     webServer.send(409, "application/json", "{\"error\":\"pa_absent\"}");
+    return;
+  }
+  // The bare TUNE key too: STANDBY only, the same rule as TUNE+. Judged on the
+  // last flags heard, which is what the palette greyed the button on as well.
+  if (bit == PA_CMD_TUNE && val == 1 && (paState.flags & PA_F_OPERATE)) {
+    webServer.send(409, "application/json", "{\"error\":\"pa_operate\"}");
     return;
   }
   // Switching the amplifier or its OPERATE state in the middle of a tune ends
@@ -8180,6 +8189,7 @@ void paTunePlusTick(void) {
   else if (keyerMoved)                            abortWhy = "The amplifier no longer follows the radio being keyed.";
   else if (!haveOi3)                              abortWhy = "The OI3 keyer is no longer set up.";
   else if (paState.flags & PA_F_ALARM)            abortWhy = "Amplifier ALARM.";
+  else if (paState.flags & PA_F_OPERATE)          abortWhy = "The amplifier went to OPERATE.";
   else if (!paPeerActive(paPeerName))             abortWhy = "The amplifier left the network.";
   else if (now - paState.lastRxMs > TP_PA_SILENT_MS)
                                                   abortWhy = "No telemetry from the amplifier.";

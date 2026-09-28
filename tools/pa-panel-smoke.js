@@ -797,14 +797,22 @@ const PAGE_SCRIPT = `
     await fetch("/set-cmd-404?v=0");
     await sleep(1600);
 
-    // ---- 11. TUNE is off where the amplifier would ignore it -------------
-    // Tuning runs at low power, so STANDBY is a perfectly ordinary place to do
-    // it from. An earlier version blocked it there and was wrong.
+    // ---- 11. TUNE only where it belongs -----------------------------------
+    // STANDBY only: the operator's rule since 2026-09-29. The tuning carrier is
+    // not meant to go through an amplifier in line.
     await setPa(base({flags:F.ON|F.LINK}));                  // STANDBY
-    check("TUNE works in STANDBY -- tuning runs at low power",
+    check("TUNE works in STANDBY",
       !$("paBtnTune").disabled, $("paBtnTune").title);
     await setPa(base({flags:F.ON|F.LINK|F.OPERATE}));
-    check("TUNE is available in OPERATE too", !$("paBtnTune").disabled);
+    check("TUNE is held in OPERATE", $("paBtnTune").disabled);
+    check("and says to go to STANDBY", /STANDBY to tune/.test($("paBtnTune").title),
+      $("paBtnTune").title);
+    await clearCommands();
+    $("paBtnTune").click();
+    await sleep(120);
+    check("and a click on it sends nothing", (await commandsSince()).length === 0,
+      JSON.stringify(await commandsSince()));
+    await setPa(base({flags:F.ON|F.LINK}));
     await clearCommands();
     $("paBtnTune").click();
     await sleep(150);
@@ -827,13 +835,13 @@ const PAGE_SCRIPT = `
     // log's own TRX, which section 18 keeps apart from it.
     await fetch("/set-tx?v=1");
     await sleep(900);
-    await setPa(base({flags:F.ON|F.LINK|F.OPERATE}));
+    await setPa(base({flags:F.ON|F.LINK}));
     check("TUNE is disabled while the radio is transmitting", $("paBtnTune").disabled);
     check("and says why, naming the radio rather than the amplifier",
       /radio is transmitting/.test($("paBtnTune").title), $("paBtnTune").title);
     await fetch("/set-tx?v=0");
     await sleep(900);
-    await setPa(base({flags:F.ON|F.LINK|F.OPERATE}));
+    await setPa(base({flags:F.ON|F.LINK}));
     check("and available again once it stops", !$("paBtnTune").disabled);
 
     // ---- 12. dragging, clamping and persistence --------------------------
@@ -1145,6 +1153,9 @@ const PAGE_SCRIPT = `
                       tp:{st:"fail", why:"The amplifier did not start tuning.", swr:0, ageMs:300}}));
     check("a failed tune says why", /did not start tuning/.test(txt("paNote")), txt("paNote"));
 
+    await setPa(base({flags:F.ON|F.LINK|F.OPERATE, trxLabel:"IC-7610", tunePlus:true, tp:idle}));
+    check("TUNE+ is held in OPERATE too", $("paBtnTune").disabled && txt("paBtnTune") === "TUNE+"
+      && /STANDBY to tune/.test($("paBtnTune").title), $("paBtnTune").title);
     await setPa(base({flags:F.LINK, trxLabel:"IC-7610", tunePlus:true, tp:idle}));
     check("TUNE+ is greyed out with the amplifier OFF", $("paBtnTune").disabled, $("paBtnTune").title);
     check("and says to switch it on", /ON first/.test($("paBtnTune").title), $("paBtnTune").title);

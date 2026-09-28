@@ -1191,7 +1191,7 @@ Four buttons, each showing the state it is in rather than the state it would mov
 | **OFF / ON** | mains power. Switching it **ON** also switches **the amplifier's radio's own antenna tuner off** (CI-V `1C 01 00`) — the amplifier's manual asks for it, and two tuners hunting on one line fight each other. That goes out at once, not after the seven seconds the amplifier takes to come up; if that radio cannot take it (it is on TrxNet, or not connected), or it is not known which radio it is, the line under the buttons says so. |
 | **STANDBY / OPERATE** | in line, or bypassed |
 | **PWR-L / PWR-H** | half or full power |
-| **TUNE** | runs the tuner. It works in STANDBY — tuning runs at low power — but **not while the amplifier's radio is keying**: the amplifier locks the whole RF path while TX is asserted. You provide the carrier yourself. |
+| **TUNE** | runs the tuner. **Only in STANDBY** — in OPERATE it is greyed out and the interface refuses it — and **not while the amplifier's radio is keying**: the amplifier locks the whole RF path while TX is asserted. You provide the carrier yourself. |
 | **TUNE+** | shown instead of TUNE when the whole tune can be done from here — see below. |
 
 #### TUNE+
@@ -1212,7 +1212,8 @@ same radio:
    filter and power it had. The line under the buttons says `Tuned — SWR 1.3`.
 
 It tunes **where the radio stands** — to tune a segment's centre, click it on the scale
-first. The amplifier's OPERATE/STANDBY state is left as it is.
+first. Like TUNE it is offered **only in STANDBY**, and switching the amplifier to OPERATE
+while it runs (from here or the front panel) ends the run.
 
 While it runs the button is yellow and is the **STOP** key — never greyed out, not even
 while the radio transmits (it is supposed to) or the amplifier drops off the network. Stop,

@@ -415,6 +415,7 @@
       delete pending[what];
       var e = r.body && r.body.error;
       note = e === 'pa_absent' ? 'Amplifier not on the network.'
+           : e === 'pa_operate' ? 'The amplifier is in OPERATE — switch it to STANDBY to tune.'
            : e === 'pa_unset'  ? 'No PA NET_ID set in SETUP.'
            : e                 ? 'Refused: ' + e
            : r.status === 404  ? 'This interface has no /pa/cmd — its firmware predates the PA panel.'
@@ -445,6 +446,7 @@
       var e = r.body && r.body.error;
       note = e === 'pa_off'         ? 'Switch the amplifier ON first.'
            : e === 'trx_tx'         ? 'The radio is transmitting.'
+           : e === 'pa_operate'     ? 'The amplifier is in OPERATE — switch it to STANDBY to tune.'
            : e === 'tp_busy'        ? 'A tune is already running.'
            : e === 'tp_unavailable' ? 'TUNE+ is not available: ' + tunePlusWhyText(state && state.tunePlusWhy)
            : e === 'pa_absent'      ? 'Amplifier not on the network.'
@@ -606,12 +608,16 @@
   // flowing, documented for precisely this case -- /s-on and /s-operate sent
   // together, with the amplifier taking about seven seconds to come up.
   //
-  // STANDBY is not a reason either: tuning runs at low power, so it is an
-  // ordinary place to tune from.
-  function whyDisabled(f, live, stale, needsQuietRadio) {
+  // TUNE (and TUNE+) has two more: a keyed radio, and OPERATE. Tuning is done
+  // in STANDBY only -- the operator's rule since 2026-09-29. An earlier version
+  // allowed it in both, reading "tuning runs at low power" as "any mode will
+  // do"; the tuning carrier is not meant to go through an amplifier in line.
+  function whyDisabled(f, live, stale, forTune) {
     if (!live)  return 'The amplifier is not on the network.';
-    if (needsQuietRadio && paTx())
+    if (forTune && paTx())
       return 'The radio is transmitting — the amplifier locks the RF path while TX is asserted.';
+    if (forTune && (f & F.OPERATE))
+      return 'The amplifier is in OPERATE — switch it to STANDBY to tune.';
     return '';
   }
 
@@ -787,10 +793,10 @@
            (f & F.OPERATE) ? 'st-op' : 'st-off', !!pending.operate, basicWhy, hint);
     setBtn('paBtnFull', pending.full ? '…' : ((f & F.FULL) ? 'PWR-H' : 'PWR-L'),
            (f & F.FULL) ? 'st-hi' : 'st-off', !!pending.full, basicWhy, hint);
-    // TUNE works in STANDBY -- tuning runs at low power. The one state where it
-    // genuinely cannot act is with the radio keying: the amplifier locks the
-    // whole RF path while TX is asserted (measured on the bench, flags stuck at
-    // 0x84 with no drive; only OPERATE / MODE / OFF / DISPLAY answered).
+    // TUNE only in STANDBY (see whyDisabled), and never with the radio keying:
+    // the amplifier locks the whole RF path while TX is asserted (measured on
+    // the bench, flags stuck at 0x84 with no drive; only OPERATE / MODE / OFF /
+    // DISPLAY answered).
     //
     // TUNE+ runs the whole tune (carrier from OI3, the amplifier's TUNE, the
     // radio put back) and while it runs this is its STOP key -- never greyed
