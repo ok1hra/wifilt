@@ -107,7 +107,7 @@
     return {v: SCHEMA_VERSION, toneHz: 1500, reverse: false,
             squelchDb: SQUELCH_DB_DEFAULT, usos: true, rfPercent: null, txPolarity: "normal",
             afcEnabled: false, afcRateHzPerChar: 60, afcMaxDeviationHz: 60,
-            secondDecoder: true, fskMarkHz: 2125};
+            secondDecoder: true, cleanText: false, fskMarkHz: 2125};
   }
 
   function normalize(input) {
@@ -153,6 +153,11 @@
       // squelchNewlineEnabled is simply not carried over: the tape's own
       // pause rule replaced that marker.
       secondDecoder: source.secondDecoder !== false,
+      // The CLEAN pill (2026-09-28): the RX log as plain text in decode order
+      // instead of the time tape (rtty-rxlog.js). One choice for the page and
+      // the QRPlog palette -- a way of reading, not a property of a window.
+      // Off unless explicitly on, so no store needs migrating.
+      cleanText: source.cleanText === true,
       // Not a range check like the others: only Icom's own three values mean
       // anything, and a fourth number would put the decoder somewhere the
       // radio's FSK modem never transmits -- silently, which is the class of

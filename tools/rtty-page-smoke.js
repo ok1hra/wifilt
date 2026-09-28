@@ -656,6 +656,129 @@ const PAGE_SCRIPT = `
     aimLog.destroy(); trimLog.destroy();
     aimEl.remove(); trimEl.remove();
 
+    // ---- 9c. CLEAN: plain text in decode order (2026-09-28) ------------------
+    // The tape places by time from the start of a burst, and with the squelch
+    // off noise never ends a burst: blanks nobody decoded, and characters
+    // dropped into old holes rows back. CLEAN writes each column in order.
+    const clEl = document.body.appendChild(document.createElement("div"));
+    clEl.className = "rtty-rx-log";
+    let clWord = null;
+    const cl = RttyRxLog.create({el: clEl, maxChars: 2000, columnChars: 20, clean: true,
+      onToken: w => { clWord = w; }});
+    // noise-like timing: 0.9-1.4 characters apart, never a pause
+    let clT = 50000, clSeed = 3;
+    const clNext = () => (clT += CS * (0.9 + 0.5 * ((clSeed = (clSeed * 69069 + 1) % 4294967296) / 4294967296)));
+    const noiseText = "QXZ\\r\\nKJ  WVBN\\nTRPLMQ\\r\\n\\r\\nFGHDKSLAQWE ZXCV";
+    const snapshots = [];
+    for (const ch of noiseText) { cl.pushChar(ch, {stream: 1, t: clNext()}); snapshots.push(cl.rowsText()); }
+    const neverRewritten = snapshots.every((rows, i) => i === 0 ||
+      snapshots[i - 1].slice(0, -1).every((r, k) => rows[k] && rows[k].dec1 === r.dec1));
+    check("CLEAN: irregular timing never rewrites a finished DEC 1 row", neverRewritten,
+      JSON.stringify(snapshots[snapshots.length - 1]));
+    check("CLEAN: DEC 1 is the decoded text, CR/LF and blank runs shown as one blank",
+      cl.rowsText().map(r => r.dec1).join("") === "QXZ KJ WVBN TRPLMQ FGHDKSLAQWE ZXCV",
+      JSON.stringify(cl.rowsText()));
+    cl.clear();
+    // DEC 2 beside DEC 1 by time, continuous inside the row, no amber marks
+    clT = 200000;
+    const clPut = (stream, text, t0) => Array.from(text).forEach((ch, i) =>
+      cl.pushChar(ch, {stream, t: t0 + i * CS * 1.07}));
+    clPut(1, "CQ TEST OK1HQA", clT);
+    clPut(2, "CQ TST OK1HRA", clT + CS * 0.4);
+    let clRows = cl.rowsText();
+    check("CLEAN: DEC 2 sits beside DEC 1 on the same row, without holes",
+      clRows.length === 1 && clRows[0].dec1 === "CQ TEST OK1HQA" && clRows[0].dec2 === "CQ TST OK1HRA",
+      JSON.stringify(clRows));
+    check("CLEAN: no amber marks", clEl.querySelectorAll(".rtty-diff").length === 0);
+    // DEC 1 fills its row; the next row starts; a late DEC 2 character from
+    // before that row began goes one row back -- DEC 1 there stays as it was.
+    clPut(1, " 5NN 15 AB", clT + CS * 15);
+    clRows = cl.rowsText();
+    const row0dec1 = clRows[0].dec1;
+    cl.pushChar("K", {stream: 2, t: clT + CS * 16});
+    clRows = cl.rowsText();
+    check("CLEAN: a late DEC 2 character goes one row back, DEC 1 untouched",
+      clRows.length === 2 && clRows[0].dec1 === row0dec1 && /K$/.test(clRows[0].dec2),
+      JSON.stringify(clRows));
+    // 2 s of silence in both columns: a new row under a rule
+    clPut(1, "DL2XYZ", clT + CS * 40 + 3 * 8000);
+    clRows = cl.rowsText();
+    check("CLEAN: a pause starts a new row under a rule",
+      clRows[clRows.length - 1].gap && clRows[clRows.length - 1].dec1 === "DL2XYZ", JSON.stringify(clRows));
+    cl.echoTx("TU 599");
+    clPut(1, "QRZ", clT + CS * 80);
+    clRows = cl.rowsText();
+    check("CLEAN: the echo is its own row, the next text after it",
+      clRows[clRows.length - 2].echo === "TU 599" && clRows[clRows.length - 1].dec1 === "QRZ",
+      JSON.stringify(clRows.slice(-2)));
+    const clTok = Array.from(clEl.querySelectorAll(".rtty-tape-s1 .rtty-tok"))
+      .find(n => n.textContent === "D");
+    if (clTok) clTok.click();
+    check("CLEAN: a click hands over the whole word, and the pause's rule ended the one before",
+      clWord === "DL2XYZ", String(clWord));
+    // back to the tape: the same events, laid out by time again
+    cl.setClean(false);
+    clRows = cl.rowsText();
+    check("CLEAN off: the tape is back, with its amber marks",
+      !clEl.classList.contains("rtty-tape-clean") && clEl.querySelectorAll(".rtty-diff").length > 0,
+      JSON.stringify(clRows.slice(0, 2)));
+    cl.setClean(true);
+    check("CLEAN on again: the history re-laid as text",
+      clEl.classList.contains("rtty-tape-clean") && cl.rowsText()[0].dec1 === "CQ TEST OK1HQA 5NN 1",
+      JSON.stringify(cl.rowsText()[0]));
+    cl.destroy(); clEl.remove();
+    // The scrollback trim drops rows from the top and leaves the rest alone.
+    const ctEl = document.body.appendChild(document.createElement("div"));
+    const ct = RttyRxLog.create({el: ctEl, maxChars: 200, columnChars: 20, clean: true, onToken: () => {}});
+    let ctT = 0;
+    const ctFeed = n => { for (let i = 0; i < n; i++) ct.pushChar(i % 5 === 4 ? " " : "E", {stream: 1, t: ctT += CS}); };
+    ctFeed(190);
+    const keptRow = ctEl.querySelector(".rtty-tape-body .rtty-tape-row:nth-last-child(2)");
+    const keptText = keptRow.textContent;
+    ctFeed(40);
+    check("CLEAN: a trim keeps the remaining rows' nodes and text",
+      keptRow.isConnected && keptRow.textContent === keptText && ct.rowsText().length < 12,
+      String(ct.rowsText().length));
+    ct.destroy(); ctEl.remove();
+    // The page's own pill, saved in the store the QRPlog palette shares.
+    check("the CLEAN pill starts off", !$("rttyRxClean").classList.contains("active") &&
+      !$("rttyRxLog").classList.contains("rtty-tape-clean"));
+    $("rttyRxClean").click();
+    await sleep(50);
+    check("CLEAN switches the page's RX log and is saved",
+      $("rttyRxClean").classList.contains("active") && $("rttyRxLog").classList.contains("rtty-tape-clean") &&
+        JSON.parse(localStorage.getItem("wifilt.data.rtty-settings")).cleanText === true);
+    check("and the click does not fold the RX section", $("rttyRxLog").closest("details").open);
+    // the palette turning it off in another document
+    const shared = JSON.parse(localStorage.getItem("wifilt.data.rtty-settings"));
+    shared.cleanText = false;
+    localStorage.setItem("wifilt.data.rtty-settings", JSON.stringify(shared));
+    window.dispatchEvent(new StorageEvent("storage", {key: "wifilt.data.rtty-settings"}));
+    await sleep(50);
+    check("the palette's choice reaches the open page",
+      !$("rttyRxClean").classList.contains("active") && !$("rttyRxLog").classList.contains("rtty-tape-clean"));
+    // The palette also writes the mark frequency the radio answered it. The
+    // page saves its own copy whole, so it has to take that over too, or its
+    // next unrelated save puts its old value back.
+    const markBefore = $("rttyFskMark").value;
+    const fromPalette = JSON.parse(localStorage.getItem("wifilt.data.rtty-settings"));
+    fromPalette.fskMarkHz = markBefore === "1275" ? 2125 : 1275;
+    localStorage.setItem("wifilt.data.rtty-settings", JSON.stringify(fromPalette));
+    window.dispatchEvent(new StorageEvent("storage", {key: "wifilt.data.rtty-settings"}));
+    await sleep(50);
+    check("the palette's mark frequency reaches the open page's SETTINGS",
+      $("rttyFskMark").value === String(fromPalette.fskMarkHz), $("rttyFskMark").value);
+    $("rttyRxClean").click();
+    $("rttyRxClean").click();
+    await sleep(50);
+    check("and the page's next save keeps it",
+      JSON.parse(localStorage.getItem("wifilt.data.rtty-settings")).fskMarkHz === fromPalette.fskMarkHz,
+      localStorage.getItem("wifilt.data.rtty-settings"));
+    fromPalette.fskMarkHz = Number(markBefore);
+    localStorage.setItem("wifilt.data.rtty-settings", JSON.stringify(fromPalette));
+    window.dispatchEvent(new StorageEvent("storage", {key: "wifilt.data.rtty-settings"}));
+    await sleep(50);
+
     // ---- 10. squelch in dB above the noise, USOS switch, v1 migration -----
     // The page booted from a v1 store with squelchThreshold 40 (a raw
     // magnitude). 40 dB would be a nonsense level on the new scale; the

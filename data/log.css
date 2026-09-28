@@ -2298,6 +2298,16 @@ body {
 .rtty-panel-zoom button.active {
   border-color: var(--cyan); background: #123430; color: var(--cyan);
 }
+/* CLEAN (RttySettings.cleanText, shared with the full page): a toggle in the
+   zoom pills' shape, lit the same way when on. Never shrinks -- in a narrow
+   bar the state text beside it gives way first. */
+.rtty-panel-clean {
+  border: 1px solid var(--line); border-radius: 999px; padding: 1px 5px; flex: none;
+  background: var(--panel2); color: var(--muted);
+  font: 700 9px/1.5 var(--font-mono); letter-spacing: .02em; cursor: pointer;
+}
+.rtty-panel-clean:hover { border-color: var(--muted); color: var(--text); }
+.rtty-panel-clean.active { border-color: var(--cyan); background: #123430; color: var(--cyan); }
 /* The only status this palette shows: without it a silent waterfall is
    ambiguous -- no signal, or no audio at all? Allowed to shrink and ellipsize:
    with the title, three zoom pills and the close button also in a 320 px bar,

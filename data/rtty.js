@@ -56,7 +56,7 @@
     "rttyReverse", "rttySquelch", "rttySnr",
     "waterfall", "waterfallCanvas", "spectrumSummary",
     "rttyScope", "rttyLiveSpectrum", "rttyScopeOverlay", "liveSpectrumCanvas",
-    "rttyRxLog", "rxSummary", "rttyRxClear",
+    "rttyRxLog", "rxSummary", "rttyRxClean", "rttyRxClear",
     "rttyTxText", "rttyTxAbort", "rttyTxState",
     "rttyStreamEnabled", "rttyStreamSubs",
     "rttySquelchInput", "rttySquelchLive", "rttySecondDecoder", "rttyUsos", "rttyToneInput", "settingsSummary",
@@ -609,6 +609,7 @@
     el: dom.rttyRxLog,
     maxChars: RX_LOG_MAX_CHARS,
     dual: settings.secondDecoder,
+    clean: settings.cleanText,
     onToken: word => {
       if (!dxcChannel) return;
       dxcChannel.postMessage({type: "dxc-tune", callsign: word,
@@ -658,6 +659,16 @@
     rxLog.clear();
     state.rxChars = 0;
     renderStatusPills();
+  }
+
+  // CLEAN pill (RX summary row): plain text in decode order instead of the
+  // time tape (rtty-rxlog.js). Shared with the QRPlog palette through the
+  // settings store, both ways.
+  function setCleanText(on) {
+    settings.cleanText = !!on;
+    rxLog.setClean(settings.cleanText);
+    dom.rttyRxClean.classList.toggle("active", settings.cleanText);
+    dom.rttyRxClean.setAttribute("aria-pressed", String(settings.cleanText));
   }
 
   // Tracks the most recent echo so a send that fails AFTER being echoed
@@ -1378,6 +1389,28 @@
     dom.rttyRxClear.addEventListener("click", event => {
       event.stopPropagation();
       clearRxLog();
+    });
+    dom.rttyRxClean.addEventListener("click", event => {
+      event.stopPropagation();
+      setCleanText(!settings.cleanText);
+      saveSettings();
+    });
+    setCleanText(settings.cleanText);
+    // The QRPlog palette writes two fields into the same store: cleanText (its
+    // CLEAN pill) and fskMarkHz (what the radio answered it). This page
+    // otherwise reads the store once and saves its own copy whole, so without
+    // taking both over here, the next unrelated save would undo them.
+    window.addEventListener("storage", event => {
+      if (event.key !== RttySettings.STORAGE_KEY) return;
+      const other = RttySettings.load(window.localStorage);
+      if (other.cleanText !== settings.cleanText) setCleanText(other.cleanText);
+      if (other.fskMarkHz !== settings.fskMarkHz) {
+        settings.fskMarkHz = other.fskMarkHz;
+        dom.rttyFskMark.value = String(other.fskMarkHz);
+        // as if chosen in the list: acted on now only while this page runs on
+        // the fallback rather than on its own reading of the radio
+        if (fskSync.active() && !fskSync.fromRadio()) fskSync.setMarkHz(other.fskMarkHz);
+      }
     });
 
     // Grilled 2026-08-29: this slider only ever sets the LEVEL, in dB above

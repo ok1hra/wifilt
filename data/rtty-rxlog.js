@@ -37,6 +37,32 @@
 // width (window resize, palette resize, DEC 2 on/off) re-lays the whole tape
 // out exactly rather than leaving old rows at the old width.
 //
+// CLEAN mode (grilled 2026-09-28, the CLEAN pill on the palette and the page).
+// The tape's slot = round((t - t0) / period) runs from the start of a burst,
+// and with the squelch off -- the palette's only setting -- noise keeps one
+// burst going for as long as the palette is open. A learnt period that moves
+// by a tenth of a percent then shifts every new slot by several positions:
+// forward leaves blanks that were never decoded, backward drops characters
+// into those holes rows back (measured on this code: none of it on a clean
+// signal, edits up to 3 rows back in noise). CLEAN does not place by time:
+//
+//  - DEC 1 is plain text, character after character in decode order -- the
+//    order the clickable words are built from, so what is on screen is what a
+//    click hands over. CR/LF show as a blank, runs of blanks as one. A row
+//    ends when either column is full; both then write only into the newest
+//    row, so DEC 1 never changes after the fact.
+//  - DEC 2 goes to the row its `t` falls in, written continuously inside it:
+//    the newest row, or the one before when the character was decoded before
+//    the newest row began. It never reaches further back. No amber marks --
+//    without slots there is nothing to compare position by position.
+//  - 2 s of silence in both columns starts a new row under a rule and ends
+//    the word in both, so the click agrees with the rule; this station's TX
+//    echo is its own row, as on the tape.
+//  - the scrollback trim drops whole rows from the top and re-lays nothing.
+//
+// The tape itself is left exactly as it was: switching re-lays the event list
+// in the other mode.
+//
 // Two deliberate differences from the code the first version replaced:
 //
 //  - the gradient endpoints arrive as parameters instead of being read from
@@ -95,6 +121,7 @@
   const CHAR_SAMPLES = 8000 / 45.45 * 7.5;
   const BURST_GAP_CHARS = 3;     // a pause this long ends a burst
   const MIN_COLUMN_CHARS = 8;
+  const CLEAN_PAUSE_SAMPLES = 2 * 8000;   // CLEAN mode: a new row after 2 s of silence
   // Holding the tape still while the operator aims at a word (see aimTouch()).
   const AIM_MS = 2000, AIM_GRACE_MS = 400;
 
@@ -129,6 +156,7 @@
   //   hotRgb      exceptionally-strong colour, default bright green
   //   floorDb/ceilDb/hotDb   |snrDb| mapped across the two ramps
   //   columnChars fixed column width in characters (tests); default: measured
+  //   clean       start in CLEAN mode (default false: the time tape)
   //   onToken(word, event)   a .rtty-tok was clicked
   function create(options) {
     const el = options.el;
@@ -146,6 +174,7 @@
     const onToken = options.onToken || (() => {});
     const fixedColumnChars = options.columnChars || 0;
     let dual = options.dual !== false;
+    let clean = options.clean === true;
 
     const rgbString = c => `rgb(${c[0]},${c[1]},${c[2]})`;
     const mix = (from, to, t) =>
@@ -228,11 +257,13 @@
         tok: [0, 0, 0],        // open token id per stream (0 = none)
         tokChars: new Map(),   // tokId -> string so far
         segmentBreak: false,   // set by an echo: the next burst starts a fresh row
+        lastAnyT: null,        // CLEAN: the newest character's t, either column
       };
     }
 
     function applyMode() {
       el.classList.toggle("rtty-tape-single", !dual);
+      el.classList.toggle("rtty-tape-clean", clean);
     }
 
     function rowFor(index, L) {
@@ -315,18 +346,63 @@
       if (d > 0.85 * CHAR_SAMPLES && d < 1.3 * CHAR_SAMPLES) L.period += (d - L.period) * 0.1;
     }
 
+    // The clickable word a character belongs to: a run of non-blank characters
+    // of one column in decode order -- the same in both modes, whatever the
+    // layout does with the characters.
+    function tokenFor(L, e) {
+      if (isBlankChar(e.ch)) { L.tok[e.s] = 0; return 0; }
+      if (!L.tok[e.s]) { L.tok[e.s] = nextTokId++; L.tokChars.set(L.tok[e.s], ""); }
+      const tok = L.tok[e.s];
+      L.tokChars.set(tok, L.tokChars.get(tok) + e.ch);
+      return tok;
+    }
+
     function applyChar(L, e) {
       learnPeriod(L, e.s, e.t);
       const {row, col} = placeChar(L, e.s, e.t);
-      let tok = 0;
-      if (isBlankChar(e.ch)) {
-        L.tok[e.s] = 0;
-      } else {
-        if (!L.tok[e.s]) { L.tok[e.s] = nextTokId++; L.tokChars.set(L.tok[e.s], ""); }
-        tok = L.tok[e.s];
-        L.tokChars.set(tok, L.tokChars.get(tok) + e.ch);
-      }
+      const tok = tokenFor(L, e);
       row.slots[e.s][col] = {ch: e.ch, snr: e.snr, tok};
+      e.row = row.index;
+      return row;
+    }
+
+    // CLEAN mode: the row a character is written into (see the header). New
+    // rows are opened here only for a character that will be drawn.
+    function cleanNewRow(L, t, gap) {
+      const row = rowFor(L.lastRow + 1, L);
+      row.t0 = t;
+      if (gap) markGap(row);
+      L.segmentBreak = false;
+      return row;
+    }
+
+    function applyCharClean(L, e) {
+      const pause = L.lastAnyT !== null && e.t - L.lastAnyT > CLEAN_PAUSE_SAMPLES;
+      // The pause's rule separates words on screen, so it ends them for the
+      // click too -- "AB", silence, "DL2XYZ" is two words here, not ABDL2XYZ.
+      if (pause) L.tok = [0, 0, 0];
+      const tok = tokenFor(L, e);
+      const blank = !tok;
+      if (L.lastAnyT === null || e.t > L.lastAnyT) L.lastAnyT = e.t;
+      const cur = L.lastRow >= 0 ? L.byIndex.get(L.lastRow) : null;
+      const fresh = !cur || cur.echo || L.segmentBreak || pause;
+      let row = fresh ? null : cur;
+      if (row && e.s === 2 && e.t < row.t0) {
+        const prev = L.byIndex.get(row.index - 1);
+        if (prev && !prev.echo && !row.gap && prev.slots[2].length < columnChars) row = prev;
+      }
+      if (row && row.slots[e.s].length >= columnChars) row = null;   // full: a new row
+      if (blank) {
+        // A blank ends the word and is drawn once, between two words: never at
+        // the start of a row, never twice in a row, never opening a row.
+        e.row = row ? row.index : L.lastRow;
+        const slots = row ? row.slots[e.s] : null;
+        if (!slots || !slots.length || isBlankChar(slots[slots.length - 1].ch)) return null;
+        slots.push({ch: " ", snr: e.snr, tok: 0});
+        return row;
+      }
+      if (!row) row = cleanNewRow(L, e.t, pause && cur && !cur.echo);
+      row.slots[e.s].push({ch: e.ch, snr: e.snr, tok});
       e.row = row.index;
       return row;
     }
@@ -424,7 +500,8 @@
         const blank = !slot || isBlankChar(slot.ch);
         const otherSlot = other[i] && !other[i].shift ? other[i] : null;
         const otherBlank = !otherSlot || isBlankChar(otherSlot.ch);
-        const differs = dual && s === 2 && (blank !== otherBlank || (!blank && slot.ch !== otherSlot.ch));
+        const differs = dual && !clean && s === 2 &&
+          (blank !== otherBlank || (!blank && slot.ch !== otherSlot.ch));
         const tok = !blank && slot.tok ? slot.tok : 0;
         const color = blank ? null : colorForSnr(slot.snr);
         const key = (blank ? " " : slot.ch) + "|" + differs + "|" + color + "|" + tok;
@@ -442,6 +519,11 @@
 
     function renderRow(row) {
       if (row.echo) return;
+      if (clean) {   // each column is its own continuous text
+        renderCell(row, 1, row.slots[1].map((_, i) => i));
+        renderCell(row, 2, row.slots[2].map((_, i) => i));
+        return;
+      }
       const visible = visibleSlots(row.slots[1], dual ? row.slots[2] : []);
       renderCell(row, 1, visible);
       renderCell(row, 2, visible);
@@ -515,8 +597,8 @@
       layout = freshLayout();
       applyMode();
       for (const e of events) {
-        if (e.kind === "c") applyChar(layout, e);
-        else if (e.kind === "s") applyShift(layout, e);
+        if (e.kind === "c") (clean ? applyCharClean : applyChar)(layout, e);
+        else if (e.kind === "s") { if (clean) e.row = layout.lastRow; else applyShift(layout, e); }
         else applyEcho(layout, e);
       }
       layout.rows.forEach(renderRow);
@@ -538,7 +620,15 @@
       }
       events = events.filter(e => e.row > cutRow);
       charCount = events.filter(e => e.kind === "c").length;
-      relayout();
+      if (!clean) { relayout(); return; }
+      // CLEAN: the rows below the cut stay exactly as they are
+      while (layout.rows.length && layout.rows[0].index <= cutRow) {
+        const row = layout.rows.shift();
+        layout.byIndex.delete(row.index);
+        if (row.echo) (row.echo.timers || []).forEach(clearTimeout);
+        body.removeChild(row.el);
+      }
+      scrollToEnd();
     }
 
     function pushChar(ch, meta) {
@@ -550,8 +640,8 @@
       if (!layout) ensureLayout();
       events.push(e);
       charCount++;
-      const row = applyChar(layout, e);
-      renderRow(row);
+      const row = clean ? applyCharClean(layout, e) : applyChar(layout, e);
+      if (row) renderRow(row);
       // a trim re-lays the whole tape: not under a word being aimed at
       if (charCount > maxChars && !aiming()) trim();
       scrollToEnd();
@@ -565,7 +655,9 @@
       if (!layout) ensureLayout();
       const e = {kind: "s", s, t: meta.t};
       events.push(e);
-      renderRow(applyShift(layout, e));
+      // CLEAN has no slots for a shift's air time; kept for the tape's sake
+      if (clean) e.row = layout.lastRow;
+      else renderRow(applyShift(layout, e));
     }
 
     // This station's own sent text, echoed into the log like a monitor -- NOT
@@ -623,6 +715,14 @@
       ensureLayout();
     }
 
+    // The CLEAN pill: the whole history re-laid in the other mode.
+    function setClean(on) {
+      if (clean === !!on) return;
+      clean = !!on;
+      applyMode();
+      if (layout) relayout();
+    }
+
     const onClick = event => {
       const token = event.target.closest(".rtty-tok");
       if (!token) return;
@@ -678,7 +778,8 @@
     }
 
     return {
-      pushChar, pushShift, clear, echoTx, markEchoFailed, setDual, destroy,
+      pushChar, pushShift, clear, echoTx, markEchoFailed, setDual, setClean, destroy,
+      clean: () => clean,
       lastEcho: () => lastEcho,
       forgetEcho: () => { lastEcho = null; },
       columnChars: () => columnChars,

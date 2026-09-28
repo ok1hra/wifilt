@@ -136,6 +136,8 @@ body.radio-transmitting .rtty-scope::after {
   font-weight: 700; letter-spacing: .03em; cursor: pointer;
 }
 .rtty-clear-pill:hover { border-color: var(--muted); color: var(--text); }
+/* CLEAN: a toggle in CLEAR's shape, lit like an active zoom pill when on. */
+.rtty-clean-pill.active { border-color: var(--cyan); background: #123430; color: var(--cyan); }
 
 /* ---- RX log: append-only, click-to-tune-QRPlog tokens (kap.5), same
    "scrolling log" shape as data.html's #binTransferLog. ---- */

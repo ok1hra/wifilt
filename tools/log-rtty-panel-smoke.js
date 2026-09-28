@@ -638,6 +638,32 @@ const PAGE_SCRIPT = `
       check("and back on, two columns again",
         !$("rttyPanelRx").classList.contains("rtty-tape-single"));
     }
+    // CLEAN (2026-09-28): the header pill, shared with the full page through
+    // RttySettings.cleanText. The layout itself is tested in rtty-page-smoke.js.
+    {
+      const pill = $("rttyPanelClean"), rx = $("rttyPanelRx");
+      const head = $("rttyPanelHead");
+      check("the CLEAN pill sits in the header and starts off",
+        !!pill && head.contains(pill) && !pill.classList.contains("active") &&
+          !rx.classList.contains("rtty-tape-clean"));
+      const focusedBefore = document.activeElement;
+      pill.dispatchEvent(new MouseEvent("mousedown", {bubbles: true, cancelable: true}));
+      pill.click();
+      await sleep(50);
+      check("clicking it switches the palette's RX log to clean text and saves it",
+        pill.classList.contains("active") && rx.classList.contains("rtty-tape-clean") &&
+          JSON.parse(localStorage.getItem("wifilt.data.rtty-settings")).cleanText === true);
+      check("the press leaves the caret where it was", document.activeElement === focusedBefore);
+      const pr = pill.getBoundingClientRect(), hr = head.getBoundingClientRect();
+      check("the pill fits inside the header", pr.right <= hr.right && pr.left >= hr.left,
+        pr.left + "-" + pr.right + " in " + hr.left + "-" + hr.right);
+      const st = JSON.parse(localStorage.getItem("wifilt.data.rtty-settings"));
+      localStorage.setItem("wifilt.data.rtty-settings", JSON.stringify(Object.assign({}, st, {cleanText: false})));
+      window.dispatchEvent(new StorageEvent("storage", {key: "wifilt.data.rtty-settings"}));
+      await sleep(120);
+      check("the full page turning CLEAN off reaches the palette",
+        !pill.classList.contains("active") && !rx.classList.contains("rtty-tape-clean"));
+    }
     // Width: dragged wider for the two columns, never below 320, remembered.
     {
       const panelEl = $("rttyPanel");

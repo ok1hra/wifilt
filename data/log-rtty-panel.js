@@ -219,7 +219,10 @@
   // The same wifilt.data.rtty-settings store rtty.html writes. Read at open and
   // followed live: `storage` fires in THIS document when another tab writes, so
   // changing the tone or squelch on the full page lands here without a reload.
-  // This palette never writes them -- it has no settings UI by design.
+  // This palette writes only two of them: the radio's mark frequency (a fact,
+  // see onMarkRead) and cleanText, its CLEAN pill -- one choice shared with the
+  // full page. The page takes both over through the same storage event
+  // (rtty.js), or its next save of its own copy would undo them.
   //
   // TWO objects, since 2026-09-10. `stored` is that shared store verbatim.
   // `effective` is what this palette's decoder, waterfall overlay and AFC
@@ -269,6 +272,12 @@
       }
       dec2On = !!effective.secondDecoder;
       rxLog.setDual(dec2On);
+      rxLog.setClean(!!stored.cleanText);
+    }
+    var cleanPill = el && document.getElementById('rttyPanelClean');
+    if (cleanPill) {
+      cleanPill.classList.toggle('active', !!stored.cleanText);
+      cleanPill.setAttribute('aria-pressed', String(!!stored.cleanText));
     }
     if (scope) scope.drawOverlay();
     renderState();
@@ -560,6 +569,7 @@
       // carries the dark ones the full page uses.
       floorRgb: RttyRxLog.floorRgbFrom(el),
       dual: dec2On,
+      clean: !!stored.cleanText,
       onToken: onTokenClicked
     });
 
@@ -957,6 +967,12 @@
           '<button type="button" data-zoom="200">200%</button>' +
           '<button type="button" data-zoom="400">400%</button>' +
         '</span>' +
+        // CLEAN, shared with the full page (RttySettings.cleanText): the RX log
+        // as plain text in decode order instead of the time tape.
+        '<button class="rtty-panel-clean" id="rttyPanelClean" type="button" aria-pressed="false" ' +
+          'title="Clean text: each decoder\'s characters in the order decoded, no time slots -- ' +
+          'what you see is what a click takes. Off: the time-aligned tape. Shared with the RTTY page.">' +
+          'CLEAN</button>' +
         '<span class="rtty-panel-state" id="rttyPanelState"></span>' +
         // Right-aligned beside the close button; hidden in RUN (S&P only).
         '<button class="rtty-panel-autotune" id="rttyPanelAutotune" type="button" hidden>' +
@@ -1007,6 +1023,11 @@
     document.getElementById('rttyPanelZoom').addEventListener('click', function (e) {
       var pill = e.target.closest('button');
       if (pill) applyZoom(Number(pill.dataset.zoom));
+    });
+    document.getElementById('rttyPanelClean').addEventListener('click', function () {
+      stored.cleanText = !stored.cleanText;
+      stored = RttySettings.save(localStorage, stored);
+      applyEffective();
     });
 
     buildEngine();
