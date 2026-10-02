@@ -652,8 +652,10 @@ f.onload=()=>{
       // clear -- and say which one is not.
       checks.js8CalRefusesUntilItMay=(()=>{
         const target=d.querySelector('#calField .cal-target').textContent;
-        const disabled=d.querySelector('#calField #calStart').disabled;
-        return disabled===true&&target.length>0;
+        // Refusing is either: disabled (any other gate), or blocked by the pledge
+        // alone -- clickable, but the click only explains (tx-pledge.js).
+        const start=d.querySelector('#calField #calStart');
+        return (start.disabled===true||start.hasAttribute('data-pledge-blocked'))&&target.length>0;
       })();
       // The batch plan, on the page that is not WSPR. The sequencer itself is
       // exhausted in tools/tx-gain-plan-smoke.js and the whole run in
@@ -2384,8 +2386,28 @@ f.onload=()=>{
           // A position beacon transmits, so the master TX switch locks it exactly
           // like HB. Checked before the ready assertion, and restored right after.
           d.querySelector('#txSafety').checked=false;change('#txSafety');
-          checks.gpsNeedsTxEnabled=gpsBtn.disabled&&gpsBtn.title.includes('Enable radio TX')&&
-            d.querySelector('#heartbeatButton').disabled;
+          // Blocked by the pledge alone, both stay clickable and marked -- the
+          // refusal is shown on click instead of hidden in a title (tx-pledge.js).
+          checks.gpsNeedsTxEnabled=gpsBtn.hasAttribute('data-pledge-blocked')&&
+            gpsBtn.title.includes('Enable radio TX')&&
+            d.querySelector('#heartbeatButton').hasAttribute('data-pledge-blocked');
+          // And the click must transmit nothing: the button's own handler never
+          // runs (a spy on it stays silent), and the toast says why.
+          {
+            const hb=d.querySelector('#heartbeatButton');
+            let hbHandlerRan=false;
+            const spy=()=>{hbHandlerRan=true;};
+            hb.addEventListener('click',spy);
+            hb.click();
+            hb.removeEventListener('click',spy);
+            const toast=d.querySelector('.tx-pledge-toast');
+            checks.pledgeClickSendsNothing=!hbHandlerRan&&Boolean(toast)&&!toast.hidden&&
+              toast.textContent.includes('not enabled');
+            d.querySelector('#settingsSection, [data-section="settings"]')&&
+              (d.querySelector('[data-section="settings"]').open=false);
+            toast.querySelector('button').click();
+            checks.pledgeGoToSettingOpensIt=d.querySelector('#txSafety').closest('details').open===true;
+          }
           d.querySelector('#txSafety').checked=true;change('#txSafety');
           checks.gpsButtonReady=!gpsBtn.hidden&&!gpsBtn.disabled&&
             d.querySelector('#gpsBeaconGrid').textContent==='JO60WC';

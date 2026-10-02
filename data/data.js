@@ -2497,6 +2497,15 @@ function renderStartup() {
   if(!pending)requestAnimationFrame(resizeWaterfall);
 }
 
+// A TX button blocked ONLY by the missing "Enable radio TX" stays clickable and
+// answers with a toast instead of transmitting (tx-pledge.js); every other block
+// still disables it.
+function gateTxButton(button,reasons) {
+  if(window.TxPledge)return TxPledge.gate(button,reasons);
+  button.disabled=reasons.length>0;
+  return reasons.length>0;
+}
+
 function txBlockReasons(needsRecipient,allowFileTransfer=false) {
   const js8=currentJs8(), connected=state.radio.connected && state.radio.transceiverType === "ICOM-LAN";
   const busy=!['idle','completed','aborted','fault'].includes(state.txStatus);
@@ -2996,7 +3005,11 @@ function onFlagRowClick(event,flags) {
   // survive the operator turning to something else and coming back.
   if(flag.key!=="TX")cancelTxConfirm();
   const js8=currentJs8();
-  if(flag.needsTx===true && js8.txSafetyAccepted!==true){revealSetting(dom.txSafety);return;}
+  if(flag.needsTx===true && js8.txSafetyAccepted!==true){
+    revealSetting(dom.txSafety);
+    if(window.TxPledge)TxPledge.show();
+    return;
+  }
   flag.toggle(js8);
   renderControls();
 }
@@ -3077,7 +3090,7 @@ function renderControls() {
   }
   renderSendHint(aprsDraft);
   renderViaRoutes();
-  dom.send.disabled=txBlocks.length>0; dom.send.title=txBlocks.join("; ");
+  gateTxButton(dom.send,txBlocks); dom.send.title=txBlocks.join("; ");
   // SEND LATER only needs a message and a real station -- deliberately NOT the
   // TX gates, because parking mail is what you do when you cannot transmit to
   // that station now. It refuses a group, since a group never shows up.
@@ -3100,10 +3113,10 @@ function renderControls() {
         ?`Hold this message and park it at ${state.viaRoute.via} when that station shows up`
         :`Hold this message and send it when ${target} shows up on the band`;
   }
-  dom.heartbeat.disabled=heartbeatBlocks.length>0; dom.heartbeat.title=heartbeatBlocks.join("; ");
+  gateTxButton(dom.heartbeat,heartbeatBlocks); dom.heartbeat.title=heartbeatBlocks.join("; ");
   dom.heartbeatOffset.textContent=`${js8.txOffsetHz} Hz`;
   renderGpsButton(heartbeatBlocks);
-  dom.tune.disabled=!state.tuneActive && tuneBlocks.length>0;
+  gateTxButton(dom.tune,state.tuneActive?[]:tuneBlocks);
   dom.tune.title=state.tuneActive ? "Stop tuning carrier" : tuneBlocks.join("; ");
   dom.tune.classList.toggle("active",state.tuneActive);
   dom.tuneLabel.textContent=state.tuneActive?"STOP":"TUNE";
@@ -8077,7 +8090,7 @@ function renderGpsButton(txBlocks=txBlockReasons(false)) {
   // as HB -- "Enable radio TX" above all. Without this the button invited a click
   // that the submit path would then refuse, which is a worse way to say no.
   reasons.push(...txBlocks);
-  dom.gpsBeacon.disabled=!gpsTrack.enabled&&reasons.length>0;
+  gateTxButton(dom.gpsBeacon,gpsTrack.enabled?[]:reasons);
   dom.gpsBeacon.title=gpsTrack.enabled
     ?(reasons.length?`Tracking on but paused: ${reasons.join("; ")} — click to turn off`
       :"Tracking on — beacons @APRSIS GRID when the first 6 locator characters change (at most every 10 min). Click to turn off.")
@@ -8940,6 +8953,7 @@ async function init() {
   // The takeover button lives inside the lock-out panel, so bindings come first
   // and the gate second -- otherwise a locked-out page has no way back in.
   bind();
+  if(window.TxPledge)TxPledge.install(()=>revealSetting(dom.txSafety));
   if(!await acquireJs8Session())return;
   populateModes(); loadTxModule();
   await syncStationIdentity();

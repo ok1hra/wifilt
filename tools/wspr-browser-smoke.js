@@ -976,7 +976,24 @@ addEventListener("unhandledrejection", event => {
     check("the TX pledge blocks the beacon",
           globalThis.__wspr.blockingReason().includes("Enable radio TX"),
           globalThis.__wspr.blockingReason());
-    check("TUNE is locked until the pledge is accepted", $("tuneButton").disabled);
+    // Blocked by the pledge ALONE, TUNE stays clickable (dimmed) so the refusal
+    // can be seen: a disabled button with the reason in its title was invisible on
+    // a tablet and operators went hunting for the switch. The click must still
+    // transmit nothing.
+    check("TUNE is pledge-blocked: clickable, marked",
+          !$("tuneButton").disabled && $("tuneButton").hasAttribute("data-pledge-blocked"));
+    $("tuneButton").click();
+    await sleep(100);
+    check("clicking a pledge-blocked TUNE does not tune",
+          globalThis.__wspr.state.beacon === "stopped" && $("tuneButton").textContent === "TUNE",
+          globalThis.__wspr.state.beacon);
+    const pledgeToast = document.querySelector(".tx-pledge-toast");
+    check("the refusal says why, in sight", Boolean(pledgeToast) && !pledgeToast.hidden
+          && /not enabled/.test(pledgeToast.textContent));
+    $("txSafety").closest("details").open = false;
+    pledgeToast.querySelector("button").click();
+    check("GO TO SETTING opens the switch on this page",
+          $("txSafety").closest("details").open === true);
     $("txSafety").click();
     check("the pledge lands in the shared Js8Settings blob",
           (JSON.parse(localStorage.getItem("wifilt.data.js8-settings")) || {})

@@ -1783,8 +1783,13 @@ filling as the slot runs — and the quick controls:
 **TUNE turns into STOP** while the carrier is up, and **GPS glows red** while position
 tracking is armed.
 
-*Enable radio TX* is the reason these buttons are greyed out most often, but not the only
-one. Transmission is also refused while a calibration or a calibration plan is running, while
+When *Enable radio TX* is the **only** thing in the way, the buttons are not greyed out but
+dimmed, and they still answer a tap: nothing is transmitted, and a notice says *Nothing was
+sent: radio TX is not enabled in SETTINGS* with a **GO TO SETTING** button that opens the
+switch right here on the page (the modem keeps running). The same holds for TUNE, START and
+the calibration on the WSPR page.
+
+It is not the only reason a button can be greyed out. Transmission is also refused while a calibration or a calibration plan is running, while
 another transmission is in progress, when ICOM-LAN is offline, when the radio's own PTT is
 down, when the mode is neither USB nor USB-D, while the encoder or decoder is still loading,
 before the audio timebase has locked, when no callsign is set, and during a file transfer.
@@ -1949,9 +1954,9 @@ current 6-character square. The button unlocks only while the position is **curr
 fix's UTC stamp is still moving — a test that works whatever the browser's own clock says —
 and the radio's **GPS Select** is set to GPS. A position entered manually in the radio
 shows in the navigation bar but never unlocks the button. On top of that it is a
-transmission like any other, so **every condition that greys out HB greys out GPS too** —
-*Enable radio TX* first among them. Hover it and the tooltip names whichever reason keeps
-it locked.
+transmission like any other, so **every condition that greys out HB greys out GPS too**.
+Hover it and the tooltip names whichever reason keeps it locked; when that is only
+*Enable radio TX*, it is dimmed instead and a tap says so.
 
 Pressing it opens this same GRID window, pre-filled with the live **8-character** locator,
 and its confirm button — **Send**, not Insert — transmits immediately, through the same
@@ -2682,7 +2687,7 @@ anything — it opens SETTINGS at whatever is missing.**
 | **TRX RF power** | percent, with the watts shown beside it and a **SET** button. Written to the radio when the page opens and after the link returns. **Turning the knob on the radio stops that until the next SET.** Needs *Enable radio TX*. |
 | **TX audio gain** | 0.1–0.8. The line under it says what is actually in force — the measured value for this band and power, or the manual one with the reason. Shared with the WSPR beacon: one modulator input, one level. |
 | *(calibration panel)* | the automatic gain measurement, identical to the one on the WSPR page — [section 7.8](#78-tx-audio-gain-and-cal-plan) |
-| **Enable radio TX** | **the master switch.** Off, and nothing transmits: HB, TUNE, auto-reply, heartbeats, CQ repeat and the calibration are all disabled, and their markers in the header go grey. The tickbox carries the pledge *"I will use safe RF power and a suitable load/antenna."* |
+| **Enable radio TX** | **the master switch.** Off, and nothing transmits: HB, TUNE, auto-reply, heartbeats, CQ repeat and the calibration all refuse (a tap on SEND, HB, TUNE, GPS or a pill shows why and offers **GO TO SETTING**), and their markers in the header go grey. The tickbox carries the pledge *"I will use safe RF power and a suitable load/antenna."* |
 | **INFO answer** | up to 40 characters, e.g. `50W VERT` |
 | **STATUS answer** | a menu — see [What the station answers to STATUS?](#what-the-station-answers-to-status) |
 | **Answer queries automatically** · **Unattended for** · **Repeat CQ** · **My groups** · **Send heartbeats** · **Heartbeat every** · **Acknowledge heartbeats** | see [section 5.13](#513-unattended-operation) |

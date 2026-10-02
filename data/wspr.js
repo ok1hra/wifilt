@@ -1884,6 +1884,25 @@
 
   // Everything that must be true before this page may key the transmitter at
   // all, whether for a beacon slot or a tune carrier.
+  function gateTx(button, reasons) {
+    const items = reasons.filter(Boolean);
+    if (window.TxPledge) return TxPledge.gate(button, items);
+    button.disabled = items.length > 0;
+    return items.length > 0;
+  }
+
+  // Where GO TO SETTING lands: the Enable radio TX row, opened and lit up.
+  function revealTxSafety() {
+    const field = dom.txSafety;
+    if (!field) return;
+    const section = field.closest("details");
+    if (section) section.open = true;
+    const row = field.closest("label") || field;
+    row.scrollIntoView({behavior: "smooth", block: "center"});
+    row.classList.add("setting-reveal");
+    setTimeout(() => row.classList.remove("setting-reveal"), 2000);
+  }
+
   function radioBlockingReason() {
     if (!isLan()) return "the primary radio is not on the ICOM-LAN transport";
     if (!state.radio.connected) return "the radio is not connected";
@@ -2147,10 +2166,15 @@
     const beaconRunning = state.beacon !== "stopped" && !tuning;
     // The two buttons key the same transmitter, so each one locks the other out
     // rather than letting a tune carrier collide with a scheduled slot.
-    dom.startStop.disabled = tuning || (!beaconRunning && Boolean(problem));
+    // Blocked by the pledge alone, START and TUNE stay clickable and answer with
+    // a toast (tx-pledge.js); any other reason disables them as before.
+    if (tuning) dom.startStop.disabled = true;
+    else gateTx(dom.startStop, beaconRunning ? [] : [problem]);
     dom.startStop.textContent = beaconRunning ? "STOP" : "START";
     dom.startStop.classList.toggle("running", beaconRunning);
-    dom.tuneButton.disabled = !tuning && (beaconRunning || Boolean(radioBlockingReason()));
+    if (tuning) gateTx(dom.tuneButton, []);
+    else if (beaconRunning) gateTx(dom.tuneButton, ["the beacon owns the radio"]);
+    else gateTx(dom.tuneButton, [radioBlockingReason()]);
     dom.tuneButton.textContent = tuning ? "STOP" : "TUNE";
     dom.tuneButton.classList.toggle("running", tuning);
     dom.beaconState.textContent = state.beacon;
@@ -2444,6 +2468,7 @@
       render();
     });
     window.addEventListener("resize", () => waterfall.resize());
+    if (window.TxPledge) TxPledge.install(revealTxSafety);
     dom.txSafety.addEventListener("change", () => {
       saveShared({txSafetyAccepted: dom.txSafety.checked});
       render();

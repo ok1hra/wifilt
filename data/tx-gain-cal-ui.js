@@ -496,7 +496,11 @@
           (stored ? ` (previous knee ${stored.knee})` : " (never calibrated)")
         : problem || "";
       this.dom.start.textContent = this.running ? "STOP" : "START CALIBRATION";
-      this.dom.start.disabled = !this.running && Boolean(problem);
+      // Blocked by the pledge alone, START stays clickable and explains itself
+      // (tx-pledge.js); any other reason disables it as before.
+      const pledge = typeof globalThis !== "undefined" ? globalThis.TxPledge : null;
+      if (pledge) pledge.gate(this.dom.start, this.running ? [] : [problem]);
+      else this.dom.start.disabled = !this.running && Boolean(problem);
 
       this.dom.live.hidden = !this.running;
       if (this.running && this.cal) {
