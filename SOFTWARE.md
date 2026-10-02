@@ -2654,6 +2654,13 @@ job list that outgrows it would quietly stop being shared between browsers.
 
 ![Settings](img/js8call-settings.png)
 
+The section opens with what a first QSO needs and nothing else: **From SETUP** (callsign,
+grid and the radio, with the link to change them) and **Transmit** — *TRX RF power*, *TX
+audio gain* with the calibration, and *Enable radio TX*. Everything else — the automatic
+answers, unattended operation, beep, CQ repeat, groups, heartbeats, APRS-IS, decode speeds
+and timing — is folded under **ADVANCED**, which this browser remembers open or closed.
+Any place that sends you to one of those fields opens the fold for you.
+
 The collapsed header carries small pills showing which functions are currently active, so
 you can see the station's posture without opening the section — **and they are the switches
 as well.** This section is long, and stopping a station that is transmitting, or putting the
@@ -2997,6 +3004,11 @@ macros build the whole exchange for you — [section 3.5](#35-cw-and-rtty-macros
 
 ### 6.6 SETTINGS
 
+On top: **TRX RF power** and **FSK output** (plus its NET_ID), and a pointer to **CAL PLAN**
+for the AFSK audio level. The decoder's tuning — TX polarity, squelch level, second decoder,
+USOS, default tone, AFC — and the FSK mark and the TrxNet text stream are folded under
+**ADVANCED**, remembered per browser.
+
 | Field | Meaning |
 |---|---|
 | **TX polarity** | `Normal` / `Reverse` — what this station's own AFSK transmits. Independent of the RX-only NORMAL/REVERSE pill in the header. |
@@ -3249,6 +3261,10 @@ Each band waits at least six minutes, and frequency and mode are confirmed betwe
 
 ![WSPR settings](img/wspr-settings.png)
 
+**From SETUP** and **Transmit** (power, TX audio gain, Enable radio TX) are on top; clock
+correction, the radio model override and the TUNE power references are folded under
+**ADVANCED**, remembered per browser.
+
 | Setting | Meaning |
 |---|---|
 | **My callsign** / **My locator** | shown, not editable — change them in SETUP. The line beside the locator says what will actually be transmitted: **WSPR type 1 carries four characters**, so `JO70FD` goes out as `JO70`. |
@@ -3460,6 +3476,9 @@ the generic "session busy" panel JS8/WSPR use — it names the file and its prog
 
 ### 8.8 SETTINGS
 
+**Power** is on top, with a pointer to CAL PLAN (Mercury's own calibration); the retries,
+timing, mode ceiling and transfer size are folded under **ADVANCED**.
+
 Everything here lives on the interface itself, not this browser — every device sees the same
 values — and is picked up **only at the start of the next CALL or LISTEN session**, never
 mid-transfer. The section locks while a session is already running.
@@ -3482,9 +3501,16 @@ into the fields but does not save them until SAVE is pressed.
 
 **`/setup`**
 
-The five guided steps are described in [chapter 2](#2-first-run). This chapter is the
+The six guided steps are described in [chapter 2](#2-first-run). This chapter is the
 reference for the sections themselves — the full editors that sit inside and below the
 steps.
+
+Below the steps the page has two groups. **Calibration and modes** holds the TX audio gain
+overview ([section 9.6](#96-tx-audio-gain)) and buttons that open the SETTINGS of each mode
+page — JS8, WSPR, RTTY, Mercury — directly (`/data.html#settings` and so on): settings every
+mode shares live here, each mode's own settings live on its page. **Advanced — not needed
+for a first QSO** holds DX Cluster, TrxNet, LOG and the remote management of unattended
+operation.
 
 Each section carries a badge saying where its values live:
 

@@ -8,7 +8,7 @@
      gate-card) so the four cannot drift apart; rtty.css carries only what is
      genuinely RTTY's, same split as wspr.css/mercury.css.
      docs/rtty-implementace.md -- grilled 2026-08-27. -->
-<link rel="stylesheet" href="/data.css?v=8e737d99">
+<link rel="stylesheet" href="/data.css?v=4a642c91">
 <link rel="stylesheet" href="/rtty.css?v=8a9de7c1">
 <!-- ?popup=1 strips this page down to the modem itself, hiding both nav
      bars. QRPLOG's RTTY button opened it that way until 2026-09-07, when it
@@ -196,6 +196,57 @@
          .power-field already forces its own 130px/1fr split regardless of
          which column it lands in. -->
     <div class="settings">
+      <!-- The basics on top -- what decides whether and how this page transmits:
+           RF power, where FSK comes from, and the audio level (CAL PLAN). The
+           decoder's tuning (polarity, squelch level, tone, AFC, USOS, DEC 2),
+           the FSK mark and the TrxNet stream are one fold down. -->
+      <p class="settings-group-title">Transmit</p>
+      <!-- Item 13: same rfPercent/writeRfPercent/knob-detection shape as
+           JS8Call-ICOM's own #rfPowerField (data.html) / WSPR's own #powerField
+           (wspr.html) -- .power-field/.power-row/.power-unit/.power-mismatch
+           are already shared data.css classes, so this needs no new CSS. -->
+      <label class="power-field" id="rttyRfPowerField">TRX RF power
+        <span class="power-row">
+          <input id="rttyRfPercent" type="number" min="1" max="100" step="1" inputmode="numeric">
+          <span class="power-unit">%</span>
+          <b id="rttyRfPercentWatts">--</b>
+          <button id="rttyRfPercentSet" type="button">SET</button>
+        </span>
+        <small>Written to the radio when this page opens and after the link returns.
+               Turning the knob on the radio stops that until the next SET.</small>
+        <small id="rttyRfPercentState" class="power-mismatch" hidden></small>
+      </label>
+      <!-- Item 5, grilled 2026-08-28 (2nd session): moved here from the SETUP
+           page's LOG config section -- still the same firmware/EEPROM-backed
+           setting (rtty.js reads/writes it via /log-config and
+           /log-config/fsk, same as QRPLOG and every other computer see), just
+           edited from the page that actually keys FSK. RTTY/RTTY-R keying is
+           always real FSK, decided from the radio's own current mode -- this
+           only chooses WHERE that FSK signal originates. Moved again,
+           2026-08-29 (grilled): to the end of SETTINGS -- an operator sets
+           this once per station, unlike Squelch/Tone/AFC/RF power above,
+           which get touched every session. -->
+      <label>FSK output
+        <select id="rttyFskOutputMode">
+          <option value="internal">Internal (this device's own GPIO)</option>
+          <option value="trxnet">External (TrxNet device)</option>
+        </select>
+        <small>Station-wide -- also used by QRPLOG, from any computer.</small>
+      </label>
+      <div id="rttyFskNetIdRow" hidden>
+        <label>FSK device NET_ID
+          <input id="rttyFskNetId" class="rtty-settings-narrow" type="text" maxlength="2" placeholder="00" inputmode="text">
+        </label>
+        <div class="trxnet-devices">
+          <div class="trxnet-devices-head">Network devices <span class="trxnet-devices-live">live</span></div>
+          <div id="rttyTrxnetPeersFsk" class="trxnet-peers-body"><span class="trxnet-peers-empty">…</span></div>
+        </div>
+      </div>
+          <small class="cal-hint">TX audio level (AFSK in USB-D/LSB-D): <b>CAL PLAN</b> in the bar at
+        the top &mdash; one calibration shared with JS8 and WSPR. Real FSK needs none.</small>
+      <details class="settings-advanced" id="rttySettingsAdvanced">
+        <summary>ADVANCED <span class="settings-advanced-what">decoder · squelch level · tone · AFC · FSK mark · TrxNet stream</span></summary>
+        <div class="settings settings-advanced-body">
       <!-- Item 11's TX method picker lived here until 2026-08-28 -- now
            mode-driven (rtty.js decides audio-stream vs FSK-backend straight
            from state.radio.mode, never an operator choice). -->
@@ -271,31 +322,6 @@
         <input id="rttyAfcMaxDeviationInput" class="rtty-settings-narrow" type="number" min="10" max="180" step="1" inputmode="numeric">
         <small>Hz</small>
       </label>
-      <!-- Item 13: same rfPercent/writeRfPercent/knob-detection shape as
-           JS8Call-ICOM's own #rfPowerField (data.html) / WSPR's own #powerField
-           (wspr.html) -- .power-field/.power-row/.power-unit/.power-mismatch
-           are already shared data.css classes, so this needs no new CSS. -->
-      <label class="power-field" id="rttyRfPowerField">TRX RF power
-        <span class="power-row">
-          <input id="rttyRfPercent" type="number" min="1" max="100" step="1" inputmode="numeric">
-          <span class="power-unit">%</span>
-          <b id="rttyRfPercentWatts">--</b>
-          <button id="rttyRfPercentSet" type="button">SET</button>
-        </span>
-        <small>Written to the radio when this page opens and after the link returns.
-               Turning the knob on the radio stops that until the next SET.</small>
-        <small id="rttyRfPercentState" class="power-mismatch" hidden></small>
-      </label>
-      <!-- Item 5, grilled 2026-08-28 (2nd session): moved here from the SETUP
-           page's LOG config section -- still the same firmware/EEPROM-backed
-           setting (rtty.js reads/writes it via /log-config and
-           /log-config/fsk, same as QRPLOG and every other computer see), just
-           edited from the page that actually keys FSK. RTTY/RTTY-R keying is
-           always real FSK, decided from the radio's own current mode -- this
-           only chooses WHERE that FSK signal originates. Moved again,
-           2026-08-29 (grilled): to the end of SETTINGS -- an operator sets
-           this once per station, unlike Squelch/Tone/AFC/RF power above,
-           which get touched every session. -->
       <!-- The radio's own RTTY Mark Frequency (SET menu). Read straight out of
            the radio over CI-V whenever it can be (IC-705/IC-7610 today), and
            a successful read overwrites this field -- so it is normally the
@@ -310,22 +336,6 @@
         </select>
         <small>Follows the radio's own RTTY menu when it can be read.</small>
       </label>
-      <label>FSK output
-        <select id="rttyFskOutputMode">
-          <option value="internal">Internal (this device's own GPIO)</option>
-          <option value="trxnet">External (TrxNet device)</option>
-        </select>
-        <small>Station-wide -- also used by QRPLOG, from any computer.</small>
-      </label>
-      <div id="rttyFskNetIdRow" hidden>
-        <label>FSK device NET_ID
-          <input id="rttyFskNetId" class="rtty-settings-narrow" type="text" maxlength="2" placeholder="00" inputmode="text">
-        </label>
-        <div class="trxnet-devices">
-          <div class="trxnet-devices-head">Network devices <span class="trxnet-devices-live">live</span></div>
-          <div id="rttyTrxnetPeersFsk" class="trxnet-peers-body"><span class="trxnet-peers-empty">…</span></div>
-        </div>
-      </div>
       <!-- Grilled 2026-09-25 (rtty_stream.h): both decoders' text and every
            RTTY transmission, published on TrxNet as /rtty1 /rtty2 /rtty-tx to
            the devices that ask for it with /s-rtty. Firmware-stored like FSK
@@ -335,6 +345,8 @@
         <input id="rttyStreamEnabled" type="checkbox">
         <small>Sends both decoders' text and every RTTY transmission to TrxNet devices that subscribe to it, for analysis elsewhere. Station-wide.<br><span id="rttyStreamSubs"></span></small>
       </label>
+        </div>
+      </details>
     </div>
     <!-- CAL PLAN's single-shot measuring device (kap.9): hidden, mounted here
          only so TxGainCalUi has a DOM node -- same as wspr.html/data.html's
@@ -399,6 +411,7 @@
 <script src="/rtty-rxlog.js?v=51e1460e"></script>
 <script src="/rtty-afsk-tx.js?v=998de20c"></script>
 <script src="/rtty-stream-feed.js?v=855b19dd"></script>
+<script src="/settings-fold.js?v=b75dee54"></script>
 <script src="/rtty.js?v=718493fe"></script>
 </body>
 </html>

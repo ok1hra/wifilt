@@ -908,6 +908,15 @@ button { color: inherit; cursor: pointer; }
 .safety-setting { grid-column:1 / -1; border:1px solid #674a30; padding:8px; }
 .safety-setting small { color:var(--amber); }
 .check-setting input { width: 20px; justify-self: start; accent-color: var(--cyan); }
+/* SETTINGS: the first-QSO basics on top, the rest folded into ADVANCED. The
+   fold spans the grid and carries a grid of its own, so its rows line up with
+   the ones above it. */
+.settings-group-title { grid-column: 1 / -1; margin: 6px 0 0; color: var(--cyan); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.settings-group-title:first-child { margin-top: 0; }
+.settings-advanced { grid-column: 1 / -1; border-top: 1px solid var(--line); padding-top: 6px; }
+.settings-advanced > summary { cursor: pointer; color: var(--cyan); font-size: 11px; font-weight: 800; letter-spacing: .08em; padding: 4px 0; }
+.settings-advanced-what { margin-left: 8px; color: var(--muted); font-weight: 400; letter-spacing: 0; }
+.settings-advanced > .settings { padding: 8px 0 0; }
 .settings-storage { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 5px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
 .settings-storage button { padding: 5px 8px; border: 1px solid var(--line); border-radius: 4px; background: transparent; }
 .settings-storage a { color:var(--cyan); }

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>JS8Call-ICOM — WIFILT</title>
-  <link rel="stylesheet" href="/data.css?v=8e737d99">
+  <link rel="stylesheet" href="/data.css?v=4a642c91">
 </head>
 <body class="startup-pending lan-gate-checking">
   <header class="site-topbar">
@@ -419,6 +419,11 @@
       <details class="compact-section" data-section="settings">
         <summary><span>SETTINGS</span><span id="settingsSummary" class="summary-status"></span><span id="settingsFlags" class="summary-flags" aria-label="Active functions"></span></summary>
         <div class="settings">
+          <!-- What matters for a first transmission, and nothing else: where the
+               station's identity and radio come from, power, audio level and the
+               TX switch. Everything else is one fold down (ADVANCED), remembered
+               per browser like the other sections. -->
+          <p class="settings-group-title">From SETUP</p>
           <!-- Shown, not edited. The callsign and the locator belong to the
                interface, not to this browser: a second tablet with its own copy
                is how a station ends up transmitting under two answers, or under
@@ -434,12 +439,11 @@
                that. The "no target=_blank" rule further down setup.html is about links
                to /wspr.html, which claims the same single-operator lease and would land
                on "session busy"; SETUP never asks for it. -->
-          <p class="identity-note">Station identity, stored in the interface —
+          <label class="identity-field">Radio
+            <output id="setupRadio" class="identity-value"></output></label>
+          <p class="identity-note">Station identity and radio, stored in the interface —
             <a href="/setup#identitySection" id="identitySetupLink" target="_blank" rel="noopener">change it in SETUP</a>.</p>
-          <label>Decode speeds <input value="E, A, B, C, I (automatic)" disabled></label>
-          <label>Follow detected speed <input id="followSpeed" type="checkbox"></label>
-          <label>Clock correction <input id="clockCorrection" type="number" min="-1000" max="1000" step="1"><span>ms</span></label>
-          <label>Auto timing <input id="autoTiming" type="checkbox"></label>
+          <p class="settings-group-title">Transmit</p>
           <!-- RF power before audio gain: that is the order the signal travels,
                and the two are the only settings here that decide how loud this
                station is. Percent because that is what the radio's own display
@@ -480,6 +484,9 @@
           <small class="cal-hint">A whole band &times; power matrix can be measured in one
             run &mdash; <b>CAL PLAN</b> in the bar at the top.</small>
           <label class="safety-setting">Enable radio TX <input id="txSafety" type="checkbox"><small>I will use safe RF power and a suitable load/antenna.</small></label>
+          <details class="settings-advanced" data-section="settingsAdvanced">
+            <summary>ADVANCED <span class="settings-advanced-what">answers · unattended · heartbeats · groups · APRS-IS · decoding and timing</span></summary>
+            <div class="settings settings-advanced-body">
           <label>INFO answer <input id="infoText" maxlength="40" autocomplete="off" placeholder="50W VERT"></label>
           <!-- A menu, not a bare field: the answer changes twice a year and this page is
                operated from a tablet. The list is filled from Js8Settings.STATUS_PRESETS so
@@ -514,6 +521,12 @@
           <label class="aprs-field">APRS-IS callsign <input id="aprsGateCall" maxlength="9" size="9" autocomplete="off" placeholder="OK1ABC-10"><small class="cal-hint">Your callsign with an SSID of its own &mdash; APRS-IS allows one connection per callsign-SSID, so it must differ from a WX station or a JS8Call already logged in elsewhere.</small></label>
           <label class="aprs-field">APRS-IS passcode <input id="aprsGatePass" maxlength="6" size="6" autocomplete="off" inputmode="numeric" placeholder="12345"><small id="aprsGateState" class="cal-hint">off</small></label>
           <label class="aprs-field">APRS-IS server <input id="aprsGateHost" maxlength="40" size="14" autocomplete="off" placeholder="czech.aprs2.net"> <input id="aprsGatePort" class="port-field" maxlength="5" size="5" autocomplete="off" inputmode="numeric" placeholder="14580"></label>
+          <label>Decode speeds <input value="E, A, B, C, I (automatic)" disabled></label>
+          <label>Follow detected speed <input id="followSpeed" type="checkbox"></label>
+          <label>Clock correction <input id="clockCorrection" type="number" min="-1000" max="1000" step="1"><span>ms</span></label>
+          <label>Auto timing <input id="autoTiming" type="checkbox"></label>
+            </div>
+          </details>
           <div class="settings-storage"><span id="storageState"></span><button id="resetSettings" type="button">Restore defaults</button></div>
           <!-- Shown only while the interface has no profile of its own: these are
                the operator's settings from before the profile moved off the
@@ -551,7 +564,7 @@
   <script src="/lan-gate.js?v=e297f7ab"></script>
   <script src="/mgrs.js?v=6a363b6c"></script>
   <script src="/fw-version.js?v=b29c5317"></script>
-  <script src="/js8-settings.js?v=74f719a2"></script>
+  <script src="/js8-settings.js?v=b1e44675"></script>
   <script src="/station-identity.js?v=a1a20249"></script>
   <script src="/station-profile.js?v=ecfd3023"></script>
 <script src="/setup-spine.js?v=a132188f"></script>
@@ -637,7 +650,8 @@
        why WSPR/Mercury are not callers. -->
   <script src="/rf-power-auto.js?v=86d35636"></script>
   <script src="/tx-pledge.js?v=5750feea"></script>
-  <script src="/data.js?v=70fcb926"></script>
+  <script src="/settings-fold.js?v=b75dee54"></script>
+  <script src="/data.js?v=27d0d705"></script>
   <script src="/compression.js?v=768da432"></script>
 </body>
 </html>

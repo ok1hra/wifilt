@@ -7,7 +7,7 @@
 <!-- Shares data.css with JS8Call-ICOM/WSPR (topbar, subnav, radio-bar, gate-card)
      so the three cannot drift apart; mercury.css carries only what is genuinely
      Mercury's, same split as wspr.css. -->
-<link rel="stylesheet" href="/data.css?v=8e737d99">
+<link rel="stylesheet" href="/data.css?v=4a642c91">
 <link rel="stylesheet" href="/mercury.css?v=33aa9ebc">
 </head>
 <!-- lan-gate.js clears the checking class once it knows whether ICOM-LAN is set
@@ -229,6 +229,9 @@
   <details class="compact-section" data-section="settings">
     <summary><span>SETTINGS</span><span id="settingsSummary" class="summary-status"></span></summary>
     <div class="settings mercury-tuning-settings">
+      <!-- The basics on top (power, and where the audio level comes from); the
+           ARQ tuning is one fold down. Same shape as the other DATA pages. -->
+      <p class="settings-group-title">Transmit</p>
       <label class="power-field" id="tuningPowerField">Power
         <span class="power-row">
           <span class="power-readout"><b id="tuningPowerWatts">--</b><small id="tuningPowerPercent">reading the radio</small></span>
@@ -238,6 +241,12 @@
         <small>applied on load and after a reconnect, same as JS8/WSPR's own power target — leave blank to never touch this radio's power from Mercury</small>
         <small id="tuningPowerMismatch" class="power-mismatch" hidden></small>
       </label>
+      <small class="cal-hint">TX audio level: <b>CAL PLAN</b> in the bar at the top. Mercury keeps
+        its own calibration, separate from JS8/WSPR/RTTY &mdash; its data bursts peak about
+        7.5 dB above a steady tone, so a tone calibration would overdrive them.</small>
+      <details class="settings-advanced" id="mercurySettingsAdvanced">
+        <summary>ADVANCED <span class="settings-advanced-what">retries · timing · mode ceiling · transfer size</span></summary>
+        <div class="settings mercury-tuning-settings settings-advanced-body">
       <label>CALL retries <input id="tuningRetryCall" type="number" min="0" max="30" step="1"><small>default 4</small></label>
       <label>ACCEPT retries <input id="tuningRetryAccept" type="number" min="0" max="30" step="1"><small>default 4</small></label>
       <label>DATA retries <input id="tuningRetryData" type="number" min="0" max="30" step="1"><small>default 10</small></label>
@@ -254,6 +263,8 @@
         <span id="tuningSaveStatus" class="muted"></span>
       </div>
       <p class="identity-note">Applied to the next CALL/LISTEN session only — never mid-transfer. Stored on this radio, not this browser, so every device sees the same values.</p>
+        </div>
+      </details>
     </div>
   </details>
 
@@ -306,6 +317,7 @@
 <script src="/spectrum.js?v=7fafbbb5"></script>
 <script src="/mercury-tuning.js?v=4aeb7206"></script>
 <script src="/audio-health.js?v=9efe092e"></script>
+<script src="/settings-fold.js?v=b75dee54"></script>
 <script src="/mercury.js?v=35043da4"></script>
 </body>
 </html>

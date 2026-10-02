@@ -1450,3 +1450,13 @@ input[type="checkbox"].setup-pending-field {
   .actions button.is-flashing,
   .setup-pending-bar.is-flashing { animation: none; }
 }
+
+/* Groups below the spine: shared calibration + mode links, then ADVANCED. */
+.setup-group-title { margin: 26px 0 8px; font-size: 12px; font-weight: 850; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--muted); }
+.setup-group-title small { font-weight: 400; letter-spacing: 0; text-transform: none; }
+.setup-mode-links { margin: 8px 0 14px; }
+.setup-mode-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 0; }
+.setup-mode-buttons a { padding: 6px 10px; border: 1px solid var(--line, #3b4541); border-radius: 5px;
+  font-size: 12px; font-weight: 700; text-decoration: none; color: inherit; }
+.setup-mode-buttons a:hover { border-color: var(--muted); }

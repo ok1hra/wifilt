@@ -7,7 +7,7 @@
 <!-- The shell -- topbar, radio bar, disclosure sections, waterfall, timetable --
      is shared with the JS8Call page so the two cannot drift apart. wspr.css only
      carries what is genuinely WSPR's. -->
-<link rel="stylesheet" href="/data.css?v=8e737d99">
+<link rel="stylesheet" href="/data.css?v=4a642c91">
 <link rel="stylesheet" href="/wspr.css?v=2155df6e">
 </head>
 <!-- lan-gate.js clears the checking class once it knows whether ICOM-LAN is set
@@ -223,6 +223,10 @@
     <details class="compact-section" data-section="settings">
       <summary><span>SETTINGS</span><span id="settingsSummary" class="summary-status"></span></summary>
       <div class="settings wspr-settings">
+        <!-- The first-transmission basics on top (identity from SETUP, power,
+             audio level, the TX switch); clock, radio model and the TUNE
+             references are one fold down. Same shape as the JS8 page. -->
+        <p class="settings-group-title">From SETUP</p>
         <!-- What goes on the air, shown but not edited here. A beacon that runs
              unattended for days must not be transmitting one browser's idea of
              the callsign: the interface holds it, SETUP types it, this reads it. -->
@@ -238,12 +242,7 @@
         <p class="identity-note">Station identity, stored in the interface —
           <a href="/setup#identitySection" target="_blank" rel="noopener">change it in SETUP</a>. Coordinates can be
           entered there and are converted to a square.</p>
-        <label>Clock correction <span><input id="clockCorrection" type="number" min="-1000" max="1000" step="1"><small>ms, shared with JS8Call-ICOM</small></span></label>
-        <label>Radio
-          <select id="radioModelOverride">
-            <option value="">auto (from the radio)</option>
-          </select>
-        </label>
+        <p class="settings-group-title">Transmit</p>
         <!-- One row, two directions. Left of the arrow is what the radio is
              actually doing -- that is what goes into the message, rounding
              error and all. Right of it is the target for SET, which is the only
@@ -276,15 +275,26 @@
              This is only the pointer to it. -->
         <small class="cal-hint">A whole band &times; power matrix can be measured in one
           run &mdash; <b>CAL PLAN</b> in the bar at the top.</small>
+        <label class="safety-setting">Enable radio TX <input id="txSafety" type="checkbox">
+          <small>I will use safe RF power and a suitable load/antenna. The same confirmation as
+                 on the JS8Call-ICOM page &mdash; one radio, one pledge.</small>
+        </label>
+        <details class="settings-advanced" id="settingsAdvanced">
+          <summary>ADVANCED <span class="settings-advanced-what">clock · radio model · TUNE references</span></summary>
+          <div class="settings wspr-settings settings-advanced-body">
+        <label>Clock correction <span><input id="clockCorrection" type="number" min="-1000" max="1000" step="1"><small>ms, shared with JS8Call-ICOM</small></span></label>
+        <label>Radio
+          <select id="radioModelOverride">
+            <option value="">auto (from the radio)</option>
+          </select>
+        </label>
         <label class="reference-field">TUNE power references
           <span class="reference-row"><b id="referenceCount">no bands measured</b><button id="referenceClear" type="button">Clear</button></span>
           <small>a transmission whose forward power drifts more than 20 % from the
                  TUNE reading for its band is logged as &ldquo;power unconfirmed&rdquo;</small>
         </label>
-        <label class="safety-setting">Enable radio TX <input id="txSafety" type="checkbox">
-          <small>I will use safe RF power and a suitable load/antenna. The same confirmation as
-                 on the JS8Call-ICOM page &mdash; one radio, one pledge.</small>
-        </label>
+          </div>
+        </details>
       </div>
     </details>
 
@@ -300,7 +310,7 @@
 <script src="/lan-gate.js?v=e297f7ab"></script>
 <script src="/mgrs.js?v=6a363b6c"></script>
 <script src="/fw-version.js?v=b29c5317"></script>
-<script src="/js8-settings.js?v=74f719a2"></script>
+<script src="/js8-settings.js?v=b1e44675"></script>
 <script src="/station-identity.js?v=a1a20249"></script>
 <script src="/station-profile.js?v=ecfd3023"></script>
 <script src="/setup-spine.js?v=a132188f"></script>
@@ -359,6 +369,7 @@
 <script src="/tx-gain-plan-ui.js?v=f25b1933"></script>
 <script src="/wspr-log.js?v=c6928b4f"></script>
 <script src="/tx-pledge.js?v=5750feea"></script>
+<script src="/settings-fold.js?v=b75dee54"></script>
 <script src="/wspr.js?v=4454ad14"></script>
 </body>
 </html>

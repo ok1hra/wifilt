@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Setup — WIFILT</title>
-  <link rel="stylesheet" href="/setup.css?v=4b5384d5">
+  <link rel="stylesheet" href="/setup.css?v=269edd1f">
 </head>
 <body>
   <header class="topbar">
@@ -466,6 +466,66 @@
           </div>
         </details>
 
+        <!-- Below the spine, two groups. First what every mode shares and where
+             each mode's own settings are: the calibration overview, and links to
+             the SETTINGS of each DATA page (first-QSO basics on top there, the
+             rest folded under ADVANCED). Then everything a first QSO does not
+             need, under one heading. -->
+        <h2 class="setup-group-title">Calibration and modes</h2>
+        <!-- Measured ALC knees, as one band x power overview. This page only SHOWS
+             them: calibration keys the transmitter, and the audio path, the TX
+             pledge and the single-operator lock live on the DATA pages (JS8, WSPR,
+             RTTY), each of which has the calibration and CAL PLAN. Hidden entirely
+             unless some slot carries ICOM-LAN: without it there is no audio path. -->
+        <details class="setup-section" id="txGainSection" hidden>
+          <summary class="setup-section-title">TX audio gain <span class="setup-local-badge" title="Stored on the interface's own configuration partition, which a firmware flash does not write.">config</span></summary>
+          <div class="setup-section-body">
+            <p class="setup-hint">The highest audio level the radio accepts without its
+               ALC acting, measured per radio, band and power setting. <b>One
+               calibration serves JS8, WSPR and RTTY (USB-D/LSB-D)</b> — the mode does
+               not matter, only the band and the power do, because the point where the
+               ALC starts to act moves with the RF power the radio is set to. Each mode
+               has its own power setting, so a band can be calibrated at one mode's
+               power and not at another's: the labels under each column say which mode
+               transmits at that power. RTTY on real FSK needs no calibration.</p>
+            <div id="txGainTable" class="txgain-body"><span class="txgain-empty">…</span></div>
+            <p class="txgain-actions">
+              <!-- No target="_blank", deliberately. Both DATA pages share one
+                   session token in sessionStorage, so a NEW TAB asks the firmware
+                   for a lease another tab already holds and lands on "session
+                   busy" -- the calibration would be unreachable exactly when the
+                   operator has the radio open, which is always. Same rule as the
+                   sub-nav links on wspr.html. -->
+              <a class="txgain-link" href="/wspr.html#autogain">CALIBRATE (WSPR PAGE) &#8599;</a>
+              <button type="button" id="txGainForget" class="txgain-forget">Forget all</button>
+            </p>
+            <p class="footnote">Set the band and the power you want to measure <em>first</em> —
+               a calibration describes the radio as it stands, and it is filed under that
+               band and that power.</p>
+            <!-- The other half of the tool, and the one an operator with an empty table
+                 actually wants: the batch plan measures a whole band x power matrix in
+                 one run. It is a window in the topbar of either DATA page, so this only
+                 has to say that it exists. -->
+            <p class="footnote">A whole matrix at once: <b>CAL PLAN</b> in the bar at the
+               top of the JS8Call, WSPR or RTTY page. It tunes the radio and sets the power
+               itself, asks about the antenna before every band, measures only what is
+               missing, and offers the powers all your modes use.</p>
+          </div>
+        </details>
+
+        <section class="setup-mode-links" id="modeSettingsSection">
+          <p class="setup-hint">Shared settings live here — identity, radio, the calibration
+             above. Each mode keeps its own on its page: the basics for a first QSO on top,
+             the rest folded under <b>ADVANCED</b>.</p>
+          <p class="setup-mode-buttons">
+            <a href="/data.html#settings">JS8 SETTINGS</a>
+            <a href="/wspr.html#settings">WSPR SETTINGS</a>
+            <a href="/rtty.html#settings">RTTY SETTINGS</a>
+            <a href="/mercury.html#settings">MERCURY SETTINGS</a>
+          </p>
+        </section>
+
+        <h2 class="setup-group-title">Advanced <small>— not needed for a first QSO</small></h2>
         <details class="setup-section" id="dxcSection">
           <summary class="setup-section-title">DX Cluster <span class="setup-local-badge" title="Stored in NVS on the interface. A firmware flash never writes there, so these survive an update.">eeprom</span></summary>
           <!-- The callsign the cluster logs in with is the station's, one section
@@ -534,46 +594,6 @@
           </div>
         </details>
 
-        <!-- Measured ALC knees, as one band x power overview. This page only SHOWS
-             them: calibration keys the transmitter, and the audio path, the TX
-             pledge and the single-operator lock live on the DATA pages (JS8, WSPR,
-             RTTY), each of which has the calibration and CAL PLAN. Hidden entirely
-             unless some slot carries ICOM-LAN: without it there is no audio path. -->
-        <details class="setup-section" id="txGainSection" hidden>
-          <summary class="setup-section-title">TX audio gain <span class="setup-local-badge" title="Stored on the interface's own configuration partition, which a firmware flash does not write.">config</span></summary>
-          <div class="setup-section-body">
-            <p class="setup-hint">The highest audio level the radio accepts without its
-               ALC acting, measured per radio, band and power setting. <b>One
-               calibration serves JS8, WSPR and RTTY (USB-D/LSB-D)</b> — the mode does
-               not matter, only the band and the power do, because the point where the
-               ALC starts to act moves with the RF power the radio is set to. Each mode
-               has its own power setting, so a band can be calibrated at one mode's
-               power and not at another's: the labels under each column say which mode
-               transmits at that power. RTTY on real FSK needs no calibration.</p>
-            <div id="txGainTable" class="txgain-body"><span class="txgain-empty">…</span></div>
-            <p class="txgain-actions">
-              <!-- No target="_blank", deliberately. Both DATA pages share one
-                   session token in sessionStorage, so a NEW TAB asks the firmware
-                   for a lease another tab already holds and lands on "session
-                   busy" -- the calibration would be unreachable exactly when the
-                   operator has the radio open, which is always. Same rule as the
-                   sub-nav links on wspr.html. -->
-              <a class="txgain-link" href="/wspr.html#autogain">CALIBRATE (WSPR PAGE) &#8599;</a>
-              <button type="button" id="txGainForget" class="txgain-forget">Forget all</button>
-            </p>
-            <p class="footnote">Set the band and the power you want to measure <em>first</em> —
-               a calibration describes the radio as it stands, and it is filed under that
-               band and that power.</p>
-            <!-- The other half of the tool, and the one an operator with an empty table
-                 actually wants: the batch plan measures a whole band x power matrix in
-                 one run. It is a window in the topbar of either DATA page, so this only
-                 has to say that it exists. -->
-            <p class="footnote">A whole matrix at once: <b>CAL PLAN</b> in the bar at the
-               top of the JS8Call, WSPR or RTTY page. It tunes the radio and sets the power
-               itself, asks about the antenna before every band, measures only what is
-               missing, and offers the powers all your modes use.</p>
-          </div>
-        </details>
 
         <details class="setup-section" id="logSettingsSection">
           <summary class="setup-section-title">LOG <span class="setup-local-badge" title="Stored on the interface's own configuration partition, which a firmware flash does not write.">config</span></summary>

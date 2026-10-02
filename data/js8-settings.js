@@ -15,7 +15,7 @@
   const MODEMS = ["js8call", "rtty45", "psk31", "ft8", "ft4", "cw"];
   const SPEEDS = ["AUTO", "A", "B", "C", "E", "I"];
   const DISCLOSURES = ["spectrum", "reply", "traffic", "stations", "inbox",
-    "telemetry", "settings", "timing"];
+    "telemetry", "settings", "timing", "settingsAdvanced"];
   // Must match UNATTENDED_ARM_CHOICES_H in unattended_guard.h.
   const ARM_HOURS = [1, 6, 12, 24, 168];
   // Must match INTERVAL_CHOICES_MS in js8-heartbeat.js.
@@ -133,7 +133,7 @@
         telemetry:{enabled: false, jobs: []}}},
       ui: {disclosures: {spectrum: true, reply: true, traffic: false,
         stations: false, inbox: false, telemetry: false, settings: false,
-        timing: false}},
+        timing: false, settingsAdvanced: false}},
       // The APRS-IS gate. It lives in the profile and not in SETUP because it is
       // a JS8 function: it only ever acts on @APRSIS traffic this modem decoded.
       // The profile is SHARED -- it is pushed to the interface and read back by

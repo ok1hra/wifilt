@@ -176,7 +176,7 @@ const dom = {
   stationMap:$("stationMap"), stationMapSummary:$("stationMapSummary"), stationMapLinks:$("stationMapLinks"),
   stationMapLog:$("stationMapLog"),
   stationHead:document.querySelector(".traffic-table thead"), reply:document.querySelector('[data-section="reply"]'),
-  stationSummary:$("stationSummary"), myCall:$("myCall"), myGrid:$("myGrid"),
+  stationSummary:$("stationSummary"), myCall:$("myCall"), myGrid:$("myGrid"), setupRadio:$("setupRadio"),
   promoteRow:$("promoteRow"), promoteSettings:$("promoteSettings"), promoteState:$("promoteState"),
   followSpeed:$("followSpeed"), clockCorrection:$("clockCorrection"), autoTiming:$("autoTiming"),
   txGain:$("txGain"), calResolved:$("calResolved"), calField:$("calField"),
@@ -2905,6 +2905,9 @@ let revealedRow=null,revealTimer=null;
 function revealSetting(field) {
   if(!field||!dom.settingsSection)return;
   dom.settingsSection.open=true;
+  // A field in the ADVANCED fold is hidden even with SETTINGS open.
+  const fold=field.closest("details.settings-advanced");
+  if(fold)fold.open=true;
   const row=field.closest("label")||field;
   // Only one row is ever revealed at a time, and revealing the same one twice has
   // to restart its two seconds rather than inherit the first reveal's expiry: the
@@ -3032,6 +3035,8 @@ function renderControls() {
   // nothing half-typed to protect and no reason for this page to hold an opinion.
   dom.myCall.textContent=js8.myCall||"— not set";
   dom.myGrid.textContent=js8.grid||"— not set";
+  if(dom.setupRadio)dom.setupRadio.textContent=liveRadioModel()
+    ?`${liveRadioModel()} · ICOM-LAN`:"— not answering yet";
   dom.followSpeed.checked=js8.followSpeed;
   if(document.activeElement!==dom.clockCorrection)dom.clockCorrection.value=js8.clockCorrectionMs;
   dom.autoTiming.checked=js8.autoTiming;
