@@ -171,6 +171,58 @@ void rememberHttpPort(bool explicitPort) {
   out << now << "\n";
 }
 
+// What a data/ tree run straight from a checkout is missing. The .br copies of
+// the JS8 modem are generated (tools/gzip-assets.sh), not in git; the page falls
+// back to the plain files, so their absence costs a slower first load -- worth a
+// line, not a refusal. A missing plain file or page is a broken tree.
+struct AssetCheck {
+  const char *file;
+  const char *needs;      // what does not work without it
+};
+const AssetCheck kRequiredAssets[] = {
+  {"/setup.html",        "the SETUP page -- is --data-dir pointing at data/?"},
+  {"/data.html",         "the DATA (JS8) page"},
+  {"/js8-worker.js",     "the JS8 modem"},
+  {"/js8-core.wasm",     "the JS8 modem"},
+  {"/js8-decoder.wasm",  "the JS8 modem"},
+  {"/js8-jsc.bin",       "the JS8 dictionary"},
+  {"/js8-brotli.wasm",   "the JS8 modem"},
+};
+const char *const kGeneratedAssets[] = {"/js8-decoder.wasm.br", "/js8-jsc.bin.br"};
+
+bool fileExists(const std::string &file) {
+  std::ifstream in(nativeJoinPath(nativeDataDir(), file), std::ios::binary);
+  return in.good();
+}
+
+// In any form the server can send (handleFileFromSPIFFS prefers .br, then .gz):
+// a release tree ships most files ONLY compressed, so the plain name alone
+// would raise an alarm on every correct install.
+bool assetExists(const char *file) {
+  const std::string name(file);
+  return fileExists(name) || fileExists(name + ".gz") || fileExists(name + ".br");
+}
+
+void checkAssets() {
+  int missing = 0;
+  for (const AssetCheck &asset : kRequiredAssets) {
+    if (assetExists(asset.file)) continue;
+    fprintf(stderr, "WIFILT | MISSING %s%s -- needed by %s\n", nativeDataDir().c_str(),
+            asset.file, asset.needs);
+    missing++;
+  }
+  if (missing)
+    fprintf(stderr, "WIFILT |   the web folder is incomplete: reinstall it, or in a source\n"
+                    "WIFILT |   checkout restore it with: git checkout -- data/\n");
+  int generated = 0;
+  for (const char *file : kGeneratedAssets)
+    if (!fileExists(file)) generated++;
+  if (generated)
+    printf("WIFILT | assets  the compressed JS8 modem files are not generated -- the page\n"
+           "WIFILT |         loads the plain ones (slower first load); ./tools/gzip-assets.sh\n"
+           "WIFILT |         makes them\n");
+}
+
 bool parseArguments(int argc, char **argv, uint16_t *port) {
   for (int i = 1; i < argc; i++) {
     const std::string flag = argv[i];
@@ -251,6 +303,7 @@ int main(int argc, char **argv) {
 
   printf("WIFILT | assets  %s\n", nativeDataDir().c_str());
   printf("WIFILT | config  %s\n", nativeConfigDir().c_str());
+  checkAssets();
 
   seedFreshConfig();   // (4)
   loadHomeHttpPort();

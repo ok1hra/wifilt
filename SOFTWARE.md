@@ -2778,6 +2778,7 @@ After logging, the button turns into **VIEW LOG** and opens the logbook in a new
 |---|---|
 | PTT works, no RF | the radio's `MOD Input` is not set to `WLAN`. See [section 5.1](#51-what-the-page-is). |
 | *Loading JS8Call-ICOM modem 0 %* never moves | the modem worker did not start. Press **RETRY**; the page can otherwise look alive because the session and audio channel are up. |
+| *Modem loading failed* — *… is missing on the server: neither /js8-decoder.wasm.br nor /js8-decoder.wasm exists* | the web folder is incomplete. Reinstall it; in a source checkout `git checkout -- data/`. The compressed `.br` copies alone may be missing — the page then loads the plain files by itself, and `./tools/gzip-assets.sh` makes the faster ones. A PC build lists anything missing in its start-up log. |
 | `TX prebuffer missed slot` on the first transmission after loading the page | start-up starvation; the next slot is normally fine. |
 | `TX buffer underrun`, `TX packet identity/continuity failure` | the network is not keeping up with the audio stream. Move the tablet closer to the access point. |
 | Everything stalls with the tablet far from the router | dropouts follow the *tablet's* distance from the access point, not the radio's link. |

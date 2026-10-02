@@ -56,9 +56,15 @@
       loading("brotli", "Brotli decoder ready", 8);
       return module;
     };
+    // The path the operator can look for in data/, without the ?v= cache key.
+    const assetPath = url => String(url).split("?")[0];
     const fetchBytes = async (url, label, stage, progressFrom, progressTo) => {
       const response = await fetch(url);
-      if (!response.ok) throw new Error(`${label} fetch failed: ${response.status}`);
+      if (!response.ok) {
+        const error = new Error(`${label} fetch failed: ${assetPath(url)} answered HTTP ${response.status}`);
+        error.status = response.status;
+        throw error;
+      }
       const total = Number(response.headers.get("Content-Length")) || 0;
       if (!response.body || !response.body.getReader) {
         const bytes = new Uint8Array(await response.arrayBuffer());
@@ -83,9 +89,33 @@
       loading(stage, label, progressTo, loaded, total || loaded);
       return bytes;
     };
+    // The .br copies are not in git: tools/gzip-assets.sh makes them, and a tree
+    // run straight from a checkout (`make -C native run`) has none. The plain
+    // files ARE in git, so a 404 on the .br falls back to them -- a bigger first
+    // load, but a modem that starts. Only when both are gone is it an error, and
+    // then it names the files and the command instead of "fetch failed: 404".
     const decompressBrotli = async (module, url, outputSize, label, stage,
                                     progressFrom, progressTo, decodeProgress) => {
-      const input = await fetchBytes(url, label, stage, progressFrom, progressTo);
+      let input;
+      try {
+        input = await fetchBytes(url, label, stage, progressFrom, progressTo);
+      } catch (error) {
+        if (error.status !== 404) throw error;
+        const plainUrl = String(url).replace(/\.br(?=\?|$)/, "");
+        let plain;
+        try {
+          plain = await fetchBytes(plainUrl, label, stage, progressFrom, progressTo);
+        } catch (plainError) {
+          if (plainError.status !== 404) throw plainError;
+          throw new Error(`${label} is missing on the server: neither ${assetPath(url)} ` +
+            `nor ${assetPath(plainUrl)} exists. The web folder (data/) is incomplete -- ` +
+            "reinstall it, or from a source checkout run ./tools/gzip-assets.sh");
+        }
+        if (plain.length !== outputSize)
+          throw new Error(`${label}: ${assetPath(plainUrl)} is ${plain.length} bytes, ` +
+            `expected ${outputSize} -- the web folder (data/) is from another version`);
+        return plain;
+      }
       loading(stage, `Expanding ${label}`, decodeProgress, input.length, input.length);
       const inputPtr = module._malloc(input.length);
       const sizePtr = module._malloc(4);

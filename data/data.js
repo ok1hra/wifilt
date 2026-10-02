@@ -5,7 +5,7 @@
 
 const PAGE_PARAMS = new URLSearchParams(location.search);
 const TEST_MODE = PAGE_PARAMS.has("test");
-const ASSET_REV = "66104543";
+const ASSET_REV = "a4319a73";
 // Two of the files the worker importScripts() are also loaded by this page with
 // its own <script> tag, and each carried an independent version: the tag in
 // data.html and ASSET_REV here. Nothing forced them to agree, and js8-protocol.js
