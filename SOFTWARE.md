@@ -3289,6 +3289,14 @@ band-and-power pair.
   question arms the same answer for all the remaining retunes, so you can walk away.
 - If nobody answers the question within 30 minutes the run gives up and releases the radio.
 - A band skipped while others finish is returned to, not abandoned.
+- **Only what is missing is keyed.** A band already calibrated at the radio's current MOD
+  level costs no carrier and no antenna question — its stored result still takes part in
+  choosing the MOD level. A new band is measured top power first, then straight on to its
+  lower powers without retuning; the run only moves on once that band is done.
+- The calibration is **shared by JS8, WSPR and RTTY in USB-D/LSB-D**: the mode does not
+  matter, only the band and the power setting do, because the point where the ALC starts to
+  act moves with the RF power the radio is set to. Mercury keeps its own table — its data
+  bursts have much higher peaks than a steady tone. RTTY on real FSK needs no calibration.
 - The **CAL PLAN button turns red by itself** when nothing is calibrated at all, or when the
   radio is sitting on a band that has never been measured.
 

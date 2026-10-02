@@ -64,9 +64,13 @@
     ? ` — SWR measured ${entry.swrMax.toFixed(1)} on ${entry.band} during this ` +
       "measurement; check the antenna before trusting that the audio is what's hot"
     : "";
-  // The survey only has to rank the bands, so it stops eight times earlier than
-  // the clean pass. ~8 s of carrier instead of ~15.
-  const SURVEY_RESOLUTION_DB = 1.5;
+  // The survey used to stop at 1.5 dB because it "only has to rank the bands" --
+  // but the host stores EVERY successful measurement, so that reading became the
+  // cell's calibration: a re-run overwrote fine top-power entries with coarse ones,
+  // and a new band's top cell stayed coarse for good, because the matrix then saw a
+  // valid entry and skipped it. The survey now measures at full resolution, and the
+  // one carrier serves both purposes: it ranks the band AND, when the MOD level
+  // does not move, it is that cell's finished calibration.
   // Nobody answers for half an hour: park the radio back where it was and let go
   // of the lock. Never a shorter one, and never an automatic "continue" -- a
   // question that answers itself is not a safeguard.
@@ -144,7 +148,9 @@
   // What a run will cost, in the units the operator pays: carriers, air time,
   // wall time and questions. Shown before START, because "10 bands" and "20
   // antenna questions" are the same plan and only one of them sounds fine.
-  function estimate(plan, {surveyMs = 8000, cellMs = 15000, retuneMs = 2000} = {}) {
+  // An upper bound: a plan with nothing stored yet, where the MOD level moves and
+  // every cell is measured again after it.
+  function estimate(plan, {surveyMs = 15000, cellMs = 15000, retuneMs = 2000} = {}) {
     const cells = cellsOf(plan);
     const bands = surveyCells(plan);            // one per band, its own top power
     // Every band is visited twice -- once by the survey, once by the clean pass --
@@ -252,7 +258,22 @@
         this.index = 0;
         return this.snapshot();
       }
-      this.queue = surveyFrom(this.orderedCells());
+      // Only a band whose top cell has no valid entry is keyed. A band that is
+      // calibrated at today's MOD level takes part in the ranking through its
+      // STORED knee -- a full-resolution fact about this MOD level, which is all
+      // the survey would have measured, minus the carrier, the retune, the antenna
+      // question, and the coarse reading that used to overwrite the fine entry.
+      // measureAll is the operator asking for every carrier, so it keys them all.
+      this.queue = [];
+      for (const cell of surveyFrom(this.orderedCells())) {
+        const entry = !this.measureAll && this.isValid(cell) ? this.resolve(cell) : null;
+        const knee = entry ? Number(entry.knee) || 0 : 0;
+        if (knee > 0)
+          this.surveyKnees.push({band: cell.band, hz: cell.hz, percent: cell.percent, knee,
+                                 swrMax: Number(entry.swrMax) || 0, reachedCeiling: false,
+                                 stored: true});
+        else this.queue.push(cell);
+      }
       this.index = 0;
       this.state = "survey";
       this.pendingRestore = true;
@@ -296,9 +317,17 @@
       // not cost a retune, and therefore must not cost a question either.
       if (!this.measureAll && !cell.survey && this.isValid(cell)) {
         const entry = this.resolve(cell) || {};
-        this.results.push({...cell, status: "skipped",
-                           reason: "already calibrated for this MOD level",
-                           knee: Number(entry.knee) || 0});
+        // Measured by this run's own survey, at the MOD level it still has: that
+        // carrier WAS this cell's calibration (full resolution since the survey
+        // stopped stopping early), so it counts as measured, not as skipped.
+        const surveyed = this.results.some(row => row.status === "survey" &&
+          row.band === cell.band && row.percent === cell.percent &&
+          row.modLevel === this.modLevel && !row.reachedCeiling);
+        this.results.push(surveyed
+          ? {...cell, status: "ok", knee: Number(entry.knee) || 0,
+             gain: Number(entry.gain) || 0, note: "", fromSurvey: true}
+          : {...cell, status: "skipped", reason: "already calibrated for this MOD level",
+             knee: Number(entry.knee) || 0});
         this.index++;
         return this.next();
       }
@@ -315,8 +344,7 @@
         return (this.step = {type: "setPower", percent: cell.percent, band: cell.band});
       return (this.step = {type: "measure", band: cell.band, hz: cell.hz,
                            percent: cell.percent, survey: Boolean(cell.survey),
-                           resolutionDb: cell.survey ? SURVEY_RESOLUTION_DB : 0,
-                           seed: this.seedFor(cell)});
+                           resolutionDb: 0, seed: this.seedFor(cell)});
     }
 
     // Where to start looking. In order of what is actually known:
@@ -571,9 +599,23 @@
     enterMatrix(extra = {}) {
       this.state = "matrix";
       this.modAdvice = extra.advice || null;
-      this.queue = this.orderedCells();
+      this.queue = this.hereFirst(this.orderedCells());
       this.index = 0;
       return this.next();
+    }
+
+    // The band the radio is tuned to -- the last one the survey keyed -- goes to the
+    // front of the matrix, whole and still ascending. Its antenna has just been
+    // confirmed and nothing has retuned since, so its reduced powers follow with no
+    // retune and no question: "measured the new band, then wandered off to the old
+    // ones" was exactly how the old order read. Only bands with work left can come
+    // first; a calibrated band costs nothing wherever it sits.
+    hereFirst(cells) {
+      const here = cells.find(cell => cell.hz === this.tuned.hz &&
+                                      (this.measureAll || !this.isValid(cell)));
+      if (!here) return cells;
+      return [...cells.filter(cell => cell.band === here.band),
+              ...cells.filter(cell => cell.band !== here.band)];
     }
 
     // ---- what the host reports back ----------------------------------------
@@ -614,7 +656,7 @@
           // Counting it as a done cell would show 13 of 10 measured.
           const po = Number(event.po) || 0;
           this.results.push({...cell, status: cell.survey ? "survey" : "ok", knee,
-                             gain: Number(event.gain) || knee, po,
+                             gain: Number(event.gain) || knee, po, modLevel: this.modLevel,
                              note: cell.survey ? "" : this.thermalNote(cell, po)});
           this.index++;
           break;
@@ -754,5 +796,5 @@
   return {TxGainPlanRun, normalizePlan, normalizePowers, cellsOf, estimate,
           emptyPlan, highestPercent,
           MOD_LEVEL_TARGET, MOD_TOLERANCE_DB, MOD_MAX_CORRECTIONS,
-          SURVEY_RESOLUTION_DB, ANTENNA_WAIT_MS, MOD_RAW_MIN, MOD_RAW_MAX};
+          ANTENNA_WAIT_MS, MOD_RAW_MIN, MOD_RAW_MAX};
 });

@@ -48,9 +48,14 @@ function makeRadio(modLevel = 128) {
 }
 
 // Runs a plan to completion against the radio, recording every intent.
+//
+// `store`, when given, is written the way tx-gain-cal-ui.js writes the real one:
+// EVERY successful measurement -- survey ones included -- lands in the table under
+// band|percent with the MOD level it was taken at. Without it the fixture never
+// showed that a coarse survey reading becomes the cell's stored calibration.
 function drive(run, radio, {answer = () => "ok", failCells = [], stopAfter = null,
                             measureFail = () => false, poFor = null,
-                            kneeOverride = null, swrFor = null} = {}) {
+                            kneeOverride = null, swrFor = null, store = null} = {}) {
   const log = [];
   for (let guard = 0; guard < 400; guard++) {
     const step = run.next();
@@ -99,7 +104,11 @@ function drive(run, radio, {answer = () => "ok", failCells = [], stopAfter = nul
           if (raw > 0.8)
             run.note({type: "ceiling", knee, gain: knee, po, swrMax,
                       reason: "the level reached the ceiling and the radio never limited"});
-          else run.note({type: "measured", knee, gain: knee, po, swrMax});
+          else {
+            if (store) store[`${step.band}|${step.percent}`] =
+              {gain: knee, knee, modLevel: radio.modLevel, resolutionDb: step.resolutionDb || 0.375};
+            run.note({type: "measured", knee, gain: knee, po, swrMax});
+          }
         }
         break;
       }
@@ -156,7 +165,7 @@ check("percent columns are whole, sorted, deduplicated and capped at four",
   check("and one carrier per cell plus one per band",
     cost.carriers === 6, String(cost.carriers));
   check("air time is the sum of the carriers, not of the wall clock",
-    cost.airMs === 2 * 8000 + 4 * 15000, String(cost.airMs));
+    cost.airMs === 2 * 15000 + 4 * 15000, String(cost.airMs));
   check("wall time is longer than air time", cost.totalMs > cost.airMs);
 }
 
@@ -182,7 +191,9 @@ check("percent columns are whole, sorted, deduplicated and capped at four",
     surveys.length === 4, String(surveys.length));
   check("the survey uses each band's own highest power",
     surveys.every(step => step.percent === 14));
-  check("the survey is coarse", surveys.every(step => step.resolutionDb === 1.5));
+  // Full resolution: the host stores every successful measurement, so a coarse
+  // survey reading became the cell's calibration (see "one new band" below).
+  check("the survey measures at full resolution", surveys.every(step => !step.resolutionDb));
 
   // The MOD level: 40 m is the worst band (K = 4.2), knee at 14 % / 128 = 0.459,
   // so the correction is 128 * 0.459 / 0.7 = 84.
@@ -205,18 +216,19 @@ check("percent columns are whole, sorted, deduplicated and capped at four",
 
   // Ordering and the antenna rule. The invariant is the one the operator asked
   // for -- a question for every retune -- and the count is what that costs: three
-  // survey visits, one to verify the MOD level, three for the clean pass.
+  // survey visits, one to verify the MOD level on 40 m, and the clean pass starts
+  // on 40 m where the radio already is -- so two more, not three.
   const questions = log.filter(step => step.type === "askAntenna");
   const retunes = log.filter(step => step.type === "retune").length;
   check("a question for every retune, and never one without", retunes === questions.length,
         `${retunes} retunes vs ${questions.length} questions`);
-  check("three bands cost seven visits", retunes === 7, String(retunes));
+  check("three bands cost six visits", retunes === 6, String(retunes));
   check("a power change alone never asks again",
     questions.length < log.filter(step => step.type === "measure").length,
     "six cells and two powers per band must not be twelve questions");
   const order = clean.map(step => `${step.band}@${step.percent}`).join(" ");
-  check("the clean pass runs band-major, ascending in power",
-    order === "160m@1 160m@14 40m@1 40m@14 20m@1 20m@14", order);
+  check("the clean pass runs band-major, ascending in power, from where the radio is",
+    order === "40m@1 40m@14 160m@1 160m@14 20m@1 20m@14", order);
 
   // Every measurement must have been taken with the radio actually on that cell.
   const wrong = log.filter((step, index) => step.type === "measure" &&
@@ -379,6 +391,85 @@ check("percent columns are whole, sorted, deduplicated and capped at four",
     log.some(step => step.type === "measure" && !step.survey));
 }
 
+// ---- one new band among calibrated ones (reported from the field) ----------
+//
+// "CAL PLAN measures the unmeasured band first -- but then skips its reduced power
+// and goes on to the bands that were already measured." That was the survey: it
+// keyed EVERY band at its top power to rank them for the MOD level, calibrated
+// ones included, and the reduced powers only came in the matrix after a full round
+// of retunes and antenna questions. Worse, the real host stores every successful
+// measurement, so each re-run overwrote fine top-power entries with 1.5 dB survey
+// readings, and a new band's top cell was left at survey resolution for good.
+{
+  const plan = Plan.normalizePlan({powers: [5, 14],
+    rows: [{band: "40m", hz: 7040000, cells: [1, 1]},
+           {band: "20m", hz: 14100000, cells: [1, 1]},
+           {band: "15m", hz: 21100000, cells: [1, 1]}]});
+  // 40 m and 20 m done at today's MOD level 84 (the level 40 m at 14 % wants).
+  const fine = (band, percent) => {
+    const knee = K[band] * percent / 84;
+    return {gain: knee, knee, modLevel: 84, resolutionDb: 0.375};
+  };
+  const store = {"40m|5": fine("40m", 5), "40m|14": fine("40m", 14),
+                 "20m|5": fine("20m", 5), "20m|14": fine("20m", 14)};
+  const before = JSON.stringify(store["40m|14"]) + JSON.stringify(store["20m|14"]);
+  const run = new Plan.TxGainPlanRun({plan, modLevel: 84,
+    resolve: cell => store[`${cell.band}|${cell.percent}`] || null});
+  run.begin();
+  const radio = makeRadio(84);
+  const log = drive(run, radio, {store});
+  const keyed = log.filter(step => step.type === "measure");
+  const retunes = log.filter(step => step.type === "retune");
+  const questions = log.filter(step => step.type === "askAntenna");
+  check("new band: calibrated bands are not keyed at all",
+    keyed.every(step => step.band === "15m"),
+    keyed.map(step => `${step.band}@${step.percent}`).join(","));
+  check("new band: their fine entries are left exactly as they were",
+    JSON.stringify(store["40m|14"]) + JSON.stringify(store["20m|14"]) === before);
+  check("new band: one retune and one antenna question in the whole run",
+    retunes.length === 1 && questions.length === 1,
+    `${retunes.length} retunes, ${questions.length} questions`);
+  check("new band: the reduced power follows straight on the same band",
+    keyed.map(step => step.percent).join(",") === "14,5",
+    keyed.map(step => step.percent).join(","));
+  check("new band: every keyed measurement is at full resolution",
+    keyed.every(step => !step.resolutionDb), keyed.map(step => step.resolutionDb).join(","));
+  check("new band: both of its cells end up stored at full resolution",
+    store["15m|5"] && store["15m|14"] && store["15m|5"].resolutionDb === 0.375
+    && store["15m|14"].resolutionDb === 0.375);
+  check("new band: the MOD level is not touched", !log.some(step => step.type === "writeMod"));
+  check("new band: the run ends cleanly", run.snapshot().state === "done");
+  // 15 m@14 was calibrated BY the survey, so it is measured, not "skipped"; the
+  // four skips are the calibrated bands' cells.
+  check("new band: the summary counts both new cells measured",
+    run.snapshot().done === 2 && run.snapshot().skipped === 4,
+    `done ${run.snapshot().done}, skipped ${run.snapshot().skipped}`);
+}
+
+{
+  // The calibrated bands still take part in the MOD decision -- through their
+  // stored knees. Here the new band (160 m: 3.4 * 14 / 120 = 0.40) is not the
+  // worst; the stored 40 m knee (4.2 * 14 / 120 = 0.49, 3 dB under target) is, and
+  // it says the MOD level must move. The write happens, owned by 40 m, and its
+  // verification keys 40 m.
+  const plan = Plan.normalizePlan({powers: [14],
+    rows: [{band: "40m", hz: 7040000, cells: [1]},
+           {band: "160m", hz: 1838000, cells: [1]}]});
+  const radio = makeRadio(120);
+  const store = {"40m|14": {gain: 0.49, knee: 0.49, modLevel: 120}};
+  const run = new Plan.TxGainPlanRun({plan, modLevel: 120,
+    resolve: cell => store[`${cell.band}|${cell.percent}`] || null});
+  run.begin();
+  const log = drive(run, radio, {store});
+  const writes = log.filter(step => step.type === "writeMod");
+  check("stored knees rank too: the calibrated worst band still owns the MOD level",
+    writes.length >= 1 && writes[0].band === "40m",
+    writes.map(step => `${step.band}:${step.value}`).join(","));
+  const firstKeyed = log.find(step => step.type === "measure");
+  check("and only the band without an entry is keyed before that decision",
+    firstKeyed && firstKeyed.band === "160m", firstKeyed ? firstKeyed.band : "none");
+}
+
 // ---- unmeasured bands go first ---------------------------------------------
 //
 // The order is an ordering, never a filter: every selected cell and every band is
@@ -413,8 +504,10 @@ check("percent columns are whole, sorted, deduplicated and capped at four",
   check("the survey starts on that band too, so both passes ask in one order",
     surveys.length && surveys[0].band === "20m",
     surveys.map(step => step.band).join(","));
-  check("and it still ranks every band, including the calibrated ones",
-    new Set(surveys.map(step => step.band)).size === 3,
+  // The calibrated bands rank through their STORED knees -- no carrier, no
+  // retune, no coarse reading overwriting a fine entry.
+  check("the calibrated bands rank without being keyed",
+    surveys.length === 1 && surveys[0].band === "20m",
     surveys.map(step => step.band).join(","));
   const firstRetune = log.find(step => step.type === "retune");
   check("the first retune of the run is to the band that needs measuring",
