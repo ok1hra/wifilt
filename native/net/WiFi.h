@@ -88,8 +88,8 @@ private:
   std::shared_ptr<SocketHandle> handle;
 };
 
-// Every WiFiServer (HTTP :80, DXC WS :82, AUD1 WS :83 -- all hardcoded ports,
-// see wifilt.ino) binds INADDR_ANY by default, same as the real device (one
+// Every WiFiServer (HTTP :80, DXC WS :82, AUD1 WS :83 -- the sketch's names
+// for them; see nativeActualPort() for where each really listens) binds INADDR_ANY by default, same as the real device (one
 // WiFi interface, one obvious place to listen). On a PC that means two
 // wifilt processes for two different radios can never coexist on one
 // machine -- both would fight over the same three ports. --bind-ip lets a
@@ -100,6 +100,12 @@ private:
 // callers/the ESP32 build.
 void nativeSetBindAddress(const std::string &ip);
 const std::string &nativeBindAddress();
+
+// Explicit port for the listener the sketch creates as WiFiServer(requested)
+// (--port / --dxc-port / --audio-port). Explicit ports never fall back.
+// nativeActualPort() and friends are declared in platform_caps.h, because the
+// sketch reads them before it includes this header.
+void nativeSetPortOverride(uint16_t requested, uint16_t port);
 
 // ---------------------------------------------------------------------------
 // WiFiServer -- listening socket, non-blocking accept.
@@ -124,6 +130,9 @@ public:
   size_t write(uint8_t) override { return 0; }
 
 private:
+  wifilt_socket_t openListener(uint16_t target, std::string *error, bool *denied,
+                               bool *taken);
+
   uint16_t        port;
   uint8_t         maxClients;
   bool            noDelay = false;

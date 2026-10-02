@@ -252,6 +252,7 @@ make -C native            # Linux binary: native/build/wifilt
 make -C native win        # Windows .exe, cross-compiled with mingw-w64: native/build-win/wifilt.exe
 make -C native arm64      # 64-bit Raspberry Pi OS, cross-compiled: native/build-arm64/wifilt
 make -C native run        # build and run against ./native/_run as the config directory, port 8080
+                          # (82/83 fall back to 8082/8083 without the capability)
 make -C native setcap     # grant cap_net_bind_service — redo after every rebuild, it lives on the inode
 ```
 
@@ -273,6 +274,15 @@ this project already applies to anything marked "needs on-radio check".
 Ports 80, 82 and 83 are all privileged, and 83 carries the audio — no `AUD1` channel means no
 JS8 and no WSPR. The Windows binary needs nothing extra to bind them; on Linux the capability
 above is required and is stored on the binary's inode, so it is lost on every rebuild.
+
+Without it the binary no longer runs half-alive: a port it cannot bind (no permission, or
+already taken) moves to **+8000** — 80→8080, 82→8082, 83→8083 — each on its own, and the
+pages learn the real ports from `/ports.js`. `--port`, `--dxc-port` and `--audio-port` set a
+port explicitly; an explicit port never moves. Moving HTTP changes the browser's origin, and
+the QSO log lives per origin, so the config directory remembers the *home* port (`http-port`,
+the first one ever served or the last explicit `--port`), and SETUP and QRPLog show a banner
+with the `setcap` command while HTTP is anywhere else. The startup log says where each
+listener really is (`HTTP| Audio WS server started on port 8083`), or that it is NOT running.
 
 ```bash
 make -C native dist       # all three: native/dist/wifilt-<REV>-linux-x86_64.tar.gz

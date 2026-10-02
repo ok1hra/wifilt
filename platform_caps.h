@@ -45,6 +45,20 @@
 
   #define CAP_BAND_DECODER 0
 
+  // Where the listeners the sketch names 80/82/83 really are. Ports below 1024
+  // need a capability on a PC, so native/net/WiFi.cpp may have moved one to
+  // +8000 (or the operator moved it with --port/--dxc-port/--audio-port).
+  // Declared here, not in WiFi.h, because the sketch includes this first.
+  #include <stdint.h>
+  uint16_t    nativeActualPort(uint16_t requested);
+  bool        nativeListenerOk(uint16_t requested);
+  const char *nativeListenerError(uint16_t requested);
+  uint16_t    nativeHomeHttpPort();   // where the QSO log lives; 0 = unknown (main.cpp)
+  #define PLATFORM_PORT(requested)        nativeActualPort(requested)
+  #define PLATFORM_LISTENER_OK(requested) nativeListenerOk(requested)
+  #define PLATFORM_LISTENER_ERROR(requested) nativeListenerError(requested)
+  #define PLATFORM_HOME_HTTP_PORT()       nativeHomeHttpPort()
+
   // No status LED either -- the PC binary has no pin to drive. Named here only
   // so #if STATUS_LED_RGB is never an undefined macro.
   #define STATUS_LED_RGB 0
@@ -56,6 +70,12 @@
   #define CAP_CIV           1
   #define CAP_GPIO          1
   #define CAP_BAND_DECODER  1
+
+  // The box owns its ports: a listener is always where the sketch put it.
+  #define PLATFORM_PORT(requested)           ((uint16_t)(requested))
+  #define PLATFORM_LISTENER_OK(requested)    true
+  #define PLATFORM_LISTENER_ERROR(requested) ""
+  #define PLATFORM_HOME_HTTP_PORT()          ((uint16_t)0)
 
   // The M5Atom Lite selects itself. Both toolchains define ARDUINO_M5Stack_ATOM
   // when that board is chosen -- PlatformIO via `board = m5stack-atom`,

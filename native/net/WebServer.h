@@ -52,8 +52,8 @@ typedef enum {
 
 // Native-only: overrides the port the sketch hard-codes as DiagWebServer(80),
 // so --port can move HTTP off 80 when binding it is not possible. Set before
-// setup() runs. Note this moves HTTP only -- the two WebSocket servers keep
-// their own ports (82, 83), which is what the browser expects.
+// setup() runs. HTTP only; --dxc-port/--audio-port move the WebSocket servers,
+// and the browser learns all three from /ports.js.
 void nativeSetHttpPort(uint16_t port);
 
 class WebServer {

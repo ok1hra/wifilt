@@ -14,6 +14,9 @@
 // calibration.
 (function () {
   const dom = {};
+  // Where the audio listener really is -- /ports.js; the PC build may have moved
+  // it off the privileged 83.
+  const audioWsPort = () => Number((window.WIFILT_PORTS || {}).audio) || 83;
   let worker = null;
   let workerRole = null; // "call" | "listen" | null
   let ownSession = false; // did THIS page's own action put the lease in use?
@@ -309,7 +312,7 @@
     workerRole = role;
     worker.onmessage = (e) => handleWorkerMessage(e.data);
     worker.onerror = (e) => handleWorkerMessage({ type: "error", reason: "worker crashed", detail: e.message });
-    worker.postMessage({ type: "start", wsPort: 83, token: MercurySession.token(), myCall, peerCall: peerCall || "", role });
+    worker.postMessage({ type: "start", wsPort: audioWsPort(), token: MercurySession.token(), myCall, peerCall: peerCall || "", role });
     setAud1Pill(role === "monitor" ? "monitoring" : "connecting");
     // CQ is a real, un-gated TX broadcast -- ambient "monitor" must not
     // enable it, same safety framing as "not listening means this station
@@ -872,7 +875,7 @@
     ensureDataMode: () => ensureUsbDataMode(),
     modLevel: () => (gainPlan ? gainPlan.modLevel() : 0),
     refreshModLevel: () => (gainPlan ? gainPlan.refreshModLevel() : null),
-    audioPort: () => 83,
+    audioPort: () => audioWsPort(),
     audioToken: () => MercurySession.token(),
     sessionHeld: () => ownSession,
     // The Mercury session lease (mercury-session.js), not the audio socket

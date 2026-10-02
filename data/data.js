@@ -38,7 +38,10 @@ const RADIO_CMD_URL = "/cmd?radio=lan";
 // because LittleFS appends are themselves deferred out of TX windows.
 const FETCH_TIMEOUT_MS = 8000, FETCH_FLASH_TIMEOUT_MS = 12000;
 const fetchDeadline = (ms = FETCH_TIMEOUT_MS) => AbortSignal.timeout(ms);
-const AUDIO_WS_PORT = Number(new URLSearchParams(location.search).get("audioPort")) || 83;
+// /ports.js says where the audio listener really is (the PC build may have moved
+// it off the privileged 83); ?audioPort= still wins, for the test fixtures.
+const AUDIO_WS_PORT = Number(new URLSearchParams(location.search).get("audioPort")) ||
+  Number((window.WIFILT_PORTS || {}).audio) || 83;
 const RX_LOW = 500, RX_HIGH = 2700, HB_HIGH = 1000, AUDIO_RATE = 8000;
 const FFT_SIZE = 4096, HOP_SIZE = 2048;
 const SPEED_TO_MODE = {A:0, B:1, C:2, E:4, I:8};

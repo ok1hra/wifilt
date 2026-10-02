@@ -10,7 +10,8 @@
 #
 #   * copies the binary and the data/ tree to $PREFIX
 #   * grants CAP_NET_BIND_SERVICE, without which ports 80, 82 and 83 cannot be
-#     bound -- and 83 carries the audio, so JS8 and WSPR do not work at all
+#     bound -- the binary then moves them to 8080/8082/8083, which works but
+#     changes the browser's origin and with it which QSO log the page shows
 #   * installs a systemd unit that is NOT enabled by default
 #
 # It deliberately does not touch the configuration directory. That lives in the

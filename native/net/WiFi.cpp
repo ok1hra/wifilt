@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <map>
 #include <string>
 
 #ifdef _WIN32
@@ -402,6 +403,56 @@ static std::string g_bindAddress; // empty = INADDR_ANY, unchanged default
 void nativeSetBindAddress(const std::string &ip) { g_bindAddress = ip; }
 const std::string &nativeBindAddress() { return g_bindAddress; }
 
+// The sketch names its listeners by the box's ports (80, 82, 83). On a PC those
+// are privileged, and an operator who moved HTTP with --port used to get a page
+// that loaded and an audio port that silently did not. Every listener is
+// therefore filed here under the port the sketch asked for, with the port it
+// really got -- /ports.js hands the real ones to the browser, /health.json says
+// which ones failed and why.
+//
+// An explicit --port/--dxc-port/--audio-port is the operator's own choice and is
+// never second-guessed. Without one, a privileged port that cannot be bound
+// (no CAP_NET_BIND_SERVICE, or already taken) falls back to +8000. Each port on
+// its own: the WebSocket ports do not take part in the origin, so the audio
+// moving to 8083 costs nothing when 80 itself was fine. HTTP moving DOES change
+// the origin, and with it which QSO log the browser shows -- which is why the
+// last HTTP port is remembered (main.cpp) and the pages warn when it moved.
+namespace {
+struct ListenerReport {
+  uint16_t    actual = 0;
+  bool        ok = false;
+  std::string error;
+};
+std::map<uint16_t, uint16_t>       g_portOverrides;   // requested -> explicit
+std::map<uint16_t, ListenerReport> g_listenerReports; // requested -> outcome
+const uint16_t kFallbackOffset = 8000;
+
+bool fallbackAllowed(uint16_t requested) {
+  return requested == 80 || requested == 82 || requested == 83;
+}
+}  // namespace
+
+void nativeSetPortOverride(uint16_t requested, uint16_t port) {
+  if (port) g_portOverrides[requested] = port;
+}
+
+uint16_t nativeActualPort(uint16_t requested) {
+  auto found = g_listenerReports.find(requested);
+  if (found != g_listenerReports.end() && found->second.ok) return found->second.actual;
+  auto override = g_portOverrides.find(requested);
+  return override != g_portOverrides.end() ? override->second : requested;
+}
+
+bool nativeListenerOk(uint16_t requested) {
+  auto found = g_listenerReports.find(requested);
+  return found != g_listenerReports.end() && found->second.ok;
+}
+
+const char *nativeListenerError(uint16_t requested) {
+  auto found = g_listenerReports.find(requested);
+  return found == g_listenerReports.end() ? "" : found->second.error.c_str();
+}
+
 WiFiServer::WiFiServer(uint16_t port, uint8_t maxClients)
     : port(port), maxClients(maxClients) {}
 
@@ -411,21 +462,61 @@ void WiFiServer::begin(uint16_t newPort) {
   if (newPort) port = newPort;
   end();
 
-  // A listener that fails to bind MUST be loud. The Arduino API returns void,
-  // so the sketch prints "web server started" either way; staying silent here
-  // produced a daemon that logged a healthy startup while answering nothing.
-  // The same failure on port 80 -- already taken, or no CAP_NET_BIND_SERVICE --
-  // is the one that must never be mistaken for success, because falling back to
-  // another port changes the origin and hides the operator's QSO log.
-  listener = ::socket(AF_INET, SOCK_STREAM, 0);
+  // `port` stays the sketch's name for this listener; what it ends up on is
+  // filed under that name. A listener that fails to bind MUST be loud: the
+  // Arduino API returns void, so the sketch cannot tell on its own.
+  const uint16_t requested = port;
+  auto override = g_portOverrides.find(requested);
+  const bool explicitPort = override != g_portOverrides.end();
+  ListenerReport &report = g_listenerReports[requested];
+  report = ListenerReport();
+
+  std::string error;
+  bool denied = false, taken = false;
+  uint16_t target = explicitPort ? override->second : requested;
+  listener = openListener(target, &error, &denied, &taken);
+
+  if (listener == WIFILT_INVALID_SOCKET && !explicitPort && (denied || taken) &&
+      fallbackAllowed(requested)) {
+    const uint16_t fallback = (uint16_t)(requested + kFallbackOffset);
+    fprintf(stderr, "WIFILT | port %u: trying %u instead\n", (unsigned)requested,
+            (unsigned)fallback);
+    std::string fallbackError;
+    bool fallbackDenied = false, fallbackTaken = false;
+    listener = openListener(fallback, &fallbackError, &fallbackDenied, &fallbackTaken);
+    if (listener != WIFILT_INVALID_SOCKET) {
+      target = fallback;
+      // Kept: the reason it is not on its own port is the part worth showing.
+      report.error = error;
+    } else {
+      error = error + "; " + std::to_string(fallback) + ": " + fallbackError;
+    }
+  }
+
   if (listener == WIFILT_INVALID_SOCKET) {
-    fprintf(stderr, "WIFILT | port %u: cannot create socket (%s)\n",
-            (unsigned)port, nativeSocketErrorText());
+    report.ok = false;
+    report.actual = 0;
+    report.error = error;
     return;
+  }
+  report.ok = true;
+  report.actual = target;
+  if (target != requested)
+    fprintf(stderr, "WIFILT | port %u is listening on %u\n", (unsigned)requested,
+            (unsigned)target);
+}
+
+wifilt_socket_t WiFiServer::openListener(uint16_t target, std::string *error,
+                                         bool *denied, bool *taken) {
+  wifilt_socket_t socket = ::socket(AF_INET, SOCK_STREAM, 0);
+  if (socket == WIFILT_INVALID_SOCKET) {
+    *error = std::string("cannot create socket: ") + nativeSocketErrorText();
+    fprintf(stderr, "WIFILT | port %u: %s\n", (unsigned)target, error->c_str());
+    return WIFILT_INVALID_SOCKET;
   }
 
   int reuse = 1;
-  setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, (const char *)&reuse,
+  setsockopt(socket, SOL_SOCKET, SO_REUSEADDR, (const char *)&reuse,
              sizeof(reuse));
 
   struct sockaddr_in address;
@@ -439,14 +530,15 @@ void WiFiServer::begin(uint16_t newPort) {
       address.sin_addr.s_addr = htonl(INADDR_ANY);
     }
   }
-  address.sin_port = htons(port);
+  address.sin_port = htons(target);
 
-  if (::bind(listener, (struct sockaddr *)&address, sizeof(address)) != 0) {
-    const bool denied = nativeSocketErrorWasPermission();
-    const bool taken = nativeSocketErrorWasInUse();
-    fprintf(stderr, "WIFILT | port %u: BIND FAILED -- %s\n", (unsigned)port,
-            nativeSocketErrorText());
-    if (denied && port < 1024) {
+  if (::bind(socket, (struct sockaddr *)&address, sizeof(address)) != 0) {
+    *denied = nativeSocketErrorWasPermission();
+    *taken = nativeSocketErrorWasInUse();
+    *error = nativeSocketErrorText();
+    fprintf(stderr, "WIFILT | port %u: BIND FAILED -- %s\n", (unsigned)target,
+            error->c_str());
+    if (*denied && target < 1024) {
 #ifdef _WIN32
       fprintf(stderr, "WIFILT |   ports below 1024 need an elevated process\n");
 #else
@@ -455,23 +547,22 @@ void WiFiServer::begin(uint16_t newPort) {
               "WIFILT |   sudo setcap cap_net_bind_service=+ep <path to wifilt>\n");
 #endif
     }
-    if (taken)
+    if (*taken)
       fprintf(stderr, "WIFILT |   another process is already on port %u\n",
-              (unsigned)port);
-    WIFILT_CLOSE_SOCKET(listener);
-    listener = WIFILT_INVALID_SOCKET;
-    return;
+              (unsigned)target);
+    WIFILT_CLOSE_SOCKET(socket);
+    return WIFILT_INVALID_SOCKET;
   }
 
-  if (::listen(listener, maxClients) != 0) {
-    fprintf(stderr, "WIFILT | port %u: listen failed (%s)\n", (unsigned)port,
-            nativeSocketErrorText());
-    WIFILT_CLOSE_SOCKET(listener);
-    listener = WIFILT_INVALID_SOCKET;
-    return;
+  if (::listen(socket, maxClients) != 0) {
+    *error = std::string("listen failed: ") + nativeSocketErrorText();
+    fprintf(stderr, "WIFILT | port %u: %s\n", (unsigned)target, error->c_str());
+    WIFILT_CLOSE_SOCKET(socket);
+    return WIFILT_INVALID_SOCKET;
   }
 
-  nativeSocketSetNonBlocking(listener, true);
+  nativeSocketSetNonBlocking(socket, true);
+  return socket;
 }
 
 void WiFiServer::end() {

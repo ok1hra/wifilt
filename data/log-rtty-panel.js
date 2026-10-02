@@ -50,7 +50,9 @@
 (function (global) {
 
   var STORE_KEY = 'wifilt-rtty-panel';
-  var AUDIO_WS_PORT = 83;
+  // Where the audio listener really is -- /ports.js; the PC build may have
+  // moved it off the privileged 83.
+  var AUDIO_WS_PORT = Number((global.WIFILT_PORTS || {}).audio) || 83;
   var RX_AUDIO_RATE = 8000, TX_AUDIO_RATE = 48000;
   var STATE_POLL_MS = 1000;
   var SESSION_PING_MS = 5000, SESSION_RETRY_MS = 3000, SESSION_PROBE_MS = 250;

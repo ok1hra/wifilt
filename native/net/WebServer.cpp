@@ -2,11 +2,11 @@
 
 #include <stdio.h>
 
-namespace {
-uint16_t g_httpPortOverride = 0;
-}
+#include "WiFi.h"
 
-void nativeSetHttpPort(uint16_t port) { g_httpPortOverride = port; }
+// The listener keeps the sketch's name (80); the override and any fallback
+// are WiFiServer's business -- see nativeActualPort().
+void nativeSetHttpPort(uint16_t port) { nativeSetPortOverride(80, port); }
 
 WebServer::WebServer(int port)
     : _port((uint16_t)port), _server((uint16_t)port) {}
@@ -14,7 +14,6 @@ WebServer::WebServer(int port)
 WebServer::~WebServer() { close(); }
 
 void WebServer::begin() {
-  if (g_httpPortOverride) _port = g_httpPortOverride;
   _server.begin(_port);
 }
 

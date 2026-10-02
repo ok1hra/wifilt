@@ -135,7 +135,14 @@ void HardwareSerial::begin(unsigned long, uint32_t, int8_t, int8_t) {
   // Baud rate is meaningless here. The sketch changes it at runtime when the
   // operator picks a CI-V speed; on the PC build CI-V does not exist, so this
   // is deliberately inert rather than an error.
-  setvbuf(stdout, nullptr, _IOLBF, 0);
+  //
+  // Line buffering is set once only: the sketch calls begin() more than once,
+  // and setvbuf() on a stream that already has output pending is undefined.
+  static bool lineBuffered = false;
+  if (!lineBuffered) {
+    setvbuf(stdout, nullptr, _IOLBF, 0);
+    lineBuffered = true;
+  }
 }
 
 void HardwareSerial::end() { fflush(stdout); }

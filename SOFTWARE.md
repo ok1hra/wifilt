@@ -328,6 +328,14 @@ a desktop instance open in two browser tabs stay easy to tell apart. A Raspberry
 `WIFILT-LINUX` instance like any other: the CPU architecture only decides which download to
 grab, never how the interface behaves once it is running.
 
+On Linux the box's ports 80, 82 and 83 need a permission that `install.sh` grants and that
+every upgrade or rebuild drops. Without it WIFILT does not run half-alive: each port it
+cannot open moves to **+8000** (80→8080, 82→8082, 83→8083 — 83 is the audio). The QSO log
+lives in the browser under the page's address, so while the web page is on a different port
+than the one this installation first used, SETUP and QRPLog show an amber banner saying where
+the log is and the command that brings port 80 back. `--port`, `--dxc-port` and
+`--audio-port` pick the ports explicitly.
+
 Building either native binary from source, and what `install.sh` does on Linux (including the
 Raspberry Pi build), is in
 [BUILD.md § 4](BUILD.md#4-native-build-linux-windows-and-raspberry-pi-arm64).
@@ -2777,6 +2785,7 @@ After logging, the button turns into **VIEW LOG** and opens the logbook in a new
 | The radio looks dead and DXC is open several times | Since 2026-09-07 the instances share one connection and no longer fight over it — the one being relayed to shows `WS↗`. If an instance sits on `WS ...` or `WS off` for more than a few seconds, reload it. A version older than that really does need exactly one DXC window open: the cluster WebSocket accepts a single client, and extra windows evict each other in a reconnect storm that starves the radio's own connection. |
 | `not calibrated for 20m @10% - using the manual 0.25` | that band and power pair has never been measured. Run **CAL PLAN**, or accept the manual gain. |
 | The unattended countdown does not start after loading the page | toggle it off and on again. |
+| PC/Linux: the QSO log is empty, and an amber banner says *WIFILT is on port 8080 this time, not 80* | the program lost its permission to open port 80 (every upgrade or rebuild drops it) and moved to 8080. The log is still there at the old address. Run `sudo setcap cap_net_bind_service=+ep <path to wifilt>` (or `sudo ./install.sh` again) and restart WIFILT. |
 
 ---
 

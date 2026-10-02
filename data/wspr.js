@@ -14,7 +14,8 @@
   // an unprivileged port on the same host. Port 83 is privileged, so without this
   // the page could not be exercised outside a real device at all.
   const AUDIO_WS_PORT =
-    Number(new URLSearchParams(location.search).get("audioPort")) || 83;
+    Number(new URLSearchParams(location.search).get("audioPort")) ||
+    Number((window.WIFILT_PORTS || {}).audio) || 83;
   const STATE_POLL_MS = 1000;
   // Same abort deadline data.js carries (data.js:30): a fetch with no timeout
   // parks a browser connection on a half-open socket for minutes after a WiFi

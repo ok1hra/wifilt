@@ -21,7 +21,8 @@
   "use strict";
 
   const AUDIO_WS_PORT =
-    Number(new URLSearchParams(location.search).get("audioPort")) || 83;
+    Number(new URLSearchParams(location.search).get("audioPort")) ||
+    Number((window.WIFILT_PORTS || {}).audio) || 83;
   const STATE_POLL_MS = 1000;
   const FETCH_TIMEOUT_MS = 8000, FETCH_FLASH_TIMEOUT_MS = 12000;
   const fetchDeadline = (ms = FETCH_TIMEOUT_MS) => AbortSignal.timeout(ms);

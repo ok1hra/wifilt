@@ -28,6 +28,7 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <fstream>
 #include <string>
 #include <thread>
 
@@ -38,6 +39,7 @@
 #include "WebServer.h"
 #include "WiFi.h"
 #include "paths.h"
+#include "platform_caps.h"
 #include "radio_transport.h"
 #include "process_args.h"
 #include "socket_compat.h"
@@ -97,6 +99,11 @@ void printUsage(const char *program) {
       "  --port N          HTTP port (default 80; needs root or\n"
       "                    setcap cap_net_bind_service=+ep)\n"
 #endif
+      "  --dxc-port N      DXC WebSocket port (default 82)\n"
+      "  --audio-port N    audio (AUD1) WebSocket port (default 83)\n"
+      "                    Without these, a port that cannot be bound (no\n"
+      "                    privilege, or taken) moves to +8000: 80->8080,\n"
+      "                    82->8082, 83->8083. An explicit port never moves.\n"
       "  --data-dir PATH   web assets (default: data/ beside the executable)\n"
       "  --config-dir PATH configuration (default: ~/.config/wifilt or %%APPDATA%%)\n"
       "  --bind-ip ADDR    bind HTTP/DXC-WS/AUD1-WS to this address instead of\n"
@@ -113,7 +120,8 @@ void printUsage(const char *program) {
       "\n"
       "The operator's QSO log lives in the browser and is scoped to the origin,\n"
       "so reaching this binary at the same address the box used is what keeps\n"
-      "that log. Moving off port 80 changes the origin.\n",
+      "that log. Moving off port 80 changes the origin -- the pages say so when\n"
+      "HTTP is not on the port this configuration first served on.\n",
       program);
 }
 
@@ -133,6 +141,36 @@ void seedFreshConfig() {
   EEPROM.commit();
 }
 
+// The HTTP port is part of the origin, and the origin is what the browser files
+// the QSO log under. The "home" port is where that log lives: the first port this
+// config directory ever served on, or whatever --port says. A fallback never
+// moves it, so a binary that lost its capability on upgrade keeps saying "you
+// are on :8080, your log is at :80" on every run, not just the first one.
+uint16_t g_homeHttpPort = 0;
+
+std::string httpPortFile() { return nativeJoinPath(nativeConfigDir(), "/http-port"); }
+
+void loadHomeHttpPort() {
+  std::ifstream in(httpPortFile());
+  unsigned value = 0;
+  if (in >> value && value > 0 && value < 65536) g_homeHttpPort = (uint16_t)value;
+}
+
+void rememberHttpPort(bool explicitPort) {
+  if (!nativeListenerOk(80)) return;
+  const uint16_t now = nativeActualPort(80);
+  if (g_homeHttpPort && g_homeHttpPort != now && !explicitPort) {
+    printf("WIFILT | HTTP is on port %u, not %u -- the browser keeps the QSO log\n"
+           "WIFILT |   per address, so the log from :%u is not visible on :%u\n",
+           (unsigned)now, (unsigned)g_homeHttpPort, (unsigned)g_homeHttpPort,
+           (unsigned)now);
+    return;
+  }
+  g_homeHttpPort = now;
+  std::ofstream out(httpPortFile(), std::ios::trunc);
+  out << now << "\n";
+}
+
 bool parseArguments(int argc, char **argv, uint16_t *port) {
   for (int i = 1; i < argc; i++) {
     const std::string flag = argv[i];
@@ -144,6 +182,10 @@ bool parseArguments(int argc, char **argv, uint16_t *port) {
     }
     if (flag == "--port" && hasValue) {
       *port = (uint16_t)atoi(argv[++i]);
+    } else if (flag == "--dxc-port" && hasValue) {
+      nativeSetPortOverride(82, (uint16_t)atoi(argv[++i]));
+    } else if (flag == "--audio-port" && hasValue) {
+      nativeSetPortOverride(83, (uint16_t)atoi(argv[++i]));
     } else if (flag == "--data-dir" && hasValue) {
       nativeSetDataDir(argv[++i]);
     } else if (flag == "--config-dir" && hasValue) {
@@ -162,6 +204,8 @@ bool parseArguments(int argc, char **argv, uint16_t *port) {
 }
 
 }  // namespace
+
+uint16_t nativeHomeHttpPort() { return g_homeHttpPort; }
 
 int main(int argc, char **argv) {
   nativeProcessArgvSet(argc, argv);
@@ -209,8 +253,10 @@ int main(int argc, char **argv) {
   printf("WIFILT | config  %s\n", nativeConfigDir().c_str());
 
   seedFreshConfig();   // (4)
+  loadHomeHttpPort();
 
   setup();
+  rememberHttpPort(port != 0);
 
   // (2) Pace the loop. A pass that finished in under a millisecond sleeps the
   // remainder, which still leaves roughly a thousand passes a second -- far

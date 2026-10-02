@@ -67,8 +67,9 @@ sudo ./install.sh
 ```
 
 The installer copies the program to `/opt/wifilt` and grants it permission to bind ports 80,
-82 and 83 — **port 83 carries the audio**, so without that permission JS8, RTTY, WSPR and
-Mercury cannot work at all. It installs a `systemd` service but deliberately does **not**
+82 and 83 — **port 83 carries the audio**. Without that permission (or after an upgrade that
+skipped the installer) WIFILT moves to 8080/8082/8083 by itself and the page tells you so;
+`--port`, `--dxc-port` and `--audio-port` choose the ports explicitly. It installs a `systemd` service but deliberately does **not**
 enable it: starting a transmitter's control interface at boot should be your decision. Then:
 
 ```sh

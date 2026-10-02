@@ -5402,6 +5402,24 @@ void setupWebServer(void){
   const char *requestHeaders[] = {"Accept-Encoding"};
   webServer.collectHeaders(requestHeaders, 1);
   webServer.on("/state", HTTP_GET, handleGetState);
+  // Where the listeners really are, as a script the pages load before their own.
+  // The box always says 80/82/83; the PC build may have moved any of them (see
+  // PLATFORM_PORT in platform_caps.h), and every page used to build its
+  // WebSocket URLs from hard-coded 82/83. homeHttp is where the QSO log lives
+  // (it is kept per origin), so a page served elsewhere can say so out loud.
+  webServer.on("/ports.js", HTTP_GET, [](){
+    String out = "window.WIFILT_PORTS={\"http\":";
+    out += PLATFORM_PORT(80);
+    out += ",\"dxc\":";
+    out += PLATFORM_PORT(82);
+    out += ",\"audio\":";
+    out += PLATFORM_PORT(83);
+    out += ",\"homeHttp\":";
+    out += PLATFORM_HOME_HTTP_PORT();
+    out += "};";
+    webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    webServer.send(200, "application/javascript", out);
+  });
   webServer.on("/unattended", HTTP_GET, handleUnattendedGet);
   webServer.on("/unattended", HTTP_POST, handleUnattendedPost);
   webServer.on("/unattended/log", HTTP_GET, handleUnattendedLog);
@@ -6025,9 +6043,27 @@ void setup(){
       setupWebServer();
       dxcRawServer.begin();
       audioWsServer.begin();
-      Serial.println("HTTP| web server started");
-      Serial.println("HTTP| DXC WS server started on port 82");
-      Serial.println("HTTP| Audio WS server started on port 83");
+      // Only what really bound. These lines used to print unconditionally, so a
+      // PC build without the capability logged a healthy start while the audio
+      // port answered nothing.
+      {
+        const uint16_t listeners[] = {80, 82, 83};
+        const char *names[] = {"web", "DXC WS", "Audio WS"};
+        for (int i = 0; i < 3; i++) {
+          Serial.print("HTTP| ");
+          Serial.print(names[i]);
+          if (PLATFORM_LISTENER_OK(listeners[i])) {
+            Serial.print(" server started on port ");
+            Serial.println(PLATFORM_PORT(listeners[i]));
+          } else {
+            Serial.print(" server NOT running (port ");
+            Serial.print(listeners[i]);
+            Serial.print(": ");
+            Serial.print(PLATFORM_LISTENER_ERROR(listeners[i]));
+            Serial.println(")");
+          }
+        }
+      }
     }
   #endif
 

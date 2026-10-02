@@ -57,6 +57,11 @@ const TAG = /(\s(?:src|href)=")\/([A-Za-z0-9_.\-]+\.(?:js|css))(\?[^"]*)?"/g;
 const ASSET_URL = /assetUrl\("(\/[A-Za-z0-9_.\-]+)"\)/g;
 const ASSET_REV_LINE = /(const ASSET_REV = ")([^"]*)(";)/;
 
+// Scripts the firmware GENERATES per request (webServer.on in wifilt.ino), not
+// files in data/. They go out no-store, so a ?v= would buy nothing -- and there
+// is no content to hash.
+const GENERATED = new Set(["/ports.js"]);
+
 const problems = [];
 const changes = [];
 
@@ -145,6 +150,7 @@ for (const name of htmlFiles) {
   const html = fs.readFileSync(file, "utf8");
   let stamped = 0;
   const next = html.replace(TAG, (whole, prefix, asset, query) => {
+    if (GENERATED.has(`/${asset}`)) return whole;
     const version = versionOf(`/${asset}`, name);
     if (!version) return whole;
     stamped++;
