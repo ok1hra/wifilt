@@ -552,6 +552,16 @@ to LOGSYNC to copy one across.
 A compressed version of the same marks appears in the top bar of the DATA and WSPR
 pages, so you can see at a glance whether anything is still outstanding.
 
+#### What next, and when something does not work
+
+Once the station can hear — network, identity, radio and audio done — a card under the
+steps offers the three ways on: **Listen** (JS8, WSPR, RTTY; nothing transmits), **Transmit**
+(calibrate, tick *Enable radio TX*, send a heartbeat or a CQ — ticked when both are done in
+this browser) and **Log it** (QRPLog, LOGSYNC). Under it, folded, **When something does not
+work** lists the symptoms operators actually run into — no audio, a dimmed TX button, PTT
+without RF, *Modem loading failed*, an empty log on a PC after an upgrade, TX underruns —
+each with its fix.
+
 ### 2.3 Finding the interface later
 
 The address is shown on the handover screen the moment the device joins, and

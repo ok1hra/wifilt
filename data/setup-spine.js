@@ -112,6 +112,21 @@
     + ".spine-body > .setup-section[data-spine-bare] > .setup-section-body{padding:0;border-top:0}"
     // The way on. One per step, always the last thing in it, always the same
     // shape -- so "what do I press now" is answered by position, not by reading.
+    + ".spine-whatnext{margin:-8px 0 22px;padding:12px 13px;border:1px solid #24413b;border-radius:7px}"
+    + ".spine-whatnext h3,.spine-trouble summary{margin:0 0 8px;font-size:12px;font-weight:850;"
+    + "letter-spacing:.08em;text-transform:uppercase;color:#d9e7e2}"
+    + ".spine-path{display:grid;grid-template-columns:22px 1fr;gap:4px 8px;margin:9px 0 0;font-size:12px;color:#8ba59d}"
+    + ".spine-path .spine-mark{width:20px;height:20px;font-size:11px}"
+    + ".spine-path .spine-path-done{border-color:#3f9d6a;background:#12291f;color:#66d69a}"
+    + ".spine-path b{color:#d9e7e2}"
+    + ".spine-path a{color:#66d69a;font-weight:700;margin-right:10px}"
+    + ".spine-trouble{margin:-8px 0 22px;padding:10px 13px;border:1px solid #24413b;border-radius:7px}"
+    + ".spine-trouble summary{cursor:pointer;margin:0}"
+    + ".spine-trouble dl{margin:10px 0 0;font-size:12px}"
+    + ".spine-trouble dt{margin-top:9px;color:#d9e7e2;font-weight:700}"
+    + ".spine-trouble dd{margin:2px 0 0;color:#8ba59d;line-height:1.5}"
+    + ".spine-trouble code{user-select:all;color:#d9e7e2}"
+    + ".spine-trouble a{color:#66d69a}"
     + ".spine-next{display:flex;flex-wrap:wrap;gap:9px;align-items:center;margin-top:11px;"
     + "padding-top:11px;border-top:1px solid #1b322c}"
     // An explicit display beats the UA's rule for [hidden], so the hidden state
@@ -336,6 +351,85 @@
     steps.forEach(function (step) { list.appendChild(step.node); });
 
     host.appendChild(list);
+
+    // ---- what next, and when something does not work ----------------------
+    //
+    // The spine ended at "This browser" and then said nothing: a finished setup
+    // and no hint of what a first QSO looks like from here. The card appears
+    // once the station can hear (network, identity, radio, audio) and offers
+    // three ways on, each ticked from a fact like the steps are -- nothing is
+    // stored. The trouble list is always there, folded: the symptoms operators
+    // actually report, each with the fix, which used to live only in the manual.
+    var whatNext = el("section", "spine-whatnext");
+    whatNext.hidden = true;
+    host.appendChild(whatNext);
+    var trouble = el("details", "spine-trouble");
+    trouble.innerHTML = "<summary>When something does not work</summary><dl>"
+      + "<dt>&ldquo;No audio&rdquo;, &ldquo;Audio link unavailable&rdquo;, nothing in the waterfall</dt>"
+      + "<dd>Step 4 (Audio) says which half failed and what to do — the audio server could not "
+      + "open its port, or this browser cannot reach it (a firewall). Radio control works "
+      + "either way, which is why it can look half-alive.</dd>"
+      + "<dt>A TX button is dimmed and says &ldquo;Nothing was sent&rdquo;</dt>"
+      + "<dd><b>Enable radio TX</b> is off in that page's SETTINGS — the notice has a button "
+      + "that opens it. It is per browser: a new tablet starts with it off.</dd>"
+      + "<dt>PTT works, but no RF comes out</dt>"
+      + "<dd>The radio's <b>MOD Input</b> (DATA MOD) is not set to <b>WLAN</b>/LAN — set it in "
+      + "the radio's menu.</dd>"
+      + "<dt>&ldquo;Modem loading failed&rdquo;</dt>"
+      + "<dd>The message names the file that is missing. The web folder is incomplete: "
+      + "reinstall it, or in a source checkout run <code>git checkout -- data/</code>. "
+      + "The compressed copies alone are optional (<code>./tools/gzip-assets.sh</code>).</dd>"
+      + "<dt>On a PC: the QSO log is suddenly empty</dt>"
+      + "<dd>WIFILT moved to port 8080 because it lost the permission for port 80 (every "
+      + "upgrade or rebuild drops it) — the log is still at the old address. "
+      + "<code>sudo setcap cap_net_bind_service=+ep &lt;path to wifilt&gt;</code>, then restart.</dd>"
+      + "<dt>TX buffer underrun, broken transmissions</dt>"
+      + "<dd>The network is not keeping up with the audio: move the tablet closer to the "
+      + "access point. Phone hotspots isolate clients and break the audio path.</dd>"
+      + "</dl>";
+    host.appendChild(trouble);
+
+    // Enable radio TX is per browser; the page reads it and hands the answer in,
+    // so this module never touches browser storage (nothing here is stored).
+    function pledgeInThisBrowser() {
+      try { return options.pledge ? Boolean(options.pledge()) : false; }
+      catch (e) { return false; }
+    }
+
+    function path(done, title, text, links) {
+      var row = el("div", "spine-path");
+      // Its own class, not .spine-step: anything that counts the steps by that
+      // class would count these too.
+      row.appendChild(el("span", "spine-mark" + (done ? " spine-path-done" : ""), done ? "✓" : "·"));
+      var body = el("div");
+      body.innerHTML = "<b>" + title + "</b> — " + text + "<br>" + links.map(function (l) {
+        return "<a href=\"" + l[1] + "\">" + l[0] + " ↗</a>";
+      }).join("");
+      row.appendChild(body);
+      return row;
+    }
+
+    function renderWhatNext(model) {
+      var audioOk = model.audio && model.audio.verdict && model.audio.verdict.state === "ok";
+      var ready = model.network.done && model.identity.done && !!model.radio && audioOk;
+      whatNext.hidden = !ready;
+      if (!ready) return;
+      var calibrated = model.transmit.done;
+      var pledge = pledgeInThisBrowser();
+      whatNext.innerHTML = "";
+      whatNext.appendChild(el("h3", null, "What next — a first QSO"));
+      whatNext.appendChild(path(true, "Listen",
+        "the station can hear: open JS8 or WSPR and watch the waterfall fill. Nothing transmits.",
+        [["JS8", "/data.html"], ["WSPR", "/wspr.html"], ["RTTY", "/rtty.html"]]));
+      whatNext.appendChild(path(calibrated && pledge, "Transmit",
+        (calibrated ? "calibrated" : "calibrate first (CAL PLAN, step 5)") + ", then "
+        + (pledge ? "radio TX is enabled in this browser" : "tick <b>Enable radio TX</b> in SETTINGS")
+        + " — and send a heartbeat (HB) or a CQ on JS8.",
+        [["JS8 SETTINGS", "/data.html#settings"], ["WSPR SETTINGS", "/wspr.html#settings"]]));
+      whatNext.appendChild(path(model.browser === true, "Log it",
+        "QRPLog keeps the log in this browser; LOGSYNC copies it to another device.",
+        [["QRPLOG", "/log"], ["LOGSYNC", "/datasync"]]));
+    }
 
     // Which step is open is the operator's choice the moment they make one, and
     // it has to survive the five-second live poll. Without this the render that
@@ -1063,6 +1157,7 @@
       fillAudio(steps[3], model);
       fillTransmit(steps[4], model);
       fillBrowser(steps[5], model);
+      renderWhatNext(model);
       applyLive(steps[2], model);
 
       // The list is always here. It used to fold itself into one line once the
@@ -1209,12 +1304,12 @@
         if (!data) return;
         var model = derive({data: data, txgain: both[1], browser: null});
         if (!model.identity.done) {
-          show("Step 2 of 5", "This station has no callsign yet — everything transmitted from "
+          show("Step 2 of 6", "This station has no callsign yet — everything transmitted from "
             + "here needs one.", "OPEN SETUP", function () { location.href = "/setup"; });
           return;
         }
         if (model.transmit.possible && !model.transmit.done) {
-          show("Step 4 of 5", "<b>The transmit check has never been run.</b> One keyed carrier "
+          show("Step 5 of 6", "<b>The transmit check has never been run.</b> One keyed carrier "
             + "measures how much audio this radio takes before its ALC acts — until then the "
             + "digital modes are guessing at the level.",
             options.onCalibrate ? "MEASURE IT HERE" : null, options.onCalibrate);

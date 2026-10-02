@@ -59,7 +59,7 @@
       <script src="/tx-mode-powers.js?v=fae0808f"></script>
       <script src="/icom-discovery.js?v=dc5654a5"></script>
       <script src="/audio-health.js?v=9efe092e"></script>
-      <script src="/setup-spine.js?v=a132188f"></script>
+      <script src="/setup-spine.js?v=54e58741"></script>
       <!-- The live TrxNet device list. Shared with the RTTY page's FSK output
            picker and the JS8 TELEMETRY panel, which is why it is a module and
            not a third hand-copied function. -->
@@ -128,7 +128,15 @@
             },
             // Bound late on purpose: the save helper is defined further down the
             // page, and this only ever runs on a click.
-            save: function () { return window.setupSaveQuiet(); }
+            save: function () { return window.setupSaveQuiet(); },
+            // Enable radio TX lives in this browser (the JS8 and WSPR pages
+            // share it); the spine's "what next" card only reads it.
+            pledge: function () {
+              try {
+                var js8 = JSON.parse(localStorage.getItem('wifilt.data.js8-settings') || 'null');
+                return !!(js8 && js8.modems && js8.modems.js8call && js8.modems.js8call.txSafetyAccepted);
+              } catch (e) { return false; }
+            }
           });
           window.setupSpine.start();
 

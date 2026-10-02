@@ -225,9 +225,9 @@ check("the banner disappears when nothing is outstanding",
 check("dismissing the banner is not remembered",
   /never stored/.test(spineSource) && !/localStorage/.test(spineSource));
 check("an unset callsign is what the banner says first",
-  /Step 2 of 5/.test(spineSource) && /no callsign yet/.test(spineSource));
+  /Step 2 of 6/.test(spineSource) && /no callsign yet/.test(spineSource));
 check("the transmit check is offered, not demanded",
-  /Step 4 of 5/.test(spineSource) && /never been run/.test(spineSource));
+  /Step 5 of 6/.test(spineSource) && /never been run/.test(spineSource));
 
 // ---------------------------------------------------------------- pass C ----
 // Two devices, two page loads: one that has nothing and one that has everything.
@@ -280,7 +280,11 @@ const DRIVER = `
           // answer both look like. The header has to survive it.
           suffix: (document.getElementById("setupPlatformSuffix") || {}).textContent,
           meta: (document.getElementById("setupMeta") || {}).textContent,
-          audioBody: steps[3] ? steps[3].querySelector(".spine-body").textContent : ""
+          audioBody: steps[3] ? steps[3].querySelector(".spine-body").textContent : "",
+          whatNext: (function () { var w = document.querySelector(".spine-whatnext");
+            return w && !w.hidden ? w.textContent : null; })(),
+          whatNextPaths: document.querySelectorAll(".spine-whatnext .spine-path").length,
+          trouble: (document.querySelector(".spine-trouble") || {}).textContent || ""
         })
       });
     })();
@@ -855,12 +859,23 @@ function report() {
   check("ready: radio detail names the model", ready && /IC-705/.test(ready.details[2]));
   check("ready: transmit detail counts bands", ready && /2 bands/.test(ready.details[4]));
 
+  // What next: shown once the station can hear, never before; the trouble list
+  // is always there.
+  check("fresh: no 'what next' before the station can hear", fresh && fresh.whatNext === null);
+  check("ready: 'what next' offers listen, transmit and log", ready && ready.whatNextPaths === 3
+    && /Listen/.test(ready.whatNext) && /Transmit/.test(ready.whatNext) && /Log it/.test(ready.whatNext));
+  check("ready: the transmit path names the TX switch until it is on",
+    ready && /Enable radio TX/.test(ready.whatNext));
+  check("the trouble list is there on every page state", fresh && ready
+    && /No audio/.test(fresh.trouble) && /MOD Input/.test(ready.trouble) && /setcap/.test(ready.trouble));
+
   const audiodown = results.audiodown, firewall = results.firewall;
   check("audiodown: the audio step is the outstanding one", audiodown && audiodown.states[3] === "todo");
   check("audiodown: it says the server is not running", audiodown
     && /not running/.test(audiodown.details[3]) && /Permission denied/.test(audiodown.audioBody));
   check("audiodown: it gives the command", audiodown && /setcap cap_net_bind_service/.test(audiodown.audioBody)
     && /--audio-port/.test(audiodown.audioBody));
+  check("audiodown: no 'what next' while the audio is down", audiodown && audiodown.whatNext === null);
   check("audiodown: it is the step that opened", audiodown && audiodown.openBodies === 1
     && audiodown.audioBody.length > 0);
   check("firewall: listener fine, browser cut off", firewall && firewall.states[3] === "todo"
