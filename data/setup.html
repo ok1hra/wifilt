@@ -56,7 +56,8 @@
       <script src="/port-move-banner.js?v=7e3a569f"></script>
       <script src="/icom-models.js?v=ddc6caa5"></script>
       <script src="/icom-discovery.js?v=dc5654a5"></script>
-      <script src="/setup-spine.js?v=f2f44550"></script>
+      <script src="/audio-health.js?v=9efe092e"></script>
+      <script src="/setup-spine.js?v=f40e6d03"></script>
       <!-- The live TrxNet device list. Shared with the RTTY page's FSK output
            picker and the JS8 TELEMETRY panel, which is why it is a module and
            not a third hand-copied function. -->
@@ -128,6 +129,20 @@
             save: function () { return window.setupSaveQuiet(); }
           });
           window.setupSpine.start();
+
+          // Other pages link here by name: /setup#audio opens a step,
+          // /setup#identitySection a section. Nothing read the hash before, so
+          // those links only worked as far as the browser's own anchor jump --
+          // which lands on nothing when the target sits in a closed step.
+          function revealFromHash() {
+            var key = (location.hash || '').replace(/^#/, '');
+            if (!key) return;
+            if (window.setupSpine.openStepByKey(key)) return;
+            if (document.getElementById(key)) window.revealSetupSection(key);
+          }
+          if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', revealFromHash);
+          else revealFromHash();
+          window.addEventListener('hashchange', revealFromHash);
         }());
       </script>
 

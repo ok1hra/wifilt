@@ -5420,6 +5420,33 @@ void setupWebServer(void){
     webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     webServer.send(200, "application/javascript", out);
   });
+  // What SETUP's Audio step and the pages' "no audio" lines need to say WHY:
+  // which listeners really bound (and the error when one did not) and which
+  // web assets are missing. Kept out of /state, whose byte budget is spent.
+  webServer.on("/health.json", HTTP_GET, [](){
+    const uint16_t ports[] = {80, 82, 83};
+    const char *names[] = {"web", "dxc", "audio"};
+    String out = "{\"platform\":\"" CAP_PLATFORM_NAME "\",\"homeHttp\":";
+    out += PLATFORM_HOME_HTTP_PORT();
+    out += ",\"listeners\":[";
+    for (int i = 0; i < 3; i++) {
+      if (i) out += ",";
+      out += "{\"name\":\""; out += names[i];
+      out += "\",\"port\":"; out += ports[i];
+      out += ",\"actual\":"; out += PLATFORM_PORT(ports[i]);
+      out += ",\"ok\":"; out += PLATFORM_LISTENER_OK(ports[i]) ? "true" : "false";
+      out += ",\"error\":\"";
+      String error = PLATFORM_LISTENER_ERROR(ports[i]);
+      error.replace("\\", "\\\\"); error.replace("\"", "\\\"");
+      out += error;
+      out += "\"}";
+    }
+    out += "],\"assets\":";
+    out += PLATFORM_ASSET_REPORT_JSON();
+    out += "}";
+    webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    webServer.send(200, "application/json", out);
+  });
   webServer.on("/unattended", HTTP_GET, handleUnattendedGet);
   webServer.on("/unattended", HTTP_POST, handleUnattendedPost);
   webServer.on("/unattended/log", HTTP_GET, handleUnattendedLog);
@@ -11266,6 +11293,29 @@ void audioHandleRawClient(){
       int valueAt = keyAt + 6, endAt = query.indexOf('&', valueAt);
       token = query.substring(valueAt, endAt < 0 ? query.length() : endAt);
     }
+  }
+  // Reachability probe for SETUP's Audio step: a full WebSocket handshake that
+  // closes at once. It never touches AudioWsClient or the session -- the server
+  // takes ONE audio client and a new owner replaces the old, so probing the real
+  // path would cut a running JS8 stream. What it proves is the part a server-side
+  // check cannot see: that THIS browser gets through to this port (a firewall
+  // that lets 80 through and drops 83 looks like a dead audio server).
+  if(uri == "/audiows/probe"){
+    String secKey = ExtractHttpHeader(request, "Sec-WebSocket-Key");
+    if(secKey.length() == 0){
+      client.println(F("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n"));
+    }else{
+      client.println(F("HTTP/1.1 101 Switching Protocols"));
+      client.println(F("Upgrade: websocket"));
+      client.println(F("Connection: Upgrade"));
+      client.print(F("Sec-WebSocket-Accept: "));
+      client.println(DxcComputeWebSocketAccept(secKey));
+      client.println();
+      const uint8_t closeFrame[2] = {0x88, 0x00};   // FIN + close, no payload
+      client.write(closeFrame, sizeof(closeFrame));
+    }
+    client.stop();
+    return;
   }
   if(uri != "/audiows"){
     client.println(F("HTTP/1.1 404 Not Found\r\nConnection: close\r\n"));

@@ -248,8 +248,17 @@ const DRIVER = `
     else window.addEventListener("load", fn);
   }
   ready(function () {
-    // The spine renders from a fetch, so give it a tick to arrive.
-    setTimeout(function () {
+    // The spine renders from a fetch, so give it a tick to arrive -- and the
+    // Audio step runs its own check (a fetch and a probe socket), so wait until
+    // it no longer says "checking".
+    var waited = 0;
+    function settled() {
+      var details = [].slice.call(document.querySelectorAll(".spine-detail"));
+      return !details.some(function (d) { return /checking/.test(d.textContent); });
+    }
+    (function tick() {
+      waited += 200;
+      if (waited < 600 || (!settled() && waited < 5000)) { setTimeout(tick, 200); return; }
       var steps = [].slice.call(document.querySelectorAll(".spine-step"));
       var list = document.querySelector(".spine");
       fetch("/result", {
@@ -270,10 +279,11 @@ const DRIVER = `
           // platform nor a network, which is what an old firmware and a failed
           // answer both look like. The header has to survive it.
           suffix: (document.getElementById("setupPlatformSuffix") || {}).textContent,
-          meta: (document.getElementById("setupMeta") || {}).textContent
+          meta: (document.getElementById("setupMeta") || {}).textContent,
+          audioBody: steps[3] ? steps[3].querySelector(".spine-body").textContent : ""
         })
       });
-    }, 600);
+    })();
   });
 }());
 </script>`;
@@ -283,6 +293,14 @@ const DRIVER = `
 // sweep found, log in, and check that the credentials were saved and the link
 // asked to reconnect. `noradio` is the same walk with nothing on the network,
 // where the interesting output is the sentence the operator is given.
+// The Audio step, failing both ways it fails in the field: the PC build could
+// not open its audio port at all, or it did and a firewall drops it -- the page
+// loads, radio control works, and only the audio is gone.
+SCENARIOS.audiodown = {data: SCENARIOS.ready.data, txgain: SCENARIOS.ready.txgain,
+  health: {listener: {ok: false, error: "Permission denied"}, platform: "linux"}};
+SCENARIOS.firewall = {data: SCENARIOS.ready.data, txgain: SCENARIOS.ready.txgain,
+  health: {platform: "linux"}, probeBlocked: true};
+
 SCENARIOS.radio = {
   data: device({dxccall: "OK1HRA", dxclocator: "JO70"}),
   txgain: {}, scanFinds: ["192.168.1.60"], testState: "ok", testModel: "IC-705"
@@ -728,7 +746,7 @@ const DRIVER_FIRSTRUN = `
     var steps = [];
     waitFor(function () {
       steps = [].slice.call(document.querySelectorAll(".spine-step"));
-      return steps.length === 5 && steps[0].querySelector("#wifiSection") ? true : null;
+      return steps.length === 6 && steps[0].querySelector("#wifiSection") ? true : null;
     }).then(function (ok) {
       out.adopted = !!ok;
       out.wifiInStep1 = !!steps[0].querySelector("#wifiSection");
@@ -755,9 +773,9 @@ const DRIVER_FIRSTRUN = `
       out.step3Opened = !steps[2].querySelector(".spine-body").hidden;
 
       // A step opened by hand must survive the render that follows every poll.
-      steps[4].querySelector(".spine-head").click();
+      steps[5].querySelector(".spine-head").click();
       if (window.setupSpine && window.setupSpine.render) window.setupSpine.render();
-      out.handOpenSurvivesRender = !steps[4].querySelector(".spine-body").hidden;
+      out.handOpenSurvivesRender = !steps[5].querySelector(".spine-body").hidden;
 
       // The regression this whole scenario exists for: on a device with no radio
       // configured, Save & Restart used to return without a trace.
@@ -802,14 +820,16 @@ function report() {
   server.close();
 
   const fresh = results.fresh, ready = results.ready;
-  check("fresh: five steps rendered", fresh && fresh.count === 5);
+  check("fresh: six steps rendered", fresh && fresh.count === 6);
   check("fresh: network step is the outstanding one", fresh && fresh.states[0] === "todo");
   check("fresh: identity outstanding", fresh && fresh.states[1] === "todo");
   // Not "todo": the radio cannot be reached from AP mode, and saying so beats
   // an amber step the operator cannot act on yet.
   check("fresh: radio step is blocked, not outstanding", fresh && fresh.states[2] === "blocked");
   // Amber on a step nobody can act on yet is the thing this page exists to stop.
-  check("fresh: transmit check is blocked while there is no radio", fresh && fresh.states[3] === "blocked");
+  check("fresh: audio waits for the network", fresh && fresh.states[3] === "blocked"
+    && /network/.test(fresh.details[3]));
+  check("fresh: transmit check is blocked while there is no radio", fresh && fresh.states[4] === "blocked");
   check("fresh: exactly one step opened by itself", fresh && fresh.openBodies === 1);
   // The five headings are the page's structure and they stay. This used to fold
   // into one summary line as soon as the core three were done, which threw the
@@ -817,8 +837,8 @@ function report() {
   // needed to see WHICH one. Measured, not inferred: an explicit display beats
   // the hidden attribute, so the flag alone would not have caught the old bar
   // showing through.
-  check("fresh: all five headings are visible", fresh && fresh.headsVisible === 5);
-  check("ready: all five headings are still visible", ready && ready.headsVisible === 5);
+  check("fresh: all six headings are visible", fresh && fresh.headsVisible === 6);
+  check("ready: all six headings are still visible", ready && ready.headsVisible === 6);
   check("ready: the finished list is not folded away", ready && !ready.listHidden && ready.listOffsetHeight > 0);
   check("the one-line summary is gone entirely",
     fresh && ready && !fresh.summaryPresent && !ready.summaryPresent);
@@ -829,9 +849,24 @@ function report() {
   check("ready: network done", ready && ready.states[0] === "done");
   check("ready: identity done", ready && ready.states[1] === "done");
   check("ready: radio done", ready && ready.states[2] === "done");
-  check("ready: transmit done", ready && ready.states[3] === "done");
+  check("ready: audio done (listener up, probe answered)", ready && ready.states[3] === "done");
+  check("ready: audio detail names the port", ready && /^port \d+/.test(ready.details[3]));
+  check("ready: transmit done", ready && ready.states[4] === "done");
   check("ready: radio detail names the model", ready && /IC-705/.test(ready.details[2]));
-  check("ready: transmit detail counts bands", ready && /2 bands/.test(ready.details[3]));
+  check("ready: transmit detail counts bands", ready && /2 bands/.test(ready.details[4]));
+
+  const audiodown = results.audiodown, firewall = results.firewall;
+  check("audiodown: the audio step is the outstanding one", audiodown && audiodown.states[3] === "todo");
+  check("audiodown: it says the server is not running", audiodown
+    && /not running/.test(audiodown.details[3]) && /Permission denied/.test(audiodown.audioBody));
+  check("audiodown: it gives the command", audiodown && /setcap cap_net_bind_service/.test(audiodown.audioBody)
+    && /--audio-port/.test(audiodown.audioBody));
+  check("audiodown: it is the step that opened", audiodown && audiodown.openBodies === 1
+    && audiodown.audioBody.length > 0);
+  check("firewall: listener fine, browser cut off", firewall && firewall.states[3] === "todo"
+    && /cannot reach port/.test(firewall.details[3]));
+  check("firewall: it names the firewall and the ufw rule", firewall
+    && /firewall/.test(firewall.audioBody) && /ufw allow \d+\/tcp/.test(firewall.audioBody));
   check("ready: the radio heading carries the model", ready && /IC-705/.test(ready.details[2]));
 
   const radio = results.radio, noradio = results.noradio;
@@ -1130,10 +1165,43 @@ const server = http.createServer((req, res) => {
     JSON.stringify(SCENARIOS[currentScenario].presets || {}));
   if (url === "/txgain.json") return send("application/json", JSON.stringify(SCENARIOS[currentScenario].txgain));
   if (url === "/state") return send("application/json", JSON.stringify({connected: true}));
+  if (url === "/audio-health.js") return send("application/javascript",
+    fs.readFileSync(path.join(ROOT, "data", "audio-health.js")));
+  // The audio "listener" is this same server: the probe socket arrives as an
+  // upgrade below, so the browser really does make the connection it makes in
+  // the field.
+  if (url === "/ports.js") {
+    const port = server.address().port;
+    return send("application/javascript",
+      `window.WIFILT_PORTS={"http":${port},"dxc":${port},"audio":${port},"homeHttp":0};`);
+  }
+  if (url === "/health.json") {
+    const port = server.address().port;
+    const h = SCENARIOS[currentScenario].health || {};
+    const listener = Object.assign({name: "audio", port: 83, actual: port, ok: true, error: ""},
+      h.listener || {});
+    if (!listener.ok) listener.actual = 0;
+    return send("application/json", JSON.stringify({platform: h.platform || "linux", homeHttp: 0,
+      listeners: [{name: "web", port: 80, actual: port, ok: true, error: ""}, listener],
+      assets: {missing: [], generated: []}}));
+  }
   // Everything else the page asks for is deliberately absent: the spine has to
   // survive a page whose other panels cannot load.
   res.writeHead(404, {"Content-Type": "application/json"});
   res.end("{}");
+});
+
+// The firmware's /audiows/probe: a handshake and an immediate close. In the
+// firewall scenario the connection is simply dropped, which is what the browser
+// sees when a packet filter eats the port.
+server.on("upgrade", (req, socket) => {
+  const url = req.url.split("?")[0];
+  if (url !== "/audiows/probe" || SCENARIOS[currentScenario].probeBlocked) { socket.destroy(); return; }
+  const accept = require("crypto").createHash("sha1")
+    .update(req.headers["sec-websocket-key"] + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
+  socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+    + "Sec-WebSocket-Accept: " + accept + "\r\n\r\n");
+  socket.end(Buffer.from([0x88, 0x00]));
 });
 
 // Headless Chrome refuses more than one target per launch, so the scenarios run
@@ -1164,7 +1232,7 @@ function runScenario(base, name, done) {
 
 server.listen(0, "127.0.0.1", () => {
   const base = "http://127.0.0.1:" + server.address().port + "/";
-  timer = setTimeout(() => { failures.push("timeout waiting for the rendered page"); report(); }, 75000);
+  timer = setTimeout(() => { failures.push("timeout waiting for the rendered page"); report(); }, 110000);
   runScenario(base, "fresh", function () {
     runScenario(base, "ready", function () {
       runScenario(base, "radio", function () {
@@ -1172,7 +1240,11 @@ server.listen(0, "127.0.0.1", () => {
           runScenario(base, "firstrun", function () {
             runScenario(base, "header", function () {
               runScenario(base, "pending", function () {
-                runScenario(base, "presets", report);
+                runScenario(base, "presets", function () {
+                  runScenario(base, "audiodown", function () {
+                    runScenario(base, "firewall", report);
+                  });
+                });
               });
             });
           });

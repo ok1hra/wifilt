@@ -77,7 +77,17 @@
       if (!this.running) return;
       const socket = new this.WebSocketImpl(this.url);
       socket.binaryType = "arraybuffer";
-      socket.onopen = () => this.status("open");
+      // A socket that closes without ever opening is the shape of "no audio
+      // server" -- or of a firewall. audio-health.js (page context only; absent
+      // in workers) works out which and says so; an ordinary drop after a
+      // successful open is not its business.
+      const health = typeof globalThis !== "undefined" ? globalThis.WifiltAudioHealth : null;
+      let opened = false;
+      socket.onopen = () => {
+        opened = true;
+        if (health) health.reachable();
+        this.status("open");
+      };
       socket.onmessage = event => Promise.resolve(this.receive(event.data))
         .catch(error => {
           this.status("protocol-error", {message:error.message});
@@ -85,6 +95,7 @@
         });
       socket.onerror = () => this.status("error");
       socket.onclose = () => {
+        if (!opened && health && this.running) health.unreachable();
         if (this.socket !== socket) return;
         this.socket = null; this.hello = null; this.ptt = false;
         this.txFault = null;

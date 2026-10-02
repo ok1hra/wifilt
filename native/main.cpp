@@ -203,10 +203,16 @@ bool assetExists(const char *file) {
   return fileExists(name) || fileExists(name + ".gz") || fileExists(name + ".br");
 }
 
+// The same findings as JSON, for /health.json: SETUP shows them to an operator
+// who never saw the start-up log.
+std::string g_assetReportJson = "{\"missing\":[],\"generated\":[]}";
+
 void checkAssets() {
+  std::string missingJson, generatedJson;
   int missing = 0;
   for (const AssetCheck &asset : kRequiredAssets) {
     if (assetExists(asset.file)) continue;
+    missingJson += std::string(missingJson.empty() ? "" : ",") + "\"" + asset.file + "\"";
     fprintf(stderr, "WIFILT | MISSING %s%s -- needed by %s\n", nativeDataDir().c_str(),
             asset.file, asset.needs);
     missing++;
@@ -215,8 +221,12 @@ void checkAssets() {
     fprintf(stderr, "WIFILT |   the web folder is incomplete: reinstall it, or in a source\n"
                     "WIFILT |   checkout restore it with: git checkout -- data/\n");
   int generated = 0;
-  for (const char *file : kGeneratedAssets)
-    if (!fileExists(file)) generated++;
+  for (const char *file : kGeneratedAssets) {
+    if (fileExists(file)) continue;
+    generatedJson += std::string(generatedJson.empty() ? "" : ",") + "\"" + file + "\"";
+    generated++;
+  }
+  g_assetReportJson = "{\"missing\":[" + missingJson + "],\"generated\":[" + generatedJson + "]}";
   if (generated)
     printf("WIFILT | assets  the compressed JS8 modem files are not generated -- the page\n"
            "WIFILT |         loads the plain ones (slower first load); ./tools/gzip-assets.sh\n"
@@ -258,6 +268,7 @@ bool parseArguments(int argc, char **argv, uint16_t *port) {
 }  // namespace
 
 uint16_t nativeHomeHttpPort() { return g_homeHttpPort; }
+const char *nativeAssetReportJson() { return g_assetReportJson.c_str(); }
 
 int main(int argc, char **argv) {
   nativeProcessArgvSet(argc, argv);

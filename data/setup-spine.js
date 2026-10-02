@@ -1,4 +1,4 @@
-// The five steps of getting a station on the air, derived instead of stored.
+// The six steps of getting a station on the air, derived instead of stored.
 //
 // Setup used to be seven collapsed <details> in the order they were built, each
 // badged with the storage tier behind it, and the only thing telling an operator
@@ -17,8 +17,11 @@
 //   3 Radio     a slot that is set up -- for LAN that means the model the radio
 //               reported, which rememberRadioModel() persists and which is the
 //               only durable proof a login ever succeeded
-//   4 Transmit  an entry in /txgain.json
-//   5 Browser   a log database in THIS browser (per-origin, unlike 1-4)
+//   4 Audio     the audio listener bound (/health.json) AND this browser
+//               reaches it (a probe WebSocket) -- live, never stored: it is the
+//               step a PC without the low-port permission, or a firewall, fails
+//   5 Transmit  an entry in /txgain.json
+//   6 Browser   a log database in THIS browser (per-origin, unlike 1-5)
 //
 // Two axes, not one. A tick means "set up, and verified once"; the dot beside it
 // means "reachable right now". A radio that is switched off must never turn its
@@ -254,6 +257,7 @@
       identity: {done: call !== "" && GRID_RE.test(grid), call: call, grid: grid,
                  compound: call.indexOf("/") >= 0},
       transmit: {done: !!cal, cal: cal, possible: !!lanSlot},
+      audio: state.audio,
       browser: state.browser
     };
   }
@@ -317,15 +321,17 @@
     var doc = host.ownerDocument;
     injectStyle(doc);
 
-    var state = {data: null, txgain: null, live: null, browser: null, openIndex: undefined};
+    var state = {data: null, txgain: null, live: null, browser: null, audio: null,
+                 openIndex: undefined};
 
     var list = el("ol", "spine");
     var steps = [
       buildStep(1, "Network"),
       buildStep(2, "Identity"),
       buildStep(3, "Radio"),
-      buildStep(4, "Transmit check"),
-      buildStep(5, "This browser")
+      buildStep(4, "Audio"),
+      buildStep(5, "Transmit check"),
+      buildStep(6, "This browser")
     ];
     steps.forEach(function (step) { list.appendChild(step.node); });
 
@@ -879,6 +885,102 @@
       }
     }
 
+    // ---- step 4: audio ------------------------------------------------------
+    //
+    // The one step that can be fine on the device and broken for THIS browser,
+    // so it is checked from here: the firmware says whether its audio listener
+    // bound, and a probe socket says whether this browser gets through to it.
+    // Not stored, and not re-run on the five-second tick -- once on load and on
+    // RECHECK, because the answer only changes when someone restarts or fixes
+    // something.
+    function runAudioCheck() {
+      var health = root.WifiltAudioHealth;
+      if (!health || state.audio === "checking") return;
+      state.audio = "checking";
+      render();
+      health.check().then(function (result) {
+        state.audio = result;
+        render();
+      }, function () {
+        state.audio = null;
+        render();
+      });
+    }
+
+    function fillAudio(step, model) {
+      step.body.innerHTML = "";
+      var radio = model.radio;
+      if (!model.network.done) {
+        setState(step, "blocked", "4");
+        step.detail.textContent = "waiting for the network";
+        step.body.appendChild(paragraph("The audio channel starts once the device is on your network. Finish step 1 first."));
+        return;
+      }
+      if (radio && radio.transport !== "lan") {
+        setState(step, "na", "—");
+        step.detail.textContent = "needs a radio on ICOM-LAN";
+        step.body.appendChild(paragraph(
+          transportName(radio.transport) + " carries commands only, so there is no audio channel to check."));
+        return;
+      }
+      if (!root.WifiltAudioHealth) {
+        setState(step, "na", "4");
+        step.detail.textContent = "this page cannot check it";
+        return;
+      }
+      var result = model.audio;
+      if (result === null || result === undefined) {
+        // First render after the data arrived: start the one check.
+        setTimeout(runAudioCheck, 0);
+      }
+      if (!result || result === "checking") {
+        setState(step, "blocked", "4");
+        step.detail.textContent = "checking…";
+        return;
+      }
+      var verdict = result.verdict || {};
+      var recheck = action("RECHECK", runAudioCheck);
+      if (verdict.state === "ok") {
+        setState(step, "done", "✓");
+        step.detail.textContent = "port " + verdict.port + (verdict.port !== 83 ? " (moved from 83)" : "");
+        step.body.appendChild(paragraph(
+          "The audio channel is running on port <b>" + verdict.port + "</b> and this browser reaches it. "
+          + "Whether the radio actually sends sound shows on the DATA pages once one of them holds the radio."));
+        var row = el("div", "spine-next");
+        var go = el("button", "spine-act spine-act-go", "CONTINUE");
+        go.type = "button";
+        go.addEventListener("click", function () { openStep(4); });
+        row.appendChild(go);
+        recheck.className = "spine-act spine-act-quiet";
+        row.appendChild(recheck);
+        step.body.appendChild(row);
+        return;
+      }
+      if (verdict.state === "unknown" && !verdict.what) {
+        setState(step, "na", "4");
+        step.detail.textContent = "could not be checked";
+        step.body.appendChild(paragraph("The device did not report its audio channel — older firmware, or it did not answer."));
+        step.body.appendChild(recheck);
+        return;
+      }
+      setState(step, "todo", "4");
+      step.detail.textContent = verdict.state === "down"
+        ? "audio server not running"
+        : "this browser cannot reach port " + verdict.port;
+      step.body.appendChild(paragraph("<b>" + escapeText(verdict.what) + "</b>"));
+      step.body.appendChild(paragraph(escapeText(verdict.fix).replace(
+        /(sudo [^—]+?)(?= —|\.$|$)/g, "<code style='user-select:all'>$1</code>")));
+      step.body.appendChild(paragraph("Until this is fixed JS8, WSPR, RTTY and Mercury have no audio — "
+        + "radio control (frequency, mode, power) keeps working, which is why it can look half-alive."));
+      step.body.appendChild(recheck);
+    }
+
+    function escapeText(text) {
+      return String(text).replace(/[&<>"]/g, function (c) {
+        return {"&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;"}[c];
+      });
+    }
+
     function fillTransmit(step, model) {
       var d = model.transmit;
       step.body.innerHTML = "";
@@ -898,14 +1000,14 @@
       } else if (!model.radio) {
         // Nothing to key yet. Amber here would be an instruction the operator
         // cannot act on, which is exactly what this page exists to stop.
-        setState(step, "blocked", "4");
+        setState(step, "blocked", "5");
         step.detail.textContent = "waiting for the radio";
         step.body.appendChild(paragraph(
           "This keys the transmitter, so it needs a radio that answers. Finish step 3 first."));
         return;
       } else {
         // Advice, not a gate: without it JS8 and WSPR still transmit, just worse.
-        setState(step, "todo", "4");
+        setState(step, "todo", "5");
         step.detail.textContent = "recommended — never measured";
       }
       step.body.appendChild(paragraph(
@@ -921,14 +1023,14 @@
         setState(step, "done", "✓");
         step.detail.textContent = "log database present on this device";
       } else if (model.browser === false) {
-        setState(step, "todo", "5");
+        setState(step, "todo", "6");
         step.detail.textContent = "no log on this device yet";
       } else {
-        setState(step, "na", "5");
+        setState(step, "na", "6");
         step.detail.textContent = "this browser will not say";
       }
       step.body.appendChild(paragraph(
-        "Steps 1–4 are stored in the interface and are the same on every device. The QSO log is "
+        "Steps 1–5 are the same on every device. The QSO log is "
         + "different: it lives in <b>this browser</b>, so a second phone or tablet starts without it. "
         + "LOGSYNC copies it across, and keeps them in step afterwards."));
       step.body.appendChild(link("OPEN LOGSYNC ↗", "/datasync"));
@@ -951,8 +1053,9 @@
       fillNetwork(steps[0], model);
       fillIdentity(steps[1], model);
       fillRadio(steps[2], model);
-      fillTransmit(steps[3], model);
-      fillBrowser(steps[4], model);
+      fillAudio(steps[3], model);
+      fillTransmit(steps[4], model);
+      fillBrowser(steps[5], model);
       applyLive(steps[2], model);
 
       // The list is always here. It used to fold itself into one line once the
@@ -1023,8 +1126,17 @@
       setInterval(pollLive, 5000);
     }
 
+    // Links from other pages name a step, not an index (/setup#audio).
+    var STEP_KEYS = {network: 0, identity: 1, radio: 2, audio: 3, transmit: 4, browser: 5};
+    function openStepByKey(key) {
+      if (!(key in STEP_KEYS)) return false;
+      openStep(STEP_KEYS[key]);
+      return true;
+    }
+
     return {setData: setData, start: start, render: render,
-            openStep: openStep, revealSection: revealSection, refresh: refresh};
+            openStep: openStep, openStepByKey: openStepByKey,
+            revealSection: revealSection, refresh: refresh};
   }
 
   // ---- the one-line form, for DATA and WSPR --------------------------------

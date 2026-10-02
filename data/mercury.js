@@ -159,6 +159,10 @@
     if (msg.type === "log") return; // debug only, not shown to the operator
     if (msg.type === "error") {
       setAud1Pill("error", "error");
+      // The transport is in the worker, out of audio-health.js's reach, so ask
+      // directly: a dead or firewalled audio port gets its own banner and a
+      // way to SETUP; any other fault comes back clean and shows nothing.
+      if (window.WifiltAudioHealth) window.WifiltAudioHealth.diagnose();
       setConnectionTest(`<p class="connection-test-line muted">${msg.reason}${msg.detail ? " -- " + msg.detail : ""}</p>`, true);
       stopWorker();
       sessionBusy = false;

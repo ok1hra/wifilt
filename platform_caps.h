@@ -58,6 +58,9 @@
   #define PLATFORM_LISTENER_OK(requested) nativeListenerOk(requested)
   #define PLATFORM_LISTENER_ERROR(requested) nativeListenerError(requested)
   #define PLATFORM_HOME_HTTP_PORT()       nativeHomeHttpPort()
+  // {"missing":[...],"generated":[...]} from the start-up check of data/ (main.cpp).
+  const char *nativeAssetReportJson();
+  #define PLATFORM_ASSET_REPORT_JSON()    nativeAssetReportJson()
 
   // No status LED either -- the PC binary has no pin to drive. Named here only
   // so #if STATUS_LED_RGB is never an undefined macro.
@@ -76,6 +79,8 @@
   #define PLATFORM_LISTENER_OK(requested)    true
   #define PLATFORM_LISTENER_ERROR(requested) ""
   #define PLATFORM_HOME_HTTP_PORT()          ((uint16_t)0)
+  // The image is built and flashed as a whole; there is no partial tree to report.
+  #define PLATFORM_ASSET_REPORT_JSON()       "{\"missing\":[],\"generated\":[]}"
 
   // The M5Atom Lite selects itself. Both toolchains define ARDUINO_M5Stack_ATOM
   // when that board is chosen -- PlatformIO via `board = m5stack-atom`,

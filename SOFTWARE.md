@@ -21,7 +21,7 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
 
 **[2. First run](#2-first-run)**
  · [2.1 AP mode](#21-ap-mode)
- · [2.2 The five steps](#22-the-five-steps)
+ · [2.2 The six steps](#22-the-six-steps)
  · [2.3 Finding the interface later](#23-finding-the-interface-later)
  · [2.4 What is stored where](#24-what-is-stored-where)
 
@@ -421,11 +421,11 @@ themselves. The Status LED fades slowly in and out the whole time the hotspot is
 If you are restoring a device from a backup, do it **now** — `SETUP` → *Upload config* at
 the bottom of the page — before setting anything by hand.
 
-### 2.2 The five steps
+### 2.2 The six steps
 
 ![SETUP page](img/setup.png)
 
-SETUP opens as five numbered steps. They are not a wizard: nothing remembers "which step you
+SETUP opens as six numbered steps. They are not a wizard: nothing remembers "which step you
 are on". Each step works out its own state every time the page renders, by asking the device
 what is actually stored. Reconfigure something months later, move to another network, or
 reflash the board, and the steps rearrange themselves accordingly.
@@ -509,7 +509,24 @@ CI-V addresses, labels. It is described in [section 9.3](#93-radio).
 If the interface is still in AP mode, this step is blocked and says so — the radio lives on
 your home network and cannot be reached from the hotspot.
 
-#### Step 4 — Transmit check
+#### Step 4 — Audio
+
+The audio channel is a listener of its own (port 83 on the box), separate from the page. On
+a PC it can fail to open while the page loads perfectly — no permission for low ports, or the
+port is taken — and a firewall can let the page through and drop the audio. Radio control
+keeps working either way, which is exactly why it is easy to miss.
+
+This step asks the interface whether its audio listener is running, and then opens a test
+connection to it **from this browser**. Green means both worked, and names the port (on a
+PC it may have moved to 8083 by itself). Amber says which of the two failed and what to do:
+the `setcap` command or `--audio-port` when the server is not running, the firewall rule when
+it is running but this browser cannot reach it. **RECHECK** runs it again after a fix. The
+test connection never touches a running audio stream.
+
+The same diagnosis appears as a banner on the JS8, WSPR, RTTY and Mercury pages, and on
+QRPLog's RTTY panel, when their audio keeps failing to connect — with a link back here.
+
+#### Step 5 — Transmit check
 
 ![Transmit check step](img/setup-transmit-check.png)
 
@@ -523,16 +540,16 @@ opens the calibration on the WSPR page; see [section 9.6](#96-tx-audio-gain).
 On a CI-V or TrxNet radio the step shows `—`: there is no network audio path, so there is
 nothing to measure and nothing missing.
 
-#### Step 5 — This browser
+#### Step 6 — This browser
 
 ![Browser step](img/setup-browser.png)
 
-Steps 1–4 are stored in the interface and are identical on every device you open it from.
+Steps 1–5 are the same on every device you open it from.
 The QSO log is not: it lives in **this browser**, so a second phone or tablet starts empty.
 This step tells you whether the browser you are looking at has a log database yet, and links
 to LOGSYNC to copy one across.
 
-A compressed version of the same five marks appears in the top bar of the DATA and WSPR
+A compressed version of the same marks appears in the top bar of the DATA and WSPR
 pages, so you can see at a glance whether anything is still outstanding.
 
 ### 2.3 Finding the interface later
