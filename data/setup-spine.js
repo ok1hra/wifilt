@@ -1014,7 +1014,14 @@
         "One keyed carrier on the band and power the radio is set to now, raising the audio level "
         + "until the ALC just starts. It proves the whole chain in one go — data mode, audio path, "
         + "PTT, power, SWR — and gives the digital modes the level to use."));
+      step.body.appendChild(paragraph(
+        "<b>One calibration serves JS8, WSPR and RTTY.</b> It depends on the band and the power "
+        + "setting, not on the mode — but each mode sets its own power, so CAL PLAN offers all of "
+        + "them and the overview shows which mode is covered where."));
       step.body.appendChild(link("RUN THE TRANSMIT CHECK ↗", "/wspr.html#autogain"));
+      var overview = action("SHOW ALL CALIBRATIONS", function () { openSection("txGainSection"); });
+      overview.className = "spine-act spine-act-quiet";
+      step.body.appendChild(overview);
     }
 
     function fillBrowser(step, model) {

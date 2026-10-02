@@ -3280,7 +3280,9 @@ band-and-power pair.
   matrix; a power is a whole percentage of the radio's scale, and **four powers per band is
   the limit** — every column is another carrier on the air.
 - Cells show their state: `EMPTY`, `NOT CALIBRATED`, `NOT FOR THIS BAND`, or the measured
-  value.
+  value. Under each power the labels say which mode transmits at it, and a line above the
+  grid lists the powers your modes use that the plan does not have yet, each with an
+  **ADD** button — one run then covers JS8, WSPR and RTTY together.
 - **RUN** starts. **RE-MEASURE ALL** discards what is stored and does it again. **STOP** ends
   the run.
 - **Before every retune to a new band the tool stops and asks whether the right antenna is
@@ -3626,13 +3628,27 @@ The protocol is documented in [docs/trxnet.md](docs/trxnet.md).
 
 ![TX audio gain](img/setup-tx-audio-gain.png)
 
-This section **shows** the measured ALC knees — per radio, band and power — and links to
-where they are measured. It is hidden entirely unless some slot carries ICOM-LAN, because
+This section **shows** the measured ALC knees as one table per radio: **bands are rows,
+powers are columns**. It is hidden entirely unless some slot carries ICOM-LAN, because
 without the network audio path there is nothing to calibrate.
+
+**One calibration serves JS8, WSPR and RTTY (USB-D/LSB-D).** The mode does not matter; the
+band and the power setting do, because the point where the ALC starts to act moves with the
+RF power the radio is set to. Each mode sets its own power, so the small labels under a
+column say which mode transmits at that power (JS8's percentage, WSPR's dBm level converted
+for this radio, RTTY's percentage). An empty cell `·` under a mode's label is a calibration
+that mode is missing.
+
+- A green value is measured. An amber one was measured at a different MOD level than the
+  newest calibrations and is probably stale — the radio's MOD level moved since.
+- Hover a cell for the knee, the MOD level, the date and how far the MOD level is from ideal;
+  **×** in the cell forgets that one.
+- **Mercury** has a line of its own: its data bursts peak about 7.5 dB above a steady tone,
+  so it keeps a separate table, measured by CAL PLAN on the Mercury page.
 
 | Control | Action |
 |---|---|
-| **CALIBRATE ON THE WSPR PAGE ↗** | opens the calibration; see [section 7.8](#78-tx-audio-gain-and-cal-plan) |
+| **CALIBRATE (WSPR PAGE) ↗** | opens the single-shot calibration; see [section 7.8](#78-tx-audio-gain-and-cal-plan) |
 | **Forget all** | discard every stored calibration |
 
 Set the band and the power you want to measure **first** — a calibration describes the radio

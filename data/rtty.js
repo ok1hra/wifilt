@@ -1183,7 +1183,11 @@
       const target = Number(settings.rfPercent);
       if (Number.isFinite(target) && target >= 1) out.push(Math.round(target));
       if (state.radio.rfPowerSeen === true) out.push(radioPercent());
-      return out;
+      // The table is shared with JS8 and WSPR, so their powers are offered too
+      // (tx-mode-powers.js): one run then covers every tone mode. RTTY's own first.
+      if (typeof TxModePowers === "undefined") return out;
+      return TxModePowers.union([out, TxModePowers.read({model: liveRadioModel()})
+        .map(entry => entry.percent)], 4);
     },
     setFrequency: async hz => {
       await command({type: "setFrequency", frequency: String(hz)});

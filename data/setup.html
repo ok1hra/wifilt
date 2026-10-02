@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Setup — WIFILT</title>
-  <link rel="stylesheet" href="/setup.css?v=373c8333">
+  <link rel="stylesheet" href="/setup.css?v=4b5384d5">
 </head>
 <body>
   <header class="topbar">
@@ -55,9 +55,11 @@
       <script src="/ports.js"></script>
       <script src="/port-move-banner.js?v=7e3a569f"></script>
       <script src="/icom-models.js?v=ddc6caa5"></script>
+      <script src="/wspr-core.js?v=450a9679"></script>
+      <script src="/tx-mode-powers.js?v=fae0808f"></script>
       <script src="/icom-discovery.js?v=dc5654a5"></script>
       <script src="/audio-health.js?v=9efe092e"></script>
-      <script src="/setup-spine.js?v=f40e6d03"></script>
+      <script src="/setup-spine.js?v=a132188f"></script>
       <!-- The live TrxNet device list. Shared with the RTTY page's FSK output
            picker and the JS8 TELEMETRY panel, which is why it is a module and
            not a third hand-copied function. -->
@@ -532,17 +534,22 @@
           </div>
         </details>
 
-        <!-- Measured ALC knees. This page only SHOWS them and links to where they
-             are measured: calibration keys the transmitter, and the audio path,
-             the TX pledge and the single-operator lock all live on the WSPR page
-             already. Hidden entirely unless some slot carries ICOM-LAN, because
-             without it there is no audio path to calibrate. -->
+        <!-- Measured ALC knees, as one band x power overview. This page only SHOWS
+             them: calibration keys the transmitter, and the audio path, the TX
+             pledge and the single-operator lock live on the DATA pages (JS8, WSPR,
+             RTTY), each of which has the calibration and CAL PLAN. Hidden entirely
+             unless some slot carries ICOM-LAN: without it there is no audio path. -->
         <details class="setup-section" id="txGainSection" hidden>
           <summary class="setup-section-title">TX audio gain <span class="setup-local-badge" title="Stored on the interface's own configuration partition, which a firmware flash does not write.">config</span></summary>
           <div class="setup-section-body">
             <p class="setup-hint">The highest audio level the radio accepts without its
-               ALC acting, measured per radio, band and power setting. Both DATA modes
-               read it: JS8Call-ICOM and the WSPR beacon.</p>
+               ALC acting, measured per radio, band and power setting. <b>One
+               calibration serves JS8, WSPR and RTTY (USB-D/LSB-D)</b> — the mode does
+               not matter, only the band and the power do, because the point where the
+               ALC starts to act moves with the RF power the radio is set to. Each mode
+               has its own power setting, so a band can be calibrated at one mode's
+               power and not at another's: the labels under each column say which mode
+               transmits at that power. RTTY on real FSK needs no calibration.</p>
             <div id="txGainTable" class="txgain-body"><span class="txgain-empty">…</span></div>
             <p class="txgain-actions">
               <!-- No target="_blank", deliberately. Both DATA pages share one
@@ -551,7 +558,7 @@
                    busy" -- the calibration would be unreachable exactly when the
                    operator has the radio open, which is always. Same rule as the
                    sub-nav links on wspr.html. -->
-              <a class="txgain-link" href="/wspr.html#autogain">CALIBRATE ON THE WSPR PAGE &#8599;</a>
+              <a class="txgain-link" href="/wspr.html#autogain">CALIBRATE (WSPR PAGE) &#8599;</a>
               <button type="button" id="txGainForget" class="txgain-forget">Forget all</button>
             </p>
             <p class="footnote">Set the band and the power you want to measure <em>first</em> —
@@ -562,8 +569,9 @@
                  one run. It is a window in the topbar of either DATA page, so this only
                  has to say that it exists. -->
             <p class="footnote">A whole matrix at once: <b>CAL PLAN</b> in the bar at the
-               top of the JS8Call or WSPR page. It tunes the radio and sets the power
-               itself, and it asks about the antenna before every band.</p>
+               top of the JS8Call, WSPR or RTTY page. It tunes the radio and sets the power
+               itself, asks about the antenna before every band, measures only what is
+               missing, and offers the powers all your modes use.</p>
           </div>
         </details>
 
@@ -1523,37 +1531,98 @@
         var ms = Number(at) || 0;
         return ms ? new Date(ms).toISOString().slice(0, 10) : '';
       }
-      function render(doc) {
+      // Bands in their order on the dial, not alphabetically.
+      var BAND_ORDER = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m',
+                        '10m', '6m', '4m', '2m', '70cm'];
+      function bandRank(band) {
+        var at = BAND_ORDER.indexOf(band);
+        return at < 0 ? BAND_ORDER.length : at;
+      }
+
+      // One matrix per radio model: rows are bands, columns the powers that were
+      // measured plus the ones the modes transmit at (tx-mode-powers.js), so a
+      // mode's missing calibration shows as an empty cell under its own label.
+      // "Probably stale" is a cell measured at a different MOD level than the
+      // newest one -- this page cannot ask the radio, so it says so in words.
+      function renderModel(model, cells, modes) {
+        var newest = null;
+        cells.forEach(function (c) {
+          if (!newest || (Number(c.e.at) || 0) > (Number(newest.e.at) || 0)) newest = c;
+        });
+        var modNow = newest ? Number(newest.e.modLevel) || 0 : 0;
+        var bands = [], powers = [];
+        cells.forEach(function (c) {
+          if (bands.indexOf(c.band) < 0) bands.push(c.band);
+          if (powers.indexOf(c.percent) < 0) powers.push(c.percent);
+        });
+        modes.forEach(function (m) { if (powers.indexOf(m.percent) < 0) powers.push(m.percent); });
+        bands.sort(function (a, b) { return bandRank(a) - bandRank(b); });
+        powers.sort(function (a, b) { return a - b; });
+        var head = '<tr><th>' + esc(model) + '</th>' + powers.map(function (p) {
+          var users = modes.filter(function (m) { return m.percent === p; })
+            .map(function (m) { return m.mode; });
+          return '<th>' + p + ' %' + (users.length
+            ? '<small class="txgain-modes">' + esc(users.join(' ')) + '</small>' : '') + '</th>';
+        }).join('') + '</tr>';
+        var rows = bands.map(function (band) {
+          return '<tr><th>' + esc(band) + '</th>' + powers.map(function (p) {
+            var c = cells.filter(function (x) { return x.band === band && x.percent === p; })[0];
+            if (!c) return '<td class="txgain-cell txgain-missing" title="not measured">·</td>';
+            var mod = Number(c.e.modLevel) || 0;
+            var stale = modNow && mod && mod !== modNow;
+            var title = 'knee ' + c.e.knee + (mod ? ' · MOD level ' + mod : '')
+              + (stale ? ' — newer calibrations are at MOD level ' + modNow + ', so this one is probably stale' : '')
+              + (c.e.at ? ' · ' + when(c.e.at) : '') + ' · ' + advice(Number(c.e.knee));
+            return '<td class="txgain-cell ' + (stale ? 'txgain-stale' : 'txgain-ok') + '" title="' + esc(title) + '">'
+              + esc(Number(c.e.gain).toFixed(3)) + (c.e.autoTrimmed ? '<span class="txgain-trim">trim</span>' : '')
+              + '<button type="button" class="txgain-drop" data-key="' + esc(c.key) + '" title="Forget this one">&times;</button>'
+              + '</td>';
+          }).join('') + '</tr>';
+        }).join('');
+        return '<table class="txgain-matrix">' + head + rows + '</table>';
+      }
+
+      function render(doc, mercury) {
         var entries = (doc && doc.entries) || {};
-        var keys = Object.keys(entries).sort();
+        var keys = Object.keys(entries);
+        var mercuryCount = mercury && mercury.entries ? Object.keys(mercury.entries).length : 0;
+        var mercuryLine = '<p class="txgain-mercury"><b>Mercury</b> keeps its own table'
+          + (mercuryCount ? ' (' + mercuryCount + ' measured)' : ' (nothing measured)')
+          + ': its data bursts peak about 7.5 dB above a steady tone, so a tone '
+          + 'calibration would overdrive them. CAL PLAN on the Mercury page measures it.</p>';
         if (!keys.length) {
-          body.innerHTML = '<span class="txgain-empty">Nothing measured yet</span>';
+          body.innerHTML = '<span class="txgain-empty">Nothing measured yet</span>' + mercuryLine;
           forget.disabled = true;
           return;
         }
         forget.disabled = false;
-        body.innerHTML = keys.map(function (key) {
+        var byModel = {};
+        keys.forEach(function (key) {
           var e = entries[key] || {};
-          // model|band|percent, straight off the key. Records used to repeat all
-          // three inside themselves; they are stored compacted now, and the key
-          // is the authority either way.
+          // model|band|percent, straight off the key -- the key is the authority.
           var parts = String(key).split('|');
-          var what = (parts[0] || e.model || '?') + ' · ' + (parts[1] || e.band || '?')
-            + ' · ' + (parts.length > 2 ? parts[2] : (e.percent == null ? '?' : e.percent)) + ' %';
-          return '<div class="txgain-row">' +
-            '<span class="txgain-what">' + esc(what) + '</span>' +
-            '<span class="txgain-level">' + esc(String(e.gain)) +
-              (e.autoTrimmed ? ' <span class="txgain-trim">trimmed</span>' : '') + '</span>' +
-            '<span class="txgain-advice">' + esc(advice(Number(e.knee))) + '</span>' +
-            '<span class="txgain-when">' + esc(when(e.at)) + '</span>' +
-            '<button type="button" class="txgain-drop" data-key="' + esc(key) + '" title="Forget this one">&times;</button>' +
-            '</div>';
-        }).join('');
+          var model = parts[0] || e.model || '?';
+          (byModel[model] = byModel[model] || []).push({key: key, e: e,
+            band: parts[1] || e.band || '?',
+            percent: Number(parts.length > 2 ? parts[2] : e.percent) || 0});
+        });
+        body.innerHTML = Object.keys(byModel).sort().map(function (model) {
+          var modes = window.TxModePowers ? window.TxModePowers.read({model: model}) : [];
+          return renderModel(model, byModel[model], modes);
+        }).join('') + '<p class="txgain-legend"><span class="txgain-ok">0.312</span> measured · '
+          + '<span class="txgain-stale">0.312</span> probably stale (other MOD level) · '
+          + '<span class="txgain-missing">·</span> not measured — hover a cell for details</p>'
+          + mercuryLine;
       }
       function load() {
+        var mercury = fetch('/mercury-txgain.json', { cache: 'no-store' })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .catch(function () { return null; });
         return fetch('/txgain.json', { cache: 'no-store' })
           .then(function (r) { return r.json(); })
-          .then(function (doc) { render(doc); return doc; })
+          .then(function (doc) {
+            return mercury.then(function (m) { render(doc, m); return doc; });
+          })
           .catch(function () {
             body.innerHTML = '<span class="txgain-empty">Calibration table unavailable</span>';
             return null;

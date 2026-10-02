@@ -1214,7 +1214,18 @@ button.icom-scan-hit:hover {
 /* TX gain calibrations. Laid out like the TrxNet peer list above: same row
    rhythm, same monospace for the measured figures, because both are "what the
    station currently knows" rather than settings to type into. */
-.txgain-body { padding: 4px 0; }
+.txgain-body { padding: 4px 0; overflow-x: auto; }
+.txgain-matrix { border-collapse: collapse; margin: 4px 0 10px; font-size: 13px; }
+.txgain-matrix th, .txgain-matrix td { padding: 4px 8px; text-align: center; border: 1px solid rgba(59, 69, 65, 0.6); }
+.txgain-matrix tr:first-child th { vertical-align: bottom; color: var(--muted); font-weight: 600; }
+.txgain-matrix th:first-child { text-align: left; font-family: monospace; color: var(--text); }
+.txgain-modes { display: block; font-size: 10px; letter-spacing: .04em; color: #7fb3a6; }
+.txgain-cell { font-family: monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.txgain-ok { color: #9fd39f; }
+.txgain-stale { color: #e0a020; }
+.txgain-missing { color: var(--muted); }
+.txgain-cell .txgain-drop { margin-left: 4px; }
+.txgain-legend, .txgain-mercury { font-size: 12px; color: var(--muted); margin: 6px 0; }
 .txgain-empty {
   display: block;
   padding: 10px 12px;

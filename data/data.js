@@ -711,7 +711,11 @@ function createGainPlan() {
       const chosen = Number(currentJs8().rfPercent);
       if (Number.isFinite(chosen) && chosen >= 1) out.push(Math.round(chosen));
       if (state.radio.rfPowerSeen === true) out.push(WsprCore.civPercent(state.radio.rfPower));
-      return out;
+      // The table is shared with WSPR and RTTY, so their powers are offered too
+      // (tx-mode-powers.js): one run then covers every tone mode. JS8's own first.
+      if (typeof TxModePowers === "undefined") return out;
+      return TxModePowers.union([out, TxModePowers.read({model:liveRadioModel()})
+        .map(entry => entry.percent)], 4);
     },
     setFrequency:async hz => {
       await fetch(RADIO_CMD_URL,{method:"POST", signal:fetchDeadline(),

@@ -635,7 +635,11 @@ f.onload=()=>{
       txGainSection.open=true;
       txGainSection.dispatchEvent(new setupFrame.contentWindow.Event('toggle'));
       await new Promise(resolve=>setTimeout(resolve,300));
-      const txGainRow=sd.querySelector('#txGainTable .txgain-row');
+      // A band x power matrix since 2026-10-03 (one calibration serves JS8, WSPR and
+      // RTTY; the columns carry the modes' labels). The per-cell details -- the MOD
+      // level advice, the date -- moved into the cell's title.
+      const txGainMatrix=sd.querySelector('#txGainTable .txgain-matrix');
+      const txGainCell=sd.querySelector('#txGainTable td.txgain-cell:not(.txgain-missing)');
       // The JS8 page now hosts the identical tool rather than pointing at the
       // page that has it. What matters is that it is the SAME module (one panel,
       // one search, one table) and that it is reachable without leaving the page,
@@ -719,11 +723,12 @@ f.onload=()=>{
       if(autoReply&&!autoWas){autoReply.checked=false;
         autoReply.dispatchEvent(new f.contentWindow.Event('change',{bubbles:true}));}
       checks.setupTxGainVisibleWithLan=!txGainSection.hidden;
-      checks.setupTxGainShowsTheTable=!!txGainRow&&txGainRow.textContent.includes('IC-705')&&
-        txGainRow.textContent.includes('20m')&&txGainRow.textContent.includes('0.031');
-      checks.setupTxGainSaysWhenItWasTrimmed=!!txGainRow&&txGainRow.textContent.toLowerCase().includes('trimmed');
+      checks.setupTxGainShowsTheTable=!!txGainMatrix&&txGainMatrix.textContent.includes('IC-705')&&
+        txGainMatrix.textContent.includes('20m')&&txGainMatrix.textContent.includes('0.031');
+      checks.setupTxGainSaysWhenItWasTrimmed=!!txGainCell&&!!txGainCell.querySelector('.txgain-trim');
       // 0.031 against the 0.7 target is about 27 dB of surplus MOD level.
-      checks.setupTxGainTranslatesTheKnee=!!txGainRow&&/MOD level 2[0-9]\.[0-9] dB too high/.test(txGainRow.textContent);
+      checks.setupTxGainTranslatesTheKnee=!!txGainCell&&
+        /MOD level 2[0-9]\.[0-9] dB too high/.test(txGainCell.getAttribute('title')||'');
       // Same tab, always: both DATA pages share one session token, so a new tab
       // asks for a lease the open one already holds and lands on "session busy".
       checks.setupTxGainLinksToTheCarrier=sd.querySelector('.txgain-link')?.getAttribute('href')==='/wspr.html#autogain'&&

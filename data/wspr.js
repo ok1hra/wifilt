@@ -1786,7 +1786,11 @@
         catch (_error) { /* an unknown model has no target to offer */ }
       }
       if (state.radio.rfPowerSeen === true) out.push(radioPercent());
-      return out;
+      // The table is shared with JS8 and RTTY, so their powers are offered too
+      // (tx-mode-powers.js): one run then covers every tone mode. WSPR's own first.
+      if (typeof TxModePowers === "undefined") return out;
+      return TxModePowers.union([out, TxModePowers.read({model: liveRadioModel()})
+        .map(entry => entry.percent)], 4);
     },
     // Confirmed writes, both of them: a plan that measured a cell on a band the
     // radio never reached would file the wrong knee under the right key.

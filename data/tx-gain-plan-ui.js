@@ -53,6 +53,8 @@
     + ".plan-head>b{min-width:44px}.plan-head>span{min-width:64px;text-align:center}"
     + ".plan-hzwarn{color:#e0a020;font-size:11px}"
     + ".plan-axis{color:#8ba59d;font-size:11px;text-transform:uppercase;min-width:104px}"
+    + ".plan-modes{display:block;font-size:9px;letter-spacing:.04em;color:#7fb3a6}"
+    + "[data-plan=modepowers] button{margin:2px 4px 0 0;font-size:11px}"
     + ".freq-timetable.asking{border-color:#e0a020;color:#e0a020;box-shadow:0 0 7px #e0a02044}"
     + ".freq-timetable.uncalibrated{border-color:#e06c5a;color:#e06c5a}"
     + ".freq-timetable.uncalibrated b{color:#e06c5a}"
@@ -107,6 +109,10 @@
     + '<input class="plan-power-input" data-plan="newpower" type="number" min="1" max="100"'
     + ' step="1" inputmode="numeric" placeholder="%" aria-label="power in percent to add">'
     + '<button type="button" data-plan="addpower">ADD POWER</button></div>'
+    // Which mode transmits at which power. The table is shared by JS8, WSPR and
+    // RTTY (only band and power are in the key), so a power one of them uses and
+    // the plan lacks is a calibration that mode will be missing.
+    + '<p class="plan-note" data-plan="modepowers" hidden></p>'
     + '<div class="plan-grid" data-plan="grid"></div>'
     + '<p class="plan-note" data-plan="estimate"></p>'
     // The two numbers the whole feature turns on, and neither was visible anywhere:
@@ -242,6 +248,12 @@
         this.dom.powerchips.addEventListener("click", event => {
           const chip = event.target.closest("[data-remove-power]");
           if (chip) this.removePower(Number(chip.dataset.removePower));
+        });
+        this.dom.modepowers.addEventListener("click", event => {
+          const add = event.target.closest("[data-add-mode-power]");
+          if (!add) return;
+          this.dom.newpower.value = add.dataset.addModePower;
+          this.addPower();
         });
         this.dom.run.addEventListener("click", () => this.begin(false));
         this.dom.runall.addEventListener("click", () => this.begin(true));
@@ -1039,6 +1051,30 @@
       return this.run ? this.run.modLevel : this.mod.value;
     }
 
+    // Which mode transmits at which power, and which of those powers the plan
+    // does not have yet -- each one a calibration that mode would be missing.
+    renderModePowers(modes) {
+      const node = this.dom.modepowers;
+      if (!modes.length) { node.hidden = true; return; }
+      const missing = modes.filter(entry => !this.plan.powers.includes(entry.percent));
+      const full = this.plan.powers.length >= 4;
+      const locked = this.running || this.starting;
+      node.hidden = false;
+      node.innerHTML = "One calibration serves JS8, WSPR and RTTY (USB-D): only the band and "
+        + "the power matter, so plan the powers your modes transmit at. "
+        + modes.map(entry => `<b>${entry.mode}</b> ${entry.percent} %`
+          + (entry.detail && entry.detail !== `${entry.percent} %` ? ` (${entry.detail})` : ""))
+          .join(" · ")
+        + (missing.length
+          ? ". Missing here: " + missing.map(entry =>
+              `<button type="button" data-add-mode-power="${entry.percent}"`
+              + `${full || locked ? " disabled" : ""}`
+              + ` title="${full ? "four powers is the limit — remove one first"
+                             : `Add a ${entry.percent} % column`}">`
+              + `ADD ${entry.percent} % (${entry.mode})</button>`).join(" ")
+          : ".");
+    }
+
     render() {
       if (!this.dom) return;
       // Columns as chips with their own remove button, so both halves of editing a
@@ -1050,9 +1086,18 @@
             ` data-remove-power="${percent}" title="Remove the ${percent} % column"` +
             `>×</button></span>`).join("")
         : `<span class="plan-note">none yet</span>`;
+      // The tone table is shared by JS8, WSPR and RTTY; Mercury's is its own
+      // (the only profile that names itself), so it gets no mode labels.
+      const modes = !this.page.calibrationProfileLabel && globalThis.TxModePowers
+        ? globalThis.TxModePowers.read({model: this.page.model ? this.page.model() : ""}) : [];
+      this.renderModePowers(modes);
       this.dom.grid.innerHTML =
         `<div class="plan-head"><b></b><span>kHz</span>${this.plan.powers
-          .map(percent => `<span>${percent} %</span>`).join("")}</div>` +
+          .map(percent => {
+            const users = modes.length ? globalThis.TxModePowers.modesAt(percent, modes) : [];
+            return `<span>${percent} %${users.length
+              ? `<small class="plan-modes">${users.join(" ")}</small>` : ""}</span>`;
+          }).join("")}</div>` +
         this.plan.rows.map((row, index) => {
           const warning = this.hzWarning(row);
           return `<div class="plan-row"><b>${row.band}</b>` +
