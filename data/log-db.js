@@ -120,8 +120,37 @@
     return tx('logs', 'readwrite', s => s.put(log));
   }
 
+  // Deleting a log leaves a tombstone behind. GIT LOG SYNC merges this
+  // browser's logs with a file other devices write to as well, and a merge is a
+  // union: without a record that the log was deleted ON PURPOSE, the next sync
+  // would simply bring it back from the file. The time matters as much as the
+  // id -- log ids are "date-CONTEST", so a log deleted and created again under
+  // the same name the same day has the same id, and only what existed BEFORE
+  // the deletion may die with it (log-git-sync.js, mergeBackups).
   function deleteLog(id) {
-    return tx('logs', 'readwrite', s => s.delete(id));
+    return tx('logs', 'readwrite', s => s.delete(id))
+      .then(() => addLogTombstones([{ id, deletedAtUtc: new Date().toISOString() }]));
+  }
+
+  const TOMBSTONE_KEY = 'deletedLogs';
+
+  function getLogTombstones() {
+    return getSetting(TOMBSTONE_KEY, []).then(v => Array.isArray(v) ? v : []);
+  }
+
+  // Union by id, the later deletion winning: a tombstone only ever moves
+  // forward in time, never back.
+  function addLogTombstones(list) {
+    return getLogTombstones().then(cur => {
+      const byId = {};
+      cur.concat(list || []).forEach(t => {
+        if (!t || !t.id || !t.deletedAtUtc) return;
+        const have = byId[t.id];
+        if (!have || t.deletedAtUtc > have.deletedAtUtc) byId[t.id] = { id: t.id, deletedAtUtc: t.deletedAtUtc };
+      });
+      const next = Object.keys(byId).sort().map(k => byId[k]);
+      return setSetting(TOMBSTONE_KEY, next).then(() => next);
+    });
   }
 
   // ── QSOs ───────────────────────────────────────────────────────────────────
@@ -387,7 +416,7 @@
   global.LogDB = {
     openDb,
     // logs
-    createLog, getLogs, getLog, updateLog, deleteLog,
+    createLog, getLogs, getLog, updateLog, deleteLog, getLogTombstones, addLogTombstones,
     // qso
     addQso, getQso, updateQso, getQsosForLog, deleteQso, findDupes, matchCalls, invalidateCallIndex, commitQso,
     onQsoWrite, hzOf: _hzOf,

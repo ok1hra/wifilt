@@ -937,6 +937,16 @@ int incomingByte = 0;   // for incoming serial data
   static const char* LOG_MACROS_PATH = "/log-macros.json";
   static const size_t LOG_MACROS_MAX_BYTES = 4096;
 
+  // GIT LOG SYNC (data/log-git-sync.js): which GitHub repo the contest log is
+  // synced with, the token that may write to it, and how the last sync ended.
+  // One copy here rather than one per browser, so every browser pointed at
+  // this station syncs to the same place -- at the price that anyone on the LAN
+  // can GET the token back. The operator is told to use a fine-grained token
+  // limited to that one repo for exactly that reason. Deliberately NOT part of
+  // /config/download: a config backup is a file people mail around.
+  static const char* GIT_SYNC_PATH = "/git-backup.json";
+  static const size_t GIT_SYNC_MAX_BYTES = 1536;
+
   // Per-slot named radio configurations ("presets") -- SETUP/Radio lets the
   // operator save the current TRX1/2/3 fields under a name and reload them
   // later without retyping IP/user/pass/civaddr each time a physical radio
@@ -1194,6 +1204,8 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void handlePostJs8Config(void);
   void handleGetLogMacros(void);
   void handlePostLogMacros(void);
+  void handleGetGitSync(void);
+  void handlePostGitSync(void);
   void handleGetRadioPresets(void);
   void handlePostRadioPresets(void);
   void handleGetIdentity(void);
@@ -4353,6 +4365,53 @@ void handlePostLogMacros() {
   webServer.send(200, "application/json", "{\"ok\":true}");
 }
 
+// ---- GIT LOG SYNC settings --------------------------------------------------------
+//
+// The same blob store as the macros above: the browser owns the shape
+// ({repo, branch, path, token, lastSync}) and this file is never parsed.
+
+void handleGetGitSync() {
+  webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  webServer.sendHeader("Connection", "close");
+  webServer.client().setNoDelay(true);
+  if (!cfgFS.exists(GIT_SYNC_PATH)) {
+    // "Not configured yet" is a state, not an error -- the button then opens
+    // its palette on the settings.
+    webServer.send(200, "application/json", "{}");
+    return;
+  }
+  File f = cfgFS.open(GIT_SYNC_PATH, FILE_READ);
+  if (!f) { webServer.send(500, "application/json", "{}"); return; }
+  webServer.streamFile(f, "application/json");
+  f.close();
+}
+
+void handlePostGitSync() {
+  webServer.sendHeader("Connection", "close");
+  webServer.client().setNoDelay(true);
+  String body = webServer.arg("plain");
+  body.trim();
+  if (body.length() == 0 || body.length() > GIT_SYNC_MAX_BYTES) {
+    String j = "{\"ok\":false,\"error\":\"too_big\",\"bytes\":";
+    j += (unsigned)body.length();
+    j += ",\"limit\":"; j += (unsigned)GIT_SYNC_MAX_BYTES; j += "}";
+    webServer.send(body.length() == 0 ? 400 : 409, "application/json", j);
+    return;
+  }
+  if (body[0] != '{' || body[body.length()-1] != '}') {
+    webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"not_an_object\"}");
+    return;
+  }
+  File f = cfgFS.open(GIT_SYNC_PATH, "w");
+  if (!f || f.print(body) != body.length()) {
+    if (f) f.close();
+    webServer.send(500, "application/json", "{\"ok\":false,\"error\":\"storage\"}");
+    return;
+  }
+  f.close();
+  webServer.send(200, "application/json", "{\"ok\":true}");
+}
+
 // ---- Per-slot radio presets ---------------------------------------------------
 //
 // Same blob-store convention as the macros above: one JSON object keyed
@@ -5390,6 +5449,8 @@ void setupWebServer(void){
   webServer.on("/js8-config.json", HTTP_POST, handlePostJs8Config);
   webServer.on("/log-macros.json", HTTP_GET,  handleGetLogMacros);
   webServer.on("/log-macros.json", HTTP_POST, handlePostLogMacros);
+  webServer.on("/git-backup.json", HTTP_GET,  handleGetGitSync);
+  webServer.on("/git-backup.json", HTTP_POST, handlePostGitSync);
   webServer.on("/radio-presets.json", HTTP_GET,  handleGetRadioPresets);
   webServer.on("/radio-presets.json", HTTP_POST, handlePostRadioPresets);
   webServer.on("/txgain.json", HTTP_GET,  handleGetTxGain);

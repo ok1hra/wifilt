@@ -60,8 +60,9 @@ function keep(label) {
   const c = clean(label);
   if (NOISE.has(c)) return "";
   if (c.length < 2 || c.length > 90) return "";
-  // A label made only of an interpolation is the template, not the text.
-  if (/^["'`+\s]*$/.test(c)) return "";
+  // A label made only of an interpolation is the template, not the text --
+  // including a concatenated call such as "+bandByTrxLabel()+".
+  if (/^["'`+\s]*$/.test(c.replace(/["']\s*\+[^"']*\+\s*["']/g, ""))) return "";
   return c;
 }
 

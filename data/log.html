@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>QRPLog — WIFILT</title>
-  <link rel="stylesheet" href="/log.css?v=54978fe3">
+  <link rel="stylesheet" href="/log.css?v=f63263d1">
 </head>
 <body>
   <!-- Split shell (2026-09-07). Everything the log itself is lives in the RIGHT
@@ -81,6 +81,8 @@
              and add <code id="fixPopupOrigin"></code> as <strong>Allow</strong>.</p>
           <p class="sw-opt">Option 3 — Regular backup</p>
           <p>Go to <a href="/datasync">LOGSYNC</a> → <em>Backup / Restore</em> and export a JSON file after each session.</p>
+          <p class="sw-opt">Option 4 — GIT LOG SYNC</p>
+          <p>Keep the log in a GitHub repository: set it up with <strong>⚙</strong> next to <em>GIT LOG SYNC</em> at the bottom right, then one click syncs it.</p>
         </div>
         <div class="sw-box-footer">
           <button id="storageFixOk" type="button">Got it</button>
@@ -309,7 +311,15 @@
                 title="Linear amplifier">PA</button>
         <button id="btnOpenLog" class="btn-trx" type="button" title="Open / create log">LOG</button>
         <button id="btnMacros" class="btn-trx" type="button" title="Edit CW/RTTY macros">MACROS</button>
-        <button id="btnBackup" class="btn-trx" type="button" title="Download QSO database backup">BACKUP</button>
+        <!-- GIT LOG SYNC (log-git-sync.js) replaced BACKUP here: the left half
+             syncs the log with a GitHub repository both ways, ⚙ opens its
+             palette (settings, questions, errors, the guide). Until git is set
+             up, log.js keeps the old auto-backup state on it. The plain file
+             backup lives on LOGSYNC -> Backup / Restore. -->
+        <span class="gs-split">
+          <button id="btnGitSync" class="btn-trx gs-main" type="button">GIT LOG SYNC</button><button
+                  id="btnGitSyncCfg" class="btn-trx gs-cfg" type="button" title="GIT LOG SYNC settings &amp; guide">&#9881;&#xFE0E;</button>
+        </span>
       </div>
     </div>
 
@@ -372,13 +382,15 @@
   <script src="/mgrs.js?v=6a363b6c"></script>
   <script src="/fw-version.js?v=b29c5317"></script>
   <script src="/dxcc.js?v=c56ee081"></script>
-  <script src="/log-db.js?v=d30a1706"></script>
+  <script src="/log-db.js?v=4325395d"></script>
   <script src="/station-identity.js?v=a1a20249"></script>
-  <script src="/log.js?v=b33858ff"></script>
+  <script src="/log-export.js?v=beff747a"></script>
+  <script src="/log.js?v=6ed0c160"></script>
   <!-- After log.js: it reads window.LogRadio (for setRunMode) and log.js reads
        window.LogDxcSplit only from inside a channel callback, never at load. -->
   <script src="/log-dxc-split.js?v=295ebac7"></script>
   <script src="/pa-panel.js?v=8f6cd707"></script>
+  <script src="/log-git-sync.js?v=c8d63497"></script>
   <!-- After log.js: reads _bandFromHz, _modeKey and inpCall from it. -->
   <script src="/log-stats.js?v=22f1ec48"></script>
 

@@ -40,7 +40,7 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
  · [3.12 The DX cluster beside the log](#312-the-dx-cluster-beside-the-log)
  · [3.13 Radio selection](#313-radio-selection)
  · [3.14 PA — the linear amplifier](#314-pa--the-linear-amplifier)
- · [3.15 Export and backup](#315-export-and-backup)
+ · [3.15 Export and backup — GIT LOG SYNC and the web log viewer](#315-export-and-backup)
  · [3.16 Statistics](#316-statistics)
  · [3.17 Keyboard shortcuts](#317-keyboard-shortcuts)
 
@@ -173,6 +173,15 @@ pocket and the laptop on the table hold the same log, with no server in between.
 
 **A DX cluster client with a band map**, wired straight into the logbook and the radio: one
 click on a spot puts the radio on frequency, and worked stations grey out.
+
+**RTTY for contesting, inside the log.** Two decoders side by side over the radio's LAN audio,
+in a palette that floats over the logbook: click a callsign in the decoded text and it is in
+*Call*; the macros send it back over real FSK or as audio — see
+[section 3.6](#36-the-rtty-palette) and [section 6](#6-data--rtty-icom).
+
+**A linear amplifier on the same screen.** An EXPERT 1K-FA on TrxNet gets a panel in the
+logbook with its own telemetry, a scale of its tuning segments, and a one-click **TUNE+** that
+keys the tune carrier for you — see [section 3.14](#314-pa--the-linear-amplifier).
 
 **Up to three radios.** TRX1, TRX2 and TRX3 can be different transceivers on different
 transports, switchable from the logbook with a keystroke.
@@ -544,12 +553,13 @@ erased.
 | Store | Contents | Survives a firmware update | Survives clearing browser data |
 |---|---|---|---|
 | **NVS** on the interface (`eeprom` badge) | WiFi networks, callsign, locator, radio login, cluster host, TrxNet, baud rate | ✅ | ✅ |
-| **`cfg` partition** on the interface (`config` badge) | radio slots and the detected model, LOG settings, TX gain calibrations, CW and frequency memories, MSG BOX, the JS8 operating profile — heartbeat, groups, band schedule, power **and the APRS-IS gate login** | ✅ | ✅ |
+| **`cfg` partition** on the interface (`config` badge) | radio slots and the detected model, LOG settings, TX gain calibrations, CW and frequency memories, MSG BOX, the JS8 operating profile — heartbeat, groups, band schedule, power **and the APRS-IS gate login**, the GIT LOG SYNC repository and token | ✅ | ✅ |
 | **The browser's database** | **your QSO log** | ✅ (it was never on the device) | ❌ **gone permanently** |
 | Nothing (`live` badge) | the unattended-operation arming window — running state only | ❌ resets on restart | — |
 
 The one that can be lost is the log, and it can only be lost by the browser. Back it up:
-LOGSYNC → *Backup / Restore*, or the **BACKUP** button in QRPLog.
+**GIT LOG SYNC** in QRPLog keeps it in a GitHub repository
+([section 3.15](#git-log-sync)), and LOGSYNC → *Backup / Restore* exports it as a file.
 
 ---
 
@@ -565,8 +575,8 @@ journal on top, the radio status bar, the input row, and a button bar at the bot
 The first time you open it, a disclaimer explains that the log lives in this browser's
 IndexedDB — not on the ESP32 and not on a server — and asks you to tick that you have noted
 the backup advice. Firefox users additionally get a standing warning bar (**Database at
-risk**) with a **How to fix** button offering three remedies: bookmark the page, add a
-storage exception, or back up regularly.
+risk**) with a **How to fix** button offering four remedies: bookmark the page, add a
+storage exception, back up regularly, or set up GIT LOG SYNC.
 
 ### 3.1 Logs: open, create, activate
 
@@ -913,6 +923,13 @@ has no audio stage to move; in `USB-D`/`LSB-D` it moves the audio tone instead. 
 **100% / 200% / 400%** buttons in the title bar zoom the waterfall in around the tone as it
 stands when you press them, for picking a station out of a crowded band.
 
+**CLEAN**, next to the zoom buttons, switches the decoded text from the time-aligned tape to
+plain text in the order it was decoded — what you see is exactly what a click takes. It matters
+most here, because the palette's squelch is always off and in steady noise the tape can leave
+gaps or slot a late character into a row above. It is **one setting shared with the full RTTY
+page**: switching it in either place switches both, and an open palette follows at once. What
+it changes is described in [section 6.4](#64-rx--the-decoded-text).
+
 **AUTOTUNE** (`Alt+T`), at the right of the title bar, exists **in S&P only** — in RUN it is
 not there. You have found a station by ear or on the band map, but it does not sit exactly on
 the two marker lines: press AUTOTUNE and the radio's dial moves so that it does, which also
@@ -1251,9 +1268,120 @@ is not a reason to refuse to switch an amplifier off.
 
 ### 3.15 Export and backup
 
-**BACKUP** downloads the whole QSO database as a JSON file. Per-log **CSV** and **ADIF**
-exports are in the log manager. Everything else — restore, import, device-to-device sync —
-is on the [LOGSYNC](#10-logsync) page.
+Per-log **CSV** and **ADIF** exports are in the log manager. The whole database as a JSON
+file — export and restore — and device-to-device sync are on the [LOGSYNC](#10-logsync)
+page. The button at the bottom right of QRPLog is **GIT LOG SYNC**; it replaced the old
+**BACKUP** button.
+
+#### GIT LOG SYNC
+
+GIT LOG SYNC keeps the whole log as one file, `QSO-database.json`, in a GitHub repository.
+Every browser and every station that syncs to the same repository writes into the same
+file, so the log outlives the browser and each device ends up with what all the others
+logged.
+
+The button has two halves:
+
+- **GIT LOG SYNC** syncs, in both directions, with one click. It downloads the file, merges
+  it with this browser's log, writes whatever is new into this browser, and pushes the
+  result back. The button fills from the left while it runs, and the line above the input
+  row reports the result, e.g. `Git sync: +14 in, 3 out, a1b2c3d`. A count in brackets,
+  `GIT LOG SYNC (12)`, is the number of changes in this browser that are not in git yet.
+  While there are any, the button is coloured and closing the page asks first.
+- **⚙** opens a small movable palette with the settings, the last sync and a link to this
+  guide. Like the PA palette, its buttons never take the cursor out of *Call*. `Esc` closes
+  it, unless something is being transmitted: then `Esc` aborts the transmission, as it does
+  everywhere on this page.
+
+The palette also opens by itself whenever the sync needs you:
+
+- **Not set up yet.** Until it is, the old behaviour stays: a JSON backup downloads by
+  itself 30 minutes after the last QSO, and the palette has a **DOWNLOAD JSON NOW** button.
+- **A log was deleted on another device.** A sync never deletes a log you can see without
+  asking. The palette lists the log and its QSO count, with **DELETE & SYNC** and
+  **CANCEL**. Choose delete and a JSON backup of this browser downloads first. Cancel writes
+  and pushes nothing, and the next sync asks again.
+- **Something went wrong.** The button turns red and the palette says what happened: a
+  wrong or expired token, a mistyped repository, or no internet. If the sync fails before
+  writing, nothing in this browser has changed.
+
+**How the merge decides:**
+
+- A QSO is identified the same way LOGSYNC identifies it, so a QSO that travelled through
+  both LOGSYNC and git is still one QSO.
+- When the same QSO differs between this browser and git, **the newer change wins**. An
+  edit, or a deletion in the QSO editor, made on one device reaches the others on their next
+  sync. A tie keeps this browser's version.
+- **Deleting a whole log** leaves a note in the file, so the log is deleted everywhere
+  instead of coming back from the file. A log created again later under the same name is
+  not affected.
+- Which log is *active* is this browser's own choice and is never synced. The next QSO
+  number is the higher of the two, so it never goes backwards.
+
+**Setting it up:**
+
+1. On GitHub, create a repository for the log. Tick *Add a README* so that the repository
+   is not empty. The log viewer below needs a **public** repository; the sync itself works
+   with a private one too. A public repository makes the whole log public: every call, time,
+   frequency and report.
+2. Create a token under *Settings → Developer settings → Personal access tokens →
+   Fine-grained tokens*. Under *Repository access*, choose *Only select repositories* and
+   pick the log repository. Under *Permissions → Contents*, choose *Read and write*. Give it
+   an expiry date.
+3. In QRPLog, open **⚙** and fill in *Repository* (`owner/name`, or paste its GitHub
+   address), and the *Token*. *Branch* (`main`) and *File* (`QSO-database.json`) can stay as
+   they are. Press **SAVE**, then **SYNC NOW**.
+
+The settings are stored on the interface, not in the browser, so every browser that opens
+this interface syncs to the same repository without being set up again. The token is never
+shown back after saving; **remove** deletes it. Anyone on your network can read the token
+back from the interface, which is why it should be limited to this one repository and
+nothing else. It is not part of *Download config* ([section 9.9](#99-save-download-and-upload-the-configuration)).
+
+The browser needs an internet connection to sync. The interface itself does not.
+
+The file in git is the same JSON as a LOGSYNC backup, with one record per line, so each new
+QSO is a one-line change in the repository's history. To restore an older state, download
+that version of the file from GitHub's history and import it on LOGSYNC → *Backup /
+Restore*.
+
+#### The web log viewer
+
+The same repository can show the log on a web page that anyone with the link can open. The
+page needs no interface and no token. It is read-only.
+
+1. Download
+   [`log-viewer/index.html`](https://github.com/ok1hra/wifilt/blob/main/log-viewer/index.html)
+   from the WIFILT repository, and upload it to the root of your log repository next to
+   `QSO-database.json`, with *Add file → Upload files*. From a terminal:
+   `curl -o index.html https://raw.githubusercontent.com/ok1hra/wifilt/main/log-viewer/index.html`.
+2. In the log repository, open *Settings → Pages*. Under *Build and deployment*, choose
+   *Deploy from a branch*, then `main` and `/ (root)`, and save.
+3. After a minute or two the log is at `https://<owner>.github.io/<repository>/`. The
+   palette's **Open log viewer** link goes there.
+
+Every sync publishes again. GitHub needs a minute or two, plus up to about ten minutes of
+its own caching, before the page shows a new QSO. To update the viewer itself, upload a
+newer `index.html` the same way. The build number is at the bottom of the page.
+
+What the page offers:
+
+- **A filter under every column**, all of them applied together. Plain text finds the text
+  anywhere in the cell, ignoring case: `OK1` in *Call*, or part of a contest name in *Log*.
+  `=text` must match the whole cell, so `=20m` finds 20 m but not 2 m or 12 m. The number
+  columns (*Nr*, *kHz*, *CQ*, *ITU*, *QRB km*, *Az°*) also take `>5000`, `<10` and
+  `14000-14100`. In *Mode*, `=SSB` includes USB and LSB, and `=CW` includes CW-R.
+- **Statistics in the header, computed from the rows shown**: QSOs, stations, DXCC entities,
+  logs, the period covered, the longest distance (ODX), QSOs per continent, and a band ×
+  mode table. Click a continent, or a number in the table, to filter by it.
+- **Countries for old QSOs.** QSOs imported from old ADIF logs carry no DXCC data. The page
+  looks the country up from the call. It works out distance and bearing only where the log
+  has its own locator set.
+- **The address keeps the view.** The filters, the sort order and *show deleted* are in the
+  address, so a link or a bookmark opens exactly that selection. **Columns ▾** hides
+  columns; that choice stays in your browser.
+- **ADIF** and **CSV** download the rows shown. The ADIF is written by the same code as
+  QRPLog's own export, with each QSO's own station call and locator.
 
 ### 3.16 Statistics
 
@@ -2746,6 +2874,15 @@ fail on different words: in simulation, a callsign came through right in at leas
 about 77 % of the time against 54 % for DEC 1 alone. **You pick whichever copy came through,
 by clicking it.** Hover a column label for the same explanation.
 
+> **On the air the difference is much smaller than in simulation.** Measured on a real CQ WW
+> RTTY log (IC-7610, 286 QSOs in RUN, the decoded text recorded over the
+> [TrxNet text stream](#66-settings) and each callsign checked against what was logged): the
+> caller's callsign came through exactly, as one clickable word, in **DEC 1 for 95 %** of the
+> QSOs and in **DEC 2 for 90 %**; the two together reached 96 %. DEC 1 alone had it 19 times
+> when DEC 2 did not, the reverse happened 3 times. DEC 2 more often loses a whole character,
+> which runs two words together. So read DEC 1 first and look across to DEC 2 when DEC 1 is
+> garbled — and turning DEC 2 off in a crowded contest costs little.
+
 The log is laid out like a teleprinter tape, in time: each row is a stretch of audio as wide
 as a column, and every character sits at the position of the moment it was received. So the
 same character from both decoders is always on the same row at the same place, and where the
@@ -2775,6 +2912,28 @@ goes into the empty row the log always keeps at the bottom for this. Moving off 
 the log still for a moment (0.4 s), long enough to reach the next word or the next row. After
 that, after 2 seconds without movement, or as soon as the mouse leaves the log, it jumps to the
 newest text and follows it again. The same applies in the QRPLog palette.
+
+**CLEAN — plain text instead of the tape.** The **CLEAN** button beside CLEAR (and the one in
+the QRPLog palette's title bar — it is one shared setting, off by default) lays the log out
+by decode order instead of by time. The tape places each character by when it arrived,
+counting from the start of a reception; with the squelch off, noise keeps that reception
+going indefinitely, and a small correction of the decoder's timing then shows as blanks that
+were never decoded, or as a character dropped into a gap a few rows up. CLEAN has none of
+that:
+
+- **DEC 1** is continuous text, character after character. Line breaks in the received text
+  become a space, and a run of spaces becomes one. Once written, it never changes.
+- **DEC 2** goes into the row its time falls in — the newest one, or at most the row before
+  it — written continuously within that row. There are no amber marks: without time
+  positions there is nothing to compare character by character.
+- A row ends when either column is full; both then continue in the new row.
+- **2 seconds of silence in both columns** starts a new row under the dashed rule, and also
+  ends the word in both — so a click never joins the text before a pause to the text after it.
+  Your own transmissions still get a row of their own.
+- With DEC 2 off, it is a single column of plain text.
+
+Switching CLEAN on or off re-lays the whole history in the other layout, so nothing already
+received is lost. The tape itself is unchanged by it.
 
 Behind the text is a decoder built to separate the signal from the noise: its tone filters
 are narrow enough to keep a station 300 Hz away out, it follows each tone's own strength
@@ -2810,7 +2969,7 @@ macros build the whole exchange for you — [section 3.5](#35-cw-and-rtty-macros
 |---|---|
 | **TX polarity** | `Normal` / `Reverse` — what this station's own AFSK transmits. Independent of the RX-only NORMAL/REVERSE pill in the header. |
 | **Squelch level** | 1–10 dB **above the noise**, default 3. The decoder measures the noise itself (in RTTY one of the two tones is always off, so the quieter filter is the noise), so the same setting means the same thing however loud the radio's LAN audio is. At 3 dB pure noise prints nothing and no readable signal is lost; raise it only if noise bursts still print. This only sets the level for when squelch *is* on; on/off is the header's SQL pill. |
-| **Second decoder** | on by default: shows DEC 2 beside DEC 1 in the RX log ([section 6.4](#64-rx--the-decoded-text)). The QRPLog palette follows it too. |
+| **Second decoder** | on by default: shows DEC 2 beside DEC 1 in the RX log ([section 6.4](#64-rx--the-decoded-text)). The QRPLog palette follows it too. (The RX log's **CLEAN** layout is not here but on the button beside CLEAR — it is kept with these settings in this browser, and shared with the palette the same way.) |
 | **Unshift on space (USOS)** | on by default: after a space the decoder returns to letters, so one corrupted FIGURES shift garbles a word instead of the rest of the line. Turn it off for a station whose numbers come out as letters after a space — `599 PPQ` instead of `599 001` — which means it sends figures after a space without repeating FIGURES. This station's own transmissions always repeat FIGURES after a space, AFSK and FSK alike, so they read correctly either way. |
 | **Default TX/RX tone** | the lower of the two tones, in Hz, 500–2700. One number serves both receive and transmit. |
 | **AFC** | nudges the *decoder's* frequency to follow another station's drift on short messages such as a lone callsign. **This station's own transmit tone never moves.** |
@@ -3517,7 +3676,8 @@ The page footer links to the licence notices the device serves from its own file
 ### 10.1 Where your QSOs live
 
 QSO records are stored in **this browser, on this device**, in IndexedDB. The ESP32 does not
-store them and there is no cloud backup.
+store them. The only copy outside the browser is the one you make: a backup file from here,
+or GIT LOG SYNC to a GitHub repository ([section 3.15](#git-log-sync)).
 
 > **The records are tied to the exact address you used to open the interface** — URL *and*
 > port. `http://192.168.1.50`, `http://192.168.1.50:80` and `http://wifilt.local` are three
@@ -3526,8 +3686,8 @@ store them and there is no cloud backup.
 
 If browser storage is cleared, or you change device or browser, the records may be gone for
 good. Firefox is the most aggressive about this, which is why it gets a standing warning bar
-with three remedies: bookmark the page (Firefox protects IndexedDB for bookmarked origins),
-add a storage exception, or export a backup after each session.
+with four remedies: bookmark the page (Firefox protects IndexedDB for bookmarked origins),
+add a storage exception, export a backup after each session, or set up GIT LOG SYNC.
 
 ### 10.2 Pairing and syncing
 

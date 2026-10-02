@@ -1641,9 +1641,25 @@ input.mx-serial-bad           { border-color: var(--conn-fail); }
   color: #dddddd;
 }
 
-/* ── Backup button state ── */
+/* ── GIT LOG SYNC button (replaced BACKUP) ──
+   Two halves of one button: the sync itself and ⚙ for its palette. The
+   "unsaved" colour is BACKUP's: QSOs here that are not in git yet -- or, until
+   git is set up, not in a downloaded backup yet. */
 
-#btnBackup.btn-backup-pending {
+.gs-split { display: inline-flex; align-items: stretch; }
+.gs-split .gs-main { border-radius: 10px 0 0 10px; }
+.gs-split .gs-cfg  { border-radius: 0 10px 10px 0; border-left-width: 0; padding: 6px 9px; }
+
+/* The progress of a sync fills the button from the left. */
+#btnGitSync.gs-busy {
+  background: linear-gradient(90deg, rgba(90, 160, 255, 0.40) var(--gs-p, 0%), transparent var(--gs-p, 0%));
+  border-color: #5a8fd6;
+  color: #ffffff;
+  cursor: progress;
+}
+#btnGitSync.gs-error { border-color: #ff5c5c; color: #ff9a9a; }
+
+#btnGitSync.btn-backup-pending {
   background: var(--btn-on-bg);
   border-color: var(--btn-on-bd);
   color: #ffffff;
@@ -1845,10 +1861,10 @@ body {
 .kbd-open .log-msg-line  { order: 4; }
 .kbd-open .log-input-row { order: 5; }
 
-/* Mini button bar: keep TRX + RUN/S&P, drop LOG/BACKUP/help and spacers */
+/* Mini button bar: keep TRX + RUN/S&P, drop LOG/GIT LOG SYNC/help and spacers */
 .kbd-open #btnHelp,
 .kbd-open #btnOpenLog,
-.kbd-open #btnBackup,
+.kbd-open .gs-split,
 .kbd-open .log-btn-spacer { display: none; }
 .kbd-open .log-btn-bar {
   border-top: 0;
@@ -2533,3 +2549,57 @@ body {
   user-select: text;
 }
 .st-list-n { color: #8b97a8; }
+
+/* ── GIT LOG SYNC palette (log-git-sync.js) ────────────────────────────────
+   The PA palette's frame and buttons (.pa-panel, .pa-head, .pa-btn), wider,
+   with a form in it. */
+
+.gs-panel { width: 280px; user-select: text; }
+/* Several parts below set their own display, which would beat [hidden]. */
+.gs-panel [hidden] { display: none !important; }
+.gs-panel .pa-body { gap: 7px; }
+.gs-panel a { color: #7fb4ff; }
+.gs-dim { color: var(--pa-dim); }
+
+.gs-form { display: flex; flex-direction: column; gap: 4px; margin: 0; }
+.gs-form label {
+  display: grid; grid-template-columns: 74px 1fr; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--pa-dim);
+}
+.gs-form input {
+  min-width: 0; font-family: inherit; font-size: 12px; color: #dfe6ef;
+  background: #11151b; border: 1px solid var(--pa-line); border-radius: 4px; padding: 3px 5px;
+}
+.gs-form input:focus { outline: none; border-color: #5a8fd6; }
+.gs-tok { font-size: 10px; line-height: 1.35; color: #9fd8b0; }
+.gs-tok .gs-dim { color: var(--pa-dim); }
+.gs-link {
+  background: none; border: none; padding: 0; font: inherit; color: #7fb4ff;
+  text-decoration: underline; cursor: pointer;
+}
+.gs-btns { display: flex; gap: 6px; margin-top: 2px; }
+.gs-btns .pa-btn { flex: 1; padding: 5px 4px; }
+.pa-btn.gs-danger { border-color: #8a3a3a; color: #ff9a9a; }
+
+.gs-status { font-size: 11px; line-height: 1.4; color: #c9d3df; }
+.gs-error-msg {
+  font-size: 11px; line-height: 1.4; color: #ff9a9a;
+  border: 1px solid #5a2a2a; border-radius: 4px; padding: 5px 6px; background: #241618;
+}
+.gs-confirm {
+  font-size: 11px; line-height: 1.4; color: #ffd38a;
+  border: 1px solid #6b5326; border-radius: 4px; padding: 5px 6px; background: #241f16;
+}
+.gs-confirm p { margin: 0 0 4px; }
+.gs-confirm ul { margin: 0 0 4px; padding-left: 16px; color: #dfe6ef; }
+.gs-unconf { font-size: 11px; line-height: 1.4; color: #c9d3df; }
+.gs-unconf .gs-btns { margin: 4px 0; }
+
+.gs-prog { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--pa-dim); }
+.gs-prog-bar { flex: 1; height: 6px; border-radius: 3px; background: #11151b; overflow: hidden; }
+.gs-prog-bar i { display: block; height: 100%; width: 0; background: #5a8fd6; transition: width 0.15s; }
+
+.gs-links {
+  display: flex; justify-content: space-between; gap: 8px;
+  font-size: 11px; border-top: 1px solid var(--pa-line); padding-top: 5px;
+}

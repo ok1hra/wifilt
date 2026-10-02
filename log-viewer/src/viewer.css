@@ -1,0 +1,135 @@
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --line: #d9dee5;
+  --text: #1c2430;
+  --dim: #66717f;
+  --accent: #1f6feb;
+  --accent-bg: rgba(31, 111, 235, 0.10);
+  --row-alt: #f9fafb;
+  --del: #b42318;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12161c;
+    --panel: #1a2029;
+    --line: #2c3542;
+    --text: #dfe6ef;
+    --dim: #8b97a8;
+    --accent: #6aa5ff;
+    --accent-bg: rgba(106, 165, 255, 0.14);
+    --row-alt: #171d25;
+    --del: #ff8a80;
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; display: flex; flex-direction: column;
+  background: var(--bg); color: var(--text); font: 14px/1.4 var(--sans);
+}
+a { color: var(--accent); }
+button {
+  font: inherit; font-size: 13px; color: var(--text); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer;
+}
+button:hover { border-color: var(--accent); }
+code { font-family: var(--mono); font-size: 12px; background: var(--accent-bg); padding: 0 3px; border-radius: 3px; }
+
+.top { padding: 12px 16px 8px; display: flex; flex-direction: column; gap: 8px; }
+.title-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+h1 { margin: 0; font-size: 20px; }
+.sub { color: var(--dim); font-size: 13px; }
+
+.tiles { display: flex; flex-wrap: wrap; gap: 8px; }
+.tile {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  padding: 6px 10px; min-width: 84px;
+}
+.tile .v { font: 600 18px/1.2 var(--mono); }
+.tile .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+.tile.wide { flex: 1 1 220px; }
+.chip {
+  display: inline-block; margin: 2px 4px 0 0; padding: 0 6px; border-radius: 10px;
+  border: 1px solid var(--line); font: 12px/1.6 var(--mono); cursor: pointer; background: none; color: var(--text);
+}
+.chip:hover, .chip.on { border-color: var(--accent); background: var(--accent-bg); }
+
+.bm summary { cursor: pointer; color: var(--dim); font-size: 13px; }
+.bm-wrap { overflow-x: auto; margin-top: 4px; }
+.bm-table { border-collapse: collapse; font: 12px var(--mono); background: var(--panel); }
+.bm-table th, .bm-table td { border: 1px solid var(--line); padding: 2px 8px; text-align: right; white-space: nowrap; }
+.bm-table th { color: var(--dim); font-weight: 600; }
+.bm-table th:first-child { text-align: left; }
+.bm-table .click { cursor: pointer; }
+.bm-table .click:hover { background: var(--accent-bg); color: var(--accent); }
+.bm-table .sum { font-weight: 700; }
+.bm-table .zero { color: var(--line); }
+
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.count { font: 13px var(--mono); color: var(--dim); }
+.chk { font-size: 13px; color: var(--dim); display: inline-flex; align-items: center; gap: 4px; }
+.spacer { flex: 1; }
+.cols-wrap { position: relative; }
+.cols-menu {
+  position: absolute; z-index: 20; top: 110%; left: 0; min-width: 160px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  padding: 6px 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+  display: grid; grid-template-columns: 1fr 1fr; gap: 2px 12px;
+}
+/* [hidden] has to win over the display above, or the menu never closes. */
+.cols-menu[hidden], .help[hidden], .msg[hidden] { display: none; }
+.cols-menu label { font-size: 13px; white-space: nowrap; display: flex; gap: 4px; align-items: center; }
+.help {
+  font-size: 13px; color: var(--dim); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
+}
+
+/* The table: ONE scroll container for both directions, the header sticky in
+   it, so the columns of header and body can never drift apart. Only the rows
+   in view exist in the DOM (viewer.js, renderRows). */
+.grid-wrap { flex: 1; min-height: 0; padding: 0 16px; display: flex; flex-direction: column; position: relative; }
+.grid {
+  flex: 1; min-height: 200px; overflow: auto; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 8px;
+}
+.ghead { position: sticky; top: 0; z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line); width: max-content; min-width: 100%; }
+.grow { display: grid; width: max-content; min-width: 100%; }
+.grow > div { padding: 0 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hrow > div {
+  font-size: 12px; font-weight: 600; color: var(--dim); padding: 6px 6px 2px; cursor: pointer; user-select: none;
+}
+.hrow > div:hover { color: var(--accent); }
+.hrow .sorted { color: var(--accent); }
+.frow > div { padding: 2px 3px 6px; overflow: visible; }
+.frow input {
+  width: 100%; min-width: 0; font: 12px var(--mono); color: var(--text);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 2px 4px;
+}
+.frow input:focus { outline: none; border-color: var(--accent); }
+.frow input.active { border-color: var(--accent); background: var(--accent-bg); }
+.frow input.bad { border-color: var(--del); }
+.gbody { position: relative; width: max-content; min-width: 100%; }
+.gwin { position: absolute; left: 0; right: 0; top: 0; }
+.drow { height: 26px; align-items: center; font: 13px var(--mono); border-bottom: 1px solid transparent; }
+.drow:nth-child(even) { background: var(--row-alt); }
+.drow:hover { background: var(--accent-bg); }
+.drow.deleted { color: var(--del); text-decoration: line-through; }
+.num { text-align: right; }
+.c-call { font-weight: 700; }
+.msg {
+  position: absolute; inset: 60px 32px auto; text-align: center; color: var(--dim);
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px;
+}
+.foot { padding: 6px 16px 10px; font-size: 12px; color: var(--dim); }
+
+@media (max-width: 640px) {
+  .top { padding: 10px 16px 6px; }
+  .tile { min-width: 70px; padding: 4px 8px; }
+  .tile .v { font-size: 16px; }
+}
