@@ -378,6 +378,24 @@ const PAGE_SCRIPT = `
     check("pull only: no commit when git already has it all", st.commits === 2, String(st.commits));
     check("pull: the hint counts what came in", /\\+3 in/.test(hint()), hint());
 
+    // ── one QSO under two ids (2026-10-03): the copy a file import would have
+    // left beside LOGSYNC's. The sync must keep one and delete the other here,
+    // under its own string key, and push nothing new.
+    {
+      const db = await LogDB.openDb();
+      const twin = Object.assign({}, bQso, { id: "import:" + log.id + ":77" });
+      await new Promise(r => { const t = db.transaction("qso", "readwrite"); t.objectStore("qso").put(twin); t.oncomplete = r; });
+      const nBefore = (await allQso()).length;
+      const cBefore = (await ghCtl()).commits;
+      await syncAndWait();
+      const after = await allQso();
+      check("a doubled QSO here is cleaned up: one copy left, LOGSYNC's id kept",
+            after.length === nBefore - 1 && after.some(r => r.id === B + ":7") && !after.some(r => r.id === twin.id),
+            nBefore + " -> " + after.length);
+      check("...said in the hint", /1 duplicates removed/.test(hint()), hint());
+      check("...and git, which never had it twice, is left alone", (await ghCtl()).commits === cBefore);
+    }
+
     // ── a lost race: someone pushes between our read and our write
     await LogDB.addQso(q(log.id, "DL1XX"));
     await ghCtl({ fail422: 1 });

@@ -173,5 +173,63 @@ const L1 = "2026-09-01-CQWW";
   check("token/settings never in the file", !text.includes("token") && !("settings" in parsed.stores));
 }
 
+// ── 8. one QSO, two ids (2026-10-03, the doubled history)
+// The same QSO reaches browsers under two ids: a file import keeps the file's
+// own ("import:LOG:N"), LOGSYNC's pairing rewrites it to "<device>:<seq>"
+// (datasync.js insertRemoteQsos). Both carry the same source_device_id and
+// source_seq -- LOGSYNC's real identity. Matching on `id` made every imported
+// QSO two QSOs after one sync, and the next sync pulled the second copy into
+// every browser.
+{
+  const IMP = "00000000-0000-0000-0000-import000001";
+  const L2 = "2020-10-20-GENERAL";
+  const base = { logId: L2, call: "VE2ZM", qsoNumber: 468, qsoDateUtc: "2024-12-13", timeOnUtc: "19:11",
+                 frequencyHz: 14059000, mode: "CW", createdAtUtc: "2024-12-13T19:11:00Z",
+                 source_device_id: IMP, source_seq: 7213 };
+  const viaFile = Object.assign({ id: "import:" + L2 + ":468" }, base);
+  const viaSync = Object.assign({ id: IMP + ":7213" }, base);
+  const browserB = file(B, db([log(L2)], [viaSync]));
+  const gitFromA = mergeBackups(file(A, db([log(L2)], [viaFile])), null).merged;
+  const m1 = mergeBackups(browserB, gitFromA);
+  check("two ids, one identity: still one QSO in the file", m1.merged.stores.qso.length === 1,
+        m1.merged.stores.qso.map(q => q.id).join(","));
+  check("...and nothing is added locally", m1.localChanges.qsoAdd.length === 0 && m1.localChanges.qsoDelete.length === 0);
+  check("the file settles on LOGSYNC's id", m1.merged.stores.qso[0].id === IMP + ":7213");
+
+  // A browser already holding both copies (what the bad syncs left behind)
+  const doubled = file(B, db([log(L2)], [viaSync, viaFile]));
+  const m2 = mergeBackups(doubled, null);
+  check("a doubled browser: the file gets one copy", m2.merged.stores.qso.length === 1);
+  check("...and the extra copy here is deleted, under its own key",
+        m2.localChanges.qsoDelete.length === 1 && m2.localChanges.qsoDelete[0].__localKey === viaFile.id,
+        JSON.stringify(m2.localChanges.qsoDelete.map(q => q.__localKey)));
+  check("...keeping LOGSYNC's copy", !m2.localChanges.qsoAdd.length && m2.merged.stores.qso[0].id === IMP + ":7213");
+
+  // A doubled file in git (what commit b289db0 holds)
+  const doubledGit = { stores: { logs: [logToFileLike(log(L2))], qso: [viaSync, viaFile], devices: [] }, deleted_logs: [] };
+  const m3 = mergeBackups(file(A, db([log(L2)], [viaFile])), doubledGit);
+  check("a doubled file is collapsed and pushed", m3.merged.stores.qso.length === 1 && m3.remoteChanged);
+  check("...without adding anything here", m3.localChanges.qsoAdd.length === 0 && m3.localChanges.qsoDelete.length === 0);
+
+  // A newer copy from git replaces the local one under the local one's key
+  const edited = Object.assign({}, viaSync, { rstSent: "579", updatedAtUtc: "2026-10-03T20:00:00.000Z" });
+  const m4 = mergeBackups(file(A, db([log(L2)], [viaFile])), { stores: { logs: [], qso: [edited], devices: [] }, deleted_logs: [] });
+  check("a newer copy lands once: written under the new key, the old key removed",
+        m4.localChanges.qsoUpdate.length === 1 && m4.localChanges.qsoDelete.length === 1 &&
+        m4.localChanges.qsoDelete[0].__localKey === viaFile.id, JSON.stringify(m4.localChanges.qsoDelete.map(q => q.__localKey)));
+  check("no local bookkeeping leaks into the file",
+        !JSON.stringify(m2.merged).includes("__localKey") && !JSON.stringify(m4.merged).includes("__localKey"));
+
+  // This browser's own QSO that came back to it through LOGSYNC as "<me>:<n>"
+  const own = qso(5, L2, "OK2ZZ", "2026-10-01T10:00:00.000Z");
+  const back = Object.assign({}, own, { id: A + ":5", source_device_id: A, source_seq: 5 });
+  const m5 = mergeBackups(file(A, db([log(L2)], [own, back])), null);
+  check("own QSO held twice: one in the file, the string copy deleted, the numbered one kept",
+        m5.merged.stores.qso.length === 1 && m5.localChanges.qsoDelete.length === 1 &&
+        m5.localChanges.qsoDelete[0].__localKey === A + ":5", JSON.stringify(m5.localChanges.qsoDelete.map(q => q.__localKey)));
+}
+
+function logToFileLike(l) { const r = Object.assign({}, l); delete r.active; return r; }
+
 console.log("\n" + pass + "/" + (pass + fail) + " passed");
 process.exit(fail ? 1 : 0);

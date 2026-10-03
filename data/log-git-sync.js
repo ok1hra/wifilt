@@ -78,14 +78,31 @@
         devices: Array.isArray(s.devices) ? s.devices : [],
       },
       deleted_logs: Array.isArray(f && f.deleted_logs) ? f.deleted_logs : [],
+      device_id: (f && f.device_id) || null,
     };
+  }
+
+  // A QSO's identity is LOGSYNC's: the device that logged it and its number
+  // there. NOT its `id` -- one QSO can sit in two browsers under two ids: a
+  // file import (LOGSYNC -> Import) keeps the file's own ("import:LOG:N"),
+  // LOGSYNC's pairing rewrites it to "<device>:<seq>" (datasync.js
+  // insertRemoteQsos). Matching on `id` turned every imported QSO into two
+  // after one sync (2026-10-03: 16 025 doubled), so `id` is only the fallback
+  // for a record that carries no source at all.
+  function ident(q) {
+    return (q.source_device_id != null && q.source_seq != null)
+      ? q.source_device_id + ':' + q.source_seq : String(q.id);
   }
 
   // A QSO in the file's (LOGSYNC's transport) form. This browser's own QSOs
   // carry a plain number as id; everyone else's already arrived as
   // "<device>:<seq>" -- datasync.js getLocalQsosRange() and insertRemoteQsos().
+  //
+  // __localKey remembers where the record sits in THIS browser's IndexedDB, so
+  // a copy can be deleted under its own key; it never reaches the file.
   function qsoToTransport(q, devId) {
     var r = copy(q);
+    r.__localKey = q.id;
     if (typeof q.id === 'number') {
       r.id = devId + ':' + q.id;
       r.source_device_id = devId;
@@ -122,6 +139,7 @@
         devices: (s.devices || []).map(copy),
       },
       deleted_logs: (tombstones || []).map(copy),
+      device_id: devId,
     };
   }
 
@@ -204,8 +222,44 @@
     });
 
     // ── QSOs
-    var Lq = byKey(L.stores.qso, 'id'), Rq = byKey(R.stores.qso, 'id');
+    var me = L.device_id;
+    // Where a QSO belongs in this browser: its own under their number, every
+    // other one under "<device>:<seq>".
+    function targetKey(q) {
+      return (me && q.source_device_id === me && typeof q.source_seq === 'number') ? q.source_seq : ident(q);
+    }
+    // The file's form: the identity as the id, nothing of this browser's.
+    function clean(q) {
+      var r = copy(q);
+      delete r.__localKey;
+      r.id = ident(q);
+      return r;
+    }
     var qsoOut = [], outCount = 0;
+    // One side holding the same QSO twice -- what the id-matching syncs left
+    // in browsers and in git. Keep one, the newer; on a tie the copy already
+    // under its proper key. Two DIFFERENT QSOs under one identity (other
+    // createdAtUtc) are a collision instead, never silently merged.
+    function collapse(list, proper, isLocal) {
+      var by = {};
+      list.forEach(function (q) {
+        var k = ident(q), have = by[k];
+        if (!have) { by[k] = q; return; }
+        if (String(q.createdAtUtc || '') !== String(have.createdAtUtc || '')) {
+          ch.collisions.push(k);
+          if (!isLocal) qsoOut.push(clean(q));
+          return;
+        }
+        var keepNew = stamp(q) > stamp(have) || (stamp(q) === stamp(have) && proper(q) && !proper(have));
+        var drop = keepNew ? have : q;
+        if (keepNew) by[k] = q;
+        if (isLocal) { ch.qsoDelete.push(drop); ch.duplicates++; }
+      });
+      return by;
+    }
+    ch.duplicates = 0;
+    var Lq = collapse(L.stores.qso, function (q) { return q.__localKey === targetKey(q); }, true);
+    var Rq = collapse(R.stores.qso, function (q) { return q.id === ident(q); }, false);
     unionKeys(Lq, Rq).forEach(function (id) {
       var l = Lq[id], r = Rq[id];
       // Two different QSOs under one identity: this browser's database was
@@ -214,7 +268,7 @@
       // the other. Report it and keep this browser's in the file untouched.
       if (l && r && String(l.createdAtUtc || '') !== String(r.createdAtUtc || '')) {
         ch.collisions.push(id);
-        qsoOut.push(r);
+        qsoOut.push(clean(r));
         return;
       }
       var lDead = !!l && dead(l.logId, l.createdAtUtc);
@@ -225,10 +279,16 @@
       }
       var pick = newer(lDead ? null : l, rDead ? null : r);
       if (!pick) return;
-      qsoOut.push(pick);
-      if (!r || rDead || canon(pick) !== canon(r)) outCount++;
-      if (!l || lDead) ch.qsoAdd.push(pick);
-      else if (pick === r && canon(r) !== canon(l)) ch.qsoUpdate.push(r);
+      var out = clean(pick);
+      qsoOut.push(out);
+      if (!r || rDead || canon(out) !== canon(clean(r))) outCount++;
+      if (!l || lDead) ch.qsoAdd.push(out);
+      else if (pick === r && canon(out) !== canon(clean(l))) {
+        ch.qsoUpdate.push(out);
+        // The newer copy goes in under its proper key; the old one, if it sat
+        // elsewhere, must go, or the update itself makes a second copy.
+        if (l.__localKey !== undefined && l.__localKey !== targetKey(out)) ch.qsoDelete.push(l);
+      }
     });
 
     // ── devices (LOGSYNC's names for the devices behind the ids)
@@ -510,7 +570,7 @@
         var t = db.transaction(['logs', 'qso'], 'readwrite');
         var ls = t.objectStore('logs'), qs = t.objectStore('qso');
         ch.logDelete.forEach(function (d) { ls.delete(d.id); });
-        ch.qsoDelete.forEach(function (q) { qs.delete(localQsoKey(q)); });
+        ch.qsoDelete.forEach(function (q) { qs.delete(q.__localKey !== undefined ? q.__localKey : localQsoKey(q)); });
         ch.logAdd.concat(ch.logUpdate).forEach(function (l) {
           var r = copy(l);
           r.active = !!activeById[l.id];
@@ -556,7 +616,7 @@
     busy = true;
     lastError = null;
     setProgress('config', 0);
-    var result = { inCount: 0, outCount: 0, sha: '' };
+    var result = { inCount: 0, outCount: 0, sha: '', duplicates: 0 };
     return loadCfg().then(function () {
       if (!isConfigured()) {
         busy = false;
@@ -573,6 +633,7 @@
           .catch(function () { /* the sync itself succeeded; the status line is a nicety */ })
           .then(function () {
             showHint('Git sync: +' + result.inCount + ' in, ' + result.outCount + ' out' +
+                     (result.duplicates ? ', ' + result.duplicates + ' duplicates removed here' : '') +
                      (result.sha ? ', ' + result.sha.slice(0, 7) : ', no changes'));
           });
       });
@@ -628,6 +689,7 @@
       .then(function () {
         var ch = m.localChanges;
         result.inCount = ch.qsoAdd.length + ch.qsoUpdate.length;
+        result.duplicates = ch.duplicates || 0;
         var any = ch.qsoAdd.length || ch.qsoUpdate.length || ch.qsoDelete.length || ch.logAdd.length ||
                   ch.logUpdate.length || ch.logDelete.length || ch.devices.length || ch.tombstones.length;
         return any ? applyLocal(ch, devId, snap.raw) : null;
