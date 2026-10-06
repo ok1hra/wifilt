@@ -112,7 +112,7 @@ const PAGE_SCRIPT = `
       "body classes: " + document.body.className);
     check("subnav shows all three DATA pages with Mercury active",
       document.querySelector('.subtabs a[href="/data"]')?.textContent.trim() === "JS8Call-ICOM" &&
-      document.querySelector('.subtabs a[href="/wspr.html"]')?.textContent.trim() === "WSPR-Beacon" &&
+      document.querySelector('.subtabs a[href="/wspr.html"]')?.textContent.trim() === "WSPR" &&
       document.querySelector('.subtabs a[href="/mercury.html"]')?.textContent.trim() === "Mercury" &&
       document.querySelector('.subtabs a[href="/mercury.html"]')?.classList.contains("subtab-active") === true);
     check("DATA tab stays active on the Mercury page",

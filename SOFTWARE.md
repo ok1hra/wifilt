@@ -82,7 +82,7 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
  · [6.6 SETTINGS](#66-settings)
  · [6.7 What the page takes from the radio](#67-what-the-page-takes-from-the-radio)
 
-**[7. DATA — WSPR beacon](#7-data--wspr-beacon)**
+**[7. DATA — WSPR](#7-data--wspr)**
  · [7.1 What the beacon does](#71-what-the-beacon-does)
  · [7.2 Starting and stopping](#72-starting-and-stopping)
  · [7.3 Power](#73-power)
@@ -92,6 +92,7 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
  · [7.7 SETTINGS](#77-settings)
  · [7.8 TX audio gain and CAL PLAN](#78-tx-audio-gain-and-cal-plan)
  · [7.9 Radio setup help](#79-radio-setup-help)
+ · [7.10 Receiving and RX SPOTS](#710-receiving-and-rx-spots)
 
 **[8. DATA — Mercury file transfer](#8-data--mercury-file-transfer)**
  · [8.1 What Mercury does](#81-what-mercury-does)
@@ -267,7 +268,7 @@ Every page carries the same bar:
 | *(logo)* | — | opens a small About panel with links to the project and to RemoteQTH |
 | **QRPLog** | `/log` | the logbook |
 | **DXC** | `/dxc.html` | the DX cluster client — splits the QRPLog page in two; its own 600×750 window from anywhere else |
-| **DATA** | `/data` | four modes over the radio's LAN audio, chosen in the page's own sub-navigation: **JS8Call-ICOM**, **RTTY-ICOM**, **WSPR-Beacon** and **Mercury**. Only one of them can run at a time — see [section 12](#12-transmit-safety). |
+| **DATA** | `/data` | four modes over the radio's LAN audio, chosen in the page's own sub-navigation: **JS8Call-ICOM**, **RTTY-ICOM**, **WSPR** and **Mercury**. Only one of them can run at a time — see [section 12](#12-transmit-safety). |
 | **SETUP** | `/setup` | configuration |
 | **LOGSYNC** | `/datasync` | log synchronisation, backup, import |
 | **BD** | `/bd` | band decoder — hidden unless the hardware has it |
@@ -987,7 +988,7 @@ an **ABORT** button while it runs (`Esc` does the same). In `RTTY`/`RTTY-R` the 
 its own FSK output as before, and the palette just mirrors what was sent.
 
 > **Opening the palette takes the radio's audio.** The interface has one audio link, so
-> JS8Call-ICOM, WSPR-Beacon, Mercury and RTTY-ICOM cannot run at the same time. If one of them
+> JS8Call-ICOM, WSPR, Mercury and RTTY-ICOM cannot run at the same time. If one of them
 > holds it, the palette says so and offers **TAKE THE SESSION OVER HERE**; it never takes it
 > on its own, not even when it reopens itself after a page reload. Closing the palette hands
 > the audio back.
@@ -2840,7 +2841,7 @@ After logging, the button turns into **VIEW LOG** and opens the logbook in a new
 A full Baudot RTTY station: a live spectrum and waterfall of the receiver's audio, a
 decoder that writes into a scrolling RX log, and a one-line composer that transmits. The
 demodulator runs in the browser tab — nothing is decoded on the interface — and the audio
-comes over the radio's LAN stream, the same one JS8Call-ICOM, WSPR-Beacon and Mercury use.
+comes over the radio's LAN stream, the same one JS8Call-ICOM, WSPR and Mercury use.
 
 It **needs a radio on ICOM-LAN**, and it holds the same single-operator session those three
 hold: open it while one of them is running and it shows *The radio is driven from somewhere
@@ -3069,9 +3070,9 @@ makes no sense — the sync is simply skipped and the settings stand as they are
 
 ---
 
-## 7. DATA — WSPR beacon
+## 7. DATA — WSPR
 
-**`/wspr.html`** — the **WSPR-Beacon** tab of the DATA page.
+**`/wspr.html`** — the **WSPR** tab of the DATA page.
 
 ![WSPR beacon](img/wspr.png)
 
@@ -3089,6 +3090,10 @@ parallel.
 
 The two pages are deliberately built alike, section for section, so that moving between them
 needs no re-orientation.
+
+The page also **receives**: switch **RX** on and it decodes WSPR on whatever band the radio is
+tuned to, keeps the spots, and can send them to wsprnet.org — see
+[section 7.10](#710-receiving-and-rx-spots).
 
 ![All sections expanded](img/wspr-unpacked-all-parts.png)
 
@@ -3128,14 +3133,14 @@ and the transmit pledge not accepted.
 
 | Button | Action |
 |---|---|
-| **START** / **STOP** | arm and disarm the beacon |
-| **TUNE** | key a carrier now, to check the antenna and set the power reference. It turns into **STOP** while the carrier is up. |
+| **START TX** / **STOP TX** | arm and disarm the beacon. Outlined while stopped, **green** while the beacon runs and waits for its slot, **red** only while the radio is actually keyed — the same look as **RX** beside it. |
+| **TX TUNE** | key a carrier now, to check the antenna and set the power reference. It turns into **STOP TUNE** while the carrier is up. |
 
-With **START** armed, a **green mm:ss counter** to the left counts down to the start of the
+With **START TX** armed, a **green mm:ss counter** to the left counts down to the start of the
 next transmission. Once transmitting it turns **red** and counts down to the end. **The whole
 page is framed in red while transmitting**, the same convention JS8Call uses.
 
-> **TUNE keys the transmitter and modulates it**, and it retunes the radio to do so. The
+> **TX TUNE keys the transmitter and modulates it**, and it retunes the radio to do so. The
 > countdown beside START shows the TUNE watchdog — the time until TUNE switches itself off.
 
 ### 7.3 Power
@@ -3173,7 +3178,12 @@ time the page opens and after a reconnection, but never in the middle of a trans
 The waterfall shows 500–2700 Hz with the **WSPR window at 1400–1600 Hz** marked. It is
 **read-only** — there is nothing to click, because the beacon chooses its own offset. The
 audio channel is held open the whole time the page is loaded, which is why the display is
-live before you ever press START.
+live before you ever press START TX.
+
+The **100% · 200% · 400% · 800%** pills in the waterfall header zoom in around **1500 Hz**,
+the middle of the WSPR window: 200 % shows 950–2050 Hz, 400 % 1225–1775 Hz, 800 %
+1362–1638 Hz — the WSPR window with a little either side. The scale under the
+waterfall follows, and the browser remembers the choice.
 
 ![TX session](img/wspr-tx-session.png)
 
@@ -3190,6 +3200,22 @@ shows:
 | **TUNE reference** | what the power meter peaked at during the last TUNE on this band and power, on the same 0–255 scale |
 
 The level bar empties on the switch back to receive and starts from zero each time.
+
+Beside START TX and TX TUNE sits **RX**, the receiver switch, and **RX** in the status line
+says which phase it is in: `recording 1:23` (time left to the end of the recorded part of the
+cycle), `decoding 2/3` (the decoder's pass), `skip: own transmission` and the like, `next cycle
+0:35` (switched on mid-cycle, or between the end of recording and the next cycle), or `waiting
+for audio`. The button itself fills as the
+cycle goes: **green** while the two-minute cycle records, **amber** through the decoder's
+passes, **grey** when the cycle will be skipped (hover for the reason). Stations decoded in the
+last cycle are labelled in the waterfall at their audio frequency, in large upright letters along the trace and
+read from the bottom up, so stations a few hertz apart still get a label each. They stay up
+while the next cycle records and decodes and are replaced only when its result is in; a
+skipped cycle leaves them as they are, and switching RX off clears them. See
+[section 7.10](#710-receiving-and-rx-spots).
+
+While RX is on, **TX SESSION folds itself away** and opens again for as long as the radio is
+keyed; switching RX off unfolds it. Unfolding it by hand in between is respected.
 
 ### 7.5 Activity
 
@@ -3226,9 +3252,11 @@ there when your browser is on the interface's own hotspot.
 
 ![Transmission schedule](img/wspr-timetable-schedule-window.png)
 
-A 24-hour UTC schedule of which bands to beacon on. It is built from **sequence changes**: at
-a 30-minute boundary you define an ordered list of bands, and that sequence runs until the
-next change.
+A 24-hour UTC schedule of which bands to beacon on — and, if you want, which bands to listen
+on. It is built from **sequence changes**: at a 30-minute boundary you define an ordered list
+of bands, and that sequence runs until the next change. Each item is one two-minute frame,
+picked from **add TX** (160–2 m, transmit) or **add RX** (160–2 m, listen); in the list an
+item carries a **TX** or **RX** mark.
 
 | Control | Action |
 |---|---|
@@ -3252,6 +3280,24 @@ Two rules govern the pacing, and they are worth stating plainly:
 
 Each band waits at least six minutes, and frequency and mode are confirmed between slots.
 
+**RX items** turn the schedule into band hopping for the receiver
+([section 7.10](#710-receiving-and-rx-spots)):
+
+- An RX item retunes the radio for its frame **only while RX is on**, in the last seconds of
+  the frame before, so the cycle still being received is not lost. A TX item keys **only
+  while START TX runs**; the beacon's own frames are tuned as before, and with RX on a band
+  change is likewise left to the last seconds.
+- RX items may repeat (`40m RX, 40m RX, 20m` listens twice as long on 40 m); a TX band
+  appears once per pass.
+- Once a change holds an RX item, every frame belongs to an item — no silent padding — and a
+  TX frame the six-minute rule forbids **listens on its band instead**. With START TX stopped,
+  its TX frames listen on their bands too, so the schedule names the band of every frame.
+- A change of **TX bands only** behaves exactly as before, and with START TX stopped leaves
+  the dial where the radio is.
+- The preview draws listening frames in green; the topbar shows `RX 40m` for a schedule with
+  no TX band, and START TX then refuses with *the schedule has no TX band*.
+- Tuning by hand while RX items run lasts until the next frame.
+
 > **The beacon may slow itself down without being asked.** If three retunes in a row miss
 > their deadline — the radio is answering too slowly to change band and settle before the
 > frame starts — the scheduler begins leaving the frame after every band change empty. TX
@@ -3266,6 +3312,7 @@ Each band waits at least six minutes, and frequency and mode are confirmed betwe
 | `10:00` | 20 m, 17 m, 15 m, 10 m | the daytime high bands; each band every eight minutes |
 | `18:00` | 40 m, 80 m | two bands, alternating; each band every six minutes with a gap between |
 | `23:00` | 160 m | one band, so every third frame — the pacing rule at its plainest |
+| `02:00` | 80 m RX, 40 m RX, 30 m TX | listen on 80 and 40 m between transmissions on 30 m (with RX on) |
 
 ### 7.7 SETTINGS
 
@@ -3284,6 +3331,7 @@ correction, the radio model override and the TUNE power references are folded un
 | **TX audio gain** | 0.1–0.8, **shared with JS8Call-ICOM** — one modulator input, one level. The measured value in force is shown beside the field rather than in it, because a calibrated level can be 0.006 or 0.63 and the field steps in 0.05. |
 | **TUNE power references** | how many bands have a reference, and a **Clear** button. A transmission whose forward power drifts more than 20 % from its band's TUNE reading is logged *power unconfirmed*. |
 | **Enable radio TX** | the same pledge as on the JS8 page — one radio, one confirmation — and settable from either page. |
+| **Receive** | the five decoder options of [section 7.10](#710-receiving-and-rx-spots): **Subtract decoded signals** (on), **Deeper candidate search**, **Wide window ±150 Hz**, **OSD for known callsigns** (on), **Quick mode** |
 
 ### 7.8 TX audio gain and CAL PLAN
 
@@ -3368,6 +3416,70 @@ For an IC-705 it lists, with the exact menu paths:
 
 The panel also restates the power rule: the transmitted power in the WSPR message follows the
 radio, so turning the knob changes what is reported, to the nearest legal WSPR level.
+
+### 7.10 Receiving and RX SPOTS
+
+The decoder is a port of WSJT-X's own `wsprd` and runs in the browser, in the background, on
+the audio the page already receives for the waterfall. On the same recordings it decodes what
+`wsprd` decodes, to the same SNR, DT and frequency, down to about −31 dB.
+
+**RX** under the waterfall switches it on and off, independently of START, and the page
+remembers where you left it.
+
+- It listens **wherever the radio is tuned** — it never retunes by itself. With the beacon
+  running, it decodes every frame between your own transmissions, on the band the TIME TABLE
+  put the radio on.
+- A two-minute cycle is **skipped** — and the summary says why — when you transmitted in it,
+  when the dial moved during it (a retune in the last ten seconds, which is when the beacon
+  changes band, does not count), when the radio did not report its dial, or when less than
+  100 s of audio arrived.
+- Decoding a busy cycle takes a few seconds on a computer and longer on a phone; if a phone
+  cannot finish one cycle before the next is ready, switch on **Quick mode**.
+
+**RX SPOTS** lists what was received in the chosen **period** — `last ½ h` (the default),
+`1 h`, `6 h`, `12 h`, `24 h`, `7 days` or `all (30 days)`. The columns:
+
+| Column | Meaning |
+|---|---|
+| **UTC** | start of the two-minute cycle |
+| **DT s** | time offset of the signal against the cycle, in seconds — near zero when both clocks are right |
+| **MHz** | frequency of the signal: the dial plus its audio offset |
+| **Drift Hz** | how far the signal's frequency moved over the 110 s transmission; a stable transmitter shows 0 |
+| **Call**, **Locator** | as decoded |
+| **dBm**, **W** | the power the station reports, and the same in watts (37 dBm = 5.01 W) |
+| **km** | distance from your locator, with an arrow along the bearing |
+| **SNR dB** | signal-to-noise ratio in 2500 Hz, with a signal meter |
+| **Up** | upload state — `✓` sent, `…` waiting, `–` kept here only |
+
+**COLUMNS** shows or hides any of them, and **−** / **+** make the text smaller or larger, as
+in the DXC window; the browser remembers both. **Click a column
+heading to sort by it**, click again to reverse; the newest are on top by default. The period,
+the sort and the filter box (callsign or locator) apply to the table, to the map below and to
+SAVE alike. At most 1000 rows are drawn at a time; spots are kept **30 days** in the browser.
+
+The table reads like the DXC window: **km** is shaded brighter the farther the station is
+among the rows shown and carries an **arrow pointing along the bearing**; **SNR** carries a
+six-step signal meter in front of the figure, shaded the same way.
+
+**RX STATIONS MAP**, the section below, is the JS8 page's radar centred on your locator: one
+dot per callsign heard in the period, placed by bearing and distance, its tooltip giving the
+best report, how many spots, when last and on which bands. When the period spans more than
+one band the dots take the band's colour and a legend appears. **LOG** spreads out nearby
+stations when the map also holds DX. Stations without a locator (compound calls) are counted
+as `no pos`.
+
+| Control | Meaning |
+|---|---|
+| **UPLOAD** (in the section header) | sends the spots to **wsprnet.org** as WSJT-X does, under the callsign and locator from SETUP. **Off until you switch it on.** Amber when it cannot act: no callsign or locator in SETUP, or no internet. Without internet the spots wait and go out when the connection comes back (up to 24 h old); a cycle with nothing heard reports the receiver as listening. Spots received off a WSPR dial frequency, and hashed calls that could not be resolved (`<...>`), are never sent. The interface itself never talks to the internet — the browser does. |
+| **DT** | the median time offset of the last 30 decodes. Near zero means the clock is right. |
+| **SET CLOCK …** | appears when DT is 0.8 s or more off and GPS is not keeping the clock: writes the clock correction shared with the JS8 page. The correction holds ±1 s; a clock worse than that needs fixing at the computer (NTP). |
+| **SAVE** | downloads the spots of the chosen period as **`ALL_WSPR.TXT`**, column for column the file `wsprd` writes, so WSJT-X tools and upload scripts read it. |
+| **APPEND TO FILE…** | only where the browser lets a page keep writing to a file — the native build opened on `localhost`, not the interface over plain http. Each decoded cycle is then appended to the file you chose; after a reload the browser asks permission again. |
+
+**Clock from GPS.** With an IC-705 that has a GPS fix, the page reads the radio's GPS time
+every few seconds and **sets the shared clock correction by itself**; the status bar then reads
+`clock … ms · GPS ±0.1 s`. Without a fix it falls back to the DT proposal above. A computer
+clock more than a second off GPS gets a warning instead, because the correction cannot hold it.
 
 ---
 
@@ -3931,7 +4043,7 @@ at that moment. They are gathered here so nothing is a surprise.
 | **PA — TUNE** | starts the amplifier's own tuning cycle ([section 3.14](#314-pa--the-linear-amplifier)) |
 
 **One radio, one operator.** The interface has exactly one audio link to the transceiver, so
-**JS8Call-ICOM, RTTY-ICOM, WSPR-Beacon and Mercury cannot run at the same time** — and neither
+**JS8Call-ICOM, RTTY-ICOM, WSPR and Mercury cannot run at the same time** — and neither
 can the RTTY palette in QRPLog, which is a full holder of that same session. Opening a second
 one shows *The radio is driven from somewhere else*, says where, and offers **TAKE THE SESSION
 OVER HERE**. Nothing ever takes the session on its own, not even a page restoring itself after

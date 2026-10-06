@@ -429,21 +429,35 @@
   const MIN_BAND_GAP_FRAMES = 3;
   const PRESET_BY_BAND = new Map(PRESETS.map(preset => [preset.band, preset]));
 
+  // A sequence item is "20m" (transmit, the only kind there used to be) or
+  // "20m RX" (listen there for that frame). Objects {band, mode} are accepted too.
+  function parseItem(value) {
+    const text = typeof value === "string" ? value
+      : value && value.band ? `${value.band}${value.mode === "rx" ? " RX" : ""}` : "";
+    const match = /^(\S+)(?:\s+(RX|TX))?$/i.exec(String(text).trim());
+    const preset = match && PRESET_BY_BAND.get(match[1]);
+    if (!preset) return null;
+    return {band: preset.band, hz: preset.hz, mode: match[2] && match[2].toUpperCase() === "RX" ? "rx" : "tx"};
+  }
+  const itemLabel = item => item.mode === "rx" ? `${item.band} RX` : item.band;
+
+  // A band transmits at most once per pass -- the six-minute rule would silence
+  // the repeat anyway. Listening on a band twice in a row is the point of
+  // repeating an RX item, so those stay.
   function cleanBands(values) {
-    const seen = new Set(), bands = [];
+    const seenTx = new Set(), bands = [];
     for (const value of Array.isArray(values) ? values : []) {
-      const name = typeof value === "string" ? value : value && value.band;
-      const preset = PRESET_BY_BAND.get(String(name || ""));
-      if (!preset || seen.has(preset.band)) continue;
-      seen.add(preset.band);
-      bands.push({band: preset.band, hz: preset.hz});
+      const item = parseItem(value);
+      if (!item) continue;
+      if (item.mode === "tx") { if (seenTx.has(item.band)) continue; seenTx.add(item.band); }
+      bands.push(item);
     }
     return bands;
   }
 
   function sameBands(left, right) {
     return left.length === right.length &&
-      left.every((band, index) => band.band === right[index].band);
+      left.every((band, index) => band.band === right[index].band && band.mode === right[index].mode);
   }
 
   // Converts both old schedule shapes to the change-list model. This is also used
@@ -456,7 +470,7 @@
           if (!row || String(row.slots || "")[slot] !== "1") continue;
           const band = PRESET_BY_BAND.get(String(row.band || ""));
           if (band && !sequences[slot].some(value => value.band === band.band))
-            sequences[slot].push({band: band.band, hz: band.hz});
+            sequences[slot].push({band: band.band, hz: band.hz, mode: "tx"});
         }
     } else if (schedule && schedule.slots) {
       for (const [index, value] of Object.entries(schedule.slots)) {
@@ -505,7 +519,14 @@
     return entry ? entry.bands.slice() : [];
   }
 
-  // Every frame of one UTC day: the band it keys, or null for silence.
+  // Every frame of one UTC day: {band, hz, mode} -- "tx" keys, "rx" listens --
+  // or null where the schedule says nothing (the radio stays where it is).
+  //
+  // A change made only of TX items behaves exactly as it always has: a sequence
+  // shorter than three is padded with silence, and a band that keyed less than
+  // six minutes ago stays silent. Once a change holds an RX item there is no
+  // padding -- every frame belongs to an item -- and a TX frame the six-minute
+  // rule forbids becomes a frame listening on that band instead.
   //
   // Position inside the active sequence is counted from its change point. The
   // cycle keeps rolling over half-hour boundaries and restarts only when the
@@ -517,7 +538,7 @@
     const entries = timetableEntries(schedule);
     const key = `${schedule.spaceBandChanges ? 1 : 0}|` +
                 entries.map(entry =>
-                  `${entry.slot}:${entry.bands.map(band => band.band).join(">")}`).join(",");
+                  `${entry.slot}:${entry.bands.map(itemLabel).join(">")}`).join(",");
     if (sequenceCache.day === dayNumber && sequenceCache.key === key)
       return sequenceCache.frames;
     const frames = new Array(FRAMES_PER_DAY).fill(null), lastKeyed = new Map();
@@ -528,25 +549,31 @@
       const entry = entryAt(entries, slotIndex);
       const bands = entry ? entry.bands : [];
       if (!bands.length) continue;
-      const cycle = Math.max(bands.length, MIN_BAND_GAP_FRAMES);
+      const hasRx = bands.some(item => item.mode === "rx");
+      const cycle = hasRx ? bands.length : Math.max(bands.length, MIN_BAND_GAP_FRAMES);
       const dayOffset = Math.floor(step / FRAMES_PER_DAY);
       let anchor = dayOffset * FRAMES_PER_DAY + entry.slot * FRAMES_PER_SLOT;
       if (entry.slot > slotIndex) anchor -= FRAMES_PER_DAY;
       const position = ((step - anchor) % cycle + cycle) % cycle;
       if (position >= bands.length) continue;
       const band = bands[position];
+      const listen = () => {
+        previousBand = band.band; previousStep = step;
+        if (step >= 0) frames[frame] = {band: band.band, hz: band.hz, mode: "rx", hasRx};
+      };
+      if (band.mode === "rx") { listen(); continue; }
       const last = lastKeyed.get(band.band);
-      if (last !== undefined && step - last < MIN_BAND_GAP_FRAMES) continue;
+      if (last !== undefined && step - last < MIN_BAND_GAP_FRAMES) { if (hasRx) listen(); continue; }
       // spaceBandChanges is the beacon telling the schedule that this radio
       // cannot retune inside the nine seconds between two frames. It leaves the
       // frame after a band change silent, which is the only honest way to slow
       // down: the preview reads the same flag, so what is drawn stays what will
       // actually be keyed.
       if (schedule.spaceBandChanges && previousBand && previousBand !== band.band &&
-          step - previousStep === 1) continue;
+          step - previousStep === 1) { if (hasRx) listen(); continue; }
       lastKeyed.set(band.band, step);
       previousBand = band.band; previousStep = step;
-      if (step >= 0) frames[frame] = {band: band.band, hz: band.hz};
+      if (step >= 0) frames[frame] = {band: band.band, hz: band.hz, mode: "tx", hasRx};
     }
     sequenceCache = {key, day: dayNumber, frames};
     return frames;
@@ -555,12 +582,20 @@
   // Does the frame starting at this instant key, and on what band? null is
   // silence -- either the half hour has no band, or this frame belongs to
   // another band in the rotation.
-  function frameTransmission(frameUtcMs, schedule) {
+  // What the frame starting at this instant does: {slotUtcMs, slot: {band, hz,
+  // mode, hasRx}, index}, or null when the schedule leaves the radio alone.
+  // hasRx: the change it belongs to holds RX items, so with the beacon stopped
+  // its TX frames listen on their band too.
+  function frameAt(frameUtcMs, schedule) {
     const at = new Date(frameUtcMs);
     const frame = Math.floor((at.getUTCHours() * 60 + at.getUTCMinutes()) / 2);
     const slot = daySequence(Math.floor(frameUtcMs / DAY_MS), schedule)[frame];
     if (!slot) return null;
     return {slotUtcMs: frameUtcMs, slot, index: slotIndexAt(frameUtcMs)};
+  }
+  function frameTransmission(frameUtcMs, schedule) {
+    const plan = frameAt(frameUtcMs, schedule);
+    return plan && plan.slot.mode === "tx" ? plan : null;
   }
 
   // The next frame this schedule keys in, or null when it stays silent for the
@@ -599,6 +634,6 @@
     percentToLevel, civLevelCommand,
     FRAME_MS, SLOTS_PER_DAY, FRAMES_PER_SLOT, FRAMES_PER_DAY, MIN_BAND_GAP_FRAMES,
     slotIndexAt, slotLabel, timetableEntries, sequenceAt, daySequence,
-    frameTransmission, nextTransmission, plannedFrames,
+    frameTransmission, frameAt, nextTransmission, plannedFrames, parseItem, itemLabel,
   };
 });

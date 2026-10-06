@@ -307,3 +307,108 @@
    reads as a squeezed fragment. Span the row. */
 .wspr-settings label > .cal-resolved,
 .wspr-settings label > .cal-hint { grid-column: 1 / -1; }
+
+/* ---- receive ------------------------------------------------------------ */
+
+/* RX is a switch that stays on for hours, so "on" is green like a running
+   beacon -- not the red .running of a transmitter. */
+/* background-color, never the `background` shorthand: the shorthand resets
+   background-image, which is where the progress fill below lives -- and this is
+   exactly the state in which it has to show. */
+.wspr-controls button.rx-toggle.running { border-color: var(--green); color: var(--green); background-color: #0c2018; }
+.summary-flag.blocked { color: var(--amber); border-color: var(--amber); opacity: 1; }
+.rx-body { padding: 9px 10px; }
+.rx-notice { margin: 0 0 8px; color: var(--amber); font-size: 12px; }
+.rx-file { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+.rx-tools { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.rx-tools input[type="search"] { flex: 1 1 140px; min-width: 0; max-width: 220px; }
+.rx-tools .rx-save { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; }
+#rxDt.warn { color: var(--amber); }
+.rx-table-wrap { margin-top: 8px; max-height: 420px; overflow: auto; border: 1px solid var(--line); border-radius: 4px; }
+.rx-table { --rx-zoom: 1; border-collapse: collapse; width: 100%;
+  font: calc(12px * var(--rx-zoom)) / 1.35 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-variant-numeric: tabular-nums; }
+.rx-table th { position: sticky; top: 0; background: var(--panel2); color: var(--muted); font-weight: 600;
+  text-align: right; padding: 4px 8px; white-space: nowrap; }
+.rx-table td { text-align: right; padding: 3px 8px; border-top: 1px solid #1b2f2b; white-space: nowrap; }
+.rx-table .l { text-align: left; }
+.rx-table td.c-call { color: var(--text); font-weight: 700; }
+.rx-table tr.cycle-start td { border-top-color: var(--line); }
+.rx-table td.up-sent { color: var(--green); }
+.rx-table td.up-queued { color: var(--amber); }
+.rx-table td.up-local { color: var(--muted); }
+.rx-empty { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
+
+/* ---- round 2: zoom, RX progress, START TX, options, sorting, map ---------- */
+
+/* The RTTY waterfall's pills, same look (rtty.css keeps its own class because
+   rtty.js selects on it). */
+.wspr-zoom-group { margin-left: 8px; display: inline-flex; gap: 4px; }
+.wspr-zoom-pill {
+  border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px;
+  background: var(--panel2); color: var(--muted); font: inherit; font-size: 10px;
+  font-weight: 700; letter-spacing: .03em; cursor: pointer;
+}
+.wspr-zoom-pill:hover { border-color: var(--muted); color: var(--text); }
+.wspr-zoom-pill.active { border-color: var(--cyan); background: #123430; color: var(--cyan); }
+
+/* RX carries its own progress as a fill behind the label: green while the
+   two-minute cycle records, amber through the decoder's passes, grey for a
+   cycle that will be skipped (own transmission, dial moved). */
+.wspr-controls button.rx-toggle { --rx-fill: 0%; --rx-fill-color: #2f8a5c; position: relative; min-width: 64px;
+  background-image: linear-gradient(90deg, var(--rx-fill-color) var(--rx-fill), transparent var(--rx-fill)); }
+.wspr-controls button.rx-toggle.rx-decoding { --rx-fill-color: #9a6c1c; }
+.wspr-controls button.rx-toggle.rx-skipped { --rx-fill-color: #56625e; }
+.wspr-controls button.rx-toggle.running { color: #eafff2; }
+#rxState.rx-recording { color: var(--green); }
+#rxState.rx-decoding { color: var(--amber); }
+#rxState.rx-skipped { color: var(--muted); }
+
+/* START TX looks like RX: outlined while stopped, green while the beacon runs,
+   red only while the radio is actually keyed -- red stays "transmitting now",
+   like the frame around the page. */
+.wspr-controls button.start-tx.armed { border-color: var(--green); color: var(--green); background: #0c2018; }
+.wspr-controls button.start-tx.keyed { border-color: var(--red); color: var(--red); background: #2a0f13; }
+
+/* Receive options: the description belongs right after its checkbox. The
+   general three-column settings row stretches the checkbox column, which threw
+   these descriptions to the far right. */
+.wspr-settings label.rx-option { grid-template-columns: 130px 20px minmax(0, 1fr); }
+.wspr-settings label.rx-option small { text-align: left; }
+
+.rx-table th[data-sort] { cursor: pointer; user-select: none; }
+.rx-table th[data-sort]:hover { color: var(--text); }
+.rx-table th.sorted { color: var(--cyan); }
+.rx-table th.sorted::after { content: " ▼"; font-size: 9px; }
+.rx-table th.sorted.asc::after { content: " ▲"; }
+.rx-map-legend { display: inline-flex; flex-wrap: wrap; gap: 4px 10px; margin-left: 10px; font-size: 11px; color: var(--muted); }
+.rx-map-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+
+/* ---- RX SPOTS in the DXC window's manner ---------------------------------- */
+.rx-table tbody tr:nth-child(2n) td { background: #0a100b; }
+.rx-table tbody tr:hover td { background: #142619; }
+.rx-table td.c-snr { min-width: 11ch; }
+.rx-table .db-meter { display: inline-block; min-width: 6ch; margin-right: 4px; text-align: right; letter-spacing: -0.5px; }
+.rx-table .db-value { display: inline-block; min-width: 3ch; text-align: right; }
+.rx-table td.c-km { min-width: 9ch; }
+.rx-table .dir-arrow { display: inline-block; margin-left: 4px; transform-origin: 50% 50%; color: #d8ffd8;
+  font-size: 1.35em; line-height: 1; }
+
+/* ---- TIMETABLE: TX and RX items -------------------------------------------- */
+.tt-mode { margin-left: 3px; font-style: normal; font-size: 8px; font-weight: 800; letter-spacing: .05em; }
+.tt-mode.tx { color: var(--amber); }
+.tt-mode.rx { color: var(--green); }
+.tt-sequence-band.rx b { color: var(--green); }
+.tt-sequence-edit.rx b { color: var(--green); }
+.tt-band-picker.rx .tt-band { border-color: #2f6b57; color: var(--green); }
+.tt-frame.planned-rx { background: #12382a; border-color: var(--green); }
+
+/* COLUMNS and the text size, as in the DXC window. */
+.rx-view-tools { position: relative; display: inline-flex; gap: 4px; }
+.rx-view-tools button { min-width: 26px; }
+.rx-columns-menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 10; display: grid;
+  grid-template-columns: repeat(2, max-content); gap: 4px 14px; padding: 8px 10px; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 4px; box-shadow: 0 4px 14px #000a; font-size: 12px; color: var(--text); }
+.rx-columns-menu[hidden] { display: none; }
+.rx-columns-menu label { display: flex; gap: 6px; align-items: center; white-space: nowrap; }
+.rx-table th small { color: var(--muted); font-weight: 400; font-size: .85em; }

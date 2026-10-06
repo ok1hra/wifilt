@@ -37,7 +37,19 @@ function stateJson() {
     supplyVolts: 13.8, swr: 1.2, preamp: 0, vox: 0,
     lanDrops: lanHealth.drops, lanStalls: lanHealth.stalls, lanFilled: lanHealth.filled,
     dxcConnected: false,
+    ...(gpsFixture.on ? {gpsGrid: "JN79QI12", gpsFixAgeMs: 900, gpsSel: 1} : {}),
   };
+}
+// The radio's GPS as the firmware reports it: a 23 00 reply some time ago,
+// stamped in whole seconds of a UTC that runs `offsetMs` ahead of this machine.
+const gpsFixture = {on: false, offsetMs: 0, served: 0};
+function gpsJson() {
+  const replyAgeMs = Math.floor(Math.random() * 4500);
+  const replyUtc = Date.now() + gpsFixture.offsetMs - replyAgeMs - 20;
+  const stamp = new Date(Math.floor(replyUtc / 1000) * 1000).toISOString();
+  gpsFixture.served++;
+  return {grid: "JN79QI12", sel: 1, fixAgeMs: 900, replyAgeMs, lat: 49.7, lon: 15.5, altM: 400,
+          courseDeg: 0, speedKmh: 0, utc: stamp.slice(0, 10) + " " + stamp.slice(11, 19)};
 }
 
 let currentFrequency = 14074000, currentMode = "USB", currentRfPower = 128;
@@ -64,6 +76,14 @@ const server = http.createServer((request, response) => {
     };
 
     if (url.pathname === "/state") return json(stateJson());
+    if (url.pathname === "/gps") {
+      if (!gpsFixture.on) { response.writeHead(404, {"Content-Type": "application/json"}); return response.end('{"error":"no_gps"}'); }
+      return json(gpsJson());
+    }
+    if (url.pathname === "/gps-fixture" && request.method === "POST") {
+      Object.assign(gpsFixture, JSON.parse(text || "{}"));
+      return json({ok: true});
+    }
 
     // lan-gate.js reads this before the page boots at all. The default answer
     // puts a fully configured ICOM-LAN on TRX1; ?lanFixture=trx2 moves it, which
@@ -658,9 +678,9 @@ addEventListener("unhandledrejection", event => {
           globalThis.__wspr.state.radio.transceiverType);
     check("LAN gate absent on a configured radio",
           !$("lanGate") && !document.body.classList.contains("lan-gate-blocked"));
-    check("DATA sub-nav marks WSPR-Beacon and offers JS8Call-ICOM",
+    check("DATA sub-nav marks WSPR and offers JS8Call-ICOM",
           document.querySelector(".subtabs .subtab-active")?.getAttribute("href") === "/wspr.html" &&
-          document.querySelector(".subtabs .subtab-active")?.textContent.trim() === "WSPR-Beacon" &&
+          document.querySelector(".subtabs .subtab-active")?.textContent.trim() === "WSPR" &&
           document.querySelector('.subtabs a[href="/data"]')?.textContent.trim() === "JS8Call-ICOM" &&
           !document.querySelector(".subtabs a[target]") &&
           !document.querySelector('.tabs a[href="/wspr.html"]'));
@@ -985,7 +1005,7 @@ addEventListener("unhandledrejection", event => {
     $("tuneButton").click();
     await sleep(100);
     check("clicking a pledge-blocked TUNE does not tune",
-          globalThis.__wspr.state.beacon === "stopped" && $("tuneButton").textContent === "TUNE",
+          globalThis.__wspr.state.beacon === "stopped" && $("tuneButton").textContent === "TX TUNE",
           globalThis.__wspr.state.beacon);
     const pledgeToast = document.querySelector(".tx-pledge-toast");
     check("the refusal says why, in sight", Boolean(pledgeToast) && !pledgeToast.hidden
@@ -1356,7 +1376,10 @@ addEventListener("unhandledrejection", event => {
     $("startStop").click();
     check("beacon armed", globalThis.__wspr.state.beacon !== "stopped",
           globalThis.__wspr.state.beacon);
-    check("START became STOP", $("startStop").textContent === "STOP");
+    check("START TX became STOP TX", $("startStop").textContent === "STOP TX", $("startStop").textContent);
+    check("a running beacon shows green like RX, not red, while it waits",
+          $("startStop").classList.contains("armed") && !$("startStop").classList.contains("keyed"),
+          $("startStop").className);
     check("a green countdown appears beside START",
           !$("slotTimer").hidden && $("slotTimer").classList.contains("waiting") &&
           /^\\d\\d:\\d\\d$/.test($("slotTimer").textContent),
@@ -1418,7 +1441,7 @@ addEventListener("unhandledrejection", event => {
     $("tuneButton").click();
     check("TUNE keys and turns into STOP",
           await wait(() => globalThis.__wspr.state.beacon === "tuning" &&
-                           $("tuneButton").textContent === "STOP", 8000),
+                           $("tuneButton").textContent === "STOP TUNE", 8000),
           globalThis.__wspr.state.beacon + " / " + $("tuneButton").textContent);
     check("START is locked out while tuning", $("startStop").disabled);
     // The clock beside the button has to count down the watchdog that ends the
@@ -1436,7 +1459,7 @@ addEventListener("unhandledrejection", event => {
     $("tuneButton").click();
     check("the second press stops the tune and does not arm the beacon",
           globalThis.__wspr.state.beacon === "stopped" &&
-          $("tuneButton").textContent === "TUNE",
+          $("tuneButton").textContent === "TX TUNE",
           globalThis.__wspr.state.beacon + " / " + $("tuneButton").textContent);
     check("stopping the tune disarms the watchdog clock too",
           globalThis.__wspr.state.tuneEndsAtMs === 0 && $("slotTimer").hidden,
@@ -2253,6 +2276,384 @@ addEventListener("unhandledrejection", event => {
     window.dispatchEvent(new HashChangeEvent("hashchange"));
     check("clearing the hash leaves the calibration panel where it is",
           !$("calField").hidden, "it is a setting, not a mode");
+
+    // ---- receive ------------------------------------------------------------
+    {
+    // The live path (AUD1 packets -> timebase -> cycle) is tools/wspr-rx-smoke.js;
+    // here: the real worker from the page's stamped URL, the store, the table,
+    // the upload against a fake wsprnet, SAVE, the clock button, the options.
+    const w = globalThis.__wspr;
+    check("RX is off until switched on", w.settings.rx.enabled === false && $("rxSummary").textContent === "receiver off",
+          $("rxSummary").textContent);
+    $("rxToggle").click();
+    check("RX switch turns the receiver on",
+          w.settings.rx.enabled === true && $("rxToggle").getAttribute("aria-pressed") === "true" &&
+          $("rxState").textContent !== "off", $("rxState").textContent);
+    const txSection = document.querySelector('[data-section="tx-session"]');
+    check("switching RX on folds TX SESSION away", txSection.open === false);
+    check("the receive options keep their descriptions beside the checkbox",
+          getComputedStyle(document.querySelector("label.rx-option")).gridTemplateColumns.indexOf("130px 20px") === 0,
+          getComputedStyle(document.querySelector("label.rx-option")).gridTemplateColumns);
+
+    const decoderSrc = document.querySelector('script[src^="/wspr-decoder.js"]').getAttribute("src");
+    const coreSrc = ["/icom-models.js", "/wspr-core.js"].map(path =>
+      document.querySelector('script[src^="' + path + '"]').getAttribute("src"));
+    check("the decoder worker URL carries the page's version stamp", decoderSrc.indexOf("?v=") > 0, decoderSrc);
+    const synth = (message, freq, snr) => {
+      const parts = message.split(" ");
+      const symbols = WsprCore.encode({callsign: parts[0], locator: parts[1], powerDbm: Number(parts[2])}).symbols;
+      const rate = 8000, n = 114 * rate, out = new Float32Array(n), sigma = 0.03;
+      for (let i = 0; i < n; i += 2) {
+        const r = Math.sqrt(-2 * Math.log(Math.random() + 1e-12)), a = 2 * Math.PI * Math.random();
+        out[i] = sigma * r * Math.cos(a); if (i + 1 < n) out[i + 1] = sigma * r * Math.sin(a);
+      }
+      const amp = Math.sqrt(2 * sigma * sigma * 2500 / 4000 * Math.pow(10, snr / 10));
+      let phase = 0;
+      for (let k = rate; k < n; k++) {
+        const s = Math.floor((k - rate) / rate / (8192 / 12000));
+        if (s >= 162) break;
+        out[k] += amp * Math.sin(phase);
+        phase += 2 * Math.PI * (1500 + freq + (symbols[s] - 1.5) * 12000 / 8192) / rate;
+      }
+      return out;
+    };
+    const worker = new Worker(decoderSrc);
+    const rxResult = await new Promise(resolve => {
+      const timer = setTimeout(() => resolve({type: "timeout"}), 90000);
+      worker.onmessage = event => {
+        if (event.data.type === "progress") return;
+        clearTimeout(timer); resolve(event.data);
+      };
+      worker.postMessage({type: "init", coreUrl: coreSrc, hashtable: null});
+      const samples = synth("OK1HRA JN79 37", 20, -15);
+      worker.postMessage({type: "decode", id: 1, samples, sampleRate: 8000, opts: {osdDepth: 3}}, [samples.buffer]);
+    });
+    worker.terminate();
+    const decodes = rxResult.decodes || [];
+    check("the worker decodes a synthesised cycle", decodes.some(d => d.call === "OK1HRA" && d.power === 37),
+          rxResult.type + " " + (rxResult.message || JSON.stringify(decodes)));
+
+    const cycle0 = Math.floor(Date.now() / 120000) * 120000 - 240000;
+    let rows = () => [...$("rxSpots").querySelectorAll("tr")];
+    await w.onRxCycle({cycleMs: cycle0, dialHz: 14095600, decodes});
+    check("a decoded cycle shows up in the table",
+          rows().length >= 1 && rows()[0].querySelector(".c-call").textContent === "OK1HRA", rows().length);
+    check("its frequency is dial + audio",
+          rows()[0] && rows()[0].querySelector(".c-freq").textContent === "14.097120", rows()[0] && rows()[0].querySelector(".c-freq").textContent);
+    check("with UPLOAD off it stays local", rows()[0] && rows()[0].querySelector(".c-upload").textContent === "–");
+    const stored = await w.rxStore.recent(5);
+    check("the spot is in IndexedDB", stored.some(s => s.call === "OK1HRA" && s.t === cycle0), stored.length);
+    check("the waterfall gets a label for it",
+          Boolean(w.state.rxLabels) && w.state.rxLabels.items.some(item => item.call === "OK1HRA"));
+    // The label stands upright: the box around its yellow text is taller than wide.
+    // A fresh label -- cycle0 is minutes old and labels fade after four.
+    const keptLabels = w.state.rxLabels;
+    // Six minutes old on purpose: labels stay until a new set replaces them,
+    // however long the decoder takes -- no timer blanks them any more.
+    w.state.rxLabels = {cycleMs: Date.now() - 6 * 60000, items: [{hz: 1520, call: "OK1HRA"}]};
+    w.waterfall.paintOverlay();
+    {
+      const overlay = $("waterfallOverlay"), g = overlay.getContext("2d");
+      const px = g.getImageData(0, 0, overlay.width, overlay.height).data;
+      let x0 = Infinity, x1 = -1, y0 = Infinity, y1 = -1;
+      for (let y = 0; y < overlay.height; y++) for (let x = 0; x < overlay.width; x++) {
+        const i = 4 * (y * overlay.width + x);
+        if (px[i] > 200 && px[i + 1] > 190 && px[i + 2] > 120 && px[i + 2] < 200 && px[i + 3] > 200) {
+          x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+        }
+      }
+      check("the waterfall label is vertical, read bottom to top",
+            x1 >= 0 && (y1 - y0) > 2 * (x1 - x0), "box " + (x1 - x0 + 1) + "x" + (y1 - y0 + 1));
+      w.state.rxLabels = keptLabels;
+    }
+    check("with no RX audio the summary says so", $("rxSummary").textContent === "waiting for audio",
+          $("rxSummary").textContent);
+    // The fixture streams no receive audio, so the timebase never locks; pretend
+    // it did to see the line an operator sees while listening.
+    Object.defineProperty(w.receiver, "status", {get: () => ({state: "listening"}), configurable: true});
+    w.render();
+    check("the summary names the last cycle", /: 1 station$/.test($("rxSummary").textContent), $("rxSummary").textContent);
+    const fill = () => $("rxToggle").style.getPropertyValue("--rx-fill");
+    check("while listening, RX fills with the cycle's progress", /^[0-9.]+%$/.test(fill()) &&
+          !$("rxToggle").classList.contains("rx-decoding"), fill());
+    // What is actually painted, not just the variable: the switched-on style
+    // once reset the fill away with a background shorthand.
+    check("the fill is really painted behind the RX label while RX is on",
+          $("rxToggle").classList.contains("running") &&
+          /linear-gradient/.test(getComputedStyle($("rxToggle")).backgroundImage),
+          getComputedStyle($("rxToggle")).backgroundImage);
+    check("the RX state says the phase in words",
+          /^(recording \\d|next cycle \\d|skip: )/.test($("rxState").textContent), $("rxState").textContent);
+    Object.defineProperty(w.receiver, "status", {get: () => ({state: "decoding", cycleMs: cycle0, pass: 2}), configurable: true});
+    w.render();
+    check("while decoding, RX fills amber by pass (2 of 3)",
+          $("rxToggle").classList.contains("rx-decoding") && fill() === "66.7%" &&
+          $("rxState").textContent === "decoding 2/3", fill() + " / " + $("rxState").textContent);
+    delete w.receiver.status;
+
+    // A fake wsprnet behind the page's own fetch.
+    const realFetch = window.fetch.bind(window);
+    const net = {online: true, requests: []};
+    window.fetch = (url, options) => {
+      if (String(url).indexOf("wsprnet.org") >= 0) {
+        if (!net.online) return Promise.reject(new TypeError("Failed to fetch"));
+        net.requests.push({url: String(url), mode: options && options.mode,
+                           body: options && options.body ? String(options.body) : ""});
+        return Promise.resolve(new Response(null, {status: 200}));
+      }
+      return realFetch(url, options);
+    };
+    const section = $("uploadToggle").closest("details");
+    const wasOpen = section.open;
+    $("uploadToggle").click();
+    check("UPLOAD in the header does not fold the section", section.open === wasOpen);
+    check("UPLOAD probes the internet", await wait(() => net.requests.some(r => r.url.indexOf("favicon") > 0), 5000),
+          JSON.stringify(net.requests));
+    check("every wsprnet request is no-cors", net.requests.every(r => r.mode === "no-cors"));
+    await w.onRxCycle({cycleMs: cycle0 + 120000, dialHz: 14095600, decodes});
+    const posted = () => net.requests.filter(r => r.url.endsWith("/post/"));
+    check("the next spot is posted", await wait(() => posted().length >= 1, 5000), JSON.stringify(net.requests));
+    const fields = new URLSearchParams(posted().length ? posted()[0].body : "");
+    check("posted as WSJT-X does: function, tcall, rcall, rgrid, rqrg, mode",
+          fields.get("function") === "wspr" && fields.get("tcall") === "OK1HRA" && fields.get("rcall") === "OK1HRA" &&
+          fields.get("rgrid") === "JN79QI" && fields.get("rqrg") === "14.095600" && fields.get("mode") === "2" &&
+          fields.get("tqrg") === "14.097120", posted().length ? posted()[0].body : "none");
+    check("the row turns ✓", await wait(() => rows()[0] && rows()[0].querySelector(".c-upload").textContent === "✓", 3000),
+          rows()[0] && rows()[0].querySelector(".c-upload").textContent);
+    check("the pill shows UPLOAD on", $("uploadToggle").classList.contains("on"));
+
+    await w.onRxCycle({cycleMs: cycle0 + 240000, dialHz: 14095600, decodes: []});
+    check("an empty cycle reports wsprstat", await wait(() => posted().some(r => r.body.indexOf("function=wsprstat") >= 0), 3000));
+
+    const beforeOffDial = posted().length;
+    await w.onRxCycle({cycleMs: cycle0 + 360000, dialHz: 14074000, decodes});
+    check("off a WSPR dial nothing is posted and the spot stays local",
+          posted().length === beforeOffDial && rows()[0].querySelector(".c-upload").textContent === "–",
+          posted().length + " " + (rows()[0] && rows()[0].querySelector(".c-upload").textContent));
+
+    net.online = false;
+    await w.uploader.probe(true);
+    await w.onRxCycle({cycleMs: cycle0 + 480000, dialHz: 14095600, decodes});
+    w.render();
+    check("offline: the spot is queued", rows()[0] && rows()[0].querySelector(".c-upload").textContent === "…",
+          rows()[0] && rows()[0].querySelector(".c-upload").textContent);
+    check("offline: the pill says so and the notice explains",
+          $("uploadToggle").classList.contains("blocked") && /No internet/.test($("rxNotice").textContent),
+          $("rxNotice").textContent);
+    net.online = true;
+    await w.uploader.probe(true);
+    await w.uploader.flush(w.rxStation());
+    w.render();
+    check("back online the queue goes out", rows()[0] && rows()[0].querySelector(".c-upload").textContent === "✓",
+          rows()[0] && rows()[0].querySelector(".c-upload").textContent);
+
+    await w.onRxCycle({cycleMs: cycle0 + 600000, dialHz: 14095600,
+                       decodes: [Object.assign({}, decodes[0], {call: "<...>", grid: "JO70AB", type: 3})]});
+    check("an unresolved hashed call is never queued", rows()[0] && rows()[0].querySelector(".c-upload").textContent === "–");
+
+    // ---- round 2: period, sorting, zoom, map ----------------------------------
+    check("the period offers ½ h to 30 days, ½ h by default",
+          [...$("rxPeriod").options].map(o => o.value).join(",") === "0.5,1,6,12,24,168,720" &&
+          $("rxPeriod").value === "0.5", [...$("rxPeriod").options].map(o => o.value).join(","));
+    await w.onRxCycle({cycleMs: cycle0 + 60000 * 0, dialHz: 7038600,
+                       decodes: [Object.assign({}, decodes[0], {call: "K1ABC", grid: "FN42", snr: 5})]});
+    const head = key => $("rxHead").querySelector('th[data-sort="' + key + '"]');
+    head("snr").click();
+    const snrs = () => rows().map(r => Number(r.querySelector(".c-snr").querySelector(".db-value").textContent));
+    check("clicking SNR sorts strongest first",
+          snrs().length > 2 && snrs().every((v, i, a) => i === 0 || a[i - 1] >= v) && head("snr").classList.contains("sorted"),
+          snrs().join(","));
+    head("snr").click();
+    check("clicking it again reverses", snrs().every((v, i, a) => i === 0 || a[i - 1] <= v) &&
+          head("snr").classList.contains("asc"), snrs().join(","));
+    head("call").click();
+    check("text columns sort A to Z", rows()[0].querySelector(".c-call").textContent === "<...>" || rows()[0].querySelector(".c-call").textContent <= rows()[rows().length - 1].querySelector(".c-call").textContent);
+    // DXC look: km with a bearing arrow instead of an Az column, dB with a meter,
+    // both toned by where they sit among the rows shown.
+    const dxRow = rows().find(r => r.querySelector(".c-call").textContent === "K1ABC");
+    check("no Az column any more; km carries a bearing arrow",
+          !$("rxHead").querySelector('th[data-sort="az"]') && Boolean(dxRow) &&
+          /rotate\\(29[0-9]deg\\)/.test(dxRow.querySelector(".c-km").querySelector(".dir-arrow").style.transform),
+          dxRow ? dxRow.querySelector(".c-km").innerHTML : "no K1ABC row");
+    check("km is toned like DXC", Boolean(dxRow) && /rgb/.test(dxRow.querySelector(".c-km").style.color), dxRow && dxRow.querySelector(".c-km").style.color);
+    check("dB shows a signal meter and is toned",
+          Boolean(dxRow) && /^\\|+$/.test(dxRow.querySelector(".c-snr").querySelector(".db-meter").textContent) &&
+          /rgb/.test(dxRow.querySelector(".c-snr").style.color), dxRow && dxRow.querySelector(".c-snr").textContent);
+    // Columns: order, units, watts, COLUMNS and the text size.
+    const heads = [...$("rxHead").querySelectorAll("th")].map(th => th.className.match(/c-(\\w+)/)[1]);
+    check("SNR comes after km, W after dBm",
+          heads.join(",") === "t,dt,freq,drift,call,grid,dbm,w,km,snr,upload", heads.join(","));
+    check("DT and Drift carry their units in the heading and explain them on hover",
+          /DT\\s*s/.test(head("dt").textContent) && /Drift\\s*Hz/.test(head("drift").textContent) &&
+          /seconds/.test(head("dt").title) && /Hz/.test(head("drift").title),
+          head("dt").textContent + " | " + head("drift").textContent);
+    const k1 = rows().find(r => r.querySelector(".c-call").textContent === "K1ABC");
+    check("W is worked out from dBm (37 dBm = 5.01 W)",
+          Boolean(k1) && k1.querySelector(".c-dbm").textContent === "37" && k1.querySelector(".c-w").textContent === "5.01",
+          k1 && k1.querySelector(".c-w").textContent);
+    $("rxColumns").click();
+    check("COLUMNS opens a list of every column", !$("rxColumnsMenu").hidden &&
+          $("rxColumnsMenu").querySelectorAll("input[data-col]").length === 11);
+    const dtBox = $("rxColumnsMenu").querySelector('input[data-col="dt"]');
+    dtBox.click();
+    check("unticking a column hides it in the heading and every row",
+          getComputedStyle(head("dt")).display === "none" && getComputedStyle(rows()[0].querySelector(".c-dt")).display === "none" &&
+          w.view.hiddenCols.includes("dt"));
+    dtBox.click();
+    check("ticking it brings it back", getComputedStyle(head("dt")).display !== "none" && !w.view.hiddenCols.includes("dt"));
+    document.body.click();
+    check("a click elsewhere closes the list", $("rxColumnsMenu").hidden);
+    const fontNow = () => parseFloat(getComputedStyle(rows()[0].querySelector(".c-call")).fontSize);
+    const before = fontNow();
+    $("rxZoomIn").click(); $("rxZoomIn").click();
+    check("+ enlarges the text in RX SPOTS", fontNow() > before && Math.abs(w.view.tableZoom - 1.2) < 1e-9,
+          before + " -> " + fontNow());
+    $("rxZoomOut").click(); $("rxZoomOut").click();
+    check("- shrinks it back", Math.abs(fontNow() - before) < 0.01 &&
+          JSON.parse(localStorage.getItem("wifilt.wspr.view")).tableZoom === 1);
+    head("t").click();
+    check("back to time: newest first, the sort remembered", w.view.sortKey === "t" && w.view.sortDir === "desc" &&
+          JSON.parse(localStorage.getItem("wifilt.wspr.view")).sortKey === "t");
+
+    const pill = zoom => document.querySelector('.wspr-zoom-pill[data-zoom="' + zoom + '"]');
+    const spectrumOpen = document.querySelector('[data-section="spectrum"]').open;
+    pill(400).click();
+    check("400 % centres the waterfall on 1500 Hz",
+          w.waterfall.lowHz === 1225 && w.waterfall.highHz === 1775 && pill(400).classList.contains("active"),
+          w.waterfall.lowHz + "-" + w.waterfall.highHz);
+    check("the scale follows the zoom", $("frequencyScale").firstElementChild.textContent === "1225 Hz",
+          $("frequencyScale").textContent);
+    check("a zoom pill does not fold the waterfall", document.querySelector('[data-section="spectrum"]').open === spectrumOpen);
+    check("the zoom is remembered", JSON.parse(localStorage.getItem("wifilt.wspr.view")).zoom === 400);
+    pill(800).click();
+    check("800 % shows 1362.5-1637.5 Hz, the WSPR window and a little either side",
+          w.waterfall.lowHz === 1362.5 && w.waterfall.highHz === 1637.5 && pill(800).classList.contains("active"),
+          w.waterfall.lowHz + "-" + w.waterfall.highHz);
+    pill(100).click();
+    check("100 % is the full 500-2700 Hz again", w.waterfall.lowHz === 500 && w.waterfall.highHz === 2700);
+
+    $("rxMapSection").open = true;
+    $("rxMapSection").dispatchEvent(new Event("toggle"));
+    w.render();
+    const mapDots = () => $("rxMap").querySelectorAll(".map-dot").length;
+    check("the RX map draws the period's stations", await wait(() => mapDots() >= 1, 3000), $("rxMap").innerHTML.slice(0, 120));
+    check("two bands in the period: dots coloured, legend shown",
+          Boolean($("rxMap").querySelector(".map-dot circle[style*=fill]")) && $("rxMapLegend").children.length === 2,
+          $("rxMapLegend").textContent);
+    check("the map summary counts what it shows", /on map/.test($("rxMapSummary").textContent) && /2 bands/.test($("rxMapSummary").textContent),
+          $("rxMapSummary").textContent);
+    $("rxMapLog").click();
+    check("LOG switches the map scale", /LOG/.test($("rxMap").textContent) && w.view.mapLog === true);
+    $("rxMapLog").click();
+    $("rxPeriod").value = "1"; $("rxPeriod").dispatchEvent(new Event("change"));
+    check("changing the period reloads the spots", await wait(() => w.view.periodH === 1 && rows().length > 0, 3000));
+    $("rxPeriod").value = "0.5"; $("rxPeriod").dispatchEvent(new Event("change"));
+
+    // SAVE: the downloaded file, caught at createObjectURL.
+    let savedBlob = null;
+    const realCreate = URL.createObjectURL;
+    URL.createObjectURL = blob => { savedBlob = blob; return realCreate.call(URL, blob); };
+    $("rxSave").click();
+    await wait(() => savedBlob !== null, 3000);
+    URL.createObjectURL = realCreate;
+    const savedText = savedBlob ? await savedBlob.text() : "";
+    check("SAVE produces ALL_WSPR.TXT lines",
+          /^[0-9]{6} [0-9]{4} +-?[0-9]+ +-?[0-9.]+ +14\.0971200  OK1HRA JN79 37 /m.test(savedText),
+          savedText.split("\\n")[0]);
+    check("APPEND is offered only where the browser can keep a file",
+          $("rxAppend").hidden === !("showSaveFilePicker" in window));
+
+    set($("rxFilter"), "JO70");
+    check("the filter narrows to matching spots",
+          await wait(() => rows().length >= 1 && rows().every(r => r.querySelector(".c-grid").textContent.indexOf("JO70") === 0), 3000),
+          rows().map(r => r.querySelector(".c-grid").textContent).join(","));
+    set($("rxFilter"), "ZZZZ");
+    check("a filter with no match says so", await wait(() => !$("rxEmpty").hidden && /No spot/.test($("rxEmpty").textContent), 3000));
+    set($("rxFilter"), "");
+
+    // DT: ten spots 1.5 s late -- a clear majority of what is in the period --
+    // so the button proposes the clamp, -1000 ms.
+    const lateDecodes = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(i => Object.assign({}, decodes[0], {dt: 1.5, call: "OK1A" + i}));
+    await w.onRxCycle({cycleMs: cycle0 + 720000, dialHz: 14095600, decodes: lateDecodes});
+    w.render();
+    check("a late clock shows amber DT and offers the correction",
+          $("rxDt").classList.contains("warn") && !$("rxApplyDt").hidden && /-1000 ms/.test($("rxApplyDt").textContent),
+          $("rxDt").textContent + " / " + $("rxApplyDt").textContent);
+    $("rxApplyDt").click();
+    check("the button writes the shared clock correction",
+          w.clockCorrectionMs() === -1000 && $("clockCorrection").value === "-1000", w.clockCorrectionMs());
+    check("and stops proposing it for the old spots", $("rxApplyDt").hidden);
+    set($("clockCorrection"), "0");
+
+    $("rxQuick").click();
+    w.render();
+    check("a decoder option reaches the receiver",
+          w.settings.rx.quick === true && w.receiver.options.quick === true);
+    $("rxQuick").click();
+
+    // GPS: the radio's clock runs 600 ms ahead of this machine; with a fix the
+    // page takes the correction from it on its own and stops proposing one.
+    await realFetch("/gps-fixture", {method: "POST", body: JSON.stringify({on: true, offsetMs: 600})});
+    await wait(() => w.state.radio.gpsFixAgeMs !== null, 4000);
+    for (let i = 0; i < 30; i++) { await w.pollGpsClock(); await sleep(150); }
+    const gpsEstimate = w.gpsClock.estimate();
+    check("GPS time sets the clock correction by itself",
+          Math.abs(w.clockCorrectionMs() - 600) <= 150,
+          w.clockCorrectionMs() + " ms, estimate " + JSON.stringify(gpsEstimate));
+    w.render();
+    check("the status bar says the clock follows GPS", /GPS/.test($("timingState").textContent), $("timingState").textContent);
+    await w.onRxCycle({cycleMs: cycle0 + 840000, dialHz: 14095600, decodes: lateDecodes});
+    w.render();
+    check("with GPS keeping time there is no manual proposal", $("rxApplyDt").hidden, $("rxApplyDt").textContent);
+    await realFetch("/gps-fixture", {method: "POST", body: JSON.stringify({on: false})});
+    set($("clockCorrection"), "0");
+
+    // ---- TIMETABLE with TX and RX items --------------------------------------
+    const savedTimetable = JSON.stringify(w.settings.timetable);
+    if ($("freqTimetablePanel").hidden) $("freqTimetableButton").click();
+    w.settings.timetable = []; w.saveSettings(); w.addChange(0); w.renderSchedule();
+    // addChange() already selected the change, so a click on its row toggles.
+    $("scheduleList").querySelector('[data-change-slot="0"]').click();
+    if ($("schedulePopover").hidden) $("scheduleList").querySelector('[data-change-slot="0"]').click();
+    const addItem = label => $("schedulePopover").querySelector('[data-add-band="' + label + '"]').click();
+    addItem("40m RX"); addItem("40m RX"); addItem("20m");
+    const entry0 = () => w.settings.timetable.find(e => e.slot === 0);
+    check("the sequence editor offers TX and RX bands; RX may repeat",
+          JSON.stringify(entry0().bands) === JSON.stringify(["40m RX", "40m RX", "20m"]), JSON.stringify(entry0().bands));
+    check("TX of a band already in the pass is not offered again",
+          !$("schedulePopover").querySelector('.tt-band-picker:not(.rx) [data-add-band="20m"]') &&
+          Boolean($("schedulePopover").querySelector('[data-add-band="20m RX"]')));
+    check("the schedule row marks RX items", $("scheduleList").querySelectorAll(".tt-mode.rx").length === 2 &&
+          $("scheduleList").querySelectorAll(".tt-mode.tx").length === 1);
+    w.renderSchedule();
+    check("the preview draws listening frames", $("previewGrid").querySelectorAll(".planned-rx").length > 0 &&
+          /RX/.test($("previewCount").textContent), $("previewCount").textContent);
+    entry0().bands = ["30m RX"]; w.saveSettings(); w.renderSchedule(); w.render();
+    check("a listening-only schedule cannot START TX and says where it listens",
+          /no TX band/.test(w.blockingReason() || "") && $("freqTimetableValue").textContent === "RX 30m",
+          (w.blockingReason() || "") + " / " + $("freqTimetableValue").textContent);
+    // The executor: eight seconds before the next frame, RX on, beacon stopped.
+    if (w.state.beacon === "stopped") {
+      const realNow = Date.now, frame = (Math.floor(realNow() / 120000) + 1) * 120000;
+      const shift = frame - 8000 - realNow() - w.clockCorrectionMs();
+      Date.now = () => realNow() + shift;
+      try {
+        await w.rxHopTick();
+        check("an RX item retunes the radio for its frame, in the last seconds of the one before",
+              await wait(async () => (await commandsSeen()).some(c => c.type === "setFrequency" && c.frequency === "10138700"), 4000),
+              JSON.stringify((await commandsSeen()).slice(-3)));
+      } finally { Date.now = realNow; }
+    }
+    w.settings.timetable = JSON.parse(savedTimetable); w.saveSettings(); w.renderSchedule();
+    $("scheduleClose").click();
+
+    $("uploadToggle").click();
+    $("rxToggle").click();
+    window.fetch = realFetch;
+    check("RX switches off again", w.settings.rx.enabled === false && $("rxSummary").textContent === "receiver off");
+    check("and the waterfall labels go with it -- no new set will replace them", w.state.rxLabels === null);
+    check("and TX SESSION unfolds again", document.querySelector('[data-section="tx-session"]').open === true);
+    }
   } catch (error) {
     check("page script ran without throwing", false, String(error && error.stack || error));
   }
@@ -2288,9 +2689,10 @@ server.listen(0, "127.0.0.1", () => {
   // The batch plan keys three carriers of its own (survey, verification, clean), so
   // the run is minutes long. It used to be 240 s and the plan tests pushed it over,
   // which surfaced as nine unrelated failures and no clue -- see the /oops route.
+  // 600 s since the receive tests: one real cycle through the decoder worker.
   timer = setTimeout(() => finish({checks: [["page reported within the timeout", false,
     "the page never posted /result. last steps: " + (progress.slice(-4).join(" > ") || "none") +
-    (pageErrors.length ? " | errors: " + pageErrors.join(" | ") : "")]]}), 420000);
+    (pageErrors.length ? " | errors: " + pageErrors.join(" | ") : "")]]}), 600000);
 });
 
 // The fixture rewrites wspr.html on the way out to append the test script, so the

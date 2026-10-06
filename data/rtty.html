@@ -35,7 +35,7 @@
     </details>
     <script>document.addEventListener("click",function(e){var b=document.querySelector(".brand-about");if(b.open&&!b.contains(e.target))b.open=false;});</script>
     <a class="tab" href="/log" target="_blank" rel="noopener">QRPLog</a><a class="tab" href="/dxc.html" onclick="window.open(this.href,'DXC','width=600,height=750,left=0,top=0,menubar=no,location=no,status=no'); return false;">DXC</a>
-    <a class="tab tab-active" href="/data" title="JS8Call-ICOM, WSPR-Beacon, Mercury and RTTY-ICOM over ICOM-LAN">DATA</a><a class="tab" href="/setup" target="_blank" rel="noopener">SETUP</a>
+    <a class="tab tab-active" href="/data" title="JS8Call-ICOM, WSPR, Mercury and RTTY-ICOM over ICOM-LAN">DATA</a><a class="tab" href="/setup" target="_blank" rel="noopener">SETUP</a>
     <a class="tab" href="/datasync" target="_blank" rel="noopener">LOGSYNC</a><a class="tab bd-nav" href="/bd" target="_blank" rel="noopener" hidden>BD</a>
     <span id="topbarFw" class="topbar-fw"></span>
   </nav>
@@ -45,7 +45,7 @@
        already do between themselves. Mercury alone has its own separate
        lease (mercury-session.js) -- see that page's own header for why. -->
   <nav class="subtabs" aria-label="DATA mode">
-    <a class="subtab" href="/data">JS8Call-ICOM</a><a class="subtab subtab-active" href="/rtty.html">RTTY-ICOM</a><a class="subtab" href="/wspr.html">WSPR-Beacon</a><a class="subtab" href="/mercury.html">Mercury</a>
+    <a class="subtab" href="/data">JS8Call-ICOM</a><a class="subtab subtab-active" href="/rtty.html">RTTY-ICOM</a><a class="subtab" href="/wspr.html">WSPR</a><a class="subtab" href="/mercury.html">Mercury</a>
   </nav>
 </header>
 
@@ -109,7 +109,7 @@
     <div class="gate-card-icon" aria-hidden="true">!</div>
     <div>
       <h1>The radio is driven from somewhere else</h1>
-      <p>One radio, one operator: JS8Call-ICOM, WSPR-Beacon and RTTY-ICOM all drive the transceiver
+      <p>One radio, one operator: JS8Call-ICOM, WSPR and RTTY-ICOM all drive the transceiver
          through a single audio link, so only one page can run at a time.</p>
       <p id="sessionBusyWhere" class="session-busy-where"></p>
       <button id="sessionTakeover" class="gate-card-action" type="button">TAKE THE SESSION OVER HERE</button>
@@ -389,7 +389,7 @@
      much-higher-PAPR DATAC1 burst needed a different carrier). -->
 <script src="/icom-models.js?v=ddc6caa5"></script>
 <script src="/js8-presets.js?v=7131988f"></script>
-<script src="/wspr-core.js?v=450a9679"></script>
+<script src="/wspr-core.js?v=981ff9bf"></script>
 <script src="/wspr-tx.js?v=20c527f9"></script>
 <!-- Item 13's auto-apply/knob-detection engine, shared with JS8Call-ICOM
      (data.html) -- code-review 2026-08-28, see the module's own header for

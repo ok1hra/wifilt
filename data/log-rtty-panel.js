@@ -997,7 +997,7 @@
       '</div>' +
       '<section class="rtty-panel-busy" id="rttyPanelBusy" hidden role="alert">' +
         '<b>The radio is driven from somewhere else</b>' +
-        '<p>One radio, one operator: JS8Call-ICOM, WSPR-Beacon, Mercury and ' +
+        '<p>One radio, one operator: JS8Call-ICOM, WSPR, Mercury and ' +
            'RTTY-ICOM all drive the transceiver through a single audio link.</p>' +
         '<p id="rttyPanelBusyWhere"></p>' +
         '<button id="rttyPanelTakeover" type="button">TAKE THE SESSION OVER HERE</button>' +

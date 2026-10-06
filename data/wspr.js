@@ -43,6 +43,10 @@
   // (prebuffering starts 1.35 s before the slot) rather than the beacon's ten
   // seconds -- a button that does nothing for ten seconds reads as broken.
   const TUNE_LEAD_MS = 2500;
+  // How long before a frame a band change may happen without costing the cycle
+  // that is still being received: the receiver ignores a dial change after
+  // 110 s of the 120 s frame, and /state reports it up to a second late.
+  const RX_RETUNE_LEAD_MS = 9000;
   const TUNE_MAX_MS = 10000;        // hard cap, same as the JS8 tune carrier
   // AUD1_TX_RING_SIZE in the sketch: the firmware's TX audio ring, 1.536 s of
   // 8 kHz mu-law. This is the margin the browser keeps ahead of the radio, and
@@ -81,7 +85,13 @@
     "trxHelpModeWarning", "timingState", "trxFrequency", "frequencyMenu",
     "trxSlotLabel", "slotTimer",
     "freqTimetableButton", "freqTimetableValue", "freqTimetablePanel",
-    "txSessionSummary", "activitySummary", "settingsSummary"]) dom[id] = $(id);
+    "txSessionSummary", "activitySummary", "settingsSummary",
+    // receive
+    "rxToggle", "rxState", "rxSummary", "uploadToggle", "rxNotice", "rxFilter", "rxDt",
+    "rxApplyDt", "rxPeriod", "rxSave", "rxAppend", "rxFile", "rxSpots", "rxEmpty",
+    "rxHead", "rxCapped", "rxMapSection", "rxMapSummary", "rxMapLog", "rxMapLegend", "rxMap",
+    "frequencyScale", "rxColumns", "rxColumnsMenu", "rxZoomIn", "rxZoomOut",
+    "rxSubtract", "rxDeep", "rxWide", "rxOsd", "rxQuick"]) dom[id] = $(id);
 
   // The WSPR sub-band inside the SSB passband. The offset is randomised in here
   // for every transmission; the waterfall only shows where it landed.
@@ -119,6 +129,13 @@
     lastOffsetHz: 1500,       // where the last (or current) transmission landed
     pendingFrequency: 0,      // a hand-tuned band waiting for the radio to confirm
     helpShownForSetup: false, // latch: the setup dialog opens once per bad state
+    fwRev: "",                // reported by /state; goes into wsprnet's version field
+    rxSpots: [],              // the chosen period, newest first, as loaded from / added to the store
+    rxCapped: false,          // the period held more than RX_LOAD_LIMIT spots
+    rxVersion: 0, rxRendered: -1,
+    rxLast: null,             // the last cycle the receiver reported, decoded or skipped
+    rxLabels: null,           // {cycleMs, items:[{hz, call}]} drawn over the waterfall
+    rxDtSinceMs: 0,           // spots before the last clock change do not count for DT
   };
 
   // ---- settings ------------------------------------------------------------
@@ -204,10 +221,20 @@
   // throws it away rather than mistaking a default for a decision.
   // `timetable` is a list of UTC change points. Each ordered band sequence stays
   // active until the next change and the final one wraps through midnight.
+  // `rx` holds the receive switches. UPLOAD is off until the operator turns it
+  // on: it publishes under their callsign.
+  const rxDefaults = () => ({enabled: false, upload: false, subtract: true, deep: false,
+                             wide: false, osd: true, quick: false});
   const settingsDefaults = () => ({
     version: SETTINGS_VERSION, powerDbm: null, modelOverride: "",
-    powerReferences: {}, timetable: [],
+    powerReferences: {}, timetable: [], rx: rxDefaults(),
   });
+  function normalizeRx() {
+    const raw = settings.rx && typeof settings.rx === "object" ? settings.rx : {};
+    const rx = rxDefaults();
+    for (const key of Object.keys(rx)) if (typeof raw[key] === "boolean") rx[key] = raw[key];
+    settings.rx = rx;
+  }
 
   let settings = settingsDefaults();
 
@@ -228,17 +255,21 @@
     for (const entry of Array.isArray(settings.timetable) ? settings.timetable : []) {
       const slot = Number(entry && entry.slot);
       if (!Number.isInteger(slot) || slot < 0 || slot >= WsprCore.SLOTS_PER_DAY) continue;
-      const seen = new Set(), bands = [];
-      for (const band of Array.isArray(entry.bands) ? entry.bands : []) {
-        const name = String(typeof band === "string" ? band : (band && band.band) || "");
-        if (!knownBands.has(name) || seen.has(name)) continue;
-        seen.add(name); bands.push(name);
+      // "20m" transmits, "20m RX" listens. A band transmits once per pass;
+      // RX items may repeat (listen longer there).
+      const seenTx = new Set(), bands = [];
+      for (const value of Array.isArray(entry.bands) ? entry.bands : []) {
+        const item = WsprCore.parseItem(value);
+        if (!item || !knownBands.has(item.band)) continue;
+        if (item.mode === "tx") { if (seenTx.has(item.band)) continue; seenTx.add(item.band); }
+        bands.push(WsprCore.itemLabel(item));
       }
       bySlot.set(slot, {slot, bands});
     }
     settings.timetable = [...bySlot.values()].sort((a, b) => a.slot - b.slot);
     if (!settings.powerReferences || typeof settings.powerReferences !== "object")
       settings.powerReferences = {};
+    normalizeRx();
   }
 
   // v1 -> v2. All three dropped values are dropped for the same reason: they
@@ -290,6 +321,7 @@
       if (!merged) return false;
       settings = {...settingsDefaults(), ...merged};
       migrateSettings();
+      normalizeRx();
       try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (_e) {}
       return true;
     }).catch(() => false);
@@ -429,6 +461,7 @@
       if (!response.ok) throw new Error(String(response.status));
       const json = await response.json();
       noteLinkState(json);
+      if (json.fwRev) state.fwRev = String(json.fwRev);
       state.radio = {
         connected: Boolean(json.connected),
         transceiverType: String(json.transceiverType || ""),
@@ -450,6 +483,8 @@
         // says so in the antenna question: on a station where the outputs switch
         // antennas, "the decoder follows the dial" is half the answer already.
         bdSupported: json.bdSupported === true,
+        // Present only when the radio has GPS; ms since its UTC stamp last moved.
+        gpsFixAgeMs: json.gpsFixAgeMs === undefined ? null : Number(json.gpsFixAgeMs),
       };
     } catch (_error) {
       // Deliberately does NOT go through noteLinkState(): a fetch that never
@@ -928,9 +963,17 @@
   const timetableEntry = slot =>
     settings.timetable.find(entry => entry.slot === Number(slot)) || null;
   const bandsAt = index => WsprCore.sequenceAt(index, settings).map(band => band.band);
-  const scheduledSlots = () =>
-    Array.from({length: WsprCore.SLOTS_PER_DAY}, (_, index) => index)
-      .filter(index => bandsAt(index).length).length;
+  const slotsWith = mode => Array.from({length: WsprCore.SLOTS_PER_DAY}, (_, index) => index)
+    .filter(index => WsprCore.sequenceAt(index, settings).some(item => !mode || item.mode === mode)).length;
+  // Anything at all / something to transmit / something to listen to.
+  const scheduledSlots = () => slotsWith(null);
+  const txScheduledSlots = () => slotsWith("tx");
+  const rxScheduledSlots = () => slotsWith("rx");
+  // One sequence item as a chip: "40m RX" listens, "40m" transmits.
+  const itemChip = label => {
+    const item = WsprCore.parseItem(label);
+    return item ? `<b>${item.band}</b><em class="tt-mode ${item.mode}">${item.mode.toUpperCase()}</em>` : "";
+  };
 
   function snapshotSchedule() {
     scheduleUndo = JSON.stringify(settings.timetable);
@@ -986,7 +1029,8 @@
           const end = rangeEnd(index), active = entry === activeEntry;
           const sequence = entry.bands.length
             ? entry.bands.map((band, order) =>
-                `<span class="tt-sequence-band">${order + 1}<b>${band}</b></span>`).join("")
+                `<span class="tt-sequence-band${WsprCore.parseItem(band).mode === "rx" ? " rx" : ""}">` +
+                `${order + 1}${itemChip(band)}</span>`).join("")
             : `<span class="tt-silent">silent</span>`;
           const range = settings.timetable.length === 1
             ? `from ${slotLabel(entry.slot)} · all day`
@@ -996,7 +1040,7 @@
                  `<span class="tt-range">${range}</span>` +
                  `<span class="tt-sequence">${sequence}</span><span class="chevron">›</span></button>`;
         }).join("")
-      : `<p class="tt-empty">No sequence yet. Add the first change and choose bands in on-air order.</p>`;
+      : `<p class="tt-empty">No sequence yet. Add the first change and choose TX and RX bands in on-air order.</p>`;
     renderPreview();
     renderActivity();
     dom.scheduleUndo.hidden = scheduleUndo === null;
@@ -1019,7 +1063,7 @@
     const until = firstHour + PREVIEW_HOURS * HOUR_MS;
     const planned = WsprCore.plannedFrames(now, (until - now) / HOUR_MS, scheduleView());
 
-    let html = "", edgeDrawn = false, marked = 0;
+    let html = "", edgeDrawn = false, marked = 0, listening = 0;
     for (let row = 0; row < PREVIEW_HOURS; row++) {
       const rowStart = firstHour + row * HOUR_MS;
       html += `<div class="tt-preview-row">` +
@@ -1029,11 +1073,14 @@
         const past = frameUtcMs + WsprCore.FRAME_MS <= now;
         const edge = !past && !edgeDrawn;
         if (edge) edgeDrawn = true;
-        const keys = past ? null : WsprCore.frameTransmission(frameUtcMs, scheduleView());
+        const plan = past ? null : WsprCore.frameAt(frameUtcMs, scheduleView());
+        const keys = plan && plan.slot.mode === "tx" ? plan : null;
+        const listens = plan && plan.slot.mode === "rx" ? plan : null;
         if (keys) marked++;
-        html += `<i class="tt-frame${keys ? " planned" : ""}${past ? " past" : ""}` +
+        if (listens) listening++;
+        html += `<i class="tt-frame${keys ? " planned" : ""}${listens ? " planned-rx" : ""}${past ? " past" : ""}` +
                 `${edge ? " edge" : ""}" title="${new Date(frameUtcMs).toISOString().slice(11, 16)}` +
-                ` UTC${keys ? ` — ${keys.slot.band}` : ""}"></i>`;
+                ` UTC${keys ? ` — ${keys.slot.band} TX` : listens ? ` — ${listens.slot.band} RX` : ""}"></i>`;
       }
       html += "</div>";
     }
@@ -1051,7 +1098,7 @@
     // already running is marked in the strip but is no longer "next", so the two
     // differ by one exactly when the beacon is mid-transmission -- and a head that
     // says 34 above 35 hollow cells is the kind of detail that costs trust.
-    dom.previewCount.textContent = `${marked} TX`;
+    dom.previewCount.textContent = listening ? `${marked} TX · ${listening} RX` : `${marked} TX`;
     dom.previewNext.textContent = planned.length
       ? `next ${planned.slice(0, 3).map(frame =>
           `${new Date(frame.slotUtcMs).toISOString().slice(11, 16)} ${frame.slot.band}`)
@@ -1072,6 +1119,10 @@
     const upcoming = nextTransmission();
     if (!scheduledSlots()) {
       dom.freqTimetableValue.textContent = "NO SCHEDULE";
+    } else if (!txScheduledSlots()) {
+      // A listening-only schedule: say where it listens next.
+      const plan = WsprCore.frameAt(WsprCore.nextSlotUtcMs(utcNow()), scheduleView());
+      dom.freqTimetableValue.textContent = plan ? `RX ${plan.slot.band}` : "RX ONLY";
     } else if (upcoming) {
       const at = state.pendingSlotUtcMs || upcoming.slotUtcMs;
       dom.freqTimetableValue.textContent =
@@ -1100,24 +1151,31 @@
       `${timetableEntry(slot) && slot !== entry.slot ? " disabled" : ""}>` +
       `${slotLabel(slot)}</option>`).join("");
     const selected = entry.bands.map((band, index) =>
-      `<span class="tt-sequence-edit"><b>${index + 1} · ${band}</b>` +
+      `<span class="tt-sequence-edit${WsprCore.parseItem(band).mode === "rx" ? " rx" : ""}">` +
+      `<b>${index + 1} · ${band.endsWith(" RX") ? band : `${band} TX`}</b>` +
       `<button type="button" data-move-band="${index}" data-direction="-1"` +
       `${index ? "" : " disabled"} title="Move ${band} earlier">←</button>` +
       `<button type="button" data-move-band="${index}" data-direction="1"` +
       `${index + 1 < entry.bands.length ? "" : " disabled"} title="Move ${band} later">→</button>` +
       `<button type="button" data-remove-band="${index}" title="Remove ${band}">×</button></span>`
     ).join("");
+    // TX: each band once per pass. RX: any band, as often as wanted.
     const spare = WsprCore.PRESETS.filter(preset => !entry.bands.includes(preset.band));
     dom.schedulePopover.innerHTML =
       `<header><strong>Sequence change</strong><small>UTC, repeats daily</small></header>` +
       `<label class="tt-change-time">from <select data-change-time>${timeOptions}</select></label>` +
       `<div class="tt-sequence-editor">${selected ||
         `<span class="tt-silent">silent until the next change</span>`}</div>` +
-      `<div class="tt-band-picker"><span>add next</span>${spare.map(preset =>
+      `<div class="tt-band-picker"><span>add TX</span>${spare.map(preset =>
         `<button class="tt-band" type="button" data-add-band="${preset.band}">${preset.band}</button>`
       ).join("")}</div>` +
-      `<small class="tt-gap-note">Each band may occur at most once per 6 minutes; ` +
-      `with fewer than 3 bands the missing positions stay silent.</small>` +
+      `<div class="tt-band-picker rx"><span>add RX</span>${WsprCore.PRESETS.map(preset =>
+        `<button class="tt-band rx" type="button" data-add-band="${preset.band} RX">${preset.band}</button>`
+      ).join("")}</div>` +
+      `<small class="tt-gap-note">One item per two-minute frame, in this order. TX keys only with ` +
+      `START TX running and each band at most once per 6 minutes; RX listens only with RX on. ` +
+      `With RX items in the sequence a TX frame that cannot key listens on its band instead; ` +
+      `TX bands alone keep the old rule (fewer than 3 bands = silent frames between).</small>` +
       `<button class="tt-clear-slot" type="button" data-remove-change>` +
       `Remove this change</button>`;
   }
@@ -1215,11 +1273,556 @@
     drawOverlay: (context, view) => drawWindowOverlay(context, view),
   });
 
-  function onSamples(samples) {
+  function onSamples(samples, rate, metadata) {
     let sum = 0;
     for (const value of samples) sum += value * value;
     state.audioDb = 20 * Math.log10(Math.sqrt(sum / Math.max(1, samples.length)) + 1e-9);
     waterfall.ingest(samples);
+    receiver.ingest(samples, rate, metadata);
+  }
+
+  // ---- receive ----------------------------------------------------------------
+  //
+  // The decoder runs in a worker started from the page's own (version-stamped)
+  // script tag, so the worker can never be a cached copy older than the page.
+  const scriptUrl = path => {
+    const node = [...document.querySelectorAll("script[src]")]
+      .find(element => element.getAttribute("src").split("?")[0] === path);
+    return node ? node.getAttribute("src") : path;
+  };
+  const RX_HASH_KEY = "wifilt.wspr.rxHash";
+  function loadRxHash() {
+    try { return JSON.parse(localStorage.getItem(RX_HASH_KEY) || "null"); } catch (_error) { return null; }
+  }
+  // Type 3 messages carry only a 15-bit hash of the call; this is what turns
+  // <...> into a name. Capped, oldest out.
+  function saveRxHash(table) {
+    try {
+      localStorage.setItem(RX_HASH_KEY, JSON.stringify({calls: (table.calls || []).slice(-2000),
+                                                         locs: (table.locs || []).slice(-2000)}));
+    } catch (_error) { /* storage full or private mode: hashes live for this session */ }
+  }
+  const rxStore = new WsprRx.SpotStore();
+  const receiver = new WsprRx.Receiver({
+    Timebase: window.Js8Timebase,
+    createWorker: () => new Worker(scriptUrl("/wspr-decoder.js")),
+    coreUrl: [scriptUrl("/icom-models.js"), scriptUrl("/wspr-core.js")],
+    hashtable: loadRxHash(), onHashtable: saveRxHash,
+    onCycle: event => { onRxCycle(event).catch(error => console.error("[wspr] rx", error)); },
+  });
+  const uploader = new WsprRx.Uploader({store: rxStore, onChange: spot => {
+    if (spot && spot.id !== undefined)
+      for (const row of state.rxSpots) if (row.id === spot.id) row.upload = spot.upload;
+    state.rxVersion++;
+    render();
+  }});
+  const appender = new WsprRx.FileAppender({store: rxStore});
+
+  // How this browser looks at the page: the period, the sort, the zoom, the map
+  // scale. Not station settings, so not pushed to the interface.
+  const VIEW_KEY = "wifilt.wspr.view";
+  const RX_PERIODS_H = [0.5, 1, 6, 12, 24, 168, 720];
+  const RX_LOAD_LIMIT = 20000, RX_ROWS_LIMIT = 1000;
+  const viewDefaults = () => ({periodH: 0.5, sortKey: "t", sortDir: "desc", zoom: 100, mapLog: false,
+                               hiddenCols: [], tableZoom: 1});
+  let view = viewDefaults();
+  try { view = {...viewDefaults(), ...JSON.parse(localStorage.getItem(VIEW_KEY) || "{}")}; }
+  catch (_error) { view = viewDefaults(); }
+  if (!RX_PERIODS_H.includes(Number(view.periodH))) view.periodH = 0.5;
+  const saveView = () => { try { localStorage.setItem(VIEW_KEY, JSON.stringify(view)); } catch (_error) {} };
+  const periodFromMs = () => Date.now() - view.periodH * 3600000;
+  if (!Array.isArray(view.hiddenCols)) view.hiddenCols = [];
+
+  // ---- RX SPOTS: columns and text size, the DXC window's two controls ---------
+  //
+  // A hidden column is one generated CSS rule per column class (.c-dt, .c-km ...),
+  // so rows rendered later are hidden too without touching them.
+  const columnStyle = document.createElement("style");
+  document.head.append(columnStyle);
+  const columnKey = element => (/\bc-(\w+)\b/.exec(element.className) || [])[1] || "";
+  function applyRxColumns() {
+    columnStyle.textContent = view.hiddenCols.map(key => `.rx-table .c-${key}{display:none}`).join("");
+    for (const box of dom.rxColumnsMenu.querySelectorAll("input[data-col]"))
+      box.checked = !view.hiddenCols.includes(box.dataset.col);
+  }
+  function buildRxColumnsMenu() {
+    dom.rxColumnsMenu.innerHTML = [...dom.rxHead.querySelectorAll("th")].map(th => {
+      const key = columnKey(th);
+      return `<label><input type="checkbox" data-col="${key}"> ${th.textContent.trim()}</label>`;
+    }).join("");
+    applyRxColumns();
+  }
+  const RX_ZOOM_MIN = 0.6, RX_ZOOM_MAX = 2.5;
+  function applyRxZoom(step = 0) {
+    const zoom = Math.round((Number(view.tableZoom) || 1) * 10 + step) / 10;
+    view.tableZoom = Math.max(RX_ZOOM_MIN, Math.min(RX_ZOOM_MAX, zoom));
+    dom.rxSpots.closest("table").style.setProperty("--rx-zoom", String(view.tableZoom));
+    dom.rxZoomOut.disabled = view.tableZoom <= RX_ZOOM_MIN;
+    dom.rxZoomIn.disabled = view.tableZoom >= RX_ZOOM_MAX;
+  }
+
+  // The whole period from the store, newest first. The table, the map and SAVE
+  // all show this one period.
+  async function loadRxPeriod() {
+    const periodH = view.periodH;
+    const {spots, capped} = await rxStore.since(periodFromMs(), RX_LOAD_LIMIT);
+    if (periodH !== view.periodH) return;      // the operator picked another one meanwhile
+    state.rxSpots = spots; state.rxCapped = capped;
+    state.rxVersion++; render();
+  }
+  // Once a minute: what has slid out of the period leaves the view.
+  function trimRxPeriod() {
+    const from = periodFromMs(), before = state.rxSpots.length;
+    state.rxSpots = state.rxSpots.filter(spot => spot.t >= from);
+    if (state.rxSpots.length !== before) { state.rxVersion++; render(); }
+  }
+
+  // ---- waterfall zoom ---------------------------------------------------------
+  //
+  // 200, 400 and 800 % are centred on 1500 Hz, the middle of the WSPR window, so
+  // the 200 Hz that matter stay in view at every step (800 % = 1362-1638 Hz).
+  const ZOOM_CENTRE_HZ = 1500;
+  function applyZoom(percent) {
+    percent = [100, 200, 400, 800].includes(Number(percent)) ? Number(percent) : 100;
+    let low = RX_LOW, high = RX_HIGH;
+    if (percent !== 100) {
+      const span = (RX_HIGH - RX_LOW) * 100 / percent;
+      low = ZOOM_CENTRE_HZ - span / 2; high = ZOOM_CENTRE_HZ + span / 2;
+    }
+    waterfall.setRange(low, high);
+    view.zoom = percent; saveView();
+    for (const pill of document.querySelectorAll(".wspr-zoom-pill"))
+      pill.classList.toggle("active", Number(pill.dataset.zoom) === percent);
+    const labels = dom.frequencyScale.children;
+    for (let i = 0; i < labels.length; i++) {
+      const hz = Math.round(low + (high - low) * i / (labels.length - 1));
+      labels[i].textContent = i === 0 || i === labels.length - 1 ? `${hz} Hz` : String(hz);
+    }
+    waterfall.paintOverlay();
+  }
+
+  const rxOptions = () => ({subtraction: settings.rx.subtract, deep: settings.rx.deep,
+    wide: settings.rx.wide, osdDepth: settings.rx.osd ? 3 : 0, quick: settings.rx.quick});
+  function applyRx() {
+    receiver.configure({options: rxOptions(), correctionMs: clockCorrectionMs()});
+    receiver.setEnabled(settings.rx.enabled);
+    // Every poll and every tick: the page knows it is keying before the radio's
+    // own PTT flag makes it through /state.
+    receiver.noteRadio({frequency: state.radio.frequency,
+      tx: Boolean(state.radio.tx || (session && session.ptt)), utcMs: utcNow()});
+  }
+
+  // What wsprnet is told about this receiver. tpct/dbm only mean something in
+  // the "nothing heard" report, where WSJT-X sends its own TX share and power.
+  function rxStation() {
+    let tpct = 0;
+    if (state.beacon !== "stopped") {
+      try { tpct = Math.round(WsprCore.plannedFrames(utcNow(), 1, scheduleView()).length / 30 * 100); }
+      catch (_error) { tpct = 0; }
+    }
+    return {call: sharedCall().toUpperCase(), grid: sharedGrid().slice(0, 6).toUpperCase(),
+      version: `WIFILT ${state.fwRev}`.trim(), tpct,
+      dbm: state.beacon === "stopped" ? 0 : (targetDbm() || 0)};
+  }
+  function uploadBlock(station = rxStation()) {
+    if (!/^[A-Z0-9/]{3,}$/.test(station.call)) return "set your callsign in SETUP";
+    if (!/^[A-R]{2}[0-9]{2}([A-X]{2})?$/.test(station.grid)) return "set your locator in SETUP";
+    return "";
+  }
+  const rxDialOk = hz => Boolean(hz) &&
+    WsprCore.PRESETS.some(preset => Math.abs(preset.hz - hz) <= DIAL_TOLERANCE_HZ);
+
+  async function onRxCycle(event) {
+    state.rxLast = event;
+    if (event.skipped) { render(); return; }
+    const station = rxStation(), block = uploadBlock(station), onDial = rxDialOk(event.dialHz);
+    const upload = settings.rx.upload && !block && onDial;
+    const spots = event.decodes.map(decode => WsprRx.makeSpot(event.cycleMs, event.dialHz, decode));
+    // An unresolved hash names nobody, and wsprnet would file it as "<...>".
+    for (const spot of spots) spot.upload = upload && spot.call !== "<...>" ? "queued" : "local";
+    state.rxLabels = {cycleMs: event.cycleMs, items: spots.map(spot => ({hz: spot.audioHz, call: spot.call}))};
+    try { await rxStore.add(spots); } catch (error) { console.error("[wspr] spot store", error); }
+    state.rxSpots = [...spots.slice().reverse(), ...state.rxSpots].slice(0, RX_LOAD_LIMIT);
+    state.rxVersion++;
+    render();
+    if (spots.length) appender.append(WsprRx.allWsprText(spots)).then(render);
+    if (upload) {
+      await uploader.probe();
+      if (spots.length) await uploader.flush(station);
+      else await uploader.status(event.dialHz, station);
+    }
+  }
+
+  // Once a minute, and whenever UPLOAD is switched on: find out whether the
+  // internet is there and send whatever waited for it.
+  async function rxUploadTick(force = false) {
+    if (!settings.rx.upload || uploadBlock()) return;
+    const online = await uploader.probe(force);
+    if (online) await uploader.flush(rxStation());
+    render();
+  }
+
+  function rxMedianDt() {
+    return WsprRx.medianDt(state.rxSpots.filter(spot => spot.t >= state.rxDtSinceMs));
+  }
+
+  async function saveRxFile() {
+    const spots = await rxStore.between(periodFromMs(), Infinity);
+    if (!spots.length) { state.rxNote = "Nothing to save in that period."; render(); return; }
+    const url = URL.createObjectURL(new Blob([WsprRx.allWsprText(spots)], {type: "text/plain"}));
+    const anchor = document.createElement("a");
+    anchor.href = url; anchor.download = "ALL_WSPR.TXT"; anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+
+  async function onAppendClick() {
+    try {
+      if (appender.state === "ready") await appender.forget();
+      else if (appender.state === "needs-permission") await appender.resume();
+      else await appender.pick();
+    } catch (error) {
+      if (!error || error.name !== "AbortError") appender.error = String(error && error.message || error);
+    }
+    render();
+  }
+
+  // ---- clock from the radio's GPS ---------------------------------------------
+  //
+  // With a fix, the radio is a better clock than this computer, so the shared
+  // correction follows it on its own (operator's decision); without one the DT
+  // of what was received proposes a value and the operator writes it.
+  const gpsClock = new WsprRx.GpsClock();
+  let gpsPollInFlight = false;
+  const GPS_CLOCK_WIDTH_MS = 300, GPS_CLOCK_STEP_MS = 100, GPS_CLOCK_MIN_SAMPLES = 6;
+  function gpsClockLive() {
+    const estimate = gpsClock.estimate();
+    return estimate && Date.now() - estimate.lastMs < 30000 && estimate.count >= GPS_CLOCK_MIN_SAMPLES &&
+      estimate.widthMs <= GPS_CLOCK_WIDTH_MS ? estimate : null;
+  }
+  async function pollGpsClock() {
+    const fixAge = state.radio.gpsFixAgeMs;
+    if (gpsPollInFlight || fixAge === null || !(fixAge < 30000)) return;
+    gpsPollInFlight = true;
+    try {
+      const sentMs = Date.now();
+      const response = await fetch("/gps", {cache: "no-store", signal: fetchDeadline()});
+      const receivedMs = Date.now();
+      if (!response.ok) return;
+      const json = await response.json();
+      // A stamp that has not moved for a while is a radio without a fix
+      // repeating its last time, not a clock.
+      if (!(Number(json.fixAgeMs) < 7000)) return;
+      gpsClock.add({utcStampMs: WsprRx.gpsUtcMs(json.utc), replyAgeMs: Number(json.replyAgeMs),
+                    sentMs, receivedMs});
+      applyGpsClock();
+    } catch (_error) { /* next poll */ } finally { gpsPollInFlight = false; }
+  }
+  function applyGpsClock() {
+    const estimate = gpsClockLive();
+    if (!estimate) return;
+    const wanted = Math.round(estimate.offsetMs);
+    const value = Math.max(-1000, Math.min(1000, wanted));
+    state.gpsClockOff = wanted !== value ? wanted : 0;
+    if (Math.abs(value - clockCorrectionMs()) <= GPS_CLOCK_STEP_MS) return;
+    saveShared({clockCorrectionMs: value});
+    if (document.activeElement !== dom.clockCorrection) dom.clockCorrection.value = String(value);
+    state.rxDtSinceMs = utcNow();
+    applyRx();
+  }
+
+  const fmtDt = value => `${value > 0 ? "+" : ""}${value.toFixed(1)} s`;
+  const UPLOAD_MARK = {sent: "✓", queued: "…", local: "–"};
+  const UPLOAD_TITLE = {sent: "delivered to wsprnet.org", queued: "waiting to be sent",
+    local: "kept here only (UPLOAD was off, the dial was off a WSPR frequency, or the call is unknown)"};
+
+  // Distance and bearing per locator pair, worked out once.
+  const whereCache = new Map();
+  function whereOf(myGrid, grid) {
+    const key = `${myGrid}|${grid}`;
+    if (!whereCache.has(key)) whereCache.set(key, WsprRx.distanceBearing(myGrid, grid));
+    return whereCache.get(key);
+  }
+  const SORT_TEXT = new Set(["call", "grid", "upload"]);
+  // The period, narrowed by the filter box, sorted by the chosen column. Rows
+  // without a value for that column (no locator -> no km) go last either way.
+  function rxView() {
+    const query = dom.rxFilter.value.trim().toUpperCase(), myGrid = sharedGrid();
+    const spots = query ? state.rxSpots.filter(spot => String(spot.call).toUpperCase().includes(query) ||
+      String(spot.grid).toUpperCase().startsWith(query)) : state.rxSpots;
+    const rows = spots.map(spot => ({spot, where: whereOf(myGrid, spot.grid)}));
+    const key = view.sortKey, sign = view.sortDir === "asc" ? 1 : -1;
+    const value = row => key === "km" ? (row.where ? row.where.km : null)
+      : key === "watts" ? row.spot.power : row.spot[key];
+    rows.sort((a, b) => {
+      const x = value(a), y = value(b);
+      if (x === null || x === undefined || x === "") return y === null || y === undefined || y === "" ? b.spot.t - a.spot.t : 1;
+      if (y === null || y === undefined || y === "") return -1;
+      const order = SORT_TEXT.has(key) ? String(x).localeCompare(String(y)) : Number(x) - Number(y);
+      return order * sign || b.spot.t - a.spot.t || a.spot.freqHz - b.spot.freqHz;
+    });
+    return {rows, query};
+  }
+
+  // The DXC window's way of reading a column at a glance (dxc.html valueTone /
+  // meterBars): green, brighter towards the top of what is on screen, and a
+  // six-step meter in front of the dB figure.
+  function valueTone(value, low, high) {
+    if (!Number.isFinite(value) || !Number.isFinite(low) || !(high > low)) return "";
+    const ratio = Math.max(0, Math.min(1, (value - low) / (high - low)));
+    return `hsl(131, 70%, ${(22 + ratio * 54).toFixed(0)}%)`;
+  }
+  function meterBars(value, low, high, count = 6) {
+    if (!Number.isFinite(value)) return "";
+    if (!(high > low)) return "|".repeat(count);
+    const ratio = Math.max(0, Math.min(1, (value - low) / (high - low)));
+    return "|".repeat(Math.max(1, Math.round(ratio * count)));
+  }
+  // dBm -> watts, as WSPR lists show it: 5.01, 0.2, 0.001.
+  function wattsText(dbm) {
+    const watts = Math.pow(10, (Number(dbm) - 30) / 10);
+    if (!Number.isFinite(watts)) return "";
+    return watts >= 1 ? String(+watts.toPrecision(3)) : watts >= 0.001 ? String(+watts.toPrecision(2)) : watts.toExponential(0);
+  }
+  const rangeOf = values => values.length ? [Math.min(...values), Math.max(...values)] : [NaN, NaN];
+
+  function renderRxTable() {
+    if (state.rxRendered === state.rxVersion) return;
+    state.rxRendered = state.rxVersion;
+    const {rows, query} = rxView();
+    const [snrLow, snrHigh] = rangeOf(rows.map(row => Number(row.spot.snr)).filter(Number.isFinite));
+    const [kmLow, kmHigh] = rangeOf(rows.filter(row => row.where).map(row => row.where.km));
+    const byTime = view.sortKey === "t";
+    for (const th of dom.rxHead.querySelectorAll("th[data-sort]")) {
+      th.classList.toggle("sorted", th.dataset.sort === view.sortKey);
+      th.classList.toggle("asc", th.dataset.sort === view.sortKey && view.sortDir === "asc");
+    }
+    const fragment = document.createDocumentFragment();
+    let previous = null;
+    for (const {spot, where} of rows.slice(0, RX_ROWS_LIMIT)) {
+      const tr = document.createElement("tr");
+      // The line between cycles only means something while time is the order.
+      if (byTime && previous !== null && spot.t !== previous) tr.className = "cycle-start";
+      previous = spot.t;
+      const time = new Date(spot.t).toISOString();
+      // [column class, text, tooltip, tone]
+      const cells = [
+        ["c-t", time.slice(11, 16), time.slice(0, 10)],
+        ["c-dt", Number(spot.dt).toFixed(1), `${Number(spot.dt).toFixed(2)} s off the start of the cycle`],
+        ["c-freq", (spot.freqHz / 1e6).toFixed(6)],
+        ["c-drift", spot.drift, `${spot.drift} Hz over the transmission`],
+        ["l c-call", spot.call, spot.osd ? "decoded by OSD: this callsign was heard cleanly before" : ""],
+        ["l c-grid", spot.grid],
+        ["c-dbm", spot.power],
+        ["c-w", wattsText(spot.power), `${spot.power} dBm`],
+        ["c-km", where ? where.km.toLocaleString("en-US") : "", where ? `${where.km} km, bearing ${where.az}°` : "",
+         where ? valueTone(where.km, kmLow, kmHigh) : ""],
+        ["c-snr", (spot.snr > 0 ? "+" : "") + spot.snr, `${spot.snr} dB in 2500 Hz`, valueTone(Number(spot.snr), snrLow, snrHigh)],
+        ["l c-upload up-" + spot.upload, UPLOAD_MARK[spot.upload] || "", UPLOAD_TITLE[spot.upload] || ""]];
+      for (const [cls, text, title, tone] of cells) {
+        const td = document.createElement("td");
+        td.className = cls;
+        if (title) td.title = title;
+        if (tone) td.style.color = tone;
+        if (cls === "c-snr") {
+          // meter, then the figure: | | | | +5
+          const bars = document.createElement("span"), value = document.createElement("span");
+          bars.className = "db-meter"; bars.textContent = meterBars(Number(spot.snr), snrLow, snrHigh);
+          value.className = "db-value"; value.textContent = String(text);
+          td.append(bars, value);
+        } else if (cls === "c-km" && where) {
+          const km = document.createElement("span"), arrow = document.createElement("span");
+          km.textContent = String(text);
+          arrow.className = "dir-arrow"; arrow.textContent = "↑";
+          arrow.style.transform = `rotate(${where.az}deg)`;
+          td.append(km, arrow);
+        } else td.textContent = String(text);
+        tr.append(td);
+      }
+      fragment.append(tr);
+    }
+    dom.rxSpots.replaceChildren(fragment);
+    dom.rxEmpty.hidden = rows.length > 0;
+    dom.rxEmpty.textContent = query ? "No spot matches the filter."
+      : "Nothing received in this period. Switch RX on under the waterfall; the first decode comes when the current two-minute cycle ends.";
+    const capped = [];
+    if (rows.length > RX_ROWS_LIMIT)
+      capped.push(`Showing ${RX_ROWS_LIMIT} of ${rows.length} spots in this order; narrow the period or the filter to see the rest.`);
+    if (state.rxCapped) capped.push(`The period holds more than ${RX_LOAD_LIMIT} spots; only the newest ${RX_LOAD_LIMIT} are loaded (SAVE still writes them all).`);
+    dom.rxCapped.textContent = capped.join(" ");
+    dom.rxCapped.hidden = !capped.length;
+    renderRxMap(rows);
+  }
+
+  // ---- RX stations map ----------------------------------------------------------
+  //
+  // One dot per callsign of the period (its best report), coloured by band when
+  // the period spans more than one. Drawn by the JS8 page's radar.
+  const BAND_COLORS = {"160m": "#c084fc", "80m": "#818cf8", "60m": "#60a5fa", "40m": "#38bdf8",
+    "30m": "#2dd4bf", "20m": "#4ade80", "17m": "#a3e635", "15m": "#facc15", "12m": "#fb923c",
+    "10m": "#f87171", "6m": "#f472b6", "2m": "#e5e7eb"};
+  function bandOf(hz) {
+    let best = null;
+    for (const preset of WsprCore.PRESETS)
+      if (!best || Math.abs(preset.hz - hz) < Math.abs(best.hz - hz)) best = preset;
+    return best ? best.band : "";
+  }
+  const hhmm = ms => new Date(ms).toISOString().slice(11, 16);
+  function renderRxMap(rows) {
+    const byCall = new Map();
+    let noPos = 0;
+    for (const {spot, where} of rows) {
+      const call = String(spot.call).replace(/[<>]/g, "");
+      if (call === "...") continue;
+      let entry = byCall.get(call);
+      if (!entry) byCall.set(call, entry = {call, best: null, where: null, count: 0, lastMs: 0, bands: new Set()});
+      entry.count++;
+      entry.lastMs = Math.max(entry.lastMs, spot.t);
+      entry.bands.add(bandOf(spot.dialHz));
+      if (where && (!entry.best || spot.snr > entry.best.snr)) { entry.best = spot; entry.where = where; }
+    }
+    const placed = [...byCall.values()].filter(entry => entry.where);
+    noPos = byCall.size - placed.length;
+    const bands = new Set(placed.map(entry => bandOf(entry.best.dialHz)));
+    const parts = [`${placed.length} on map`];
+    if (noPos) parts.push(`${noPos} no pos`);
+    if (bands.size > 1) parts.push(`${bands.size} bands`);
+    dom.rxMapSummary.textContent = parts.join(" · ");
+    dom.rxMapLog.classList.toggle("active", view.mapLog === true);
+    dom.rxMapLog.setAttribute("aria-pressed", String(view.mapLog === true));
+    if (!dom.rxMapSection.open) return;
+    const multi = bands.size > 1;
+    dom.rxMapLegend.innerHTML = multi ? [...bands].sort((a, b) => parseFloat(b) - parseFloat(a) || a.localeCompare(b))
+      .map(band => `<span><i style="background:${BAND_COLORS[band] || "#66f2d5"}"></i>${band}</span>`).join("") : "";
+    if (!WsprRx.distanceBearing(sharedGrid(), sharedGrid())) {
+      dom.rxMap.innerHTML = '<div class="empty-row">Set your locator in SETUP to see the map.</div>'; return;
+    }
+    if (!placed.length) {
+      dom.rxMap.innerHTML = '<div class="empty-row">No station with a locator in this period.</div>'; return;
+    }
+    dom.rxMap.innerHTML = StationMap.svg({
+      stations: placed.map(entry => ({key: entry.call, km: entry.where.km, az: entry.where.az, member: entry})),
+      logScale: view.mapLog === true, centerTitle: sharedCall() || "My station",
+      memberTip: entry => `${entry.call} ${entry.best.grid} · best ${entry.best.snr > 0 ? "+" : ""}${entry.best.snr} dB · ` +
+        `${entry.count}× · last ${hhmm(entry.lastMs)} · ${entry.where.km} km · ${entry.where.az}° · ${[...entry.bands].join(" ")}`,
+      clusterFill: members => (multi ? BAND_COLORS[bandOf(members[0].best.dialHz)] || "" : ""),
+    });
+  }
+
+  // TX SESSION folds away while RX runs and opens for the moments the radio is
+  // keyed. Only on those transitions -- what the operator unfolds by hand in
+  // between stays unfolded.
+  let txFoldRx = null, txFoldKeyed = null;
+  function foldTxSession() {
+    const section = document.querySelector('[data-section="tx-session"]');
+    const rxOn = settings.rx.enabled, keyed = Boolean(state.radio.tx || (session && session.ptt));
+    if (!section || (rxOn === txFoldRx && keyed === txFoldKeyed)) return;
+    const first = txFoldRx === null;
+    txFoldRx = rxOn; txFoldKeyed = keyed;
+    if (keyed) section.open = true;
+    else if (rxOn) section.open = false;
+    else if (!first) section.open = true;
+  }
+
+  function renderRx() {
+    const rx = settings.rx, status = receiver.status;
+    // The progress behind the RX label: the cycle recording, then the decoder's
+    // passes; grey when this cycle is already known to be skipped.
+    // The same phase in words beside it: what is happening, and for how long.
+    let fill = 0, mode = "", phase = status.state === "off" ? "off" : status.state;
+    if (rx.enabled && !state.rxOnSinceMs) state.rxOnSinceMs = utcNow();
+    if (!rx.enabled) state.rxOnSinceMs = 0;
+    if (rx.enabled && status.state === "syncing") phase = "waiting for audio";
+    if (rx.enabled && status.state === "decoding") {
+      const passes = rx.subtract ? 3 : 1;
+      mode = "rx-decoding";
+      fill = Math.min(1, (status.pass || 0) / passes);
+      phase = `decoding ${status.pass || 1}/${passes}`;
+    } else if (rx.enabled && status.state === "listening") {
+      const now = utcNow(), cycleStart = Math.floor(now / WsprRx.CYCLE_MS) * WsprRx.CYCLE_MS;
+      const into = now - cycleStart, tainted = receiver.cycleTainted(now);
+      fill = Math.min(1, into / WsprRx.CAPTURE_MS);
+      const toNext = formatDuration((cycleStart + WsprRx.CYCLE_MS - now) / 1000);
+      if (cycleStart + 1000 < state.rxOnSinceMs) {
+        // Switched on after this cycle began: it will be too short to decode.
+        mode = "rx-skipped"; phase = `next cycle ${toNext}`;
+      } else if (tainted) {
+        mode = "rx-skipped"; phase = `skip: ${tainted}`;
+      } else if (into < WsprRx.CAPTURE_MS) {
+        mode = "rx-recording"; phase = `recording ${formatDuration((WsprRx.CAPTURE_MS - into) / 1000)}`;
+      } else phase = `next cycle ${toNext}`;
+    }
+    dom.rxToggle.style.setProperty("--rx-fill", `${(fill * 100).toFixed(1)}%`);
+    dom.rxToggle.classList.toggle("rx-decoding", mode === "rx-decoding");
+    dom.rxToggle.classList.toggle("rx-skipped", mode === "rx-skipped");
+    dom.rxToggle.title = mode === "rx-skipped" ? `This cycle will be skipped: ${receiver.cycleTainted(utcNow())}`
+      : "Decode WSPR on whatever band the radio is tuned to. Cycles this station transmits in, or in which the dial moves, are skipped.";
+    dom.rxToggle.classList.toggle("running", rx.enabled);
+    dom.rxToggle.setAttribute("aria-pressed", String(rx.enabled));
+    dom.rxState.textContent = phase;
+    dom.rxState.className = "beacon-state" + (rx.enabled ? " running" : "") + (mode ? ` ${mode}` : "");
+
+    const last = state.rxLast, at = last ? new Date(last.cycleMs).toISOString().slice(11, 16) : "";
+    dom.rxSummary.textContent = status.state === "off" ? "receiver off"
+      : status.state === "decoding" ? `decoding ${new Date(status.cycleMs).toISOString().slice(11, 16)}` +
+          (status.pass ? `, pass ${status.pass}` : "")
+      : status.state === "syncing" ? "waiting for audio"
+      : !last ? "listening, first decode after this cycle"
+      : last.skipped ? `${at} skipped: ${last.skipped}`
+      : `${at}: ${last.decodes.length} ${last.decodes.length === 1 ? "station" : "stations"}`;
+
+    // UPLOAD: on/off is the operator's; whether it can act is shown, not forced.
+    const station = rxStation(), block = uploadBlock(station);
+    const offline = rx.upload && uploader.online === false;
+    dom.uploadToggle.classList.toggle("on", rx.upload && !block && !offline);
+    dom.uploadToggle.classList.toggle("blocked", rx.upload && Boolean(block || offline));
+    dom.uploadToggle.setAttribute("aria-pressed", String(rx.upload));
+    dom.uploadToggle.title = block ? `UPLOAD needs: ${block}`
+      : offline ? "No internet: UPLOAD is paused and spots wait (up to 24 h)"
+      : rx.upload ? `Sending to wsprnet.org as ${station.call} ${station.grid}` +
+          (uploader.sent ? ` · ${uploader.sent} sent this session` : "")
+      : "Send received spots to wsprnet.org under the callsign and locator from SETUP";
+
+    const queued = state.rxSpots.filter(spot => spot.upload === "queued").length;
+    const notices = [];
+    if (rx.enabled && state.radio.frequency && !rxDialOk(state.radio.frequency))
+      notices.push(`The dial (${(state.radio.frequency / 1e6).toFixed(4)} MHz) is not a WSPR frequency: ` +
+        "spots are kept here but not uploaded.");
+    if (rx.upload && block) notices.push(`UPLOAD is on but cannot send: ${block}.`);
+    else if (offline) notices.push("No internet, UPLOAD paused" +
+      (queued ? `: ${queued} ${queued === 1 ? "spot waits" : "spots wait"} and go out when it returns (up to 24 h).` : "."));
+    if (state.rxNote) { notices.push(state.rxNote); state.rxNote = ""; }
+
+    if (state.gpsClockOff && gpsClockLive())
+      notices.push(`This computer's clock is ${(state.gpsClockOff / 1000).toFixed(1)} s off GPS time, more than ` +
+        "the ±1 s correction can hold. Set the clock right (NTP).");
+    dom.rxNotice.textContent = notices.join(" ");
+    dom.rxNotice.hidden = !notices.length;
+
+    const dt = rxMedianDt();
+    dom.rxDt.textContent = dt === null ? "--" : fmtDt(dt);
+    dom.rxDt.classList.toggle("warn", dt !== null && Math.abs(dt) >= 0.8);
+    // The manual proposal only where GPS is not already keeping the clock.
+    const proposal = !gpsClockLive() && dt !== null && Math.abs(dt) >= 0.8
+      ? Math.max(-1000, Math.min(1000, Math.round(clockCorrectionMs() - dt * 1000))) : null;
+    dom.rxApplyDt.hidden = proposal === null || proposal === clockCorrectionMs();
+    if (proposal !== null) {
+      dom.rxApplyDt.textContent = `SET CLOCK ${proposal > 0 ? "+" : ""}${proposal} ms`;
+      dom.rxApplyDt.title = Math.abs(dt) > 1 ? "The clock is off by more than the ±1 s correction can hold; " +
+        "this sets the limit. Fix the computer's clock (NTP)." : "Write this to the clock correction shared with JS8Call";
+      dom.rxApplyDt.dataset.value = String(proposal);
+    }
+
+    const canAppend = WsprRx.FileAppender.available();
+    dom.rxAppend.hidden = !canAppend;
+    if (canAppend) {
+      dom.rxAppend.textContent = appender.state === "ready" ? "STOP APPENDING"
+        : appender.state === "needs-permission" ? "ALLOW APPENDING" : "APPEND TO FILE…";
+      const file = appender.state === "ready" ? `Each cycle is appended to ${appender.name}.`
+        : appender.state === "needs-permission" ? `Appending to ${appender.name} needs your permission again after a reload.` : "";
+      dom.rxFile.textContent = file + (appender.error ? ` ${appender.error}` : "");
+      dom.rxFile.hidden = !dom.rxFile.textContent;
+    }
+    renderRxTable();
   }
 
   function drawWindowOverlay(context, view) {
@@ -1264,6 +1867,37 @@
     context.moveTo(marker, 0); context.lineTo(marker, height);
     context.stroke();
     context.setLineDash([]);
+
+    // Who the last decoded cycle held, at their audio frequency. They stay up
+    // through the next cycle's recording and decoding and are replaced only when
+    // its result is in -- a fade on a timer blanked them while the decoder was
+    // still working. A skipped cycle brings no new set, so the old one stays.
+    // Upright along the trace, read from the bottom up: WSPR stations sit a few
+    // hertz apart, and only a vertical label fits between them. Starts just
+    // above the Hz scale; a long call is squeezed rather than cut.
+    const labels = state.rxLabels;
+    if (labels && settings.rx.enabled) {
+      context.font = "bold 13px monospace";
+      const bottom = height - 18, room = Math.max(10, bottom - 3);
+      let lastX = -Infinity;
+      for (const item of labels.items.slice().sort((a, b) => a.hz - b.hz)) {
+        let x = Math.round(view.hzToX(item.hz, width));
+        if (x - lastX < 15) x = lastX + 15;          // too close: set beside the previous one
+        if (x < 6 || x > width - 6) continue;
+        lastX = x;
+        const textWidth = Math.min(context.measureText(item.call).width, room);
+        context.save();
+        // Rotated -90 deg: the text runs upwards and its letters lie to the left
+        // of the baseline, so the baseline goes 5 px right of the trace.
+        context.translate(x + 5, bottom);
+        context.rotate(-Math.PI / 2);
+        context.fillStyle = "rgba(2,6,14,.75)";
+        context.fillRect(-2, -11, textWidth + 4, 14);
+        context.fillStyle = "#ffe9a8";
+        context.fillText(item.call, 0, 0, room);
+        context.restore();
+      }
+    }
 
     if (transmitting) {
       context.fillStyle = "rgba(255,24,56,.14)";
@@ -1534,6 +2168,36 @@
     render();
   }
 
+  // ---- the schedule's RX frames ---------------------------------------------
+  //
+  // An RX item tunes the radio for its frame, in the last seconds of the frame
+  // before. With the beacon stopped, a TX frame of a change that holds RX items
+  // listens on its band too, so the schedule names the band of every frame; a
+  // change of TX bands alone leaves the dial where the radio is. The beacon's
+  // own frames are tuned by beaconTick. Tuning by hand lasts until the next frame.
+  let rxHopFrameMs = 0, rxHopBusy = false;
+  async function rxHopTick() {
+    if (!settings.rx.enabled || rxHopBusy || state.beacon === "tuning" || state.calRunning) return;
+    if (state.radio.tx || (session && session.ptt)) return;
+    const now = utcNow(), nextFrame = (Math.floor(now / WsprCore.FRAME_MS) + 1) * WsprCore.FRAME_MS;
+    const until = nextFrame - now;
+    if (until > RX_RETUNE_LEAD_MS || until < 1500 || rxHopFrameMs === nextFrame) return;
+    const plan = WsprCore.frameAt(nextFrame + 1000, scheduleView());
+    if (!plan) return;
+    const listen = plan.slot.mode === "rx" || (state.beacon === "stopped" && plan.slot.hasRx);
+    if (!listen) return;
+    rxHopFrameMs = nextFrame;
+    if (state.radio.frequency === plan.slot.hz && state.radio.mode === "USB-D") return;
+    rxHopBusy = true;
+    try {
+      await command({type: "setFrequency", frequency: String(plan.slot.hz)});
+      await waitForState(radio => radio.frequency === plan.slot.hz);
+      if (state.radio.mode !== "USB-D") await ensureUsbDataMode();
+    } catch (error) {
+      state.rxNote = `RX band change to ${plan.slot.band} failed: ${error.message || error}`;
+    } finally { rxHopBusy = false; render(); }
+  }
+
   async function beaconTick() {
     if (state.beacon !== "armed" || !tx || beaconPreparing) return;
     if (["preparing", "waiting-slot", "prebuffering", "streaming"].includes(tx.state)) return;
@@ -1549,6 +2213,10 @@
     // an unconfirmed band is the one thing this page will not do.
     const leadMs = untilSlot < PREPARE_LEAD_MS ? TIGHT_LEAD_MS : PREPARE_LEAD_MS;
     if (untilSlot < RETUNE_CUTOFF_MS) return;             // too late, wait for the next
+    // With RX on, a band change waits for the last seconds of the frame before:
+    // retuning thirty seconds early would throw away the cycle being received
+    // there as "dial changed". The receiver accepts a change after 110 s.
+    if (settings.rx.enabled && state.radio.frequency !== next.slot.hz && untilSlot > RX_RETUNE_LEAD_MS) return;
 
     // Re-checked here rather than only at START: the operator can reach over and
     // turn the power up hours into an unattended run, and this slot must not go
@@ -1938,6 +2606,7 @@
                          powerDbm: power.dbm});
     } catch (error) { return error.message; }
     if (!scheduledSlots()) return "the schedule is empty";
+    if (!txScheduledSlots()) return "the schedule has no TX band";
     return "";
   }
 
@@ -2055,7 +2724,11 @@
       `LAN drop ${state.radio.lanDrops} · stall ${state.radio.lanStalls} · fill ${state.radio.lanFilled}`;
     dom.lanHealth.classList.toggle("warn",
       state.radio.lanDrops > 0 || state.radio.lanFilled > 0);
-    dom.timingState.textContent = `clock ${clockCorrectionMs() >= 0 ? "+" : ""}${clockCorrectionMs()} ms`;
+    const gps = gpsClockLive();
+    dom.timingState.textContent = `clock ${clockCorrectionMs() >= 0 ? "+" : ""}${clockCorrectionMs()} ms` +
+      (gps ? ` · GPS ±${Math.max(0.1, gps.widthMs / 2000).toFixed(1)} s` : "");
+    dom.timingState.title = gps ? "The clock correction follows the radio's GPS time" :
+      "Clock correction shared with JS8Call-ICOM";
 
     const scale = fullPower();
     dom.fullPowerWatts.textContent = scale.watts ? `${scale.watts} W` : "unknown";
@@ -2163,7 +2836,7 @@
     renderPreview();
     dom.audioLevel.textContent = `${Math.round(state.audioDb)} dBFS`;
     dom.spectrumSummary.textContent =
-      `RX ${RX_LOW}–${RX_HIGH} Hz · WSPR window ${WINDOW_LOW_HZ}–${WINDOW_HIGH_HZ} Hz · TX ${state.lastOffsetHz} Hz`;
+      `RX ${Math.round(waterfall.lowHz)}–${Math.round(waterfall.highHz)} Hz · WSPR window ${WINDOW_LOW_HZ}–${WINDOW_HIGH_HZ} Hz · TX ${state.lastOffsetHz} Hz`;
 
     const problem = startBlockingReason();
     const tuning = state.beacon === "tuning";
@@ -2174,12 +2847,15 @@
     // a toast (tx-pledge.js); any other reason disables them as before.
     if (tuning) dom.startStop.disabled = true;
     else gateTx(dom.startStop, beaconRunning ? [] : [problem]);
-    dom.startStop.textContent = beaconRunning ? "STOP" : "START";
-    dom.startStop.classList.toggle("running", beaconRunning);
+    dom.startStop.textContent = beaconRunning ? "STOP TX" : "START TX";
+    // Same look as RX: green while the beacon runs, red only while keyed.
+    const keyedNow = Boolean(state.radio.tx || (tx && tx.ptt));
+    dom.startStop.classList.toggle("armed", beaconRunning && !keyedNow);
+    dom.startStop.classList.toggle("keyed", beaconRunning && keyedNow);
     if (tuning) gateTx(dom.tuneButton, []);
     else if (beaconRunning) gateTx(dom.tuneButton, ["the beacon owns the radio"]);
     else gateTx(dom.tuneButton, [radioBlockingReason()]);
-    dom.tuneButton.textContent = tuning ? "STOP" : "TUNE";
+    dom.tuneButton.textContent = tuning ? "STOP TUNE" : "TX TUNE";
     dom.tuneButton.classList.toggle("running", tuning);
     dom.beaconState.textContent = state.beacon;
     dom.beaconState.className = `beacon-state ${state.beacon === "paused" ? "paused"
@@ -2242,6 +2918,8 @@
     renderSlotTimer(next, countdown);
 
     renderTimetableButton();
+    foldTxSession();
+    renderRx();
     waterfall.paintOverlay();
   }
 
@@ -2307,6 +2985,87 @@
   }
 
   function wire() {
+    dom.rxToggle.addEventListener("click", () => {
+      settings.rx.enabled = !settings.rx.enabled; saveSettings(); applyRx();
+      if (!settings.rx.enabled) state.rxLabels = null;    // no new set will come to replace them
+      render();
+    });
+    dom.uploadToggle.addEventListener("click", event => {
+      // Inside <summary>: the click must not also fold the section.
+      event.preventDefault(); event.stopPropagation();
+      settings.rx.upload = !settings.rx.upload; saveSettings();
+      render();
+      if (settings.rx.upload) rxUploadTick(true);
+    });
+    for (const [id, key] of [["rxSubtract", "subtract"], ["rxDeep", "deep"], ["rxWide", "wide"],
+                             ["rxOsd", "osd"], ["rxQuick", "quick"]]) {
+      dom[id].checked = settings.rx[key];
+      dom[id].addEventListener("change", () => {
+        settings.rx[key] = dom[id].checked; saveSettings(); applyRx();
+      });
+    }
+    let filterTimer = null;
+    dom.rxFilter.addEventListener("input", () => {
+      clearTimeout(filterTimer);
+      filterTimer = setTimeout(() => { state.rxVersion++; render(); }, 200);
+    });
+    dom.rxPeriod.value = String(view.periodH);
+    dom.rxPeriod.addEventListener("change", () => {
+      view.periodH = Number(dom.rxPeriod.value) || 0.5; saveView();
+      loadRxPeriod().catch(error => console.error("[wspr] spot store", error));
+    });
+    dom.rxHead.addEventListener("click", event => {
+      const th = event.target.closest("th[data-sort]");
+      if (!th) return;
+      const key = th.dataset.sort;
+      // Numbers and time start from the top (newest, strongest, farthest); text A-Z.
+      if (view.sortKey === key) view.sortDir = view.sortDir === "asc" ? "desc" : "asc";
+      else { view.sortKey = key; view.sortDir = SORT_TEXT.has(key) ? "asc" : "desc"; }
+      saveView(); state.rxVersion++; render();
+    });
+    buildRxColumnsMenu();
+    applyRxZoom();
+    dom.rxColumns.addEventListener("click", event => {
+      event.stopPropagation();
+      dom.rxColumnsMenu.hidden = !dom.rxColumnsMenu.hidden;
+      dom.rxColumns.setAttribute("aria-expanded", String(!dom.rxColumnsMenu.hidden));
+    });
+    dom.rxColumnsMenu.addEventListener("click", event => event.stopPropagation());
+    dom.rxColumnsMenu.addEventListener("change", event => {
+      const key = event.target.dataset.col;
+      if (!key) return;
+      view.hiddenCols = event.target.checked ? view.hiddenCols.filter(col => col !== key)
+                                             : [...new Set([...view.hiddenCols, key])];
+      saveView(); applyRxColumns();
+    });
+    document.addEventListener("click", () => {
+      if (dom.rxColumnsMenu.hidden) return;
+      dom.rxColumnsMenu.hidden = true; dom.rxColumns.setAttribute("aria-expanded", "false");
+    });
+    dom.rxZoomIn.addEventListener("click", () => { applyRxZoom(+1); saveView(); });
+    dom.rxZoomOut.addEventListener("click", () => { applyRxZoom(-1); saveView(); });
+    dom.rxMapLog.addEventListener("click", () => {
+      view.mapLog = view.mapLog !== true; saveView(); state.rxVersion++; render();
+    });
+    dom.rxMapSection.addEventListener("toggle", () => { state.rxVersion++; render(); });
+    for (const pill of document.querySelectorAll(".wspr-zoom-pill"))
+      pill.addEventListener("click", event => {
+        // Inside <summary>: the click must not also fold the waterfall.
+        event.preventDefault(); event.stopPropagation();
+        applyZoom(pill.dataset.zoom);
+        render();
+      });
+    dom.rxSave.addEventListener("click", () => { saveRxFile().catch(error => {
+      state.rxNote = `Could not save: ${error && error.message || error}`; render(); }); });
+    dom.rxAppend.addEventListener("click", onAppendClick);
+    dom.rxApplyDt.addEventListener("click", () => {
+      const value = Number(dom.rxApplyDt.dataset.value);
+      if (!Number.isFinite(value)) return;
+      saveShared({clockCorrectionMs: value});
+      dom.clockCorrection.value = String(value);
+      state.rxDtSinceMs = utcNow();
+      applyRx(); render();
+    });
     dom.powerDbm.addEventListener("change", () => {
       settings.powerDbm = Number(dom.powerDbm.value); saveSettings();
       // A fresh choice re-enables an automation that a turn of the knob had
@@ -2372,7 +3131,7 @@
       const entry = timetableEntry(editingSlot);
       if (!entry) return;
       const add = event.target.closest("[data-add-band]");
-      if (add && !entry.bands.includes(add.dataset.addBand)) {
+      if (add && (add.dataset.addBand.endsWith(" RX") || !entry.bands.includes(add.dataset.addBand))) {
         snapshotSchedule();
         entry.bands.push(add.dataset.addBand);
         saveSettings(); renderSchedule(); renderSlotPopover(); positionSlotPopover(); render();
@@ -2602,6 +3361,18 @@
       {profile: TxGainPlanStore.PROFILE_TONE, store: gainStore},
     ]).then(() => { if (gainPlan) gainPlan.reload(); render(); });
 
+    // The receive side: last 30 days from the store, the file the operator
+    // chose last time, and the switch where they left it.
+    rxStore.prune(Date.now()).catch(() => {})
+      .then(loadRxPeriod)
+      .catch(error => console.error("[wspr] spot store", error));
+    applyZoom(view.zoom);
+    appender.restore().then(render).catch(() => {});
+    applyRx();
+    setInterval(() => { rxUploadTick(); trimRxPeriod(); }, 60000);
+    setInterval(() => { pollGpsClock(); }, 5000);
+    rxUploadTick(true);
+
     pollState();
     setInterval(pollState, STATE_POLL_MS);
     setInterval(renderClock, 1000);
@@ -2631,6 +3402,8 @@
       // by intents and by what the radio answers, never by this timer -- a hidden
       // tab throttles timers to once a second and the run must not care.
       if (gainPlan) gainPlan.tick();
+      rxHopTick();
+      applyRx();
       render();
     }, 500);
 
@@ -2654,6 +3427,8 @@
                          scheduleView, addChange, saveSettings,
                          get editingSlot() { return editingSlot; },
                          get tx() { return tx; },
+                         receiver, rxStore, uploader, appender, onRxCycle, rxStation, gpsClock,
+                         pollGpsClock, rxHopTick, applyZoom, loadRxPeriod, get view() { return view; },
                          get sessionHeld() { return sessionHeld && sessionConfirmed; }};
   // The whole page is built inside one .then callback, so anything that throws
   // in it becomes an unhandled rejection and leaves a half-drawn beacon on

@@ -142,7 +142,7 @@ volatile bool cwIpSendPending = false;
 #ifndef LOOP_WARN_MS
   #define LOOP_WARN_MS 200
 #endif
-#define REV 20261004
+#define REV 20261006
 #define WIFI
 #define FSK_KEYING  // RTTY by keying the FSK + PTT outputs (was UDP_TO_FSK, from when a UDP port fed it)
 #define WDT         // watchdog timer
@@ -1125,6 +1125,10 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   bool     gpsDataSeen = false;
   bool     gpsStampSeen = false;
   uint32_t gpsStampChangedMs = 0;   // millis() of the last stamp advance, 0 = never
+  // millis() of the last 23 00 reply, whether the stamp moved or not. /gps
+  // reports its age, which is what lets a page bound the browser's clock against
+  // the radio's GPS time: at that instant UTC was within [stamp, stamp + 1 s).
+  uint32_t gpsReplyMs = 0;
   uint32_t gpsPosSentMs = 0;
   uint32_t gpsSelSentMs = 0;
   bool     gpsSelAsked = false;     // first 23 01 goes right after the probe succeeds
@@ -8640,6 +8644,7 @@ static void gpsReset(void) {
   gpsDataSeen = false;
   gpsStampSeen = false;
   gpsStampChangedMs = 0;
+  gpsReplyMs = 0;
   gpsSelAsked = false;
 }
 
@@ -8723,6 +8728,7 @@ void gpsCivCapture(uint8_t slot, const uint8_t *frame, size_t len) {
     gpsLatLonToGrid(lat, lon, gpsGrid);     // FF fill decodes false -> keep last known
   // Movement of the UTC stamp (data bytes 21-27) is the freshness signal. The
   // first stored stamp is observation, not movement -- see the globals block.
+  gpsReplyMs = millis();
   if (memcmp(gpsStamp, pl + 20, sizeof(gpsStamp)) != 0) {
     if (gpsStampSeen) gpsStampChangedMs = millis();
     memcpy(gpsStamp, pl + 20, sizeof(gpsStamp));
@@ -8746,10 +8752,15 @@ static void gpsSendQuery(uint8_t slot, uint8_t sub) {
 // query waits for the freq/mode poller's idle gap so two frames never collide;
 // the LAN client queues and paces its CI-V channel internally.
 void gpsPollTick(void) {
-  static uint32_t lastTick = 0;
+  static uint32_t lastTick = 0, tickGap = 500;
   uint32_t now = millis();
-  if (now - lastTick < 500) return;
+  if (now - lastTick < tickGap) return;
   lastTick = now;
+  // 400-600 ms rather than exactly 500: the WSPR page bounds its clock by
+  // intersecting [stamp, stamp + 1 s) windows from many replies, and that only
+  // narrows if the queries land at different points inside the GPS second. A
+  // fixed 500 ms grid would ask at the same two phases for ever.
+  tickGap = 400 + (esp_random() % 201);
   uint8_t slot = gpsTargetSlot();
   bool linked = slot != 0xFF && radioSlotConnected(slot);
   if (!linked) {
@@ -8804,6 +8815,8 @@ void handleGetGps() {
   json += gpsGrid;
   json += "\",\"sel\":" + String((unsigned)gpsSel);
   json += ",\"fixAgeMs\":" + String((unsigned long)age);
+  if (gpsReplyMs) json += ",\"replyAgeMs\":" + String((unsigned long)(millis() - gpsReplyMs));
+  else json += ",\"replyAgeMs\":null";
   char field[40];
   double lat, lon;
   if (gpsDataSeen && gpsDecodeLat(gpsData, &lat) && gpsDecodeLon(gpsData + 5, &lon)) {

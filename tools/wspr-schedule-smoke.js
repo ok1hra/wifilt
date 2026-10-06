@@ -180,5 +180,39 @@ ok("slotLabel exposes all 30-minute boundaries",
    WsprCore.slotLabel(40) === "20:00" &&
    WsprCore.slotLabel(47) === "23:30");
 
+// ---- TX and RX items ----------------------------------------------------------
+
+const mixedDay = WsprCore.daySequence(DAY_NUMBER, schedule([change(0, ["20m", "40m RX"])]));
+// The pattern runs on across midnight (frame -2 of the previous day keyed 20 m),
+// so frame 0 is the forbidden one: what matters is the rule, wherever it lands.
+same("TX and RX items alternate; a TX the six-minute rule forbids listens on its band",
+     mixedDay.slice(0, 8).map(frame => `${frame.band}${frame.mode === "rx" ? " RX" : ""}`),
+     ["20m RX", "40m RX", "20m", "40m RX", "20m RX", "40m RX", "20m", "40m RX"]);
+const txSteps = mixedDay.map((frame, index) => frame.mode === "tx" ? index : null).filter(index => index !== null);
+ok("no TX on the same band within six minutes, all day",
+   txSteps.every((step, i) => i === 0 || step - txSteps[i - 1] >= WsprCore.MIN_BAND_GAP_FRAMES) && txSteps.length === 180,
+   String(txSteps.length));
+ok("every frame of a change with RX items belongs to an item -- no padding",
+   mixedDay.every(frame => frame !== null));
+same("RX items may repeat, a TX band only once per pass",
+     WsprCore.timetableEntries(schedule([change(0, ["40m RX", "40m RX", "20m", "20m"])]))[0].bands.map(WsprCore.itemLabel),
+     ["40m RX", "40m RX", "20m"]);
+const rxOnlyDay = WsprCore.daySequence(DAY_NUMBER, schedule([change(0, ["30m RX"])]));
+ok("a single RX item listens on its band every frame",
+   rxOnlyDay.every(frame => frame && frame.band === "30m" && frame.mode === "rx"));
+const mixed = schedule([change(0, ["20m", "40m RX"])]);
+ok("frameTransmission still only reports frames that key",
+   WsprCore.frameTransmission(DAY0 + 240000 + 1000, mixed) !== null &&
+   WsprCore.frameTransmission(DAY0 + 120000 + 1000, mixed) === null);
+const listenAt = WsprCore.frameAt(DAY0 + 120000 + 1000, mixed);
+ok("frameAt reports the listening frame and that the change holds RX",
+   listenAt && listenAt.slot.mode === "rx" && listenAt.slot.band === "40m" && listenAt.slot.hasRx === true,
+   JSON.stringify(listenAt));
+const txOnlyAt = WsprCore.frameAt(DAY0 + 1000, dayNight);
+ok("a TX-only change is marked as having no RX (a stopped beacon leaves the dial alone)",
+   txOnlyAt === null || txOnlyAt.slot.hasRx === false, JSON.stringify(txOnlyAt));
+ok("items parse both ways", WsprCore.parseItem("17m RX").mode === "rx" && WsprCore.parseItem("17m").mode === "tx" &&
+   WsprCore.parseItem("99m RX") === null && WsprCore.itemLabel(WsprCore.parseItem({band: "6m", mode: "rx"})) === "6m RX");
+
 console.log(`${checks - failures}/${checks} checks passed`);
 if (failures) process.exitCode = 1;

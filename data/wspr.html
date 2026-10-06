@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>WSPR beacon — WIFILT</title>
+<title>WSPR — WIFILT</title>
 <!-- The shell -- topbar, radio bar, disclosure sections, waterfall, timetable --
      is shared with the JS8Call page so the two cannot drift apart. wspr.css only
      carries what is genuinely WSPR's. -->
 <link rel="stylesheet" href="/data.css?v=4a642c91">
-<link rel="stylesheet" href="/wspr.css?v=2155df6e">
+<link rel="stylesheet" href="/wspr.css?v=a02baa5c">
 </head>
 <!-- lan-gate.js clears the checking class once it knows whether ICOM-LAN is set
      up, so the page never flashes an interface it is about to replace. -->
@@ -29,7 +29,7 @@
     </details>
     <script>document.addEventListener("click",function(e){var b=document.querySelector(".brand-about");if(b.open&&!b.contains(e.target))b.open=false;});</script>
     <a class="tab" href="/log" target="_blank" rel="noopener">QRPLog</a><a class="tab" href="/dxc.html" onclick="window.open(this.href,'DXC','width=600,height=750,left=0,top=0,menubar=no,location=no,status=no'); return false;">DXC</a>
-    <a class="tab tab-active" href="/data" title="JS8Call-ICOM, WSPR-Beacon and Mercury over ICOM-LAN">DATA</a><a class="tab" href="/setup" target="_blank" rel="noopener">SETUP</a>
+    <a class="tab tab-active" href="/data" title="JS8Call-ICOM, WSPR and Mercury over ICOM-LAN">DATA</a><a class="tab" href="/setup" target="_blank" rel="noopener">SETUP</a>
     <a class="tab" href="/datasync" target="_blank" rel="noopener">LOGSYNC</a><a class="tab bd-nav" href="/bd" target="_blank" rel="noopener" hidden>BD</a>
     <span id="topbarFw" class="topbar-fw"></span>
   </nav>
@@ -40,7 +40,7 @@
        lease, real since 2026-08-22), so it is still a plain link, just not one that
        preserves anything by staying in this tab. -->
   <nav class="subtabs" aria-label="DATA mode">
-    <a class="subtab" href="/data">JS8Call-ICOM</a><a class="subtab" href="/rtty.html">RTTY-ICOM</a><a class="subtab subtab-active" href="/wspr.html">WSPR-Beacon</a><a class="subtab" href="/mercury.html">Mercury</a>
+    <a class="subtab" href="/data">JS8Call-ICOM</a><a class="subtab" href="/rtty.html">RTTY-ICOM</a><a class="subtab subtab-active" href="/wspr.html">WSPR</a><a class="subtab" href="/mercury.html">Mercury</a>
   </nav>
 </header>
 
@@ -125,7 +125,7 @@
     <div class="gate-card-icon" aria-hidden="true">!</div>
     <div>
       <h1>The radio is driven from somewhere else</h1>
-      <p>One radio, one operator: JS8Call-ICOM and WSPR-Beacon both drive the transceiver through a
+      <p>One radio, one operator: JS8Call-ICOM and WSPR both drive the transceiver through a
          single audio link, so only one page can run at a time.</p>
       <p id="sessionBusyWhere" class="session-busy-where"></p>
       <button id="sessionTakeover" class="gate-card-action" type="button">TAKE THE SESSION OVER HERE</button>
@@ -135,11 +135,20 @@
   <div id="beaconInterface">
 
     <details class="compact-section spectrum-section" data-section="spectrum" open>
-      <summary><span>Waterfall</span><span id="spectrumSummary" class="summary-status">RX 500–2700 Hz · WSPR window 1400–1600 Hz</span></summary>
+      <summary><span>Waterfall</span><span id="spectrumSummary" class="summary-status">RX 500–2700 Hz · WSPR window 1400–1600 Hz</span>
+        <!-- Same pills as the RTTY waterfall, centred on 1500 Hz -- the middle of
+             the WSPR window -- and remembered, unlike RTTY's: a WSPR operator
+             wants the 200 Hz that matter magnified every time. -->
+        <span class="wspr-zoom-group" role="group" aria-label="Waterfall zoom">
+          <button class="wspr-zoom-pill active" type="button" data-zoom="100">100%</button>
+          <button class="wspr-zoom-pill" type="button" data-zoom="200">200%</button>
+          <button class="wspr-zoom-pill" type="button" data-zoom="400">400%</button>
+          <button class="wspr-zoom-pill" type="button" data-zoom="800">800%</button>
+        </span></summary>
       <div id="waterfall" class="waterfall" title="Receiver audio. The two lines mark the 1400–1600 Hz WSPR window; the red marker is where this beacon transmits.">
         <canvas id="waterfallCanvas" width="1024" height="64"></canvas>
         <canvas id="waterfallOverlay" width="1024" height="64"></canvas>
-        <div class="frequency-scale"><span>500 Hz</span><span>1100</span><span>1700</span><span>2200</span><span>2700 Hz</span></div>
+        <div id="frequencyScale" class="frequency-scale"><span>500 Hz</span><span>1100</span><span>1700</span><span>2200</span><span>2700 Hz</span></div>
       </div>
       <div class="quick-controls wspr-controls">
         <span class="inline-status">Audio <b id="audioLevel">-- dBFS</b></span>
@@ -148,13 +157,19 @@
              / PTT off" is a real failure mode, not a redundancy. -->
         <span class="inline-status">PTT <b id="pttState">off</b></span>
         <span class="inline-status">Beacon <b id="beaconState" class="beacon-state">stopped</b></span>
+        <span class="inline-status">RX <b id="rxState" class="beacon-state">off</b></span>
         <div class="tx-actions">
           <!-- Green counts down to the next slot while armed, red counts the
                transmission out. Hidden when the beacon is stopped, because then
                there is nothing to count. -->
           <span id="slotTimer" class="slot-timer" hidden></span>
-          <button id="startStop" class="primary" type="button" disabled>START</button>
-          <button id="tuneButton" class="tune secondary" type="button" disabled>TUNE</button>
+          <!-- Its own switch, not part of START: receiving needs no pledge and
+               no schedule, and with the beacon running it decodes every frame
+               between this station's own transmissions. -->
+          <button id="rxToggle" class="secondary rx-toggle" type="button" aria-pressed="false"
+                  title="Decode WSPR on whatever band the radio is tuned to. Cycles this station transmits in, or in which the dial moves, are skipped.">RX</button>
+          <button id="startStop" class="secondary start-tx" type="button" disabled>START TX</button>
+          <button id="tuneButton" class="tune secondary" type="button" disabled>TX TUNE</button>
         </div>
       </div>
     </details>
@@ -184,6 +199,80 @@
         </div>
         <p id="beaconError" class="form-error" role="alert" hidden></p>
       </div>
+    </details>
+
+    <details class="compact-section" data-section="rx-spots" open>
+      <!-- UPLOAD sits in the header like the JS8 page's state pills: it is the
+           one switch that publishes something, and it must be visible with the
+           section rolled up. -->
+      <summary><span>RX SPOTS</span><span id="rxSummary" class="summary-status">receiver off</span>
+        <span class="summary-flags"><button id="uploadToggle" class="summary-flag" type="button" aria-pressed="false"
+          title="Send received spots to wsprnet.org under the callsign and locator from SETUP">UPLOAD</button></span></summary>
+      <div class="rx-body">
+        <p id="rxNotice" class="rx-notice" hidden></p>
+        <div class="rx-tools">
+          <input id="rxFilter" type="search" placeholder="callsign or locator" aria-label="Filter spots">
+          <!-- As in the DXC window: which columns, and how big the text. -->
+          <span class="rx-view-tools">
+            <button id="rxColumns" type="button" aria-expanded="false" title="Show or hide columns">COLUMNS</button>
+            <button id="rxZoomOut" type="button" title="Smaller text">−</button>
+            <button id="rxZoomIn" type="button" title="Larger text">+</button>
+            <div id="rxColumnsMenu" class="rx-columns-menu" hidden></div>
+          </span>
+          <span class="inline-status" title="Median time offset of the last 30 decodes. Near zero means this computer's clock is right.">DT <b id="rxDt">--</b></span>
+          <button id="rxApplyDt" type="button" hidden></button>
+          <span class="rx-save">
+            <!-- One period for the table, the map below and SAVE: what is shown
+                 is what gets saved. -->
+            <select id="rxPeriod" aria-label="Period shown and saved">
+              <option value="0.5" selected>last ½ h</option>
+              <option value="1">last 1 h</option>
+              <option value="6">last 6 h</option>
+              <option value="12">last 12 h</option>
+              <option value="24">last 24 h</option>
+              <option value="168">last 7 days</option>
+              <option value="720">all (30 days)</option>
+            </select>
+            <button id="rxSave" type="button" title="Download the spots of this period as ALL_WSPR.TXT, the WSJT-X format">SAVE</button>
+            <!-- Exists only where the browser offers a file the page may keep
+                 writing to: the native build on localhost, not plain http. -->
+            <button id="rxAppend" type="button" hidden>APPEND TO FILE…</button>
+          </span>
+        </div>
+        <p id="rxFile" class="rx-file" hidden></p>
+        <div class="rx-table-wrap">
+          <table class="rx-table">
+            <!-- Click a heading to sort by it, again to reverse. Units sit in the
+                 heading itself: a phone has no hover. -->
+            <thead id="rxHead"><tr>
+              <th class="c-t" data-sort="t" title="Start of the two-minute cycle, UTC">UTC</th>
+              <th class="c-dt" data-sort="dt" title="Time offset of the signal against the start of the cycle, in seconds. Near zero when both clocks are right; transmissions start 1 s into the cycle and that second is already taken off.">DT <small>s</small></th>
+              <th class="c-freq" data-sort="freqHz" title="Frequency of the received signal: the dial plus its audio offset">MHz</th>
+              <th class="c-drift" data-sort="drift" title="How far the signal's frequency moved over the 110 s transmission, in Hz. A stable transmitter shows 0.">Drift <small>Hz</small></th>
+              <th class="l c-call" data-sort="call">Call</th>
+              <th class="l c-grid" data-sort="grid">Locator</th>
+              <th class="c-dbm" data-sort="power" title="Transmit power the station reports in its message, dBm">dBm</th>
+              <th class="c-w" data-sort="watts" title="The reported power in watts, worked out from dBm">W</th>
+              <th class="c-km" data-sort="km" title="Distance from your locator; the arrow points along the bearing">km</th>
+              <th class="c-snr" data-sort="snr" title="Signal-to-noise ratio in a 2500 Hz bandwidth, dB">SNR <small>dB</small></th>
+              <th class="l c-upload" data-sort="upload" title="wsprnet.org">Up</th></tr></thead>
+            <tbody id="rxSpots"></tbody>
+          </table>
+        </div>
+        <p id="rxCapped" class="rx-empty" hidden></p>
+        <p id="rxEmpty" class="rx-empty">Nothing received in this period. Switch <b>RX</b> on under the waterfall;
+          the first decode comes when the current two-minute cycle ends.</p>
+      </div>
+    </details>
+
+    <!-- The JS8 page's radar (station-map.js), fed with the stations of the
+         period chosen above. Drawn only while open, like on the JS8 page. -->
+    <details class="compact-section" data-section="rx-map" id="rxMapSection">
+      <summary><span>RX STATIONS MAP</span><span id="rxMapSummary" class="summary-status">0 on map</span></summary>
+      <div class="map-toolbar"><button type="button" id="rxMapLog" class="map-toggle" aria-pressed="false"
+        title="Logarithmic distance scale — spreads out nearby stations when the map also holds DX">LOG</button>
+        <span id="rxMapLegend" class="rx-map-legend"></span></div>
+      <div id="rxMap" class="station-map"></div>
     </details>
 
     <details class="compact-section" data-section="activity">
@@ -279,6 +368,17 @@
           <small>I will use safe RF power and a suitable load/antenna. The same confirmation as
                  on the JS8Call-ICOM page &mdash; one radio, one pledge.</small>
         </label>
+        <p class="settings-group-title">Receive</p>
+        <label class="rx-option">Subtract decoded signals <input id="rxSubtract" type="checkbox">
+          <small>finds weak stations under strong ones; three passes instead of one</small></label>
+        <label class="rx-option">Deeper candidate search <input id="rxDeep" type="checkbox">
+          <small>also tries peaks too weak to stand out; more CPU</small></label>
+        <label class="rx-option">Wide window &plusmn;150 Hz <input id="rxWide" type="checkbox">
+          <small>beyond the 1390&ndash;1610 Hz wsprd searches by default</small></label>
+        <label class="rx-option">OSD for known callsigns <input id="rxOsd" type="checkbox">
+          <small>a second decoder that only accepts calls heard cleanly before</small></label>
+        <label class="rx-option">Quick mode <input id="rxQuick" type="checkbox">
+          <small>less sensitive, for a slow phone that cannot finish a cycle in two minutes</small></label>
         <details class="settings-advanced" id="settingsAdvanced">
           <summary>ADVANCED <span class="settings-advanced-what">clock · radio model · TUNE references</span></summary>
           <div class="settings wspr-settings settings-advanced-body">
@@ -355,7 +455,10 @@
 <script src="/icom-models.js?v=ddc6caa5"></script>
 <script src="/trx-help.js?v=4767f20f"></script>
 <script>TrxHelp.mount(document, {kind: "wspr"});</script>
-<script src="/wspr-core.js?v=450a9679"></script>
+<script src="/wspr-core.js?v=981ff9bf"></script>
+<script src="/js8-timebase.js?v=9afbcab8"></script>
+<script src="/wspr-decoder.js?v=0153ee97"></script>
+<script src="/wspr-rx.js?v=2855444c"></script>
 <script src="/wspr-tx.js?v=20c527f9"></script>
 <!-- The calibration tool: panel, carrier and verdict, shared with /data. -->
 <script src="/tx-gain-cal-ui.js?v=9f454af0"></script>
@@ -370,6 +473,7 @@
 <script src="/wspr-log.js?v=c6928b4f"></script>
 <script src="/tx-pledge.js?v=5750feea"></script>
 <script src="/settings-fold.js?v=b75dee54"></script>
-<script src="/wspr.js?v=4454ad14"></script>
+<script src="/station-map.js?v=7bd5311c"></script>
+<script src="/wspr.js?v=650ae40f"></script>
 </body>
 </html>

@@ -4227,43 +4227,9 @@ function renderHearingLinksButton(){
   dom.stationMapLinks.setAttribute("aria-pressed",String(on));
 }
 
-// Distance -> radius. Linear is the default and unchanged: half the radius is half
-// the distance, which is what a radar plot promises.
-//
-// LOG exists for the case the linear plot cannot draw at all -- a map holding both
-// a station 30 km away and one 15 000 km away puts the neighbour 0.2 % out from the
-// centre, under the operator's own dot. log10(1+d)/log10(1+dmax) spreads those out:
-// 0 km still maps to the centre (log10(1) = 0, so there is no floor to invent and
-// no free constant to tune), it is monotonic, and dmax still lands on the rim.
-function mapRadiusFor(qrbKm,maxKm,plotR){
-  const d=Math.max(0,Number(qrbKm)||0), max=Math.max(1,Number(maxKm)||1);
-  if(state.mapLogScale!==true)return (d/max)*plotR;
-  return (Math.log10(1+d)/Math.log10(1+max))*plotR;
-}
-
-// The rings. In linear mode they sit at a third and two thirds of the radius, as
-// they always have. In LOG mode that would be meaningless -- two thirds of the
-// radius is no longer two thirds of the distance -- so the rings become decades and
-// carry their value. A ring is only drawn when it actually falls inside the plot,
-// otherwise a 200 km map would be crossed by a labelled 10 000 km circle.
-const MAP_LOG_DECADES=[10,100,1000,10000];
-function mapRings(maxKm,plotR,cx,cy){
-  if(state.mapLogScale!==true)
-    return `<circle cx="${cx}" cy="${cy}" r="${(plotR/3).toFixed(1)}" class="map-ring"/>`
-      +`<circle cx="${cx}" cy="${cy}" r="${(plotR*2/3).toFixed(1)}" class="map-ring"/>`;
-  let out="";
-  for(const km of MAP_LOG_DECADES){
-    if(km>=maxKm)continue;                 // beyond the rim, or the rim itself
-    const r=mapRadiusFor(km,maxKm,plotR);
-    if(r<12)continue;                      // too close to the centre dot to read
-    out+=`<circle cx="${cx}" cy="${cy}" r="${r.toFixed(1)}" class="map-ring"/>`
-      +`<text x="${cx+3}" y="${(cy-r+3).toFixed(1)}" class="map-ring-label">`
-      +`${km>=1000?`${km/1000}k`:km}</text>`;
-  }
-  return out;
-}
-
-const MAP={CX:150, CY:150, R_FRAME:132, R_PLOT:120, DOT:4, LABEL_R:143};
+// The radar itself is data/station-map.js, shared with the WSPR page. What a dot
+// means here stays here: red when any merged station reacted to us, hollow when
+// every one of them was only ever named by somebody else (never heard directly).
 function stationMapTip({item,dir,reacted}){
   // A station we only ever heard *about* has no signal numbers of its own -- the ones in
   // the table row belong to whoever transmitted its callsign.
@@ -4272,74 +4238,14 @@ function stationMapTip({item,dir,reacted}){
 }
 function hearingLinkTip(link){ return `${link.from} → ${link.to} · ${link.detail} · ${age(link.atMs)}`; }
 function buildStationMapSvg(placed, edges) {
-  const {CX,CY,R_FRAME,R_PLOT,DOT,LABEL_R}=MAP;
-  const maxKm=Math.max(...placed.map(p=>p.dir.qrbKm)) || 1;
-  const points=placed.map(({item,dir,reacted})=>{
-    const r=mapRadiusFor(dir.qrbKm,maxKm,R_PLOT), a=dir.azimuthDeg*Math.PI/180;
-    return {item,dir,reacted,x:CX+r*Math.sin(a),y:CY-r*Math.cos(a)};
+  return StationMap.svg({
+    stations:placed.map(entry=>({key:entry.item.call,km:entry.dir.qrbKm,az:entry.dir.azimuthDeg,member:entry})),
+    edges:(edges||[]).map(link=>({from:link.from,to:link.to,tip:hearingLinkTip(link)})),
+    logScale:state.mapLogScale===true, centerTitle:currentJs8().myCall||"My station",
+    memberTip:stationMapTip,
+    clusterClass:members=>(members.some(m=>m.reacted)?" reacted":"")+
+      (!members.some(m=>m.item.heardDirectly!==false)?" phantom":""),
   });
-  // Merge dots that would touch (centre-to-centre distance <= one diameter). Greedy single pass;
-  // each cluster keeps the first member's position so a dot never drifts off its real bearing.
-  const clusters=[], touch=DOT*2;
-  for(const p of points){
-    const c=clusters.find(cl=>Math.hypot(cl.x-p.x,cl.y-p.y)<=touch);
-    if(c) c.members.push(p); else clusters.push({x:p.x,y:p.y,members:[p]});
-  }
-  // Hearing links attach to the merged cluster, never to the raw point, or an arrow would
-  // end next to the dot it belongs to. One line per station pair: reported in both
-  // directions it becomes a single line with a head at each end ("we hear each other").
-  const clusterOf=new Map();
-  for(const cluster of clusters) for(const member of cluster.members) clusterOf.set(member.item.call,cluster);
-  const pairs=new Map();
-  for(const link of edges||[]){
-    const from=clusterOf.get(link.from), to=clusterOf.get(link.to);
-    if(!from || !to) continue;
-    const key=[link.from,link.to].sort().join("|"), pair=pairs.get(key);
-    if(pair) pair.links.push(link); else pairs.set(key,{from,to,links:[link]});
-  }
-  const insideCluster=new Map(), hearingLines=[];
-  for(const pair of pairs.values()){
-    // Both ends merged into one dot: there is no line to draw, so the pair is reported in
-    // that dot's tooltip instead of being lost.
-    if(pair.from===pair.to){
-      const listed=insideCluster.get(pair.from) || [];
-      listed.push(...pair.links.map(link=>`hears: ${hearingLinkTip(link)}`));
-      insideCluster.set(pair.from,listed); continue;
-    }
-    const dx=pair.to.x-pair.from.x, dy=pair.to.y-pair.from.y, length=Math.hypot(dx,dy) || 1;
-    // Pull each end back so the arrowhead clears the dot instead of hiding under it,
-    // without ever inverting the line when two clusters sit close together.
-    const gap=Math.min(DOT+2,(length-2)/2), ux=dx/length*gap, uy=dy/length*gap;
-    const x1=(pair.from.x+ux).toFixed(1), y1=(pair.from.y+uy).toFixed(1);
-    const x2=(pair.to.x-ux).toFixed(1), y2=(pair.to.y-uy).toFixed(1);
-    const both=pair.links.length>1 ? ' marker-start="url(#mapHearingArrow)"' : "";
-    hearingLines.push(`<g class="map-hearing"><title>${esc(pair.links.map(hearingLinkTip).join("\n"))}</title>`+
-      `<line class="map-hearing-hit" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`+
-      `<line class="map-hearing-line" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" marker-end="url(#mapHearingArrow)"${both}/></g>`);
-  }
-  const defs=`<defs><marker id="mapHearingArrow" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L8 4 L0 8 Z" class="map-hearing-head"/></marker></defs>`;
-  const frame=
-    mapRings(maxKm,R_PLOT,CX,CY)+
-    `<circle cx="${CX}" cy="${CY}" r="${R_FRAME}" class="map-frame"/>`+
-    `<text x="${CX}" y="${CY-LABEL_R}" class="map-compass">N</text>`+
-    `<text x="${CX+LABEL_R}" y="${CY}" class="map-compass">E</text>`+
-    `<text x="${CX}" y="${CY+LABEL_R}" class="map-compass">S</text>`+
-    `<text x="${CX-LABEL_R}" y="${CY}" class="map-compass">W</text>`+
-    `<text x="294" y="14" class="map-scale">${state.mapLogScale===true?"LOG · ":""}${(maxKm/1000).toFixed(1)} kkm</text>`;
-  const spokes=clusters.map(c=>`<line x1="${c.x.toFixed(1)}" y1="${c.y.toFixed(1)}" x2="${CX}" y2="${CY}" class="map-link"/>`).join("");
-  const dots=clusters.map(c=>{
-    const tip=esc([...c.members.map(stationMapTip),...(insideCluster.get(c)||[])].join("\n"));
-    // A cluster is red if any of its merged members reacted to us (Q4): the alert
-    // that "someone here made contact" must win over the plain heard dots.
-    const reacted=c.members.some(m=>m.reacted);
-    // Hollow while every station merged here is one we have only been told about, so the
-    // map never claims to hear a station that merely got named on the air.
-    const phantom=!c.members.some(m=>m.item.heardDirectly!==false);
-    const badge=c.members.length>1 ? `<text x="${(c.x+6).toFixed(1)}" y="${(c.y-5).toFixed(1)}" class="map-badge">×${c.members.length}</text>` : "";
-    return `<g class="map-dot${reacted?" reacted":""}${phantom?" phantom":""}"><circle cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="${DOT}"><title>${tip}</title></circle>${badge}</g>`;
-  }).join("");
-  const center=`<circle cx="${CX}" cy="${CY}" r="5" class="map-center"><title>${esc(currentJs8().myCall||"My station")}</title></circle>`;
-  return `<svg viewBox="0 0 300 300" class="station-map-svg" role="img" aria-label="Stations radar map">${defs}${frame}${spokes}${hearingLines.join("")}${dots}${center}</svg>`;
 }
 
 function age(utcMs) {

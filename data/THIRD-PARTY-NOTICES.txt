@@ -144,6 +144,21 @@ License: GNU GPL version 3.
 Protocol description this implementation was written from: docs/wspr.md
 Upstream: https://sourceforge.net/projects/wsjt/
 
+WSPR receive decoder (wsprd port)
+---------------------------------
+data/wspr-decoder.js is a JavaScript port of wsprd from WSJT-X, made by
+RemoteQTH.com (2026): downconversion, sync search, noncoherent block
+demodulation, signal subtraction, the Fano sequential decoder, the ordered
+statistics decoder (osdwspr.f90) and the message/hash unpacking.
+Copyright 2001-2018 Joe Taylor (K1JT): WSPR protocol, original wsprd decoder,
+  message packing and callsign hashing.
+Copyright 2014-2018 Steven Franke (K9AN): current wsprd decoder, block
+  demodulation, signal subtraction, ordered statistics decoder.
+Copyright 1994 Phil Karn (KA9Q): Fano sequential decoder.
+lookup3 hash function: Bob Jenkins, 2006, public domain.
+License: GNU GPL version 3.
+Upstream: https://sourceforge.net/projects/wsjt/
+
 horusdemodlib (technique credit, no code)
 ------------------------------------------
 The RTTY-ICOM page's Baudot/ITA2 demodulator (data/rtty-codec.js) is an original,
