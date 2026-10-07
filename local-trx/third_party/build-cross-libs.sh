@@ -50,7 +50,7 @@
 
 set -euo pipefail
 
-HAMLIB_VERSION=4.5.5
+HAMLIB_VERSION=4.7.2
 LIBSERIALPORT_VERSION=0.1.2
 HAMLIB_URL="https://github.com/Hamlib/Hamlib/releases/download/${HAMLIB_VERSION}/hamlib-${HAMLIB_VERSION}.tar.gz"
 LIBSERIALPORT_URL="https://sigrok.org/download/source/libserialport/libserialport-${LIBSERIALPORT_VERSION}.tar.gz"
@@ -92,6 +92,10 @@ build_hamlib() {
       --enable-static --disable-shared \
       --without-libusb --without-readline --without-indi --without-cxx-binding \
       CC="$cc" CXX="$cxx" )
+
+  # A stale tree from an older HAMLIB_VERSION would otherwise leave its
+  # headers/libs mixed in with the new ones (make install only overwrites).
+  rm -rf "$out"
 
   if ( cd "$src" && make -j"$JOBS" ); then
     ( cd "$src" && make install )

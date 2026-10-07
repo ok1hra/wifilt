@@ -7,6 +7,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 namespace LocalTrx {
 
@@ -29,21 +30,27 @@ class RigBackend {
  public:
   virtual ~RigBackend() = default;
 
-  virtual double  getFreqHz() = 0;
-  virtual bool    setFreqHz(double hz) = 0;
+  // Every read returns false when it got no trustworthy answer (CAT timeout,
+  // garbled reply, a value outside the rig's own range) -- never a default
+  // dressed up as a reading. Ignoring hamlib's return code here once let a
+  // failed/garbled IC-7300 read reach wifilt as "1409.404.04 MHz".
+  virtual bool getFreqHz(double *hzOut) = 0;
+  virtual bool setFreqHz(double hz) = 0;
 
   // CI-V mode byte (0x00 LSB .. 0x08 RTTY-R), not hamlib's rmode_t -- the
   // translation table lives in hamlib_bridge.cpp, on the far side of this seam.
-  virtual uint8_t getModeByte() = 0;
-  virtual bool    setModeByte(uint8_t mode) = 0;
+  // `data` is ICOM's separate DATA flag (USB-D = 0x01 + data), the same split
+  // CI-V 0x26 carries on the wire; legacy 0x04/0x06 simply cannot express it.
+  virtual bool getMode(uint8_t *modeOut, bool *dataOut) = 0;
+  virtual bool setMode(uint8_t mode, bool data) = 0;
 
   // Hz, signed -- CI-V 0x21 RIT.
-  virtual int32_t getRitHz() = 0;
-  virtual bool    setRitHz(int32_t hz) = 0;
+  virtual bool getRitHz(int32_t *hzOut) = 0;
+  virtual bool setRitHz(int32_t hz) = 0;
 
   // 0-255, CI-V's own gain scale (0x14 0x01 AF / 0x14 0x02 RF / 0x14 0x0A RF power).
-  virtual uint8_t getGain(GainKind kind) = 0;
-  virtual bool    setGain(GainKind kind, uint8_t value) = 0;
+  virtual bool getGain(GainKind kind, uint8_t *valueOut) = 0;
+  virtual bool setGain(GainKind kind, uint8_t value) = 0;
 
   // CI-V 0x15, bod 11 category (b), fáze 7. false = this backend does not
   // (or cannot honestly) answer this meter -- civ_router.cpp must then send
@@ -58,6 +65,16 @@ class RigBackend {
   // unsupported, same no-reply convention as getMeter().
   virtual bool getAttenuatorOn(bool *onOut) = 0;
   virtual bool getVoxOn(bool *onOut) = 0;
+
+  // Drop and re-establish the CAT link (radio power-cycled, USB serial port
+  // re-enumerated). Backends with nothing to reopen keep the default.
+  virtual bool reopen(std::string *error) {
+    if (error) *error = "this backend cannot reopen";
+    return false;
+  }
+
+  // Human-readable reason for the most recent failed call, for logging only.
+  virtual std::string lastError() const { return std::string(); }
 };
 
 }  // namespace LocalTrx

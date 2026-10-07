@@ -11,6 +11,42 @@ published.
 
 ## Working tree — not committed
 
+**local-trx: an IC-7300 over hamlib — nonsense frequencies, wrong mode, empty waterfall.**
+
+First field report of `local-trx` on Windows with an ICOM (IC-7300, non-MK2). Until now it
+had only ever met a real Kenwood (TS-480) through hamlib.
+
+* **Nonsense frequencies (`1409.404.04`).** Every hamlib return code was ignored, so a failed
+  or garbled CAT read went straight to wifilt as a frequency. `1 409 404 040 Hz` is
+  `14.094.040` with its BCD shifted by one byte — a misparsed reply. Reads now fail honestly
+  (no reply instead of an invented value), a value outside the rig's own receive range is
+  dropped, and a jump of more than 50 kHz has to be read twice before wifilt sees it. A
+  one-off reading is logged and ignored; tuning steps and real band changes still come
+  through, the latter one poll (200 ms) later.
+* **Mode did not match the radio.** hamlib reports USB-D as `PKTUSB`, which had no
+  entry in the mode table and fell back to a hard-coded `USB`. The PKT modes now map to the
+  ICOM mode byte plus the DATA flag, and `local-trx` answers CI-V `26 00` (read and write) —
+  the only way wifilt shows `USB-D`. A mode-change broadcast is followed at once by a
+  `26 00` frame, so the display does not flicker through `USB`.
+* **No audio in the waterfall.** `local-trx` ran CAT and audio on one thread. Each hamlib
+  round-trip (418 ms on the photographed diagnostics) froze audio pacing, the sender sent at
+  most one 20 ms packet per loop pass and never caught up, and a slow `03` reply could trip
+  wifilt's 1 s CAT liveness probe and tear the LAN session down, audio included. hamlib now
+  lives on its own thread behind a cache (`src/cached_rig.h`): CI-V is answered in
+  milliseconds, writes are queued, and audio catches up after a stall while its backlog
+  stays bounded.
+* **Devices that come and go.** A rig absent at startup or one that stops answering is
+  reopened every 5 s. An audio device that is missing (radio still off, so no USB Audio
+  CODEC yet) or disappears is reopened too, and "device not found" now lists the devices
+  that *are* there — the usual mistake is picking the PC's own microphone.
+* **hamlib 4.5.5 → 4.7.2** for the Windows and ARM64 builds (`build-cross-libs.sh`). Port
+  and speed now go through `rig_set_conf()`, which works on both 4.5 and 4.7.
+* Verified: 90/90 unit tests, `tools/local-trx-integration-test.sh` 17/17 on Linux, and a
+  CI-V round-trip against hamlib's own IC-7300 simulator (`simic7300`). Under wine the
+  Windows `.exe` fails the wifilt LAN link exactly as the unmodified `HEAD` build does —
+  the wine loopback-bind quirk already described in `docs/local-trx-implementace.md`
+  (Dávka 3); on real Windows the link comes up. **Not yet verified on a real IC-7300.**
+
 **DXC: one row per station, not one per skimmer — repeat suppression on the Reverse Beacon feed.**
 
 * **What the feed actually is.** A Reverse Beacon cluster sends *receptions*, not stations.

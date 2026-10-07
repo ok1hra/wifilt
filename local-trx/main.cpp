@@ -48,6 +48,7 @@
                             // with wifilt's own ESP.restart(), see its own header
 
 #include "src/audio_bridge.h"
+#include "src/cached_rig.h"
 #include "src/config.h"
 #include "src/hamlib_bridge.h"
 #include "src/icom_lan_server.h"
@@ -196,32 +197,50 @@ class LoggingKeyLine : public LocalTrx::KeyLine {
   }
 };
 
-// Fallback RigBackend when config.cat.rigModel/port fails to open (wrong
-// port, wrong baud, rig off or unplugged) -- same "never refuse to start"
-// rule as LoggingKeyLine above, extended to CAT: found live 2026-09-02, a
-// CAT/keying port mixup made rig.open() fail and used to take the ENTIRE
-// process down (including the wizard's own web server, main()'s early
-// `return 1`), locking the operator out of the one UI that could fix the
-// mistake. getMeter()/getAttenuatorOn()/getVoxOn() already have a genuine
-// "false = no reply" convention (civ_router.cpp's "no guess" policy), so
-// those just say unsupported here too; getFreqHz()/getModeByte()/getRitHz()/
-// getGain() have no such signal in RigBackend (civ_router.cpp always sends
-// a reply for these, see bcdFromHz/encodeCivLevel/encodeRitLsb3 call sites)
-// so they answer with an inert 0 rather than fabricating a plausible-looking
-// number.
-class NullRigBackend : public LocalTrx::RigBackend {
+// (Re)opens an audio device that is configured but not running: absent at
+// startup, or stopped later because the radio was switched off and its USB
+// Audio CODEC disappeared. Logs transitions, not every retry.
+class AudioDeviceKeeper {
  public:
-  double  getFreqHz() override { return 0.0; }
-  bool    setFreqHz(double) override { return false; }
-  uint8_t getModeByte() override { return 0; }
-  bool    setModeByte(uint8_t) override { return false; }
-  int32_t getRitHz() override { return 0; }
-  bool    setRitHz(int32_t) override { return false; }
-  uint8_t getGain(LocalTrx::GainKind) override { return 0; }
-  bool    setGain(LocalTrx::GainKind, uint8_t) override { return false; }
-  bool    getMeter(LocalTrx::MeterKind, uint8_t *) override { return false; }
-  bool    getAttenuatorOn(bool *) override { return false; }
-  bool    getVoxOn(bool *) override { return false; }
+  // startedText keeps the exact wording tools/local-trx-integration-test.sh
+  // greps for ("RX audio capturing from").
+  AudioDeviceKeeper(const char *what, const char *startedText, std::string configured)
+      : what_(what), startedText_(startedText),
+        shownName_(configured == "default" ? "(system default)" : configured) {}
+
+  template <typename Device>
+  void keep(Device &device) {
+    if (device.running()) return;
+    const auto now = std::chrono::steady_clock::now();
+    if (tried_ && now < nextTry_) return;
+    if (wasRunning_) {
+      std::fprintf(stderr, "warning: %s device \"%s\" stopped -- reopening\n", what_, shownName_.c_str());
+      wasRunning_ = false;
+      lastError_.clear();
+    }
+    tried_ = true;
+    nextTry_ = now + std::chrono::seconds(5);
+    std::string error;
+    if (device.start(&error)) {
+      std::printf("local-trx: %s \"%s\"\n", startedText_, shownName_.c_str());
+      std::fflush(stdout);
+      wasRunning_ = true;
+      lastError_.clear();
+    } else if (error != lastError_) {
+      std::fprintf(stderr, "warning: %s device unavailable (%s) -- retrying every 5 s\n", what_,
+                   error.c_str());
+      lastError_ = error;
+    }
+  }
+
+ private:
+  const char *what_;
+  const char *startedText_;
+  std::string shownName_;
+  bool tried_ = false;
+  bool wasRunning_ = false;
+  std::string lastError_;
+  std::chrono::steady_clock::time_point nextTry_;
 };
 
 void printHelp() {
@@ -351,17 +370,24 @@ int main(int argc, char **argv) {
     return 0;
   }
 
+  // A rig that fails to open (wrong port/baud, radio off or unplugged) never
+  // stops the process -- found live 2026-09-02, a CAT/keying port mixup used
+  // to take the wizard's own web server down with it, locking the operator
+  // out of the one UI that could fix the mistake. CachedRigBackend answers
+  // inert defaults (0 Hz, USB) until the rig opens, and keeps retrying it.
+  // It also owns the only thread that ever talks to hamlib (see cached_rig.h).
   LocalTrx::HamlibRigBackend hamlibRig((rig_model_t)config.cat.rigModel, config.cat.port, config.cat.baud);
-  NullRigBackend nullRig;
-  LocalTrx::RigBackend *rig = &hamlibRig;
-  if (!hamlibRig.open(&error)) {
+  const bool rigOpen = hamlibRig.open(&error);
+  if (!rigOpen) {
     std::fprintf(stderr,
                  "warning: cannot open rig (model %d, port %s): %s -- CAT reporting inert "
-                 "defaults instead (fix cat.port/cat.rigModel in the wizard, still reachable "
+                 "defaults and retrying (fix cat.port/cat.rigModel in the wizard, still reachable "
                  "below)\n",
                  config.cat.rigModel, config.cat.port.c_str(), error.c_str());
-    rig = &nullRig;
   }
+  LocalTrx::CachedRigBackend cachedRig(hamlibRig, rigOpen);
+  cachedRig.start();
+  LocalTrx::RigBackend *rig = &cachedRig;
 
   uint8_t civAddr = parseHexByte(config.identity.civAddress, 0xA6);
 
@@ -400,38 +426,21 @@ int main(int argc, char **argv) {
   // reads the same way.
   std::string audioDeviceName = config.audio.inputDevice == "default" ? "" : config.audio.inputDevice;
   LocalTrx::AudioCapture audioCapture(audioDeviceName);
-  LocalTrx::AudioCapture *audioCapturePtr = nullptr;
-  if (!config.audio.inputDevice.empty()) {
-    std::string audioError;
-    if (audioCapture.start(&audioError)) {
-      audioCapturePtr = &audioCapture;
-      std::printf("local-trx: RX audio capturing from \"%s\"\n",
-                  config.audio.inputDevice == "default" ? "(system default)"
-                                                          : config.audio.inputDevice.c_str());
-    } else {
-      std::fprintf(stderr, "warning: RX audio device unavailable (%s) -- no audio will stream\n",
-                   audioError.c_str());
-    }
-  }
+  // Configured but not openable right now (radio still off, so its USB
+  // Audio CODEC is not there yet) is retried from the main loop below, not
+  // given up on for the life of the process.
+  LocalTrx::AudioCapture *audioCapturePtr = config.audio.inputDevice.empty() ? nullptr : &audioCapture;
+  AudioDeviceKeeper captureKeeper("RX audio", "RX audio capturing from", config.audio.inputDevice);
+  if (audioCapturePtr) captureKeeper.keep(audioCapture);
 
   // TX audio (bod: fáze 3, PTT gated separately via CI-V 0x1C, not via audio
   // arrival). Same "" = disabled / "default" = portable sentinel convention
   // as the capture side above.
   std::string playbackDeviceName = config.audio.outputDevice == "default" ? "" : config.audio.outputDevice;
   LocalTrx::AudioPlayback audioPlayback(playbackDeviceName);
-  LocalTrx::AudioPlayback *audioPlaybackPtr = nullptr;
-  if (!config.audio.outputDevice.empty()) {
-    std::string audioError;
-    if (audioPlayback.start(&audioError)) {
-      audioPlaybackPtr = &audioPlayback;
-      std::printf("local-trx: TX audio playing to \"%s\"\n",
-                  config.audio.outputDevice == "default" ? "(system default)"
-                                                           : config.audio.outputDevice.c_str());
-    } else {
-      std::fprintf(stderr, "warning: TX audio device unavailable (%s) -- incoming audio dropped\n",
-                   audioError.c_str());
-    }
-  }
+  LocalTrx::AudioPlayback *audioPlaybackPtr = config.audio.outputDevice.empty() ? nullptr : &audioPlayback;
+  AudioDeviceKeeper playbackKeeper("TX audio", "TX audio playing to", config.audio.outputDevice);
+  if (audioPlaybackPtr) playbackKeeper.keep(audioPlayback);
 
   LocalTrx::IcomLanServer server(config.listenIp, config.identity.radioName, civAddr, *rig,
                                   &keyer, audioCapturePtr, audioPlaybackPtr, verbose);
@@ -475,6 +484,8 @@ int main(int argc, char **argv) {
   while (!g_stop) {
     server.poll();
     trxnetPeer.poll();
+    if (audioCapturePtr) captureKeeper.keep(audioCapture);
+    if (audioPlaybackPtr) playbackKeeper.keep(audioPlayback);
     if (webUi) webUi->poll();
     if (webUi && webUi->restartRequested()) restartSelfAfterSave();
     if (!announced && server.connected()) {

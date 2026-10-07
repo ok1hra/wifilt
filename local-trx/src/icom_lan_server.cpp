@@ -380,8 +380,13 @@ void CivChannel::tick(uint32_t nowMs) {
   if (nowMs < nextBroadcastPollMs_) return;
   nextBroadcastPollMs_ = nowMs + kCivBroadcastPollMs;
 
-  const uint64_t freqHz = (uint64_t)rig_.getFreqHz();
-  const uint8_t modeByte = rig_.getModeByte();
+  // rig_ is the CachedRigBackend: both reads are a mutex + copy, never a CAT
+  // round-trip, so this tick cannot stall the audio pacing below it.
+  double hz = 0.0;
+  uint8_t modeByte = 0;
+  bool data = false;
+  if (!rig_.getFreqHz(&hz) || !rig_.getMode(&modeByte, &data)) return;
+  const uint64_t freqHz = (uint64_t)hz;
 
   if (!haveLastBroadcast_) {
     // First sample only establishes the baseline -- otherwise every run would
@@ -389,6 +394,7 @@ void CivChannel::tick(uint32_t nowMs) {
     // happened to power up at.
     lastBroadcastFreqHz_ = freqHz;
     lastBroadcastModeByte_ = modeByte;
+    lastBroadcastData_ = data;
     haveLastBroadcast_ = true;
     return;
   }
@@ -404,14 +410,21 @@ void CivChannel::tick(uint32_t nowMs) {
     vlog("-> transceive broadcast freq (bod 11d)");
   }
 
-  if (modeByte != lastBroadcastModeByte_) {
+  if (modeByte != lastBroadcastModeByte_ || data != lastBroadcastData_) {
     lastBroadcastModeByte_ = modeByte;
+    lastBroadcastData_ = data;
     std::vector<uint8_t> m = {0xFE, 0xFE, kCivBroadcastAddress, civAddr_,
                                0x01,          // CMD_TRANS_MODE
                                modeByte, 0x01};  // filter width -- same "not modelled yet,
                                                   // wide/default" placeholder as the 0x04 read reply
     m.push_back(0xFD);
     sendCiv(m);
+    // 01 is data-blind: wifilt's printMode() would show USB-D as plain USB
+    // until its next 26 00 poll. Follow it at once with the same 26 00 frame
+    // that poll would get back, so the display never flickers through "USB".
+    std::vector<uint8_t> d = {0xFE, 0xFE, kCivBroadcastAddress, civAddr_,
+                               0x26, 0x00, modeByte, (uint8_t)(data ? 0x01 : 0x00), 0x01, 0xFD};
+    sendCiv(d);
     vlog("-> transceive broadcast mode (bod 11d)");
   }
 }
@@ -421,6 +434,9 @@ void CivChannel::tick(uint32_t nowMs) {
 namespace {
 constexpr uint32_t kAudioPacketMs = 20;      // wire format's fixed cadence, 8kHz/160B
 constexpr size_t kAudioSamplesPerPacket = 160;
+constexpr uint32_t kAudioMaxLagMs = 200;     // schedule debt kept after a stall
+constexpr uint32_t kAudioMaxBacklogMs = 300; // captured audio queued beyond this is dropped
+constexpr int kAudioMaxPacketsPerTick = 10;
 constexpr uint16_t kMaxGapChase = 32;   // icom_lan_audio_tx.h's own HISTORY_PACKETS bound --
                                         // chasing further than the peer's own replay history
                                         // holds would just draw more unanswered requests
@@ -494,12 +510,27 @@ void AudioChannel::tick(uint32_t nowMs) {
     nextSendMs_ = nowMs;
     sending_ = true;
   }
-  if ((int32_t)(nowMs - nextSendMs_) < 0) return;
-  if (capture_->available() < kAudioSamplesPerPacket) return;   // wait for a full 20ms chunk
+  // A late tick (the loop was busy) owes several packets, not one: send every
+  // packet that is due and captured, up to a cap. The old one-packet-per-tick
+  // pacing never caught up after a stall -- audio fell further behind with
+  // every slow CAT round-trip until the capture ring overflowed.
+  if ((int32_t)(nowMs - nextSendMs_) > (int32_t)kAudioMaxLagMs) nextSendMs_ = nowMs - kAudioMaxLagMs;
+  // Trim capture backlog beyond kAudioMaxBacklogMs (device clock running a
+  // little fast, or a long stall): fresh audio beats a growing delay.
+  const size_t maxBacklog = (size_t)kAudioMaxBacklogMs * kAudioSamplesPerPacket / kAudioPacketMs;
+  if (capture_->available() > maxBacklog) capture_->discard(capture_->available() - maxBacklog);
 
+  for (int sent = 0; sent < kAudioMaxPacketsPerTick; sent++) {
+    if ((int32_t)(nowMs - nextSendMs_) < 0) return;
+    if (capture_->available() < kAudioSamplesPerPacket) return;   // wait for a full 20ms chunk
+    sendAudioPacket();
+    nextSendMs_ += kAudioPacketMs;
+  }
+}
+
+void AudioChannel::sendAudioPacket() {
   uint8_t payload[kAudioSamplesPerPacket];
   size_t got = capture_->pull(payload, sizeof(payload));
-  nextSendMs_ += kAudioPacketMs;
 
   // Byte layout ported from tools/icom-lan-fake-radio.py's AudioChannel.tick()
   // -- the proven server-side RX format, NOT icom_lan_audio_tx.h's client-TX

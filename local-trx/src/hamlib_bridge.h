@@ -27,29 +27,40 @@ class HamlibRigBackend : public RigBackend {
   // what makes it usable in CI with no hardware on the bench.
   bool open(std::string *error);
 
-  double  getFreqHz() override;
-  bool    setFreqHz(double hz) override;
-  uint8_t getModeByte() override;
-  bool    setModeByte(uint8_t mode) override;
-  int32_t getRitHz() override;
-  bool    setRitHz(int32_t hz) override;
-  uint8_t getGain(GainKind kind) override;
-  bool    setGain(GainKind kind, uint8_t value) override;
-  bool    getMeter(MeterKind kind, uint8_t *rawOut) override;
-  bool    getAttenuatorOn(bool *onOut) override;
-  bool    getVoxOn(bool *onOut) override;
+  bool isOpen() const { return rig_ != nullptr; }
+
+  bool getFreqHz(double *hzOut) override;
+  bool setFreqHz(double hz) override;
+  bool getMode(uint8_t *modeOut, bool *dataOut) override;
+  bool setMode(uint8_t mode, bool data) override;
+  bool getRitHz(int32_t *hzOut) override;
+  bool setRitHz(int32_t hz) override;
+  bool getGain(GainKind kind, uint8_t *valueOut) override;
+  bool setGain(GainKind kind, uint8_t value) override;
+  bool getMeter(MeterKind kind, uint8_t *rawOut) override;
+  bool getAttenuatorOn(bool *onOut) override;
+  bool getVoxOn(bool *onOut) override;
+  bool reopen(std::string *error) override;
+  std::string lastError() const override { return lastError_; }
 
  private:
+  void close();
+  bool check(int rc, const char *what);
+  bool inRigRange(double hz) const;
+
   rig_model_t rigModel_;
   std::string port_;
   int baud_;
   RIG *rig_ = nullptr;
+  std::string lastError_;
 };
 
-// CI-V mode byte <-> hamlib rmode_t (bod 11 "Mode translace"). Exposed for
-// doctest. Returns RIG_MODE_NONE / 0xFF for anything with no counterpart on
-// the other side, matching civ_router's "no guess" policy elsewhere.
-rmode_t civModeToHamlib(uint8_t civMode);
-uint8_t hamlibModeToCiv(rmode_t mode);
+// CI-V mode byte + DATA flag <-> hamlib rmode_t (bod 11 "Mode translace").
+// hamlib folds ICOM's DATA flag into the mode itself (PKTUSB = USB-D), CI-V
+// keeps it separate (0x26: mode byte + data byte). Exposed for doctest.
+// Returns RIG_MODE_NONE / false for anything with no counterpart on the other
+// side, matching civ_router's "no guess" policy elsewhere.
+rmode_t civModeToHamlib(uint8_t civMode, bool data = false);
+bool hamlibModeToCiv(rmode_t mode, uint8_t *civModeOut, bool *dataOut);
 
 }  // namespace LocalTrx

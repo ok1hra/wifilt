@@ -99,11 +99,13 @@ CivResult dispatchCiv(const std::vector<uint8_t> &frame, RigBackend &rig, Keying
       return ack();
     }
     case 0x03: {   // read frequency, no body
+      double hz;
+      if (!rig.getFreqHz(&hz)) return noReply();   // no trustworthy reading, no guess
       CivResult r;
       r.answered = true;
       r.payload.push_back(0x03);
       uint8_t bcd[5];
-      bcdFromHz((uint64_t)rig.getFreqHz(), bcd);
+      bcdFromHz((uint64_t)hz, bcd);
       r.payload.insert(r.payload.end(), bcd, bcd + 5);
       return r;
     }
@@ -112,18 +114,40 @@ CivResult dispatchCiv(const std::vector<uint8_t> &frame, RigBackend &rig, Keying
       rig.setFreqHz((double)hzFromBcd(body));
       return ack();
     }
-    case 0x04: {   // read mode, no body
+    case 0x04: {   // read mode, no body -- data-blind, exactly like a real ICOM's 04
+      uint8_t mode;
+      bool data;
+      if (!rig.getMode(&mode, &data)) return noReply();
       CivResult r;
       r.answered = true;
       r.payload.push_back(0x04);
-      r.payload.push_back(rig.getModeByte());
+      r.payload.push_back(mode);
       r.payload.push_back(0x01);   // filter width -- not modelled yet, wide/default
       return r;
     }
     case 0x06: {   // write mode, [modeId, modeWidth]
+      // Legacy 06 has no DATA byte; it selects the plain mode (USB, not
+      // USB-D), which is also what hamlib's own ICOM backend does with it.
       if (bodyLen < 1) return noReply();
-      rig.setModeByte(body[0]);
+      rig.setMode(body[0], false);
       return ack();
+    }
+    case 0x26: {   // selected-VFO mode WITH the DATA flag: 26 00 <mode> <data> <filter>
+      // wifilt polls `26 00` and, once answered, stops polling the data-blind
+      // 04 (icomLanClient.h civSelectedModeSeen) -- the only way it can show
+      // USB-D. Unselected VFO (26 01) is not modelled: no reply.
+      if (bodyLen < 1 || body[0] != 0x00) return noReply();
+      if (bodyLen >= 3) {   // write: 26 00 mode data [filter]
+        rig.setMode(body[1], body[2] != 0x00);
+        return ack();
+      }
+      uint8_t mode;
+      bool data;
+      if (!rig.getMode(&mode, &data)) return noReply();
+      CivResult r;
+      r.answered = true;
+      r.payload = {0x26, 0x00, mode, (uint8_t)(data ? 0x01 : 0x00), 0x01};   // filter: same placeholder as 04
+      return r;
     }
     case 0x14: {   // levels: AF (0x01) / RF (0x02) gain (bod 11 category a),
                     // CW speed (0x0C, bod 7/8 -- keying subsystem, never hamlib)
@@ -159,24 +183,28 @@ CivResult dispatchCiv(const std::vector<uint8_t> &frame, RigBackend &rig, Keying
         return ack();
       }
       // read: subcmd only
+      uint8_t value;
+      if (!rig.getGain(kind, &value)) return noReply();
       CivResult r;
       r.answered = true;
       r.payload.push_back(0x14);
       r.payload.push_back(sub);
       uint8_t lv[2];
-      encodeCivLevel(rig.getGain(kind), lv);
+      encodeCivLevel(value, lv);
       r.payload.push_back(lv[0]);
       r.payload.push_back(lv[1]);
       return r;
     }
     case 0x21: {   // RIT, bod 11 category (a) -- only subcommand 0x00 read modelled
       if (bodyLen < 1 || body[0] != 0x00) return noReply();
+      int32_t ritHz;
+      if (!rig.getRitHz(&ritHz)) return noReply();
       CivResult r;
       r.answered = true;
       r.payload.push_back(0x21);
       r.payload.push_back(0x00);
       uint8_t rit[3];
-      encodeRitLsb3((uint32_t)rig.getRitHz(), rit);
+      encodeRitLsb3((uint32_t)ritHz, rit);
       r.payload.insert(r.payload.end(), rit, rit + 3);
       return r;
     }

@@ -58,8 +58,8 @@ LDLIBS   := -lpthread -ldl -lm $(HAMLIB_SERIALPORT_LIBS)
 
 CXX_SOURCES := \
   main.cpp \
-  src/config.cpp src/civ_router.cpp src/hamlib_bridge.cpp src/icom_lan_server.cpp \
-  src/udp_socket.cpp src/keyer.cpp src/keying_backend.cpp src/key_runner.cpp \
+  src/config.cpp src/civ_router.cpp src/hamlib_bridge.cpp src/cached_rig.cpp \
+  src/icom_lan_server.cpp src/udp_socket.cpp src/keyer.cpp src/keying_backend.cpp src/key_runner.cpp \
   src/serial_key.cpp src/audio_bridge.cpp \
   src/trxnet_udp.cpp src/trxnet_peer.cpp \
   src/device_enum.cpp src/webui_server.cpp \
@@ -152,7 +152,8 @@ TEST_BIN       := $(TEST_BUILD_DIR)/local-trx-tests
 TEST_SOURCES   := tests/test_civ_router.cpp tests/test_config.cpp tests/test_hamlib_bridge.cpp \
                   tests/test_keyer.cpp tests/test_keying_backend.cpp tests/test_key_runner.cpp \
                   tests/test_serial_key.cpp tests/test_audio_bridge.cpp tests/test_device_enum.cpp \
-                  src/config.cpp src/civ_router.cpp src/hamlib_bridge.cpp src/keyer.cpp \
+                  tests/test_cached_rig.cpp \
+                  src/config.cpp src/civ_router.cpp src/hamlib_bridge.cpp src/cached_rig.cpp src/keyer.cpp \
                   src/keying_backend.cpp src/key_runner.cpp src/serial_key.cpp src/audio_bridge.cpp \
                   src/device_enum.cpp $(NATIVE_DIR)/platform/paths.cpp
 TEST_C_SOURCES := third_party/miniaudio/miniaudio_impl.c

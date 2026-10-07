@@ -31,7 +31,9 @@ Exit codes:
 
 import argparse
 import json
+import time
 import sys
+import urllib.error
 import urllib.request
 
 
@@ -79,18 +81,27 @@ def main():
     print(f"  ok  GET /api/config: radioName={config['identity']['radioName']!r}")
 
     # Round trip: flip cwWpm to a value nothing else in this test run depends
-    # on, then read it back via GET. Safe to do mid-test regardless of what
-    # else is running against this local-trx process: main.cpp reads
-    # config.json exactly once at startup (fáze 6 has no live-reconfiguration
-    # path for any subsystem), so writing a new one never touches the
-    # ALREADY-RUNNING process's own CW/FSK/audio/CI-V behaviour.
+    # on, then read it back via GET. The save restarts local-trx in place
+    # (same PID, execv) with the new config -- only cwWpm differs, which no
+    # later check in tools/local-trx-integration-test.sh asserts on.
     config["keying"]["cwWpm"] = 37
     _, resp_body = post(base + "/api/config", json.dumps(config))
     result = json.loads(resp_body)
     if not result.get("ok"):
         print(f"FAIL POST /api/config: {result}", file=sys.stderr)
         return 5
-    _, body = get(base + "/api/config")
+    # A successful save makes local-trx restart itself (main.cpp
+    # restartSelfAfterSave()) -- wait for the wizard to come back up.
+    body = None
+    deadline = time.monotonic() + 10.0
+    while body is None and time.monotonic() < deadline:
+        try:
+            _, body = get(base + "/api/config")
+        except (urllib.error.URLError, ConnectionError):
+            time.sleep(0.2)
+    if body is None:
+        print("FAIL wizard did not come back after the save-triggered restart", file=sys.stderr)
+        return 5
     if json.loads(body)["keying"]["cwWpm"] != 37:
         print("FAIL POST /api/config did not round-trip cwWpm", file=sys.stderr)
         return 5

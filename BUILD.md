@@ -366,7 +366,7 @@ cross-compiled first, once:
 local-trx/third_party/build-cross-libs.sh win     # or: arm64, or: all
 ```
 
-This fetches the upstream release tarballs (hamlib 4.5.5, libserialport 0.1.2 — not
+This fetches the upstream release tarballs (hamlib 4.7.2, libserialport 0.1.2 — not
 distribution-patched sources) into `local-trx/third_party/cross/` (gitignored, rebuilt on
 demand) and cross-compiles static libraries with the same `x86_64-w64-mingw32-*`/
 `aarch64-linux-gnu-*` toolchains §4 already uses for `wifilt` itself.

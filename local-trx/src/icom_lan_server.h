@@ -133,6 +133,7 @@ class CivChannel : public Channel {
   bool haveLastBroadcast_ = false;
   uint64_t lastBroadcastFreqHz_ = 0;
   uint8_t lastBroadcastModeByte_ = 0;
+  bool lastBroadcastData_ = false;
 };
 
 class AudioChannel : public Channel {
@@ -151,6 +152,7 @@ class AudioChannel : public Channel {
  private:
   void handle(const uint8_t *data, size_t len) override;
   void onTxAudio(const uint8_t *data, size_t len);
+  void sendAudioPacket();
 
   AudioCapture *capture_;
   AudioPlayback *playback_;

@@ -246,7 +246,11 @@ void WebUiServer::handleTestCat() {
     fail(400, openError);
     return;
   }
-  double freqHz = rig.getFreqHz();
+  double freqHz = 0.0;
+  if (!rig.getFreqHz(&freqHz)) {
+    fail(400, "rig opened but the frequency read failed: " + rig.lastError());
+    return;
+  }
 
   json ok;
   ok["ok"] = true;

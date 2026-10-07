@@ -26,9 +26,26 @@ AudioCapture::AudioCapture(std::string deviceName) : deviceName_(std::move(devic
   ring_.resize(32000);   // 4s at 8kHz mono uLaw (1 byte/sample)
 }
 
-AudioCapture::~AudioCapture() {
+AudioCapture::~AudioCapture() { close(); }
+
+void AudioCapture::close() {
+  running_ = false;
   if (deviceInitialized_) ma_device_uninit(&device_);
   if (contextInitialized_) ma_context_uninit(&context_);
+  deviceInitialized_ = contextInitialized_ = false;
+}
+
+void AudioCapture::discard(size_t count) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (count > count_) count = count_;
+  head_ = (head_ + count) % ring_.size();
+  count_ -= count;
+}
+
+void AudioCapture::notificationCallback(const ma_device_notification *notification) {
+  // Fires for our own close() too -- harmless, close() clears running_ anyway.
+  if (notification->type != ma_device_notification_type_stopped) return;
+  static_cast<AudioCapture *>(notification->pDevice->pUserData)->running_ = false;
 }
 
 void AudioCapture::dataCallback(ma_device *device, void *, const void *input, ma_uint32 frameCount) {
@@ -54,6 +71,12 @@ void AudioCapture::onCaptured(const int16_t *samples, ma_uint32 frameCount) {
 }
 
 bool AudioCapture::start(std::string *error) {
+  close();
+  {
+    // Whatever a previous run left buffered is old audio by now.
+    std::lock_guard<std::mutex> lock(mutex_);
+    head_ = count_ = 0;
+  }
   if (ma_context_init(nullptr, 0, nullptr, &context_) != MA_SUCCESS) {
     if (error) *error = "miniaudio: ma_context_init failed";
     return false;
@@ -78,7 +101,17 @@ bool AudioCapture::start(std::string *error) {
       }
     }
     if (!found) {
-      if (error) *error = "miniaudio: capture device not found: \"" + deviceName_ + "\"";
+      // List what IS there: the usual mistake is picking the PC's own
+      // microphone in the wizard instead of the radio's USB Audio CODEC, or
+      // the CODEC not being there yet because the radio is still off.
+      std::string names;
+      for (ma_uint32 i = 0; i < captureCount; i++) {
+        names += (i ? ", \"" : "\"") + std::string(captureInfos[i].name) + "\"";
+      }
+      if (error) {
+        *error = "miniaudio: capture device not found: \"" + deviceName_ + "\" (available: " +
+                 (names.empty() ? std::string("none") : names) + ")";
+      }
       return false;
     }
   }
@@ -91,6 +124,7 @@ bool AudioCapture::start(std::string *error) {
                                // resampler/channel-mixer handles the real device's
                                // native format transparently
   config.dataCallback = &AudioCapture::dataCallback;
+  config.notificationCallback = &AudioCapture::notificationCallback;
   config.pUserData = this;
 
   if (ma_device_init(&context_, &config, &device_) != MA_SUCCESS) {
@@ -103,6 +137,7 @@ bool AudioCapture::start(std::string *error) {
     if (error) *error = "miniaudio: cannot start capture device \"" + deviceName_ + "\"";
     return false;
   }
+  running_ = true;
   return true;
 }
 
@@ -138,9 +173,18 @@ AudioPlayback::AudioPlayback(std::string deviceName) : deviceName_(std::move(dev
   ring_.resize(16000);   // 2s at 8kHz mono s16 (1 sample/slot)
 }
 
-AudioPlayback::~AudioPlayback() {
+AudioPlayback::~AudioPlayback() { close(); }
+
+void AudioPlayback::close() {
+  running_ = false;
   if (deviceInitialized_) ma_device_uninit(&device_);
   if (contextInitialized_) ma_context_uninit(&context_);
+  deviceInitialized_ = contextInitialized_ = false;
+}
+
+void AudioPlayback::notificationCallback(const ma_device_notification *notification) {
+  if (notification->type != ma_device_notification_type_stopped) return;
+  static_cast<AudioPlayback *>(notification->pDevice->pUserData)->running_ = false;
 }
 
 void AudioPlayback::dataCallback(ma_device *device, void *output, const void *, ma_uint32 frameCount) {
@@ -163,6 +207,12 @@ void AudioPlayback::onPlayback(int16_t *output, ma_uint32 frameCount) {
 }
 
 bool AudioPlayback::start(std::string *error) {
+  close();
+  {
+    // Whatever a previous run left buffered is old audio by now.
+    std::lock_guard<std::mutex> lock(mutex_);
+    head_ = count_ = 0;
+  }
   if (ma_context_init(nullptr, 0, nullptr, &context_) != MA_SUCCESS) {
     if (error) *error = "miniaudio: ma_context_init failed";
     return false;
@@ -187,7 +237,14 @@ bool AudioPlayback::start(std::string *error) {
       }
     }
     if (!found) {
-      if (error) *error = "miniaudio: playback device not found: \"" + deviceName_ + "\"";
+      std::string names;
+      for (ma_uint32 i = 0; i < playbackCount; i++) {
+        names += (i ? ", \"" : "\"") + std::string(playbackInfos[i].name) + "\"";
+      }
+      if (error) {
+        *error = "miniaudio: playback device not found: \"" + deviceName_ + "\" (available: " +
+                 (names.empty() ? std::string("none") : names) + ")";
+      }
       return false;
     }
   }
@@ -198,6 +255,7 @@ bool AudioPlayback::start(std::string *error) {
   config.playback.channels = 1;
   config.sampleRate = 8000;
   config.dataCallback = &AudioPlayback::dataCallback;
+  config.notificationCallback = &AudioPlayback::notificationCallback;
   config.pUserData = this;
 
   if (ma_device_init(&context_, &config, &device_) != MA_SUCCESS) {
@@ -210,6 +268,7 @@ bool AudioPlayback::start(std::string *error) {
     if (error) *error = "miniaudio: cannot start playback device \"" + deviceName_ + "\"";
     return false;
   }
+  running_ = true;
   return true;
 }
 

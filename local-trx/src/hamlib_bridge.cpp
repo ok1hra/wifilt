@@ -1,12 +1,24 @@
 #include "hamlib_bridge.h"
 
+#include <cstdio>
 #include <cstring>
 
 namespace LocalTrx {
 
-rmode_t civModeToHamlib(uint8_t civMode) {
+rmode_t civModeToHamlib(uint8_t civMode, bool data) {
   // Table matches civ_router.cpp's civModeName() byte-for-byte (both trace
   // back to wifilt.ino's decodeModeName() [wifilt.ino:1349]).
+  if (data) {
+    // Only the modes ICOM itself offers a DATA variant of (USB-D/LSB-D/
+    // FM-D/AM-D on the IC-7300/705/7610).
+    switch (civMode) {
+      case 0x00: return RIG_MODE_PKTLSB;
+      case 0x01: return RIG_MODE_PKTUSB;
+      case 0x02: return RIG_MODE_PKTAM;
+      case 0x05: return RIG_MODE_PKTFM;
+      default:   return RIG_MODE_NONE;
+    }
+  }
   switch (civMode) {
     case 0x00: return RIG_MODE_LSB;
     case 0x01: return RIG_MODE_USB;
@@ -21,56 +33,85 @@ rmode_t civModeToHamlib(uint8_t civMode) {
   }
 }
 
-uint8_t hamlibModeToCiv(rmode_t mode) {
+bool hamlibModeToCiv(rmode_t mode, uint8_t *civModeOut, bool *dataOut) {
+  uint8_t civ;
+  bool data = false;
   switch (mode) {
-    case RIG_MODE_LSB:   return 0x00;
-    case RIG_MODE_USB:   return 0x01;
-    case RIG_MODE_AM:    return 0x02;
-    case RIG_MODE_CW:    return 0x03;
-    case RIG_MODE_RTTY:  return 0x04;
-    case RIG_MODE_FM:    return 0x05;
-    case RIG_MODE_WFM:   return 0x06;
-    case RIG_MODE_CWR:   return 0x07;
-    case RIG_MODE_RTTYR: return 0x08;
-    default:             return 0xFF;   // no counterpart -- caller must not guess
+    case RIG_MODE_LSB:    civ = 0x00; break;
+    case RIG_MODE_USB:    civ = 0x01; break;
+    case RIG_MODE_AM:     civ = 0x02; break;
+    case RIG_MODE_CW:     civ = 0x03; break;
+    case RIG_MODE_RTTY:   civ = 0x04; break;
+    case RIG_MODE_FM:     civ = 0x05; break;
+    case RIG_MODE_WFM:    civ = 0x06; break;
+    case RIG_MODE_CWR:    civ = 0x07; break;
+    case RIG_MODE_RTTYR:  civ = 0x08; break;
+    case RIG_MODE_PKTLSB: civ = 0x00; data = true; break;
+    case RIG_MODE_PKTUSB: civ = 0x01; data = true; break;
+    case RIG_MODE_PKTAM:  civ = 0x02; data = true; break;
+    case RIG_MODE_PKTFM:  civ = 0x05; data = true; break;
+    default:              return false;   // no counterpart -- caller must not guess
   }
+  *civModeOut = civ;
+  *dataOut = data;
+  return true;
 }
 
 HamlibRigBackend::HamlibRigBackend(rig_model_t rigModel, std::string port, int baud)
     : rigModel_(rigModel), port_(std::move(port)), baud_(baud) {}
 
-HamlibRigBackend::~HamlibRigBackend() {
-  if (rig_) {
-    rig_close(rig_);
-    rig_cleanup(rig_);
-  }
+HamlibRigBackend::~HamlibRigBackend() { close(); }
+
+void HamlibRigBackend::close() {
+  if (!rig_) return;
+  rig_close(rig_);
+  rig_cleanup(rig_);
+  rig_ = nullptr;
+}
+
+// rigerror2(), not rigerror(): since hamlib 4.5 the latter appends hamlib's
+// whole recent debug-message buffer to the text.
+bool HamlibRigBackend::check(int rc, const char *what) {
+  if (rc == RIG_OK) return true;
+  lastError_ = std::string(what) + ": " + rigerror2(rc);
+  return false;
 }
 
 bool HamlibRigBackend::open(std::string *error) {
+  close();
   rig_ = rig_init(rigModel_);
   if (!rig_) {
-    if (error) *error = "rig_init failed for model " + std::to_string(rigModel_);
+    lastError_ = "rig_init failed for model " + std::to_string(rigModel_);
+    if (error) *error = lastError_;
     return false;
   }
 
-  if (!port_.empty()) {
-    // strncpy() does NOT null-terminate when port_ is >= the destination
-    // size -- it silently relies on rig_init() having already zeroed the
-    // struct, which is an internal hamlib detail, not a documented
-    // guarantee. Terminate explicitly rather than depend on that (found by
-    // code review): an unterminated pathname here means whatever hamlib's
-    // serial backend reads past the buffer next is undefined.
-    std::strncpy(rig_->state.rigport.pathname, port_.c_str(),
-                 sizeof(rig_->state.rigport.pathname) - 1);
-    rig_->state.rigport.pathname[sizeof(rig_->state.rigport.pathname) - 1] = '\0';
-  }
-  if (baud_ > 0) {
-    rig_->state.rigport.parm.serial.rate = baud_;
+  // Port and speed through rig_set_conf() rather than poking
+  // rig->state.rigport directly: that struct field was renamed in hamlib
+  // 4.6 (ports moved behind accessor macros), the conf tokens work the same
+  // on 4.5 (Linux distro packages) and 4.7 (the cross-built Windows/ARM64 libs).
+  auto setConf = [this](const char *name, const std::string &value) {
+    int rc = rig_set_conf(rig_, rig_token_lookup(rig_, name), value.c_str());
+    if (rc != RIG_OK) lastError_ = std::string("rig_set_conf ") + name + ": " + rigerror2(rc);
+    return rc == RIG_OK;
+  };
+  bool confOk = true;
+  if (!port_.empty()) confOk = setConf("rig_pathname", port_) && confOk;
+  // serial_speed only exists for serial-port rigs -- hamlib's Dummy (and
+  // network/USB backends) reject it as an invalid parameter.
+  if (baud_ > 0 && rig_->caps->port_type == RIG_PORT_SERIAL)
+    confOk = setConf("serial_speed", std::to_string(baud_)) && confOk;
+  if (!confOk) {
+    if (error) *error = lastError_;
+    rig_cleanup(rig_);
+    rig_ = nullptr;
+    return false;
   }
 
   int rc = rig_open(rig_);
   if (rc != RIG_OK) {
-    if (error) *error = std::string("rig_open failed: ") + rigerror(rc);
+    lastError_ = std::string("rig_open failed: ") + rigerror2(rc);
+    if (error) *error = lastError_;
     rig_cleanup(rig_);
     rig_ = nullptr;
     return false;
@@ -78,38 +119,76 @@ bool HamlibRigBackend::open(std::string *error) {
   return true;
 }
 
-double HamlibRigBackend::getFreqHz() {
+bool HamlibRigBackend::reopen(std::string *error) { return open(error); }
+
+bool HamlibRigBackend::inRigRange(double hz) const {
+  // Any of the rig's own receive ranges, all ITU regions. A model whose caps
+  // list no range at all gets the benefit of the doubt.
+  const freq_range_t *lists[] = {rig_->caps->rx_range_list1, rig_->caps->rx_range_list2,
+                                 rig_->caps->rx_range_list3, rig_->caps->rx_range_list4,
+                                 rig_->caps->rx_range_list5};
+  bool anyRange = false;
+  for (const freq_range_t *list : lists) {
+    for (int i = 0; i < HAMLIB_FRQRANGESIZ && !RIG_IS_FRNG_END(list[i]); i++) {
+      anyRange = true;
+      if (hz >= list[i].startf && hz <= list[i].endf) return true;
+    }
+  }
+  return !anyRange;
+}
+
+bool HamlibRigBackend::getFreqHz(double *hzOut) {
+  if (!rig_) { lastError_ = "rig not open"; return false; }
   freq_t f = 0;
-  rig_get_freq(rig_, RIG_VFO_CURR, &f);
-  return f;
+  if (!check(rig_get_freq(rig_, RIG_VFO_CURR, &f), "get_freq")) return false;
+  if (f <= 0 || !inRigRange(f)) {
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "get_freq: %.0f Hz is outside the rig's own range, discarded", f);
+    lastError_ = buf;
+    return false;
+  }
+  *hzOut = f;
+  return true;
 }
 
 bool HamlibRigBackend::setFreqHz(double hz) {
-  return rig_set_freq(rig_, RIG_VFO_CURR, (freq_t)hz) == RIG_OK;
+  if (!rig_) { lastError_ = "rig not open"; return false; }
+  return check(rig_set_freq(rig_, RIG_VFO_CURR, (freq_t)hz), "set_freq");
 }
 
-uint8_t HamlibRigBackend::getModeByte() {
+bool HamlibRigBackend::getMode(uint8_t *modeOut, bool *dataOut) {
+  if (!rig_) { lastError_ = "rig not open"; return false; }
   rmode_t mode = RIG_MODE_NONE;
   pbwidth_t width = 0;
-  rig_get_mode(rig_, RIG_VFO_CURR, &mode, &width);
-  uint8_t civ = hamlibModeToCiv(mode);
-  return civ == 0xFF ? 0x01 /* USB, least-surprising default */ : civ;
+  if (!check(rig_get_mode(rig_, RIG_VFO_CURR, &mode, &width), "get_mode")) return false;
+  if (!hamlibModeToCiv(mode, modeOut, dataOut)) {
+    lastError_ = std::string("get_mode: no CI-V counterpart for ") + rig_strrmode(mode);
+    return false;
+  }
+  return true;
 }
 
-bool HamlibRigBackend::setModeByte(uint8_t mode) {
-  rmode_t hamlibMode = civModeToHamlib(mode);
-  if (hamlibMode == RIG_MODE_NONE) return false;   // unmapped -- do not guess
-  return rig_set_mode(rig_, RIG_VFO_CURR, hamlibMode, RIG_PASSBAND_NORMAL) == RIG_OK;
+bool HamlibRigBackend::setMode(uint8_t mode, bool data) {
+  if (!rig_) { lastError_ = "rig not open"; return false; }
+  rmode_t hamlibMode = civModeToHamlib(mode, data);
+  if (hamlibMode == RIG_MODE_NONE) {   // unmapped -- do not guess
+    lastError_ = "set_mode: no hamlib counterpart for CI-V mode";
+    return false;
+  }
+  return check(rig_set_mode(rig_, RIG_VFO_CURR, hamlibMode, RIG_PASSBAND_NORMAL), "set_mode");
 }
 
-int32_t HamlibRigBackend::getRitHz() {
+bool HamlibRigBackend::getRitHz(int32_t *hzOut) {
+  if (!rig_) { lastError_ = "rig not open"; return false; }
   shortfreq_t rit = 0;
-  rig_get_rit(rig_, RIG_VFO_CURR, &rit);
-  return (int32_t)rit;
+  if (!check(rig_get_rit(rig_, RIG_VFO_CURR, &rit), "get_rit")) return false;
+  *hzOut = (int32_t)rit;
+  return true;
 }
 
 bool HamlibRigBackend::setRitHz(int32_t hz) {
-  return rig_set_rit(rig_, RIG_VFO_CURR, (shortfreq_t)hz) == RIG_OK;
+  if (!rig_) { lastError_ = "rig not open"; return false; }
+  return check(rig_set_rit(rig_, RIG_VFO_CURR, (shortfreq_t)hz), "set_rit");
 }
 
 namespace {
@@ -136,17 +215,21 @@ uint8_t clampToByte(float raw) {
 }
 }  // namespace
 
-uint8_t HamlibRigBackend::getGain(GainKind kind) {
+bool HamlibRigBackend::getGain(GainKind kind, uint8_t *valueOut) {
+  if (!rig_) { lastError_ = "rig not open"; return false; }
+  if (!rig_has_get_level(rig_, gainLevel(kind))) return false;
   value_t val;
   val.f = 0.0f;
-  rig_get_level(rig_, RIG_VFO_CURR, gainLevel(kind), &val);
-  return floatToByte(val.f);
+  if (!check(rig_get_level(rig_, RIG_VFO_CURR, gainLevel(kind), &val), "get_level")) return false;
+  *valueOut = floatToByte(val.f);
+  return true;
 }
 
 bool HamlibRigBackend::setGain(GainKind kind, uint8_t value) {
+  if (!rig_) { lastError_ = "rig not open"; return false; }
   value_t val;
   val.f = (float)value / 255.0f;
-  return rig_set_level(rig_, RIG_VFO_CURR, gainLevel(kind), val) == RIG_OK;
+  return check(rig_set_level(rig_, RIG_VFO_CURR, gainLevel(kind), val), "set_level");
 }
 
 bool HamlibRigBackend::getMeter(MeterKind kind, uint8_t *rawOut) {
@@ -171,10 +254,11 @@ bool HamlibRigBackend::getMeter(MeterKind kind, uint8_t *rawOut) {
   // same two levels instead; never reproduced through the actual build, so
   // treated as an artifact of those probes' own compile flags, not a real
   // Dummy quirk worth designing around.)
+  if (!rig_) { lastError_ = "rig not open"; return false; }
   if (!rig_has_get_level(rig_, level)) return false;
   value_t val;
   val.f = 0.0f;
-  if (rig_get_level(rig_, RIG_VFO_CURR, level, &val) != RIG_OK) return false;
+  if (!check(rig_get_level(rig_, RIG_VFO_CURR, level, &val), "get_level")) return false;
 
   switch (kind) {
     case MeterKind::PowerMeter:
@@ -196,6 +280,7 @@ bool HamlibRigBackend::getMeter(MeterKind kind, uint8_t *rawOut) {
 }
 
 bool HamlibRigBackend::getAttenuatorOn(bool *onOut) {
+  if (!rig_) { lastError_ = "rig not open"; return false; }
   if (!rig_has_get_level(rig_, RIG_LEVEL_ATT)) return false;
   value_t val;
   val.i = 0;
@@ -205,6 +290,7 @@ bool HamlibRigBackend::getAttenuatorOn(bool *onOut) {
 }
 
 bool HamlibRigBackend::getVoxOn(bool *onOut) {
+  if (!rig_) { lastError_ = "rig not open"; return false; }
   if (!rig_has_get_func(rig_, RIG_FUNC_VOX)) return false;
   int v = 0;
   if (rig_get_func(rig_, RIG_VFO_CURR, RIG_FUNC_VOX, &v) != RIG_OK) return false;

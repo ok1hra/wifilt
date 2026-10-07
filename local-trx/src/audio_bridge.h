@@ -14,6 +14,7 @@
 // actually does, not a re-purposed WSPR/JS8 TX mechanism.
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -42,7 +43,19 @@ class AudioCapture {
   // ma_context_init() + device lookup by name (if any) + ma_device_init() at
   // a fixed 8 kHz mono s16 capture format -- miniaudio's own resampler/channel
   // conversion handles whatever the real hardware's native format is.
+  // Safe to call again after a failure or after running() went false: it
+  // tears down whatever the previous attempt left first. A device that is
+  // not there yet (radio switched on after local-trx, USB CODEC not
+  // enumerated) is the normal case main.cpp retries on.
   bool start(std::string *error);
+  void close();
+
+  // false once the device stopped on its own (USB CODEC unplugged / radio
+  // powered off) -- miniaudio's stop notification, set from its own thread.
+  bool running() const { return running_; }
+
+  // Drops the oldest `count` buffered bytes (backlog trimming).
+  void discard(size_t count);
 
   // Pulls up to `max` already-encoded µ-law bytes into `out`, oldest first.
   // Never blocks; returns the number actually available (may be less than
@@ -57,6 +70,7 @@ class AudioCapture {
  private:
   static void dataCallback(ma_device *device, void *output, const void *input,
                             ma_uint32 frameCount);
+  static void notificationCallback(const ma_device_notification *notification);
   void onCaptured(const int16_t *samples, ma_uint32 frameCount);
 
   std::string deviceName_;
@@ -64,6 +78,7 @@ class AudioCapture {
   ma_device device_{};
   bool contextInitialized_ = false;
   bool deviceInitialized_ = false;
+  std::atomic<bool> running_{false};
 
   std::mutex mutex_;
   std::vector<uint8_t> ring_;
@@ -81,7 +96,9 @@ class AudioPlayback {
   explicit AudioPlayback(std::string deviceName);
   ~AudioPlayback();
 
-  bool start(std::string *error);
+  bool start(std::string *error);   // same retry contract as AudioCapture::start()
+  void close();
+  bool running() const { return running_; }
 
   // Pushes already-decoded PCM16 mono 8kHz samples. Never blocks; on
   // overflow the OLDEST buffered samples are dropped to make room -- favours
@@ -92,6 +109,7 @@ class AudioPlayback {
  private:
   static void dataCallback(ma_device *device, void *output, const void *input,
                             ma_uint32 frameCount);
+  static void notificationCallback(const ma_device_notification *notification);
   void onPlayback(int16_t *output, ma_uint32 frameCount);
 
   std::string deviceName_;
@@ -99,6 +117,7 @@ class AudioPlayback {
   ma_device device_{};
   bool contextInitialized_ = false;
   bool deviceInitialized_ = false;
+  std::atomic<bool> running_{false};
 
   std::mutex mutex_;
   std::vector<int16_t> ring_;

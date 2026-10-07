@@ -15,16 +15,39 @@ TEST_CASE("civModeToHamlib/hamlibModeToCiv round-trip for every mapped CI-V byte
   for (uint8_t m : modes) {
     rmode_t h = civModeToHamlib(m);
     CHECK(h != RIG_MODE_NONE);
-    CHECK(hamlibModeToCiv(h) == m);
+    uint8_t back = 0xFF;
+    bool data = true;
+    REQUIRE(hamlibModeToCiv(h, &back, &data));
+    CHECK(back == m);
+    CHECK_FALSE(data);
+  }
+}
+
+TEST_CASE("DATA modes: hamlib's PKT* modes are ICOM's mode byte + DATA flag, both ways") {
+  // The IC-7300 in USB-D reports RIG_MODE_PKTUSB -- this used to fall through
+  // to a hard-coded "USB", which is why wifilt never showed USB-D.
+  struct { rmode_t hamlib; uint8_t civ; } pairs[] = {
+      {RIG_MODE_PKTLSB, 0x00}, {RIG_MODE_PKTUSB, 0x01}, {RIG_MODE_PKTAM, 0x02}, {RIG_MODE_PKTFM, 0x05}};
+  for (auto p : pairs) {
+    uint8_t civ = 0xFF;
+    bool data = false;
+    REQUIRE(hamlibModeToCiv(p.hamlib, &civ, &data));
+    CHECK(civ == p.civ);
+    CHECK(data);
+    CHECK(civModeToHamlib(p.civ, true) == p.hamlib);
   }
 }
 
 TEST_CASE("civModeToHamlib on an unmapped byte returns RIG_MODE_NONE, never a guess") {
   CHECK(civModeToHamlib(0xFF) == RIG_MODE_NONE);
+  CHECK(civModeToHamlib(0x03, true) == RIG_MODE_NONE);   // there is no CW-D
 }
 
-TEST_CASE("hamlibModeToCiv on an unmapped rmode_t returns 0xFF, never a guess") {
-  CHECK(hamlibModeToCiv(RIG_MODE_PKTUSB) == 0xFF);
+TEST_CASE("hamlibModeToCiv on an unmapped rmode_t returns false, never a guess") {
+  uint8_t civ = 0x42;
+  bool data = false;
+  CHECK_FALSE(hamlibModeToCiv(RIG_MODE_SAM, &civ, &data));
+  CHECK(civ == 0x42);
 }
 
 TEST_CASE("civ_router's own mode table (civModeName) agrees with hamlib_bridge's") {

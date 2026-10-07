@@ -13,6 +13,8 @@
 //     [wifilt.ino:1320] / buildSetFrequencyFrame() [wifilt.ino:1742] -- same
 //     layout tools/icom-lan-fake-radio.py's bcd_from_hz() already proves works.
 //   - mode: single byte, table matches decodeModeName() [wifilt.ino:1349].
+//     0x26 00 adds the DATA byte (26 00 <mode> <data> <filter>), parsed by
+//     processCivBuffer()'s own `case 0x26` -- the only way wifilt shows USB-D.
 //   - 0x14 gain levels: 2-byte value where byte0 is a plain 0-2 "hundreds"
 //     digit and byte1 is packed BCD tens|units, see encodeCivLevel()
 //     [wifilt.ino:5511] / decodeCivBcdBytes() [wifilt.ino:1330].

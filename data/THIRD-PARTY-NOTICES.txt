@@ -237,7 +237,7 @@ License: GNU Lesser General Public License version 2.1 or later (the
 library itself; some optional backends/frontends not used here are GPL).
 Upstream: https://github.com/Hamlib/Hamlib
 Cross-compiled version pin (Windows/ARM64 builds only; the Linux build
-links the host's own libhamlib-dev): 4.5.5.
+links the host's own libhamlib-dev): 4.7.2.
 
 libserialport (LOCAL-TRX)
 --------------------------

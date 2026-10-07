@@ -5,6 +5,7 @@
 #include "doctest.h"
 
 #include <string>
+#include <vector>
 
 #include "../src/civ_router.h"
 
@@ -14,19 +15,33 @@ namespace {
 
 class FakeRig : public RigBackend {
  public:
-  double  getFreqHz() override { return freqHz_; }
-  bool    setFreqHz(double hz) override { freqHz_ = hz; return true; }
-  uint8_t getModeByte() override { return mode_; }
-  bool    setModeByte(uint8_t mode) override { mode_ = mode; return true; }
-  int32_t getRitHz() override { return ritHz_; }
-  bool    setRitHz(int32_t hz) override { ritHz_ = hz; return true; }
-  uint8_t getGain(GainKind kind) override {
+  bool getFreqHz(double *hz) override {
+    if (!readsOk) return false;
+    *hz = freqHz_;
+    return true;
+  }
+  bool setFreqHz(double hz) override { freqHz_ = hz; return true; }
+  bool getMode(uint8_t *mode, bool *data) override {
+    if (!readsOk) return false;
+    *mode = mode_;
+    *data = data_;
+    return true;
+  }
+  bool setMode(uint8_t mode, bool data) override { mode_ = mode; data_ = data; return true; }
+  bool getRitHz(int32_t *hz) override {
+    if (!readsOk) return false;
+    *hz = ritHz_;
+    return true;
+  }
+  bool setRitHz(int32_t hz) override { ritHz_ = hz; return true; }
+  bool getGain(GainKind kind, uint8_t *value) override {
+    if (!readsOk) return false;
     switch (kind) {
-      case GainKind::Af:      return af_;
-      case GainKind::Rf:      return rf_;
-      case GainKind::RfPower: return rfPower_;
+      case GainKind::Af:      *value = af_; break;
+      case GainKind::Rf:      *value = rf_; break;
+      case GainKind::RfPower: *value = rfPower_; break;
     }
-    return 0;
+    return true;
   }
   bool setGain(GainKind kind, uint8_t value) override {
     switch (kind) {
@@ -64,8 +79,10 @@ class FakeRig : public RigBackend {
     return true;
   }
 
+  bool readsOk = true;   // false = every CAT read fails (timeout / garbled reply)
   double freqHz_ = 7035920;
   uint8_t mode_ = 0x03;
+  bool data_ = false;
   int32_t ritHz_ = 0;
   uint8_t af_ = 200;
   uint8_t rf_ = 255;
@@ -189,6 +206,61 @@ TEST_CASE("dispatchCiv 0x04/0x06 mode read and write") {
   CivResult w = dispatchCiv({0x06, 0x03, 0x01}, rig);   // set CW
   CHECK(w.answered);
   CHECK(rig.mode_ == 0x03);
+}
+
+TEST_CASE("dispatchCiv 0x04 is data-blind: USB-D reads back as plain USB, like a real ICOM") {
+  FakeRig rig;
+  rig.mode_ = 0x01;
+  rig.data_ = true;
+  CivResult r = dispatchCiv({0x04}, rig);
+  REQUIRE(r.answered);
+  CHECK(r.payload == std::vector<uint8_t>{0x04, 0x01, 0x01});
+}
+
+TEST_CASE("dispatchCiv 0x06 selects the plain mode, clearing DATA") {
+  FakeRig rig;
+  rig.mode_ = 0x01;
+  rig.data_ = true;
+  CHECK(dispatchCiv({0x06, 0x01, 0x01}, rig).answered);
+  CHECK(rig.mode_ == 0x01);
+  CHECK_FALSE(rig.data_);
+}
+
+TEST_CASE("dispatchCiv 0x26 0x00 reports mode WITH the DATA flag (wifilt's USB-D path)") {
+  FakeRig rig;
+  rig.mode_ = 0x01;
+  rig.data_ = true;
+  CivResult r = dispatchCiv({0x26, 0x00}, rig);
+  REQUIRE(r.answered);
+  // 26 00 <mode> <data> <filter> -- the shape processCivBuffer()'s case 0x26 parses.
+  CHECK(r.payload == std::vector<uint8_t>{0x26, 0x00, 0x01, 0x01, 0x01});
+
+  rig.data_ = false;
+  r = dispatchCiv({0x26, 0x00}, rig);
+  REQUIRE(r.answered);
+  CHECK(r.payload[3] == 0x00);
+}
+
+TEST_CASE("dispatchCiv 0x26 0x00 write sets mode and DATA; unselected VFO is not modelled") {
+  FakeRig rig;
+  CivResult w = dispatchCiv({0x26, 0x00, 0x00, 0x01, 0x01}, rig);   // LSB-D, FIL1
+  CHECK(w.answered);
+  CHECK(w.payload == std::vector<uint8_t>{0xFB});
+  CHECK(rig.mode_ == 0x00);
+  CHECK(rig.data_);
+
+  CHECK_FALSE(dispatchCiv({0x26, 0x01}, rig).answered);
+  CHECK_FALSE(dispatchCiv({0x26}, rig).answered);
+}
+
+TEST_CASE("dispatchCiv: a failed CAT read is no reply, never an invented value") {
+  FakeRig rig;
+  rig.readsOk = false;
+  CHECK_FALSE(dispatchCiv({0x03}, rig).answered);
+  CHECK_FALSE(dispatchCiv({0x04}, rig).answered);
+  CHECK_FALSE(dispatchCiv({0x26, 0x00}, rig).answered);
+  CHECK_FALSE(dispatchCiv({0x14, 0x01}, rig).answered);
+  CHECK_FALSE(dispatchCiv({0x21, 0x00}, rig).answered);
 }
 
 TEST_CASE("dispatchCiv 0x14 AF/RF gain read and write") {

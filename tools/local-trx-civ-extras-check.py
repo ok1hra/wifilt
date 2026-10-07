@@ -130,10 +130,21 @@ def main():
         send_civ(bytes([0xFE, 0xFE, civ_addr, CTRL_ADDR]) + bytes(body) + bytes([0xFD]))
         return recv_civ_frame(timeout)
 
+    # local-trx answers levels/meters from a cache its CAT thread fills only
+    # while somebody keeps asking (src/cached_rig.h) -- exactly how wifilt's
+    # own aux-poll rotation behaves. A single unanswered ask is therefore
+    # "not read yet", not "unsupported": ask again a few times, like wifilt.
+    def send_and_wait_retrying(body, attempts=5, timeout=0.5):
+        for _ in range(attempts):
+            frame = send_and_wait(body, timeout=timeout)
+            if frame is not None:
+                return frame
+        return None
+
     all_ok = True
 
     def expect_exact(label, body, expect_payload):
-        frame = send_and_wait(body)
+        frame = send_and_wait_retrying(body)
         expected = bytes([0xFE, 0xFE, CTRL_ADDR, civ_addr]) + bytes(expect_payload) + bytes([0xFD])
         ok = frame == expected
         print(f"  {'ok' if ok else 'FAIL'}  {label}: {frame.hex() if frame else None}")
@@ -146,7 +157,7 @@ def main():
         return ok
 
     def expect_answered_prefix(label, body, cmd, sub):
-        frame = send_and_wait(body)
+        frame = send_and_wait_retrying(body)
         ok = frame is not None and len(frame) >= 6 and frame[4] == cmd and frame[5] == sub
         extra = decode_civ_level(frame[6], frame[7]) if ok and len(frame) >= 8 else None
         print(f"  {'ok' if ok else 'FAIL'}  {label}: {frame.hex() if frame else None}"
