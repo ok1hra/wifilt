@@ -1519,7 +1519,35 @@
     dom.rttyRfPercentSet.addEventListener("click", () => rfPowerAuto.setFromField());
   }
 
-  LanGate.gate().then(ready => {
+  // The station keeps these settings (data/station-profile.js, the "rtty"
+  // half) and its copy overrules this browser's -- except the tone, which stays
+  // where this page is listening. Fetched beside LanGate.gate() so the panel
+  // below is drawn from what the station keeps rather than redrawn a moment
+  // later. Everything goes through the setters the controls use, because the
+  // decoders, the tape and the pills were built from the local copy already.
+  function adoptStationSettings() {
+    if (!window.StationProfile) return Promise.resolve();
+    return StationProfile.adoptHalf("rtty", settings, RttySettings.isSaved(window.localStorage))
+      .then(station => {
+        if (!station) return;
+        const next = RttySettings.save(window.localStorage, station, {localOnly: true});
+        const dualBefore = settings.secondDecoder;
+        Object.assign(settings, next);
+        if (settings.squelchDb > 0) squelchOnDb = settings.squelchDb;
+        if (settings.secondDecoder && !dualBefore) {
+          decoder2.reset();
+          decoder2.totalSamples = decoder.totalSamples;
+        }
+        rxLog.setDual(settings.secondDecoder);
+        setCleanText(settings.cleanText);
+        if (fskSync.active() && !fskSync.fromRadio()) fskSync.setMarkHz(settings.fskMarkHz);
+        if (!settings.afcEnabled) afcReset();
+        applyEffective();
+      })
+      .catch(() => {});
+  }
+
+  Promise.all([LanGate.gate(), adoptStationSettings()]).then(([ready]) => {
     if (!ready) return;
 
     dom.rttySquelchInput.min = String(RttySettings.SQUELCH_DB_MIN);

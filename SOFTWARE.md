@@ -3867,6 +3867,19 @@ Download a copy before any firmware update, and before any experiment you might 
 undo. When restoring a device from scratch, upload the file **first**, before setting
 anything by hand.
 
+The file holds the whole station: WiFi, the radios and their saved presets, identity, DXC,
+CW and frequency memories, the log settings and QRPlog macros, every TX audio calibration,
+the JS8, WSPR, RTTY and Mercury settings (including their band schedules), the Mercury
+tuning and the band decoder. Not in it:
+
+- the **QSO log** — it lives in the browser; back it up in LOGSYNC ([chapter 10](#10-logsync));
+- the **MSG BOX** — stored messages cannot be exported;
+- the **GIT LOG SYNC** repository and token — kept out on purpose, because a configuration
+  file is something people mail around ([section 3.15](#git-log-sync));
+- what belongs to one computer rather than the station: its clock correction, the tone the
+  RTTY decoder is listening on, the DXC filters and which panels are open. A firmware
+  update does not touch these — they stay in that browser.
+
 The page footer links to the licence notices the device serves from its own filesystem.
 
 ---

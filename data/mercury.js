@@ -697,6 +697,20 @@
   function slotText(slot) { return slot ? (slot.band || MercuryTrxPresets.formatFrequency(slot.hz)) : ""; }
   function persistTimetable() { persistMercurySettings(); }
 
+  // The station keeps the schedule (data/station-profile.js, the "mercury"
+  // half) and its copy overrules this browser's; a schedule saved only here,
+  // before it moved, becomes the station's when the station has none yet.
+  function adoptStationSchedule() {
+    if (!window.StationProfile) return Promise.resolve();
+    return StationProfile.adoptHalf("mercury", mercurySettings,
+      MercurySettings.isSaved(window.localStorage)).then(station => {
+      if (!station) return;
+      mercurySettings = MercurySettings.save(window.localStorage, station, {localOnly: true});
+      renderTimetableGrid();
+      renderTimetableButton();
+    }).catch(() => {});
+  }
+
   function timetableDisplay() {
     const tt = timetable();
     if (!tt.enabled) return {text: "OFF", active: false};
@@ -1000,8 +1014,8 @@
   // §6.6 Settings (2026-08-23 grill-me): ARQ retry/CALLINT/downgrade/mode-
   // ceiling/transfer-limit + RF power. /mercury-tuning.json, ONE station-wide
   // source -- see mercury-tuning.js's own header for why this is not
-  // data/mercury-settings.js's MercurySettings (that one is localStorage,
-  // scoped to the frequency timetable alone). Read once at page load,
+  // data/mercury-settings.js's MercurySettings (that one is scoped to the
+  // frequency timetable alone). Read once at page load,
   // written only by SAVE/RESET or a manual power SET; mercury-worker.js
   // reads the same file itself at the START of every session (never
   // mid-transfer -- see mercury-status-plan/mercury-settings-plan memory).
@@ -1340,6 +1354,7 @@
     dom.tuningReset.addEventListener("click", onTuningReset);
     dom.tuningPowerSet.addEventListener("click", setTuningPowerFromField);
     loadTuning();
+    adoptStationSchedule();
 
     createGainPlan();
     // Adopt the shared matrix and import plans left in either legacy result

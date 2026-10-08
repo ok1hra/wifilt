@@ -11,6 +11,45 @@ published.
 
 ## Working tree — not committed
 
+**SETUP backup: the QRPlog macros and the Mercury tuning now travel with it.**
+
+`/config/download` left out two files the station keeps on the configuration partition:
+`log-macros.json` (the CW/RTTY macro wording in QRPlog) and `mercury-tuning.json` (Mercury
+ARQ retries, ceiling, transfer limit, RF power). A restore after an erase brought back
+everything else and quietly reset those two to defaults. Both are now in the backup as
+`logMacros` and `mercuryTuning` and restored the same way as the JS8 profile, including
+the refusal of an oversized section. The GIT LOG SYNC settings stay out on purpose: they
+hold a token that can write to the operator's repository, and a backup is a file people
+mail around. `tools/config-backup-smoke.js` checks both new keys and that the token stays
+out; a round trip between two native instances restores both files byte for byte.
+
+**RTTY settings and the Mercury band schedule are kept by the station, not the browser.**
+
+The RTTY page (and its QRPlog palette) kept RF power, squelch, USOS, Normal/Reverse, TX
+polarity, DEC 2, CLEAN, AFC and the FSK mark frequency in each browser's localStorage, and
+the Mercury page its band schedule. A second computer ran the same station with other
+values, and the SETUP backup could not carry them. They now live in the station profile
+(`/js8-config.json`) beside JS8 and WSPR, and so in the backup too. The station's copy wins
+on page load; a copy saved only in this browser becomes the station's when the station has
+none yet, while a browser that never saved anything does not push its defaults. The RTTY
+tone stays per browser: it is where the decoder is listening and moves with every click.
+
+* **Every page's save used to keep only the JS8 and WSPR halves** of the shared file. With
+  four halves, any half missing from that list would have been erased by the next save on
+  another page; `station-profile.js` now knows all four, and the smoke test saves each
+  half and checks that the other three survive.
+* A save that changes nothing the station stores (a tone-only click) is not sent.
+* The CAL PLAN columns and the SETUP calibration overview read each mode's RF power from
+  the station profile, no longer from whichever pages had been opened in this browser.
+* **The profile cap went from 8 to 32 kB.** The old cap was already within reach: six
+  TELEMETRY jobs at their limits are about 10 kB of JS8, and a WSPR day full of RX items
+  with power references is about 12 kB. The worst case built from the pages' own limits is
+  24 kB.
+* **`/config/download` is streamed** (chunked, each file read in 1 kB pieces) instead of
+  being built as one String of tens of kB, and the SETUP restore sends the station profile
+  to `/js8-config.json` on its own and first, so a refused profile stops the restore before
+  anything is overwritten and the restore body stays the size it was.
+
 **local-trx: an IC-7300 over hamlib — nonsense frequencies, wrong mode, empty waterfall.**
 
 First field report of `local-trx` on Windows with an ICOM (IC-7300, non-MK2). Until now it

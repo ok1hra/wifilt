@@ -15,12 +15,18 @@
 // answer the same way for QRPLOG as for this page, from any computer -- see
 // rtty.js's own loadFskConfig()/saveFskOutput().
 //
-// txPolarity (grilled 2026-08-28, 2nd session, item 3) IS per-browser
-// localStorage, unlike fskOutputMode above: it is the AFSK encoder's own
-// mark/space assignment, which is genuinely a property of how this operator
-// has this page's audio tone set up, not of the station as a whole the way
-// the FSK GPIO wiring is. Deliberately a field of its own rather than reusing
-// `reverse` -- see its own comment below.
+// txPolarity (grilled 2026-08-28, 2nd session, item 3) is the AFSK encoder's
+// own mark/space assignment. It was kept per-browser at first, as a property
+// of how one operator had the page's audio set up; since 2026-10-07 it follows
+// the station like the rest of this store, because it is what the station puts
+// on the air and a second computer keying the same radio must agree with it.
+// Deliberately a field of its own rather than reusing `reverse` -- see its own
+// comment below.
+//
+// Where this store lives: localStorage first, as the cache the page draws from,
+// and the station's own copy (the "rtty" half of /js8-config.json, see
+// data/station-profile.js and save() below) as the authority -- except toneHz,
+// which is where this browser is listening right now and stays here.
 //
 // rfPercent (grilled 2026-08-27, second session, item 13) follows JS8's own
 // rfPercent field verbatim: null means "nothing chosen, leave the radio
@@ -178,11 +184,36 @@
     } catch (_error) { return defaults(); }
   }
 
-  function save(storage, input) {
+  // Every save also goes to the station (data/station-profile.js, the "rtty"
+  // half of /js8-config.json), debounced there, so the settings follow the
+  // station to every browser and into the SETUP backup. Here rather than in
+  // each caller because there are several -- the full page and the QRPlog
+  // palette both save -- and a caller that forgot would leave the station
+  // quietly behind. `localOnly` is for the one save that must not go back up:
+  // taking the station's own copy over. Resolved at call time, not load time,
+  // so this file stays independent of the order the scripts load in.
+  let stationWriter = null;
+  function pushToStation(settings) {
+    const profile = typeof globalThis !== "undefined" ? globalThis.StationProfile : null;
+    if (!profile || !profile.writer) return;
+    if (!stationWriter) stationWriter = profile.writer("rtty", 1500);
+    stationWriter(settings);
+  }
+
+  function save(storage, input, options) {
     const settings = normalize(input);
     try { storage.setItem(STORAGE_KEY, JSON.stringify(settings)); }
     catch (_error) { /* private mode, or storage full -- the page keeps running in memory */ }
+    if (!(options && options.localOnly)) pushToStation(settings);
     return settings;
+  }
+
+  // Whether the operator ever saved anything in this browser -- as opposed to
+  // load() handing back the defaults. Only a real saved copy may become the
+  // station's half (StationProfile.adoptHalf).
+  function isSaved(storage) {
+    try { return !!(storage && storage.getItem(STORAGE_KEY)); }
+    catch (_error) { return false; }
   }
 
   return {STORAGE_KEY, SCHEMA_VERSION, TONE_MIN_HZ, TONE_MAX_HZ,
@@ -191,5 +222,5 @@
           AFC_RATE_MIN_HZ_PER_CHAR, AFC_RATE_MAX_HZ_PER_CHAR,
           AFC_MAX_DEVIATION_MIN_HZ, AFC_MAX_DEVIATION_HARD_CAP_HZ,
           FSK_MARK_CHOICES_HZ,
-          defaults, normalize, load, save};
+          defaults, normalize, load, save, isSaved};
 });

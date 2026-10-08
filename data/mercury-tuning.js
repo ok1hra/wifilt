@@ -1,9 +1,10 @@
 // Mercury ARQ/RF-power tuning settings (docs/mercury-implementace.md §6.6,
 // the 2026-08-23 grill-me). Deliberately a SEPARATE module and a SEPARATE
 // server-side file from data/mercury-settings.js's own MercurySettings --
-// that store is localStorage, per-browser, and scoped to the frequency
-// timetable alone (ch.13, a personal browsing preference, same as JS8's own
-// freqTimetable). This one is the opposite kind of setting: retry counts,
+// that store is scoped to the frequency timetable alone and was localStorage,
+// per-browser, until 2026-10-07; it now follows the station through
+// data/station-profile.js, the same move JS8's own freqTimetable made. This
+// one is a different concern rather than a different kind: retry counts,
 // mode ceiling and RF power are properties of the STATION, not the browser,
 // so they live in one server-side blob (/mercury-tuning.json, same pattern
 // as /mercury-txgain.json) and read the same everywhere this station is

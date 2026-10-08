@@ -142,7 +142,7 @@ volatile bool cwIpSendPending = false;
 #ifndef LOOP_WARN_MS
   #define LOOP_WARN_MS 200
 #endif
-#define REV 20261007
+#define REV 20261008
 #define WIFI
 #define FSK_KEYING  // RTTY by keying the FSK + PTT outputs (was UDP_TO_FSK, from when a UDP port fed it)
 #define WDT         // watchdog timer
@@ -910,24 +910,33 @@ int incomingByte = 0;   // for incoming serial data
   // ARQ retry/CALLINT/downgrade/mode-ceiling + transfer-size-limit + RF power
   // (docs/mercury-implementace.md §6.6, the 2026-08-23 grill-me). A separate
   // file from MERCURY_TXGAIN_CONFIG_PATH above (different concern) and from
-  // data/mercury-settings.js's own MercurySettings (that one is localStorage,
-  // per-browser, scoped to the frequency timetable alone -- see
+  // data/mercury-settings.js's own MercurySettings (the frequency timetable
+  // alone, kept as the "mercury" half of JS8_CONFIG_PATH below -- see
   // data/mercury-tuning.js's own header for why the two must not merge).
   // Small flat blob, same generous headroom style as MERCURY_TXGAIN_MAX_BYTES.
   static const char* MERCURY_TUNING_CONFIG_PATH = "/mercury-tuning.json";
   static const size_t MERCURY_TUNING_MAX_BYTES = 2048;
-  // The JS8 and WSPR operating profile: speed, TX offset, heartbeat interval,
-  // groups, the 24 h band schedule, the RF power percent. It used to live in
-  // each browser's localStorage, which meant a second tablet ran the station
-  // with a different schedule and no heartbeat and nothing said so. Same design
-  // as the calibration table -- a blob the firmware stores and never reads into.
+  // The station's operating profile (data/station-profile.js): JS8 -- speed, TX
+  // offset, heartbeat interval, groups, the 24 h band schedule, the RF power
+  // percent -- plus WSPR, RTTY and the Mercury band schedule beside it. It used
+  // to live in each browser's localStorage, which meant a second tablet ran the
+  // station with a different schedule and no heartbeat and nothing said so.
+  // Same design as the calibration table -- a blob the firmware stores and
+  // never reads into.
   static const char* JS8_CONFIG_PATH = "/js8-config.json";
-  // 8 KB, not the 4 KB this held until TELEMETRY arrived: a full 48-slot band
-  // schedule measured 2041 B, but six telemetry jobs of eight fields each add
-  // roughly 5 KB of job definitions on top. Oversize is refused with a 409, and
-  // station-profile.js posts fire-and-forget -- so a ceiling the panel can reach
-  // is a config that stops being shared between browsers without saying so.
-  static const size_t JS8_CONFIG_MAX_BYTES = 8192;
+  // 32 KB. It was 8 KB, which a busy station could already outgrow: six
+  // TELEMETRY jobs of eight fields with full-length peer and topic names come
+  // to about 10 kB of JS8, and a WSPR day filled with RX items plus a power
+  // reference for every band at every level to about 12 kB more. RTTY and the
+  // Mercury schedule (2026-10-07) add 2 kB. tools/station-profile-smoke.js
+  // builds that worst case (24 kB) from the pages' own limits and holds it
+  // under this cap; a typical profile is a few kB. Oversize is refused
+  // with a 409, and station-profile.js posts fire-and-forget -- so a ceiling
+  // the panels can reach is a config that stops being shared between browsers
+  // without saying so. The backup streams the file rather than holding it, and
+  // the restore page sends it on its own, so neither builds a body this size
+  // plus everything else in RAM.
+  static const size_t JS8_CONFIG_MAX_BYTES = 32768;
 
   // QRPlog CW/RTTY macro templates (CQ/TXEXCH/TXEXCHSP/TXEXCHSP2/TU/CALLTU,
   // x2 for CW vs RTTY -- 12 short strings). Same blob-store convention as the
@@ -3662,6 +3671,32 @@ static void eepromWriteTrxPrio(const String &s) {
   }
 }
 
+// One blob file into the streamed backup, under `key`, read in 1 kB pieces --
+// only when the file holds a JSON object, the same rule the String version
+// applied with startsWith("{"). Whitespace around it is legal JSON as it is.
+static void configDownloadBlob(const char* key, const char* path) {
+  if (!cfgFS.exists(path)) return;
+  File f = cfgFS.open(path, "r");
+  if (!f) return;
+  int c = f.peek();
+  while (c == ' ' || c == '\n' || c == '\r' || c == '\t') { f.read(); c = f.peek(); }
+  if (c != '{') { f.close(); return; }
+  String lead = ",\"";
+  lead += key;
+  lead += "\":";
+  webServer.sendContent(lead);
+  uint8_t buf[1024];
+  size_t got;
+  while ((got = f.read(buf, sizeof(buf))) > 0) webServer.sendContent((const char*)buf, got);
+  f.close();
+}
+
+// The backup goes out in pieces rather than as one String. With the station
+// profile (JS8_CONFIG_MAX_BYTES) beside the calibration tables it reaches tens
+// of kB, and growing a String that large is a realloc that needs the old and
+// the new block at once, on a heap the LAN audio has already fragmented. The
+// small fields still go as one String; every blob file is read straight
+// through. Both web servers end a chunked response themselves.
 void handleConfigDownload() {
   char civHex[3];
   snprintf(civHex, sizeof(civHex), "%02X", configuredCivAddress);
@@ -3701,113 +3736,61 @@ void handleConfigDownload() {
   j += ",\"dxclocator\":\""; j += configJsonEscape(DxcLocator);  j += "\"";
   j += ",\"dxcmaphost\":\""; j += configJsonEscape(DxcMapHost);  j += "\"";
   j += ",\"btname\":\"";     j += configJsonEscape(BT_NAME);     j += "\"";
-  if (cfgFS.exists(RADIO_CONFIG_PATH)) {
-    File radioFile = cfgFS.open(RADIO_CONFIG_PATH, "r");
-    if (radioFile) {
-      String radioJson = radioFile.readString();
-      radioFile.close();
-      radioJson.trim();
-      if (radioJson.startsWith("{")) {
-        j += ",\"radioConfig\":";
-        j += radioJson;
-      }
-    }
-  }
-  // Per-slot named configurations travel with the rest of the persisted
-  // state -- same rationale as txGain below: a first flash wipes the
-  // filesystem, and without this the operator would silently lose every
-  // saved radio profile on reflash, not just the live one.
-  if (cfgFS.exists(RADIO_PRESETS_PATH)) {
-    File presetsFile = cfgFS.open(RADIO_PRESETS_PATH, "r");
-    if (presetsFile) {
-      String presetsJson = presetsFile.readString();
-      presetsFile.close();
-      presetsJson.trim();
-      if (presetsJson.startsWith("{")) {
-        j += ",\"radioPresets\":";
-        j += presetsJson;
-      }
-    }
-  }
-  String lc = readLogConfigJson();
-  if (lc.startsWith("{")) {
-    j += ",\"logConfig\":";
-    j += lc;
-  }
-  // Calibrations are measurements, and the first full flash wipes the
-  // filesystem -- so without this a reflash silently costs every band and power
-  // the operator ever calibrated, each of them a 20 s carrier on the air to get
-  // back. Embedded verbatim, exactly like radioConfig and logConfig above.
-  if (cfgFS.exists(TXGAIN_CONFIG_PATH)) {
-    File txgainFile = cfgFS.open(TXGAIN_CONFIG_PATH, "r");
-    if (txgainFile) {
-      String txgainJson = txgainFile.readString();
-      txgainFile.close();
-      txgainJson.trim();
-      if (txgainJson.startsWith("{")) {
-        j += ",\"txGain\":";
-        j += txgainJson;
-      }
-    }
-  }
-  if (cfgFS.exists(TXGAIN_PLAN_CONFIG_PATH)) {
-    File planFile = cfgFS.open(TXGAIN_PLAN_CONFIG_PATH, "r");
-    if (planFile) {
-      String planJson = planFile.readString();
-      planFile.close();
-      planJson.trim();
-      if (planJson.startsWith("{")) {
-        j += ",\"txGainPlan\":";
-        j += planJson;
-      }
-    }
-  }
-  if (cfgFS.exists(MERCURY_TXGAIN_CONFIG_PATH)) {
-    File mercuryGainFile = cfgFS.open(MERCURY_TXGAIN_CONFIG_PATH, "r");
-    if (mercuryGainFile) {
-      String mercuryGainJson = mercuryGainFile.readString();
-      mercuryGainFile.close();
-      mercuryGainJson.trim();
-      if (mercuryGainJson.startsWith("{")) {
-        j += ",\"mercuryTxGain\":";
-        j += mercuryGainJson;
-      }
-    }
-  }
-  // The operating profile travels with the rest. It moved out of the browser in
-  // 2026-08-08 precisely so it would stop being the one thing a backup could not
-  // carry, and the restore below has to know the same key.
-  if (cfgFS.exists(JS8_CONFIG_PATH)) {
-    File js8File = cfgFS.open(JS8_CONFIG_PATH, "r");
-    if (js8File) {
-      String js8Json = js8File.readString();
-      js8File.close();
-      js8Json.trim();
-      if (js8Json.startsWith("{")) {
-        j += ",\"js8Config\":";
-        j += js8Json;
-      }
-    }
-  }
-  if (bdEnabled) {
-    j += ",\"bd\":{\"source\":"; j += bdSource;
-    j += ",\"rows\":[";
-    for (int i = 0; i < BD_ROWS; i++) {
-      if (i > 0) j += ",";
-      j += "{\"fMin\":"; j += bdRows[i].fMin;
-      j += ",\"fMax\":"; j += bdRows[i].fMax;
-      j += ",\"outputs\":"; j += bdRows[i].outputs;
-      j += "}";
-    }
-    j += "]}";
-  }
-  j += "}";
   webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   webServer.sendHeader("Pragma", "no-cache");
   webServer.sendHeader("Content-Disposition", "attachment; filename=\"wifilt-config.json\"");
   webServer.sendHeader("Connection", "close");
   webServer.client().setNoDelay(true);
-  webServer.send(200, "application/json", j);
+  webServer.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  webServer.send(200, "application/json", "");
+  webServer.sendContent(j);
+  j = String();
+
+  configDownloadBlob("radioConfig", RADIO_CONFIG_PATH);
+  // Per-slot named configurations travel with the rest of the persisted
+  // state -- same rationale as txGain below: a first flash wipes the
+  // filesystem, and without this the operator would silently lose every
+  // saved radio profile on reflash, not just the live one.
+  configDownloadBlob("radioPresets", RADIO_PRESETS_PATH);
+  {
+    String lc = readLogConfigJson();
+    if (lc.startsWith("{")) {
+      webServer.sendContent(",\"logConfig\":");
+      webServer.sendContent(lc);
+    }
+  }
+  // Calibrations are measurements, and the first full flash wipes the
+  // filesystem -- so without this a reflash silently costs every band and power
+  // the operator ever calibrated, each of them a 20 s carrier on the air to get
+  // back. Embedded verbatim, exactly like radioConfig and logConfig above.
+  configDownloadBlob("txGain", TXGAIN_CONFIG_PATH);
+  configDownloadBlob("txGainPlan", TXGAIN_PLAN_CONFIG_PATH);
+  configDownloadBlob("mercuryTxGain", MERCURY_TXGAIN_CONFIG_PATH);
+  // The station profile -- JS8, WSPR, RTTY and the Mercury schedule -- travels
+  // with the rest. It moved out of the browser precisely so it would stop being
+  // the one thing a backup could not carry, and the restore below has to know
+  // the same key.
+  configDownloadBlob("js8Config", JS8_CONFIG_PATH);
+  // The QRPlog CW/RTTY macro wording and the Mercury ARQ tuning are station
+  // settings kept on the configuration partition like the blobs above, so
+  // they travel with them. The GIT LOG SYNC file next to them does not: it
+  // holds a token that can write to the operator's repo (git-backup.json).
+  configDownloadBlob("logMacros", LOG_MACROS_PATH);
+  configDownloadBlob("mercuryTuning", MERCURY_TUNING_CONFIG_PATH);
+  if (bdEnabled) {
+    String b = ",\"bd\":{\"source\":"; b += bdSource;
+    b += ",\"rows\":[";
+    for (int i = 0; i < BD_ROWS; i++) {
+      if (i > 0) b += ",";
+      b += "{\"fMin\":"; b += bdRows[i].fMin;
+      b += ",\"fMax\":"; b += bdRows[i].fMax;
+      b += ",\"outputs\":"; b += bdRows[i].outputs;
+      b += "}";
+    }
+    b += "]}";
+    webServer.sendContent(b);
+  }
+  webServer.sendContent("}");
 }
 
 void handleConfigUpload() {
@@ -4030,6 +4013,42 @@ void handleConfigUpload() {
         if (f) f.close();
         webServer.send(500, "application/json",
           "{\"ok\":false,\"error\":\"storage\",\"section\":\"js8Config\"}");
+        return;
+      }
+      f.close();
+    }
+  }
+
+  {
+    String macrosCfg = extractJsonObject(body, "logMacros");
+    if (macrosCfg.length() > LOG_MACROS_MAX_BYTES) {
+      rejectOversize("logMacros", macrosCfg.length(), LOG_MACROS_MAX_BYTES);
+      return;
+    }
+    if (macrosCfg.length() > 0) {
+      File f = cfgFS.open(LOG_MACROS_PATH, "w");
+      if (!f || f.print(macrosCfg) != macrosCfg.length()) {
+        if (f) f.close();
+        webServer.send(500, "application/json",
+          "{\"ok\":false,\"error\":\"storage\",\"section\":\"logMacros\"}");
+        return;
+      }
+      f.close();
+    }
+  }
+
+  {
+    String tuningCfg = extractJsonObject(body, "mercuryTuning");
+    if (tuningCfg.length() > MERCURY_TUNING_MAX_BYTES) {
+      rejectOversize("mercuryTuning", tuningCfg.length(), MERCURY_TUNING_MAX_BYTES);
+      return;
+    }
+    if (tuningCfg.length() > 0) {
+      File f = cfgFS.open(MERCURY_TUNING_CONFIG_PATH, "w");
+      if (!f || f.print(tuningCfg) != tuningCfg.length()) {
+        if (f) f.close();
+        webServer.send(500, "application/json",
+          "{\"ok\":false,\"error\":\"storage\",\"section\":\"mercuryTuning\"}");
         return;
       }
       f.close();

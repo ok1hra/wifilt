@@ -56,7 +56,8 @@
       <script src="/port-move-banner.js?v=7e3a569f"></script>
       <script src="/icom-models.js?v=ddc6caa5"></script>
       <script src="/wspr-core.js?v=981ff9bf"></script>
-      <script src="/tx-mode-powers.js?v=fae0808f"></script>
+      <script src="/station-profile.js?v=317b4ccb"></script>
+      <script src="/tx-mode-powers.js?v=f14b9900"></script>
       <script src="/icom-discovery.js?v=dc5654a5"></script>
       <script src="/audio-health.js?v=9efe092e"></script>
       <script src="/setup-spine.js?v=54e58741"></script>
@@ -1646,10 +1647,14 @@
         var mercury = fetch('/mercury-txgain.json', { cache: 'no-store' })
           .then(function (r) { return r.ok ? r.json() : null; })
           .catch(function () { return null; });
+        // The power each mode transmits at comes from the station's profile
+        // (TxModePowers reads what StationProfile last saw), not from whichever
+        // pages happen to have been opened in this browser.
+        var profile = window.StationProfile ? window.StationProfile.read() : Promise.resolve(null);
         return fetch('/txgain.json', { cache: 'no-store' })
           .then(function (r) { return r.json(); })
           .then(function (doc) {
-            return mercury.then(function (m) { render(doc, m); return doc; });
+            return Promise.all([mercury, profile]).then(function (r) { render(doc, r[0]); return doc; });
           })
           .catch(function () {
             body.innerHTML = '<span class="txgain-empty">Calibration table unavailable</span>';
@@ -2101,10 +2106,37 @@
           msg.textContent = "Error: invalid JSON";
           return;
         }
-        fetch("/config/upload", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(parsed)
+        // The station profile (JS8, WSPR, RTTY, the Mercury schedule) goes on
+        // its own, first, to the endpoint the pages themselves write: it is the
+        // largest part of the file, and leaving it out keeps the one body the
+        // interface has to hold in RAM for the rest as small as it ever was.
+        // First, so a profile the interface refuses stops the restore before
+        // anything else has been overwritten. /config/upload still takes it
+        // inside the file too, for a backup restored by other means.
+        var profile = parsed && typeof parsed === "object" ? parsed.js8Config : undefined;
+        var rest = parsed;
+        if (profile && typeof profile === "object") {
+          rest = Object.assign({}, parsed);
+          delete rest.js8Config;
+        }
+        var profileSent = !(profile && typeof profile === "object") ? Promise.resolve()
+          : fetch("/js8-config.json", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(profile)
+            }).then(function (r) {
+              if (r.ok) return;
+              return r.json().catch(function () { return {}; }).then(function (info) {
+                throw new Error("station profile: " + (info.error === "too_big"
+                  ? info.bytes + " B is over the " + info.limit + " B limit" : "HTTP " + r.status));
+              });
+            });
+        profileSent.then(function () {
+          return fetch("/config/upload", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(rest)
+          });
         }).then(function(r) {
           if (!r.ok) throw new Error('upload ' + r.status);
           return r.json();
@@ -2137,7 +2169,11 @@
               msg.textContent = "Error: " + (result.error || 'upload');
             }
           })
-          .catch(function () { msg.textContent = "Upload failed — check connection."; });
+          .catch(function (error) {
+            msg.textContent = /^station profile:/.test(error && error.message)
+              ? "Upload failed — " + error.message + ". Nothing was restored."
+              : "Upload failed — check connection.";
+          });
       };
       reader.readAsText(file);
       this.value = "";

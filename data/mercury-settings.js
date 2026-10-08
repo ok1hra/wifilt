@@ -6,6 +6,11 @@
 // smallest store that can hold it rather than a trimmed copy of the JS8 one
 // dragging along fields Mercury has no use for (modem choice, groups,
 // heartbeat interval, ...).
+//
+// localStorage is the cache the page draws from; since 2026-10-07 the station
+// keeps the authority (the "mercury" half of /js8-config.json, see
+// data/station-profile.js and save() below), the same move JS8's own schedule
+// made: where the station listens cannot depend on which screen is open.
 (function (root, factory) {
   const value = factory();
   if (typeof module === "object" && module.exports) module.exports = value;
@@ -54,13 +59,35 @@
     } catch (_error) { return defaults(); }
   }
 
-  function save(storage, input) {
+  // Every save also goes to the station (data/station-profile.js, the
+  // "mercury" half of /js8-config.json), debounced there: the band schedule is
+  // where the station listens, the same fact JS8's own schedule moved to the
+  // station for, and on the station it is also in the SETUP backup.
+  // `localOnly` is for taking the station's own copy over. Resolved at call
+  // time, so this file stays independent of the order the scripts load in.
+  let stationWriter = null;
+  function pushToStation(settings) {
+    const profile = typeof globalThis !== "undefined" ? globalThis.StationProfile : null;
+    if (!profile || !profile.writer) return;
+    if (!stationWriter) stationWriter = profile.writer("mercury", 1500);
+    stationWriter(settings);
+  }
+
+  function save(storage, input, options) {
     const settings = normalize(input);
     try { storage.setItem(STORAGE_KEY, JSON.stringify(settings)); }
     catch (_error) { /* private mode, or storage full -- the page keeps running in memory */ }
+    if (!(options && options.localOnly)) pushToStation(settings);
     return settings;
   }
 
+  // Whether the operator ever saved a schedule in this browser, as opposed to
+  // load() handing back the defaults -- only that may become the station's.
+  function isSaved(storage) {
+    try { return !!(storage && storage.getItem(STORAGE_KEY)); }
+    catch (_error) { return false; }
+  }
+
   return {STORAGE_KEY, SCHEMA_VERSION, TIMETABLE_SLOTS, TIMETABLE_MIN_HZ, TIMETABLE_MAX_HZ,
-          normalizeTimetable, defaults, normalize, load, save};
+          normalizeTimetable, defaults, normalize, load, save, isSaved};
 });

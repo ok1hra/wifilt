@@ -1119,6 +1119,19 @@
       save();
     });
 
+    // The station keeps the RTTY settings (data/station-profile.js) and its
+    // copy overrules this browser's, the same as on the full page -- except the
+    // tone, which stays where this browser is listening. reloadSettings() is
+    // the path a change from another tab already takes.
+    if (global.StationProfile) {
+      global.StationProfile.adoptHalf('rtty', RttySettings.load(localStorage),
+        RttySettings.isSaved(localStorage)).then(function (station) {
+        if (!station) return;
+        RttySettings.save(localStorage, station, {localOnly: true});
+        reloadSettings();
+      });
+    }
+
     // Another tab changed the shared RTTY settings on the full page.
     global.addEventListener('storage', function (e) {
       if (e.key === RttySettings.STORAGE_KEY) reloadSettings();

@@ -48,9 +48,23 @@ const upload = body("void handleConfigUpload()");
 check("the download handler was found", download.length > 100);
 check("the restore handler was found", upload.length > 100);
 
+// ---- the backup is streamed, not built ------------------------------------
+// With the station profile at up to 32 kB beside the calibration tables, one
+// String holding the whole file would need that much contiguous heap twice
+// over while it grows.
+check("the backup is sent chunked", /setContentLength\(CONTENT_LENGTH_UNKNOWN\)/.test(download));
+check("every blob file is streamed through the helper, not read into a String",
+  !/readString\(\)/.test(download));
+const helper = body("static void configDownloadBlob(const char* key, const char* path)");
+check("the streaming helper exists", helper.length > 100);
+check("the helper embeds only a JSON object", /if \(c != '\{'\)/.test(helper));
+check("the helper reads the file in pieces", /f\.read\(buf, sizeof\(buf\)\)/.test(helper));
+
 // ---- every emitted key is consumed ----------------------------------------
 const emitted = new Set();
 for (const match of download.matchAll(/\\"([a-zA-Z0-9_]+)\\":/g)) emitted.add(match[1]);
+// The blob files are streamed by a helper, so their keys are its argument.
+for (const match of download.matchAll(/configDownloadBlob\("([a-zA-Z0-9_]+)"/g)) emitted.add(match[1]);
 // The CW and frequency memories are emitted by a loop with snprintf, so their
 // keys never appear as literals on either side; checking for the same loop is
 // what checking them individually would amount to.
@@ -81,10 +95,16 @@ check("every key the backup writes is read back by the restore",
 
 // These blobs carry the operator's real work, so they get
 // named individually rather than trusted to the sweep above.
-for (const blob of ["radioConfig", "logConfig", "txGain", "txGainPlan", "mercuryTxGain"]) {
+for (const blob of ["radioConfig", "logConfig", "txGain", "txGainPlan", "mercuryTxGain",
+                    "logMacros", "mercuryTuning"]) {
   check("the backup carries " + blob, mentions(download, blob));
   check("the restore writes " + blob + " back", mentions(upload, blob));
 }
+
+// The GIT LOG SYNC file holds a token that can write to the operator's repo,
+// and a backup is a file people mail around -- so it stays out on purpose.
+check("the GIT LOG SYNC token is not in the backup",
+  !/GIT_SYNC_PATH/.test(download) && !mentions(download, "gitSync"));
 
 // ---- nothing is dropped in silence ----------------------------------------
 // The failure this file exists for: a section present but too large used to be
@@ -92,7 +112,9 @@ for (const blob of ["radioConfig", "logConfig", "txGain", "txGainPlan", "mercury
 check("an oversized section refuses the restore instead of skipping it",
   /rejectOversize\("logConfig"/.test(upload) && /rejectOversize\("txGain"/.test(upload)
   && /rejectOversize\("txGainPlan"/.test(upload)
-  && /rejectOversize\("mercuryTxGain"/.test(upload));
+  && /rejectOversize\("mercuryTxGain"/.test(upload)
+  && /rejectOversize\("logMacros"/.test(upload)
+  && /rejectOversize\("mercuryTuning"/.test(upload));
 check("the refusal names the section and both sizes",
   /\\"section\\":\\"/.test(upload) && /\\"bytes\\":/.test(upload) && /\\"limit\\":/.test(upload));
 check("the refusal returns early rather than carrying on",
@@ -100,7 +122,9 @@ check("the refusal returns early rather than carrying on",
 check("a failed write of the calibrations is reported, not swallowed",
   /\\"error\\":\\"storage\\",\\"section\\":\\"txGain\\"/.test(upload)
   && /\\"error\\":\\"storage\\",\\"section\\":\\"txGainPlan\\"/.test(upload)
-  && /\\"error\\":\\"storage\\",\\"section\\":\\"mercuryTxGain\\"/.test(upload));
+  && /\\"error\\":\\"storage\\",\\"section\\":\\"mercuryTxGain\\"/.test(upload)
+  && /\\"error\\":\\"storage\\",\\"section\\":\\"logMacros\\"/.test(upload)
+  && /\\"error\\":\\"storage\\",\\"section\\":\\"mercuryTuning\\"/.test(upload));
 // A bare 2048 in three places was how the cap and the check drifted apart.
 check("the log-config cap is a named constant",
   /LOG_CONFIG_MAX_BYTES/.test(sketch) && !/length\(\) > 2048/.test(sketch));

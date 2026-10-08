@@ -225,7 +225,8 @@
        docs/mercury-implementace.md §6.6). All of it lives in
        /mercury-tuning.json, one station-wide source, not this browser's
        localStorage -- data/mercury-settings.js's own MercurySettings next to
-       it is a DIFFERENT store, for the frequency timetable alone. -->
+       it is a DIFFERENT store, for the frequency timetable alone (kept by the
+       station too, in /js8-config.json through station-profile.js). -->
   <details class="compact-section" data-section="settings">
     <summary><span>SETTINGS</span><span id="settingsSummary" class="summary-status"></span></summary>
     <div class="settings mercury-tuning-settings">
@@ -292,7 +293,8 @@
 <script src="/station-identity.js?v=a1a20249"></script>
 <script src="/mercury-session.js?v=285d3936"></script>
 <script src="/mercury-presets.js?v=9f4074aa"></script>
-<script src="/mercury-settings.js?v=aa2a4ac1"></script>
+<script src="/station-profile.js?v=317b4ccb"></script>
+<script src="/mercury-settings.js?v=7c2c1427"></script>
 <!-- CAL PLAN (bullet 3): icom-models.js/wspr-core.js supply model->watts and the
      percent<->CI-V-level math (the same formulas JS8/WSPR already use, not a
      second copy); tx-gain-cal.js/tx-gain-mod-level.js/tx-gain-plan.js are the
@@ -315,9 +317,9 @@
      mercury-settings.js above -- see its own header for why. Both load
      before mercury.js, which references them at top level. -->
 <script src="/spectrum.js?v=7fafbbb5"></script>
-<script src="/mercury-tuning.js?v=4aeb7206"></script>
+<script src="/mercury-tuning.js?v=e5a811f0"></script>
 <script src="/audio-health.js?v=9efe092e"></script>
 <script src="/settings-fold.js?v=b75dee54"></script>
-<script src="/mercury.js?v=35043da4"></script>
+<script src="/mercury.js?v=390287cd"></script>
 </body>
 </html>

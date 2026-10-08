@@ -1012,9 +1012,11 @@ cat > "${OUTPUT_DIR}/index.html" <<EOF
             browser blocks the request.
           </p>
           <p style="margin-top:0.5rem">
-            One thing a backup file never carries: the <strong>MSG BOX</strong>. Stored messages
+            Two things a backup file never carries. The <strong>MSG BOX</strong>: stored messages
             cannot be exported, so anything still waiting there is lost by an erase &mdash; read or
-            forward it first.
+            forward it first. And the <strong>GIT LOG SYNC</strong> repository and token, kept out on
+            purpose because a backup is a file people mail around &mdash; after an erase, enter them
+            again in QRPlog.
           </p>
         </div>
 
@@ -1175,9 +1177,11 @@ $(if [[ "$HAVE_M5ATOM" -eq 1 ]]; then cat <<M5ATOM
             browser blocks the request.
           </p>
           <p style="margin-top:0.5rem">
-            One thing a backup file never carries: the <strong>MSG BOX</strong>. Stored messages
+            Two things a backup file never carries. The <strong>MSG BOX</strong>: stored messages
             cannot be exported, so anything still waiting there is lost by an erase &mdash; read or
-            forward it first.
+            forward it first. And the <strong>GIT LOG SYNC</strong> repository and token, kept out on
+            purpose because a backup is a file people mail around &mdash; after an erase, enter them
+            again in QRPlog.
           </p>
         </div>
 

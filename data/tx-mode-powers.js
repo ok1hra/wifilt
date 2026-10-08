@@ -10,7 +10,9 @@
 //
 // This module names those powers so the calibration can be planned for all of
 // them at once (CAL PLAN columns) and shown per mode (SETUP's overview). It reads
-// each page's own stored settings in this browser; nothing here writes.
+// the station's copy of each page's settings (data/station-profile.js) where the
+// page has seen one, and this browser's stored copy for any mode it has not;
+// nothing here writes.
 //
 // Mercury is deliberately absent: its bursts have ~7.5 dB more peak than a steady
 // tone, so it keeps its own table and its own carrier. RTTY on real FSK keys the
@@ -44,14 +46,19 @@
     var storage = options.storage !== undefined ? options.storage
       : (typeof root.localStorage !== "undefined" ? root.localStorage : null);
     var wsprCore = options.wsprCore || root.WsprCore;
+    var station = options.station !== undefined ? options.station
+      : (root.StationProfile && root.StationProfile.seen ? root.StationProfile.seen() : null);
+    function half(which) {
+      return station && station[which] ? station[which] : readJson(storage, KEYS[which]);
+    }
     var out = [];
 
-    var js8 = readJson(storage, KEYS.js8);
+    var js8 = half("js8");
     var js8Percent = wholePercent(js8 && js8.modems && js8.modems.js8call &&
                                   js8.modems.js8call.rfPercent);
     if (js8Percent) out.push({mode: "JS8", percent: js8Percent, detail: js8Percent + " %"});
 
-    var wspr = readJson(storage, KEYS.wspr);
+    var wspr = half("wspr");
     if (wspr && wsprCore) {
       var model = wspr.modelOverride || options.model || "";
       var full = model ? wsprCore.fullPowerWatts(model) : 0;
@@ -69,7 +76,7 @@
       }
     }
 
-    var rtty = readJson(storage, KEYS.rtty);
+    var rtty = half("rtty");
     var rttyPercent = wholePercent(rtty && rtty.rfPercent);
     if (rttyPercent) out.push({mode: "RTTY", percent: rttyPercent, detail: rttyPercent + " %"});
     return out;

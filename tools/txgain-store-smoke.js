@@ -122,8 +122,9 @@ check("and both sources are reset with a new txId",
 const downloadBody = between(sketch, "void handleConfigDownload()");
 const uploadBody = between(sketch, "void handleConfigUpload()");
 
-const downloadKey = /,\\"([A-Za-z]+)\\":";\s*\n?\s*j \+= txgainJson;/.exec(
-  downloadBody.replace(/\r/g, ""));
+// The backup streams each blob file through configDownloadBlob(key, path)
+// since 2026-10-07, so the key is the argument beside the table's own path.
+const downloadKey = /configDownloadBlob\("([A-Za-z]+)", TXGAIN_CONFIG_PATH\)/.exec(downloadBody);
 check("the backup embeds the table", Boolean(downloadKey));
 // The window was 200 characters until 2026-08-08, when the size guard that
 // refuses an oversized section (instead of skipping it in silence) landed
