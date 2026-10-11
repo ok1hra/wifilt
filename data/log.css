@@ -1260,6 +1260,24 @@ body {
   padding: 5px 6px 6px;
 }
 
+/* STATISTICS over every saved log: the year fold's frame, the Alt+S
+   palette's table (.st-table), with the sums as the first row and column. */
+.lm-stats {
+  border: 1px solid #444444;
+  border-radius: 8px;
+  background: #303030;
+}
+.lm-stats[open] .lm-year-head::before { content: '\25BE'; }
+.lm-stats-body { padding: 4px 10px 8px; overflow-x: auto; }
+.st-table.lm-stats-table { font-family: var(--font-mono); font-size: 14px; color: var(--dark-text); }
+.st-table.lm-stats-table thead th,
+.st-table.lm-stats-table .st-lbl { font-size: 13px; color: var(--dark-muted); }
+.st-table.lm-stats-table .st-sum { border-left: none; border-right: 1px solid #555555; }
+.st-table.lm-stats-table thead th { border-bottom: 1px solid #555555; }
+.st-table.lm-stats-table tr.lm-st-sumrow > * { font-weight: 700; border-bottom: 1px solid #555555; }
+.st-table.lm-stats-table tr.lm-st-sumrow .st-lbl { color: var(--dark-text); }
+.st-table.lm-stats-table tbody tr:not(.lm-st-sumrow):hover > * { background: #3a3a3a; }
+
 .lm-log-total {
   padding: 6px 10px 2px;
   font-size: 14px;

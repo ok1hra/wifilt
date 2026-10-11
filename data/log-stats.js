@@ -103,11 +103,27 @@
     return i < 0 ? 100 : i;
   }
 
-  // Pure: QSOs in, table out. No DOM, so the smoke harness can feed it straight.
-  //   bands     column keys in display order ('?' last, when present)
-  //   rows      [{label, perBand:{band: n}, total}] -- the QSO rows as shown
-  //   mult      null, or {perBand:{band: n}, sum, unique:[...]}
-  function compute(qsos, kind, lookup) {
+  // Bands in display order: _bandFromHz's own order, an unknown band after
+  // those, '?' last.
+  function orderBands(used) {
+    var bands = BAND_ORDER.filter(function (b) { return used[b]; });
+    Object.keys(used).forEach(function (b) {
+      if (b !== '?' && bands.indexOf(b) < 0) bands.push(b);
+    });
+    if (used['?']) bands.push('?');
+    return bands;
+  }
+
+  function orderModes(modes) {
+    return modes.sort(function (a, b) {
+      return (modeRank(a) - modeRank(b)) || (a < b ? -1 : a > b ? 1 : 0);
+    });
+  }
+
+  // One log's QSOs counted the way the palette counts them: deleted ones out,
+  // a dupe (call + band + mode) only once, the first one logged. each(q, band)
+  // sees every QSO that counted.
+  function tally(qsos, each) {
     var list = (qsos || []).filter(function (q) { return q && !q.deleted; });
     // Oldest first, so the QSO that counts is the first one logged and a dupe
     // cannot bring in a multiplier its original did not.
@@ -117,9 +133,6 @@
     });
 
     var seen = {}, used = {}, byMode = {};
-    var multBand = {}, multAll = {};
-    var multOn = !!MULT_KINDS[kind];
-
     list.forEach(function (q) {
       var band = bandOf(q) || '?';
       var mode = modeOf(q) || '?';
@@ -130,18 +143,27 @@
       used[band] = 1;
       var row = byMode[mode] || (byMode[mode] = {});
       row[band] = (row[band] || 0) + 1;
-      if (!multOn) return;
+      if (each) each(q, band);
+    });
+    return { used: used, byMode: byMode };
+  }
+
+  // Pure: QSOs in, table out. No DOM, so the smoke harness can feed it straight.
+  //   bands     column keys in display order ('?' last, when present)
+  //   rows      [{label, perBand:{band: n}, total}] -- the QSO rows as shown
+  //   mult      null, or {perBand:{band: n}, sum, unique:[...]}
+  function compute(qsos, kind, lookup) {
+    var multBand = {}, multAll = {};
+    var multOn = !!MULT_KINDS[kind];
+
+    var t = tally(qsos, multOn ? function (q, band) {
       var m = multOf(q, kind, lookup);
       if (!m) return;
       (multBand[band] || (multBand[band] = {}))[m] = 1;
       multAll[m] = 1;
-    });
-
-    var bands = BAND_ORDER.filter(function (b) { return used[b]; });
-    Object.keys(used).forEach(function (b) {
-      if (b !== '?' && bands.indexOf(b) < 0) bands.push(b);
-    });
-    if (used['?']) bands.push('?');
+    } : null);
+    var byMode = t.byMode;
+    var bands = orderBands(t.used);
 
     function mkRow(label, perBand) {
       var total = 0;
@@ -149,9 +171,7 @@
       return { label: label, perBand: perBand, total: total };
     }
 
-    var modes = Object.keys(byMode).sort(function (a, b) {
-      return (modeRank(a) - modeRank(b)) || (a < b ? -1 : a > b ? 1 : 0);
-    });
+    var modes = orderModes(Object.keys(byMode));
     var rows = [];
     if (modes.length > 1) {
       var sum = {};
@@ -178,6 +198,37 @@
     }
 
     return { bands: bands, rows: rows, mult: mult };
+  }
+
+  // Pure, for the saved-log picker (log.js): every log's QSOs counted as the
+  // palette counts one log -- dupes within a log out, the same call in two logs
+  // twice -- and summed. No multipliers: they belong to a contest, not to a
+  // pile of logs. Laid out band by mode, the transpose of the palette, because
+  // a few seasons collect more bands than modes.
+  //   bands, modes   row and column keys in display order
+  //   cells          {band: {mode: n}}
+  //   bandTotal, modeTotal, total
+  function computeAll(qsoLists) {
+    var used = {}, modeUsed = {}, cells = {}, bandTotal = {}, modeTotal = {}, total = 0;
+    (qsoLists || []).forEach(function (qsos) {
+      var t = tally(qsos, null);
+      Object.keys(t.byMode).forEach(function (m) {
+        modeUsed[m] = 1;
+        Object.keys(t.byMode[m]).forEach(function (b) {
+          var n = t.byMode[m][b];
+          used[b] = 1;
+          var row = cells[b] || (cells[b] = {});
+          row[m] = (row[m] || 0) + n;
+          bandTotal[b] = (bandTotal[b] || 0) + n;
+          modeTotal[m] = (modeTotal[m] || 0) + n;
+          total += n;
+        });
+      });
+    });
+    return {
+      bands: orderBands(used), modes: orderModes(Object.keys(modeUsed)),
+      cells: cells, bandTotal: bandTotal, modeTotal: modeTotal, total: total
+    };
   }
 
   // ── persistence ───────────────────────────────────────────────────────────
@@ -456,7 +507,8 @@
     setOpen: setOpen,
     isOpen:  function () { return open; },
     refresh: refresh,
-    compute: compute
+    compute: compute,
+    computeAll: computeAll
   };
 
 }(window));

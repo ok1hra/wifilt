@@ -633,6 +633,16 @@ Each row has five actions:
 
 **Delete all** wipes every log in the browser. It is deliberately a two-press action.
 
+**STATISTICS**, a fold under the saved logs, counts the QSOs of **every** log in the
+browser by band and mode; the filter does not narrow it. Bands are the rows, modes the
+columns, and both sums sit next to their labels — the **Σ** column right after the band,
+the **Σ** row right under the mode names, with the grand total where they meet. QSOs are
+counted the way the [Statistics palette](#316-statistics) counts one log: a duplicate
+within a log once, the same station in two logs twice, CW-R as CW, USB and LSB as SSB, a
+QSO with no frequency under **?**. That is why its total can be lower than the QSO count in
+the footer. There are no multipliers — they belong to one contest. Whether the fold is open
+is remembered; the numbers are counted each time the log manager opens.
+
 *New log* creates one:
 
 | Field | Meaning |

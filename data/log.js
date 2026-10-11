@@ -201,6 +201,7 @@
 
   let _allLogs   = [];
   let _allCounts = [];
+  let _allStats  = null;
   let _delAllTimer = null;
 
   function buildModal() {
@@ -522,11 +523,12 @@
     if (!container) return;
     LogDB.getLogs().then(logs => {
       logs.sort((a,b) => b.createdAtUtc.localeCompare(a.createdAtUtc));
-      Promise.all(logs.map(log =>
-        LogDB.getQsosForLog(log.id).then(qsos => qsos.filter(q => !q.deleted).length)
-      )).then(counts => {
+      Promise.all(logs.map(log => LogDB.getQsosForLog(log.id))).then(lists => {
         _allLogs   = logs;
-        _allCounts = counts;
+        _allCounts = lists.map(qsos => qsos.filter(q => !q.deleted).length);
+        // The QSOs are in hand for the counts anyway, so the statistics over
+        // every log cost no second pass through the database.
+        _allStats  = window.LogStats && LogStats.computeAll ? LogStats.computeAll(lists) : null;
         applyFilter();
       });
     });
@@ -563,6 +565,55 @@
         </div>
       `;
     return row;
+  }
+
+  // QSOs by band and mode over every saved log (log-stats.js computeAll), folded
+  // like a year. Bands are the rows because seasons collect more bands than
+  // modes, and both sums sit right next to their labels -- Σ the first column
+  // and the first row -- so a band or mode total never has to be traced across
+  // the whole table. It ignores the filter on purpose: it answers "what is in
+  // all my logs", and the footer already counts what the filter matched.
+  const STATS_OPEN_KEY = 'wifilt-log-list-stats-open';
+
+  function _statsFoldOpen() {
+    try { return localStorage.getItem(STATS_OPEN_KEY) === '1'; } catch (_) { return false; }
+  }
+
+  function _makeStatsFold(st) {
+    const zero = '<span class="st-zero">&middot;</span>';
+    const cell = n => n ? String(n) : zero;
+    const det  = document.createElement('details');
+    det.className = 'lm-stats';
+    det.id        = 'lmStats';
+    det.open      = _statsFoldOpen();
+
+    let h = '<tr><th class="st-lbl"></th><th class="st-sum">&Sigma;</th>';
+    st.modes.forEach(m => { h += `<th>${_esc(m)}</th>`; });
+    h += '</tr>';
+    let b = '<tr class="lm-st-sumrow"><th class="st-lbl">&Sigma;</th>' +
+            `<td class="st-sum">${st.total}</td>`;
+    st.modes.forEach(m => { b += `<td>${cell(st.modeTotal[m])}</td>`; });
+    b += '</tr>';
+    st.bands.forEach(band => {
+      const row = st.cells[band] || {};
+      b += `<tr data-band="${_esc(band)}"><th class="st-lbl">${_esc(band)}</th>` +
+           `<td class="st-sum">${cell(st.bandTotal[band])}</td>`;
+      st.modes.forEach(m => { b += `<td>${cell(row[m])}</td>`; });
+      b += '</tr>';
+    });
+
+    det.innerHTML = `
+        <summary class="lm-year-head">
+          <span class="lm-year-name">STATISTICS</span>
+          <span class="lm-year-meta" title="Dupes (same call, band and mode within one log) are counted once">all logs · ${st.total} QSO, no dupes</span>
+        </summary>
+        <div class="lm-stats-body">${st.total
+          ? `<table class="st-table lm-stats-table"><thead>${h}</thead><tbody>${b}</tbody></table>`
+          : '<div class="lm-empty">No QSOs yet.</div>'}</div>`;
+    det.addEventListener('toggle', () => {
+      try { localStorage.setItem(STATS_OPEN_KEY, det.open ? '1' : '0'); } catch (_) {}
+    });
+    return det;
   }
 
   function applyFilter() {
@@ -635,6 +686,8 @@
     if (!rest.length && query) {
       container.insertAdjacentHTML('beforeend', '<div class="lm-empty">No match.</div>');
     }
+
+    if (_allStats) container.appendChild(_makeStatsFold(_allStats));
 
     const total    = _allCounts.reduce((s, c) => s + c, 0);
     const filteredTotal = filtered.reduce((s, { i }) => s + (_allCounts[i] || 0), 0);
