@@ -1368,6 +1368,20 @@ private:
     putLE32(packet + 0x0C, remoteId);
   }
 
+  // close() on a Winsock SOCKET is the CRT's file close: it fails and the
+  // socket stays open, still bound to audioLocalPort. The next audio session
+  // (every page close/reopen) then binds the same port again through
+  // SO_REUSEADDR, and Windows keeps delivering the radio's I Am Here to the
+  // leaked socket -- the channel sent AreYouThere for ever while ctl/civ
+  // (WiFiUDP, which already uses closesocket) were fine.
+  static void audioCloseSocket(int fd) {
+#ifdef _WIN32
+    closesocket(fd);
+#else
+    close(fd);
+#endif
+  }
+
   int audioSendDatagram(const uint8_t* packet, size_t length) {
     if (!audioRuntime || audioRuntime->socketFd < 0) return -1;
     sockaddr_in destination = {};
@@ -1707,7 +1721,7 @@ private:
       local.sin_port = htons(audioLocalPort);
       local.sin_addr.s_addr = htonl(INADDR_ANY);
       if (bind(runtime->socketFd, reinterpret_cast<sockaddr*>(&local), sizeof(local)) < 0) {
-        close(runtime->socketFd);
+        audioCloseSocket(runtime->socketFd);
         runtime->socketFd = -1;
       }
     }
@@ -1737,7 +1751,7 @@ private:
       uint8_t disconnect[0x10];
       buildAudioCtrl(disconnect, sizeof(disconnect), 0x05, 0, audioMyId, audioRemoteId);
       audioSendDatagram(disconnect, sizeof(disconnect));
-      close(runtime->socketFd);
+      audioCloseSocket(runtime->socketFd);
       runtime->socketFd = -1;
     }
     audioLock();

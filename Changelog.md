@@ -11,6 +11,35 @@ published.
 
 ## Working tree — not committed
 
+**DXC: the Spotter column filters by the spotter's continent, several at once.**
+
+* **What it is for.** On a Reverse Beacon feed a station is heard by skimmers all over the
+  world, and a skimmer three continents away says little about whether it can be worked
+  from here. The Spotter header is now a button; its menu ticks EU, AF, AS, NA, SA, OC and
+  *other / unknown* (Antarctica and any spotter cty.dat cannot place), with **All on** and
+  **Only mine** — the continent of the station's own callsign from SETUP → Identity.
+* **It discards, like Mode.** Same door (`addLine()`, the restored cache and the leader's
+  seed all call `spotterAdmitted()`), same shared policy in `wifilt-dxc-policy`, same rule
+  that hiding the column switches it off. A spot it refuses never takes a slot in the
+  500-row buffer, and is never brought back by ticking the continent again.
+* **On a narrow pane it keeps working.** Below 700 px the CSS hides the Spotter column, which
+  is common for QRPlog's embedded pane. The filter is armed by the Columns checkbox, which is
+  shared, not by what CSS shows, so the two instances never disagree about what the feed keeps.
+  It is set from the wider one.
+* **The header says what is kept.** One or two continents are spelled out (`EU`, `EU NA`),
+  three or more read `Spotter N`, all ticked reads `Spotter`; the tooltip counts what was
+  discarded since **Clear**. The SSID is stripped before the lookup (`DK8NE-#`, `OK1HRA-2`),
+  and lookups are memoised per spotter.
+* **The menu stays open while ticking.** The Mode menu closes after every tick: its rebuild
+  detaches the clicked box, and the document's click-outside handler then reads the click as
+  outside. The new menu stops the click the way the Band menu already did.
+* `tools/dxc-spotter-continent-smoke.js` (25 checks) hosts the window and the embedded pane
+  side by side and drives them only through the feed, the menu and the Columns box. The other
+  two DXC smokes got `/ports.js` in their fixtures; since the per-port fallback they had been
+  rewriting a `:82` the page no longer contains, and never connected. The click smoke passes
+  again. The map-feed smoke still times out at "all 152 spots reach the follower", the same on
+  HEAD.
+
 **SETUP backup: the QRPlog macros and the Mercury tuning now travel with it.**
 
 `/config/download` left out two files the station keeps on the configuration partition:

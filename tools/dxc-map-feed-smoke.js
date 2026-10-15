@@ -168,6 +168,13 @@ const server = http.createServer((request, response) => {
     return json({ok: true});
   }
 
+  // The page takes the cluster relay's port from the firmware-generated
+  // /ports.js (it no longer hardcodes :82), so this points it at the fixture.
+  if (url.pathname === "/ports.js") {
+    response.writeHead(200, {"Content-Type": "application/javascript"});
+    return response.end(`window.WIFILT_PORTS={"http":${port},"dxc":${port}};`);
+  }
+
   // Pass 2 hands out an empty maphost: the feature must then be completely inert.
   if (url.pathname === "/dxcinfo") return json({
     locator: "JO70UC", callsign: "OK1HRA", trx2netid: 0, trx3netid: 0,

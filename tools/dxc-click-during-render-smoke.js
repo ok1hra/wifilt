@@ -88,6 +88,12 @@ const server = http.createServer((request, response) => {
     return readBody(body => { try { cmds.push(JSON.parse(body)); } catch (_) {} json({ok: true}); });
   if (url.pathname === "/oi3/state") return json({connected: false, frequency: 0, mode: "USB", dxcConnected: true});
   if (url.pathname === "/js8/session") return json({held: false, role: ""});
+  // The page takes the cluster relay's port from the firmware-generated
+  // /ports.js (it no longer hardcodes :82), so this points it at the fixture.
+  if (url.pathname === "/ports.js") {
+    response.writeHead(200, {"Content-Type": "application/javascript"});
+    return response.end(`window.WIFILT_PORTS={"http":${port},"dxc":${port}};`);
+  }
   if (url.pathname === "/dxcinfo") return json({locator: "JO70UC", callsign: "OK1HRA", trx2netid: 0, trx3netid: 0});
   if (url.pathname === "/identity") return json({call: "OK1HRA", grid: "JO70UC"});
   if (url.pathname === "/log-config") return json({
