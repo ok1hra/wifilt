@@ -3872,9 +3872,18 @@ CW the radio takes over the network is text for its own keyer (CI-V `17`). So th
 | | **Radio keyer (CI-V text)** | **KEY output (cable)** |
 |---|---|---|
 | How | the edges are decoded back into characters and the radio's keyer sends them | the interface closes the **KEY** jack itself, each edge a fixed delay after the paddle |
-| Needs | nothing but the radio link — works over ICOM-LAN, over CI-V and on the PC build | the interface box, a cable from **KEY** to the radio's key jack set to a straight key |
+| Needs | nothing but the radio link — works over ICOM-LAN, over CI-V and on the PC build | the interface box, a cable from **KEY** to the radio's key jack set to a straight key (an IC-705 is switched by itself, below) |
 | On the air | about one character late (a character is known once its letter gap has passed), in the radio's timing | the operator's own timing, the playout delay late |
 | Speed | the radio's keyer speed is set to the paddle's WPM on connect and on every change, so QRPLog's CW macros go out at that speed too. The radio keyer stops at 48 WPM. | anything the paddle does |
+
+**IC-705 and the KEY output.** The IC-705 has a single KEY jack, and its *Key Type* decides
+whether that jack is a paddle or a straight key. So for each over the interface switches it
+to **Straight** over CAT (CI-V `1A 05 02 55 00`), holds the paddle's edges until the radio has
+taken it, and switches it back to **Paddle** (`… 02`) once the key has been up for 2 s — or after
+an abort. Pauses under 2 s stay one over, so a QSO does not flip it between words. The first
+mark of an over waits about 80 ms for the switch, which the playout delay normally absorbs. The
+radio's own paddle keys as a straight key while an over is on. If the interface restarts in the
+middle of one, the radio is left on Straight. The live block shows the current key type.
 
 Either way the radio has to be in **CW or CW-R** — nothing is keyed in any other mode — and
 transmits only with **BK-IN** on (semi or full); with BK-IN off it plays the sidetone and
@@ -3894,7 +3903,8 @@ the rest of the interface is doing.
 **Paddle** below shows the link live: who is connected, the radio's state, the paddle's WPM,
 packets received and edges lost or late, and the text it keyed, decoded (`<SK>` = joined
 characters, `*` = a character cut by an abort). *Refused* counts packets with a wrong key or
-tampered with.
+tampered with. *Aborts* names the last reason — `radio not ready` means the IC-705 did not take
+the key-type switch within 3 s.
 
 ### 9.9 Remote management of JS8 unattended operation
 

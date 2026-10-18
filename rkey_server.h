@@ -17,6 +17,10 @@
 //   GPIO  The edges are replayed on the KEY output at t_sender + latency + D,
 //         exactly like the OI3 does on CW1: the operator's own timing on air.
 //         Box only, cabled to the radio's KEY jack (straight key, BK-IN on).
+//         With `gate` set, an over's edges wait until the sketch reports the
+//         radio ready (txWanted -> txReady), the way the OI3 waits for its PTT
+//         sequencer: the IC-705 has one KEY jack, and its key type has to be
+//         switched from Paddle to Straight over CAT first, and back afterwards.
 //
 // The decoder can use a fixed threshold because Paddle2IP's keyer is exact: a
 // dit is 1, a dah 3, the element gap 1, the letter gap 3 and the word gap 7
@@ -52,6 +56,8 @@ static const uint32_t RKEY_LINK_TIMEOUT_US  = 300000;   // key down and no packe
 static const uint32_t RKEY_MAX_DOWN_US      = 3000000;  // longest single key-down
 static const uint32_t RKEY_CONN_US          = 1000000;  // "connected" = a packet within this
 static const uint32_t RKEY_OVER_GAP_US      = 3000000;  // longer pause = new over, no word space
+static const uint32_t RKEY_READY_TIMEOUT_US = 3000000;  // gate: the radio never got ready -> abort
+static const uint32_t RKEY_GATE_HOLD_US     = 2000000;  // gate: this long idle ends the over
 
 #define RKEY_Q     32    // playout queue (power of two)
 #define RKEY_TXT   128   // decoded text waiting for loop() (power of two)
@@ -109,6 +115,15 @@ struct RkeyServer {
   uint16_t delayMs;             // default playout delay (the paddle may ask for another)
   void   (*keyOut)(bool down);  // KEY pin; null = this build has none
   uint32_t (*rand32)();
+  volatile bool gate;           // GPIO: hold an over's edges until txReady (set by the sketch)
+
+  // Gate handshake. The server raises txWanted for an over and drops it 2 s
+  // after the last key-up; the sketch prepares the radio, then sets txReady,
+  // and undoes it once txWanted is down. Only the server clears txReady.
+  volatile bool txWanted, txReady;
+  uint32_t pend[RKEY_Q];        // accepted edges waiting for txReady
+  uint8_t  pendH, pendT;
+  uint32_t waitSinceUs;
 
   // the radio, published by loop()
   volatile bool     rigLink, rigCw, rigTx;
@@ -315,6 +330,8 @@ static void rkeyAbort(RkeyServer &s, const char *why, uint32_t nowUs) {
   s.outDown = false;
   RKEY_UNLOCK();
   rkeyDecReset(s);
+  s.pendH = s.pendT = 0;
+  s.waitSinceUs = 0;
   s.anchored = false;
   s.lastState = false;
   s.muted = true;
@@ -514,7 +531,12 @@ static uint16_t rkeyOnPacket(RkeyServer &s, const uint8_t *buf, uint16_t n, uint
     if (down == s.lastState) continue;               // not a transition
     s.lastState = down;
     rkeyDecEdge(s, down, RKEY_EV_TIME(e));
-    if (s.output == RKEY_OUT_GPIO) rkeySchedule(s, e, arriveUs);
+    if (s.output != RKEY_OUT_GPIO) continue;
+    if (!s.gate) { rkeySchedule(s, e, arriveUs); continue; }
+    uint8_t nh = (s.pendH + 1) & (RKEY_Q - 1);
+    if (nh == s.pendT) { rkeyAbort(s, "pending full", arriveUs); continue; }
+    s.pend[s.pendH] = e;
+    s.pendH = nh;
   }
   if (!s.muted) rkeyDecIdle(s, h.tSend);
   return replyLen;
@@ -529,7 +551,16 @@ static void rkeyService(RkeyServer &s, uint32_t nowUs) {
 
   if (s.wdTripped) { s.wdTripped = false; rkeyAbort(s, "watchdog", nowUs); return; }
 
-  bool busy = !rkeyPlayIdle(s) || s.elN || s.decDown;
+  // Gate: the over ends -- and the radio goes back -- once nothing is waiting,
+  // nothing plays and the key has been up for a while. Before the allowed()
+  // test on purpose: an over cut by an abort must hand the radio back too.
+  bool pend = s.pendH != s.pendT;
+  if (s.txWanted && !pend && rkeyPlayIdle(s)) {
+    RKEY_LOCK(); uint32_t lastUp = s.lastUpUs; RKEY_UNLOCK();
+    if ((nowUs - lastUp) > RKEY_GATE_HOLD_US) s.txWanted = false;
+  }
+
+  bool busy = !rkeyPlayIdle(s) || s.elN || s.decDown || pend;
   if (!rkeyAllowed(s)) {
     if (busy) rkeyAbort(s, "not allowed", nowUs);
     else s.muted = true;
@@ -538,6 +569,24 @@ static void rkeyService(RkeyServer &s, uint32_t nowUs) {
   // A paddle that went silent mid-character: the character is gone. (The
   // playout timer has already released a key that was down.)
   if (busy && (nowUs - s.lastPktUs) > RKEY_LINK_TIMEOUT_US) { rkeyAbort(s, "link", nowUs); return; }
+
+  if (pend) {
+    // A new over always waits for a fresh "ready": ready is cleared BEFORE
+    // wanted is raised, so loop() can never pair this over with a ready it
+    // gave the previous one -- after which it may already have sent Paddle.
+    if (!s.txWanted) { s.txReady = false; s.txWanted = true; s.waitSinceUs = nowUs | 1; }
+    if (s.txReady) {
+      s.waitSinceUs = 0;
+      while (s.pendT != s.pendH) {
+        rkeySchedule(s, s.pend[s.pendT], nowUs);
+        s.pendT = (s.pendT + 1) & (RKEY_Q - 1);
+      }
+    } else {
+      if (!s.waitSinceUs) s.waitSinceUs = nowUs | 1;
+      // signed: waitSinceUs = now|1 can sit 1 us in the future
+      if ((int32_t)(nowUs - s.waitSinceUs) > (int32_t)RKEY_READY_TIMEOUT_US) { rkeyAbort(s, "radio not ready", nowUs); return; }
+    }
+  }
 
   // 7 dits of silence end the over; the next mark re-anchors the playout.
   if (s.anchored && rkeyPlayIdle(s)) {

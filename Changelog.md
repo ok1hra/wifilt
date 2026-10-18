@@ -33,6 +33,10 @@ published.
   prosigns go as `^XY`, and the radio's keyer speed is set to the paddle's WPM (`14 0C`). Works
   over ICOM-LAN and on the PC build, one character late. *KEY output*: the box replays the edges
   on GPIO 33 from an esp_timer, the operator's own timing a playout delay later. Box only.
+* **IC-705: key type switched per over.** Its one KEY jack follows *Key Type*, so with the KEY
+  output an over first sets Straight (`1A 05 02 55 00`) and the server holds the edges until the
+  sketch reports it done (a ready gate like OI3's sequencer wait, 3 s timeout); 2 s after the
+  last key-up, or after an abort, it goes back to Paddle (`02`).
 * **Off the main loop.** A task of its own blocks in `select()` and stamps each datagram on
   arrival; `loop()` only publishes the radio's state and sends the decoded text. The playout
   timer enforces the 0.3 s link timeout and the 3 s max key-down by itself.

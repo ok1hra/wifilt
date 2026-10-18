@@ -190,6 +190,15 @@ public:
   // Distinguishes "radio said no" from "radio never answered". Only the SETUP
   // credential test cares; the reconnect logic retries either way.
   bool credentialsRejected() const { return loginRejected; }
+  // Radio itself is switched on. An IC-705 put to "Power OFF (for Remote
+  // Control) = Standby" keeps its LAN unit -- login, control pings and the CI-V
+  // stream -- alive, so connected() stays true while the transceiver is off.
+  // What changes is the replies: every read comes back NG (FA). Power is
+  // therefore judged on recent data-bearing radio frames, never on the session.
+  bool radioPowered() const {
+    return state == LAN_CONNECTED && radioDataSeen
+        && millis() - lastRadioDataMs < LAN_RADIO_OFF_MS;
+  }
   // CI-V stream is actually delivering data and not mid-recovery.
   bool catHealthy() const { return state == LAN_CONNECTED && civGotData && !civRecovering; }
   // Audio sub-stream linked and delivering fresh payload (firmware-side RX-live).
@@ -415,6 +424,7 @@ public:
         uint32_t forgive = gap - LAN_STALL_CREDIT_MS;
         forgiveClock(lastCtrlRxMs, now, forgive);
         forgiveClock(lastCivDataMs, now, forgive);
+        forgiveClock(lastRadioDataMs, now, forgive);
         forgiveClock(stateSince, now, forgive);
         if (civHealthProbePending) forgiveClock(civHealthProbeSentMs, now, forgive);
         if (civRecovering)         forgiveClock(civRecoveryStartedMs, now, forgive);
@@ -652,6 +662,11 @@ private:
   bool civRecovering = false, civReadyWaitAnnounced = false, civRequestPending = false;
   bool civHealthProbePending = false;
   bool civSelectedModeSeen = false;
+  // radioPowered(): last frame from the radio that carried data (not FA/FB).
+  // Telemetry polls run every 100-250 ms, so 4 s of NG-only means standby.
+  static const uint32_t LAN_RADIO_OFF_MS = 4000;
+  bool radioDataSeen = false;
+  uint32_t lastRadioDataMs = 0;
   uint32_t civNextOpen = 0, lastFreqPoll = 0, lastCivDataMs = 0, lastCtrlRxMs = 0;
   uint32_t civLastAyt = 0, civLastReady = 0, civLastPing = 0, civLastIdle = 0;
   uint32_t civRequestSentMs = 0, civHealthProbeSentMs = 0, civRecoveryStartedMs = 0;
@@ -1287,6 +1302,8 @@ private:
     civTxHistory.clear();
     civDataSeq = 0;
     lastCivDataMs = millis();
+    radioDataSeen = false;
+    lastRadioDataMs = millis();
     lastFreqPoll = 0;
     auxRot = 0;
     civLastAyt = civLastReady = civLastPing = civLastIdle = 0;
@@ -1925,6 +1942,9 @@ private:
     // radio (from-addr == radioCivAddr); the radio echoes our own commands back
     // (from == 0xE1 controller), which must not be parsed as replies.
     if (f[3] != radioCivAddr) return false;
+    // Anything but NG/OK from the radio means the transceiver is on; in
+    // standby the LAN unit answers NG to every read (see radioPowered()).
+    if (f[4] != 0xFA && f[4] != 0xFB) { radioDataSeen = true; lastRadioDataMs = millis(); }
     if (f[4] == 0x27) return false;                      // scope data does not prove CAT replies
     lanCivFrameRoute(radioSlot, f, (size_t)len);         // slot-aware parse in the .ino
     // NOTE: state is intentionally NOT driven here — see maybeConnected(). A radio

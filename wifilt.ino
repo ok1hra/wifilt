@@ -6749,15 +6749,28 @@ void lanClientLoop(){
     // (re)start RX audio if the DATA page is open but the audio channel isn't up
     // yet — covers WS-connected-before-LAN and LAN-reconnect-while-page-open.
     if (AudioWsClient.connected() && !lanClient.rxAudioActive()) lanClient.startRxAudio();
-    if (statusPower == 0) {
+    // PWR follows the transceiver, not the session: in remote-control standby
+    // the IC-705 LAN stays logged in while the radio itself is off.
+    bool radioOn = lanClient.radioPowered();
+    if (radioOn && statusPower == 0) {
       statusPower = 1;
       digitalWrite(PowerOnPin, HIGH);
       Serial.println(" PWR| ON (LAN)");
-      if (cwIpOnConnect) cwIpSendPending = true; // arm CW IP announce on first link-up
+      if (cwIpOnConnect) cwIpSendPending = true; // arm CW IP announce on power-up
+    } else if (!radioOn && statusPower == 1) {
+      statusPower = 0;
+      digitalWrite(PowerOnPin, LOW);
+      Serial.println(" PWR| OFF (LAN standby)");
+      frequency = 0; frequencyTmp = 0; lanFreqTmp = 0;
+      setModesText("OFF");
+      if (trxNetEnabled) {
+        uint32_t zero = 0;
+        net.publish("/hz", (uint8_t*)&zero, sizeof(zero));
+      }
     }
     // Announce the IP once the radio address is known (learned from the first
     // decoded frame). Same feature/flag as the BT path; snapshots + restores state.
-    if (cwIpSendPending && radio_address != 0x00) {
+    if (radioOn && cwIpSendPending && radio_address != 0x00) {
       cwIpSendPending = false;
       announceIpViaCw();
     }
@@ -9245,6 +9258,47 @@ static uint8_t rkeyModeByte(const char *mode) {
   return 0xff;
 }
 
+// IC-705: its one KEY jack is whatever the key type says, and Paddle2IP keys it
+// as a straight key. So an over switches the key type to Straight over CAT
+// (1A 05 02 55 00) and back to Paddle (02) once it has ended -- the server holds
+// the over's edges until then (rkey_server.h, gate). Other radios have a jack
+// of their own for a straight key and are left alone.
+static const uint32_t RKEY_KEYTYPE_SETTLE_MS = 80;    // CI-V over LAN, with margin
+static bool rkeyKeyTypeStraight = false;              // what we last told the radio
+
+static bool rkeyIsIc705() {
+  IcomLanClient *client = radioSlots[0].transport == RADIO_LAN ? radioLanClient(0) : nullptr;
+  const char *live = client ? client->radioModelName() : "";
+  String model = (live && live[0]) ? String(live) : radioSlots[0].model;
+  if (model.length()) return model.startsWith("IC-705");
+  return radioSlots[0].civAddr == 0xA4;               // never reported: its default address
+}
+
+static bool rkeySendKeyType(uint8_t type) {
+  uint8_t p[] = {0x05, 0x02, 0x55, type};
+  uint8_t frame[12];
+  size_t n = buildSimpleCatFrame(0x1A, p, sizeof(p), frame, sizeof(frame));
+  bool ok = n && catWriteFrame(frame, n, false);
+  if (ok) { Serial.print("RKEY| key type "); Serial.println(type == 0x00 ? "Straight" : "Paddle"); }
+  return ok;
+}
+
+static void rkeyKeyTypeTick(RkeyServer &s) {
+  static uint32_t sentMs = 0;
+  s.gate = rkeyIsIc705();
+  if (s.txWanted) {
+    if (!rkeyKeyTypeStraight) {
+      if (s.rigLink && rkeySendKeyType(0x00)) { rkeyKeyTypeStraight = true; sentMs = millis(); }
+    } else if (!s.txReady && millis() - sentMs >= RKEY_KEYTYPE_SETTLE_MS) {
+      s.txReady = true;
+    }
+  } else if (rkeyKeyTypeStraight && millis() - sentMs >= 500) {
+    // Retried every 0.5 s while the link is down: the radio must not stay Straight.
+    sentMs = millis();
+    if (rkeySendKeyType(0x02)) rkeyKeyTypeStraight = false;
+  }
+}
+
 void rkeyLoop() {
   if (!rkey) return;
   RkeyServer &s = *rkey;
@@ -9256,7 +9310,8 @@ void rkeyLoop() {
   s.rigMode = rkeyModeByte(mode);
   s.rigFreq = frequency;
   s.rigTx   = stateTx;
-  if (s.output != RKEY_OUT_CIV || !s.rigLink) return;
+  if (s.output == RKEY_OUT_GPIO) { rkeyKeyTypeTick(s); return; }
+  if (!s.rigLink) return;
 
   // The radio's keyer sends at the paddle's speed: set on every new session and
   // WPM change. Icom keying speed 0000-0255 spans 6-48 WPM.
@@ -9306,6 +9361,9 @@ void handleRkeyStatus() {
     // 16 47 as last polled: 0 off, 1 semi, 2 full. Off is not refused -- keying
     // then plays the sidetone only, which is how one practises -- but said.
     j += ",\"bkin\":"; j += (unsigned)stateVoxMode;
+    // IC-705 only: the key type this interface switched the radio to, null = not touched
+    j += ",\"keyType\":";
+    j += !s.gate ? "null" : (rkeyKeyTypeStraight ? "\"straight\"" : "\"paddle\"");
     j += ",\"rxPkts\":"; j += s.rxPkts;
     j += ",\"late\":"; j += s.lateEv;
     j += ",\"lost\":"; j += s.lostEv;

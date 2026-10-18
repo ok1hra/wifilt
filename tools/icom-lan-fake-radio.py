@@ -27,6 +27,7 @@ WHY 127.0.0.2 BY DEFAULT
 USAGE
     python3 tools/icom-lan-fake-radio.py [--ip 127.0.0.2] [--freq 7035920]
                                          [--user hra] [--pass secret] [-v]
+                                         [--standby-at S] [--wake-at S]
 
     Any username/password is accepted unless --user/--pass are given.
 
@@ -294,6 +295,14 @@ class CivChannel(Channel):
         self.seq_b = 0
         self.opened = False
         self.answered = 0
+        # "Power OFF (for Remote Control) = Standby": the LAN unit stays logged
+        # in and answers NG (FA) to every read; only 18 01 wakes the radio.
+        self.standby = False
+
+    def set_standby(self, on):
+        if on != self.standby:
+            self.standby = on
+            self.log("-- radio STANDBY (NG to all reads)" if on else "-- radio ON")
 
     def send_civ(self, frame):
         p = bytearray(0x15)
@@ -341,7 +350,12 @@ class CivChannel(Channel):
             self.send_civ(bytes([0xFE, 0xFE, sender, self.civ_addr]) + payload + b"\xFD")
             self.answered += 1
 
-        if cmd == 0x03:                      # read operating frequency
+        if cmd == 0x18 and body[:1] in (b"\x00", b"\x01"):   # power off/on
+            self.set_standby(body[0] == 0x00)
+            reply(b"\xFB")
+        elif self.standby:
+            reply(b"\xFA")
+        elif cmd == 0x03:                    # read operating frequency
             reply(bytes([0x03]) + bcd_from_hz(self.freq_hz))
             if self.answered == 1:
                 self.log(f"-> frequency {self.freq_hz} Hz")
@@ -458,6 +472,10 @@ def main():
     parser.add_argument("--name", default="IC-705", help="radio name in capabilities")
     parser.add_argument("--user", default=None, help="expected username (any if unset)")
     parser.add_argument("--password", default=None, help="expected password (any if unset)")
+    parser.add_argument("--standby-at", type=float, default=0,
+                        help="enter remote-control standby after this many seconds")
+    parser.add_argument("--wake-at", type=float, default=0,
+                        help="leave standby again after this many seconds")
     parser.add_argument("--seconds", type=float, default=0,
                         help="exit after this many seconds (0 = run forever)")
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -487,6 +505,11 @@ def main():
         if args.seconds and time.monotonic() - started > args.seconds:
             print("time limit reached", flush=True)
             return 0
+        elapsed = time.monotonic() - started
+        if args.standby_at and elapsed > args.standby_at and not (args.wake_at and elapsed > args.wake_at):
+            civ.set_standby(True)
+        elif args.wake_at and elapsed > args.wake_at:
+            civ.set_standby(False)
 
         # Short timeout: the audio stream has to be paced at 20 ms, so the loop
         # cannot sit in select() waiting for a packet that may not come.

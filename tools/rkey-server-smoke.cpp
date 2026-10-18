@@ -12,6 +12,9 @@
 //     only between words, a "^XY" never split across 0x17 frames
 //   - authentication: bad tag, wrong key, replay, a new session without a fresh
 //     nonce -- none is accepted
+//   - IC-705 gate: an over waits until the "sketch" switched the key type to
+//     Straight, then plays whole; one switch per over, back to Paddle after it,
+//     and an over the radio is never ready for is dropped, not keyed
 //   - safety: a link that dies mid-mark releases the key within the timeout and
 //     mutes; muted resumes only at a word gap; a radio not in CW keys nothing
 
@@ -96,6 +99,10 @@ struct Sim {
   uint32_t statusCount = 0;
   // CIV text drained like loop() does, frame by frame
   std::vector<std::string> frames;
+  // the IC-705 key-type dance of rkeyKeyTypeTick(), in sender time
+  bool     emulateKeyType = false, radioDead = false, straight = false;
+  uint32_t sentT = 0, readyT = 0, settleUs = 80000;
+  int      toStraight = 0, toPaddle = 0;
 
   explicit Sim(uint8_t output) {
     rkeyInit(s);
@@ -158,6 +165,12 @@ struct Sim {
     }
     rkeyService(s, st);
     rkeyPlayTick(s, st);
+    if (emulateKeyType) {
+      if (s.txWanted) {
+        if (!straight && !radioDead) { straight = true; sentT = t; toStraight++; }
+        else if (straight && !s.txReady && t - sentT >= settleUs) { s.txReady = true; readyT = st; }
+      } else if (straight) { straight = false; toPaddle++; }
+    }
     if (s.output == RKEY_OUT_CIV) {
       char f[30]; uint8_t n;
       while ((n = rkeyTakeText(s, f, 30)) > 0) frames.push_back(std::string(f, n));
@@ -301,6 +314,42 @@ int main() {
     rkeyOnPacket(m.s, none.data(), (uint16_t)none.size(), m.t, 1, 1, reply);
     CHECK(m.s.session == sess, "a new session without a nonce is refused");
     m.nonce = n0; m.session = sess;
+  }
+
+  printf("IC-705 gate: key type switched for the over\n");
+  {
+    Sim m(RKEY_OUT_GPIO);
+    m.s.gate = true; m.emulateKeyType = true;
+    m.run(300000);
+    m.keyAll("CQ TEST");
+    std::vector<PinEdge> want = m.sent;
+    CHECK(m.toStraight == 1, "switched to Straight once for the over (%d)", m.toStraight);
+    CHECK(!pin.empty() && (int32_t)(pin[0].t - m.readyT) >= 0, "nothing keyed before the radio was ready");
+    CHECK(pin.size() == want.size(), "every edge played (%zu of %zu)", pin.size(), want.size());
+    size_t n = pin.size() < want.size() ? pin.size() : want.size();
+    CHECK(worstTimingError(want, 0, n) <= 600, "lengths kept (worst %.0f us)", worstTimingError(want, 0, n));
+    m.run(1000000);
+    CHECK(m.toPaddle == 1 && !m.s.txWanted, "back to Paddle after the over");
+    m.keyAll("K");
+    m.run(1000000);
+    CHECK(m.toStraight == 2 && m.toPaddle == 2, "the next over switches again (%d/%d)", m.toStraight, m.toPaddle);
+
+    Sim w(RKEY_OUT_GPIO);                         // words within an over: one switch
+    w.s.gate = true; w.emulateKeyType = true;
+    w.run(300000);
+    w.key("TEST"); w.run(w.todo.back().t - w.t + 900000);   // under the 2 s hold
+    w.keyAll("TEST");
+    w.run(1000000);
+    CHECK(w.toStraight == 1 && w.toPaddle == 1, "a pause under 2 s keeps Straight (%d/%d)", w.toStraight, w.toPaddle);
+
+    Sim d(RKEY_OUT_GPIO);                         // the radio never answers
+    d.s.gate = true; d.emulateKeyType = true; d.radioDead = true;
+    d.run(300000);
+    d.keyAll("TEST");
+    d.run(4000000);
+    CHECK(pin.empty(), "a radio never ready: nothing keyed");
+    CHECK(d.s.lastAbort && strcmp(d.s.lastAbort, "radio not ready") == 0 && !d.s.txWanted,
+          "aborted as '%s', over released", d.s.lastAbort ? d.s.lastAbort : "-");
   }
 
   printf("safety: link dies mid-mark\n");

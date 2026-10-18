@@ -579,7 +579,7 @@
                   <option value="civ">Radio keyer (CI-V text)</option>
                   <option value="gpio">KEY output (cable)</option>
                 </select>
-                <span class="help-tip" data-tip="Radio keyer: the paddle's characters are decoded and the radio's own keyer sends them, at the paddle's WPM (the radio's keyer speed is set to it). Works over ICOM-LAN with no cable, but goes out about one character late, in the radio's timing, and the radio keyer tops out at 48 WPM. KEY output: the interface box keys the KEY jack itself, with the operator's exact timing a fixed delay later. Needs a cable from KEY to the radio's key jack set to straight key. Only on the interface box.">?</span>
+                <span class="help-tip" data-tip="Radio keyer: the paddle's characters are decoded and the radio's own keyer sends them, at the paddle's WPM (the radio's keyer speed is set to it). Works over ICOM-LAN with no cable, but goes out about one character late, in the radio's timing, and the radio keyer tops out at 48 WPM. KEY output: the interface box keys the KEY jack itself, with the operator's exact timing a fixed delay later. Needs a cable from KEY to the radio's key jack set to straight key; an IC-705, with its one KEY jack, is switched to Straight over CAT for each over and back to Paddle 2 s after it. Only on the interface box.">?</span>
               </div>
             </label>
             <label>UDP port
@@ -2555,6 +2555,8 @@
             : (!st.radioCw ? 'not in CW, nothing is keyed'
             : (st.bkin === 0 ? 'CW, BK-IN off: sidetone only, nothing transmitted' : 'CW')),
             !st.radioLink || !st.radioCw || st.bkin === 0);
+          if (st.keyType) row('IC-705 key type', st.keyType === 'straight'
+            ? 'Straight, for the over' : 'Paddle', false);
           if (st.lastPacketMs === null || st.lastPacketMs === undefined) return;
           row('Paddle', st.wpm + ' WPM' + (st.output === 'gpio' ? ', delay ' + st.delayMs + ' ms' : '')
             + (st.muted ? ', muted until the next word' : ''), false);

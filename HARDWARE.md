@@ -352,7 +352,9 @@ CW and RTTY text comes from the QRPLog macros — see the QRPLog chapter in
 **A remote paddle.** With SETUP → Remote CW key set to *KEY output*, a
 [Paddle2IP](https://github.com/ok1hra/paddle2ip) on the network keys this jack directly, edge by
 edge, a fixed playout delay after the operator (key down = the open collector closes to ground).
-Cable KEY to the radio's key jack, set that jack to a straight key and turn BK-IN on. The other
+Cable KEY to the radio's key jack, set that jack to a straight key and turn BK-IN on. An IC-705
+has only one KEY jack: the interface switches its key type to Straight over CAT for each over and
+back to Paddle afterwards. The other
 setting, *Radio keyer*, needs no cable at all: it sends the paddle's characters as CI-V text.
 See SOFTWARE.md, section 9.8.
 
