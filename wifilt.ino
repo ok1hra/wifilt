@@ -142,7 +142,7 @@ volatile bool cwIpSendPending = false;
 #ifndef LOOP_WARN_MS
   #define LOOP_WARN_MS 200
 #endif
-#define REV 20261015
+#define REV 20261018
 #define WIFI
 #define FSK_KEYING  // RTTY by keying the FSK + PTT outputs (was UDP_TO_FSK, from when a UDP port fed it)
 #define WDT         // watchdog timer
@@ -160,7 +160,7 @@ volatile bool cwIpSendPending = false;
 #endif
 
 #include "EEPROM.h"
-#define EEPROM_SIZE 400
+#define EEPROM_SIZE 424
 /*
   0|Byte    1|128
   1|Char    1|A
@@ -214,6 +214,12 @@ volatile bool cwIpSendPending = false;
   360-399 DXC map host (40B) — where dxc.html POSTs the spot snapshot for the
           IP-rotator map; empty = feature off. 246-266 was the only free block
           left and 20 chars is too tight for "ip-rotator.local:88".
+  400 RKEY flags     (Paddle2IP remote CW key; 0xff = never set = off;
+                      bit0 on, bit1 output: 0 = radio keyer over CI-V, 1 = KEY GPIO)
+  401-402 RKEY UDP port (UShort, 0xffff -> 5690)
+  403-404 RKEY default playout delay ms (UShort, 0xffff -> 120)
+  405-420 RKEY shared SipHash key (16 B; all 0xff = none)
+  421-423 FREE
 
   !! Increment EEPROM_SIZE #define !!
 */
@@ -428,6 +434,7 @@ char CwMsg[37] = "";
 #include "aud1_ws_parser.h"     // incremental, non-blocking browser WebSocket framing
 #include "js8_session.h"        // single-operator lock for the JS8LAN page
 #include "rtty_stream.h"        // RTTY decoder/TX text to TrxNet subscribers
+#include "rkey_net.h"           // Paddle2IP remote CW key: UDP server task
 // See radio_transport.h's own comment on radioLanLocalControlPort(): 0 means
 // "use the real default (50001)", exactly today's behavior on the real
 // device and on native/ unless --lan-port-base overrides it.
@@ -875,6 +882,18 @@ int incomingByte = 0;   // for incoming serial data
   // so the DXC relay keeps its single WebSocket slot. Empty = feature off.
   String DxcMapHost = "";
 
+  // Paddle2IP remote CW key (rkey_net.h). Read at boot; SETUP saves and restarts.
+  #define RKEY_EEPROM_FLAGS 400
+  #define RKEY_EEPROM_PORT  401
+  #define RKEY_EEPROM_DELAY 403
+  #define RKEY_EEPROM_KEY   405
+  bool     RkeyEnable  = false;
+  uint8_t  RkeyOutput  = 0;               // RKEY_OUT_CIV / RKEY_OUT_GPIO
+  uint16_t RkeyPort    = 5690;
+  uint16_t RkeyDelayMs = 120;
+  uint8_t  RkeyKey[16];
+  bool     RkeyKeySet  = false;
+
   static const char* LOG_CONFIG_PATH = "/log-config.json";
   static const size_t LOG_CONFIG_MAX_BYTES = 2048;
 
@@ -1176,6 +1195,14 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void lanCivFrameRoute(uint8_t slot, const uint8_t *frame, size_t len);
   String jsonEscape(const String &value);
   String configJsonEscape(const String &s);
+  bool rkeyParseKey(const String &text, uint8_t out[16]);
+  String rkeyKeyHex();
+  void rkeyStoreConfig();
+  String rkeyApplyConfig(bool enable, const String &output, const String &port,
+                         const String &delay, const String &key);
+  void rkeyStart();
+  void rkeyLoop();
+  void handleRkeyStatus();
   String civFrameToHex(const uint8_t *frame, size_t frameLen);
   uint32_t decodeCivFrequencyBytes(const uint8_t *bytes, size_t byteCount);
   uint32_t decodeCivBcdBytes(const uint8_t *bytes, size_t byteCount);
@@ -2171,6 +2198,11 @@ void handleSetupData(){
   j += ",\"dxccall\":\""; j += configJsonEscape(DxcCallsign); j += "\"";
   j += ",\"dxclocator\":\""; j += configJsonEscape(DxcLocator); j += "\"";
   j += ",\"dxcmaphost\":\""; j += configJsonEscape(DxcMapHost); j += "\"";
+  j += ",\"rkeyenable\":"; j += RkeyEnable ? "true" : "false";
+  j += ",\"rkeyoutput\":\""; j += RkeyOutput ? "gpio" : "civ"; j += "\"";
+  j += ",\"rkeyport\":\""; j += RkeyPort; j += "\"";
+  j += ",\"rkeydelay\":\""; j += RkeyDelayMs; j += "\"";
+  j += ",\"rkeykey\":\""; j += rkeyKeyHex(); j += "\"";
   j += ",\"blockedDxcc\":\""; j += configJsonEscape(g_lcBlockedDxcc); j += "\"";
   // fskOutputMode/fskNetId used to be serialized here too (this is a SEPARATE
   // g_lc* serialization from /log-config's own, feeding setup.html's
@@ -3735,6 +3767,11 @@ void handleConfigDownload() {
   j += ",\"dxccall\":\"";    j += configJsonEscape(DxcCallsign); j += "\"";
   j += ",\"dxclocator\":\""; j += configJsonEscape(DxcLocator);  j += "\"";
   j += ",\"dxcmaphost\":\""; j += configJsonEscape(DxcMapHost);  j += "\"";
+  j += ",\"rkeyenable\":";  j += RkeyEnable ? "true" : "false";
+  j += ",\"rkeyoutput\":\""; j += RkeyOutput ? "gpio" : "civ"; j += "\"";
+  j += ",\"rkeyport\":";    j += RkeyPort;
+  j += ",\"rkeydelay\":";   j += RkeyDelayMs;
+  j += ",\"rkeykey\":\"";    j += rkeyKeyHex(); j += "\"";
   j += ",\"btname\":\"";     j += configJsonEscape(BT_NAME);     j += "\"";
   webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   webServer.sendHeader("Pragma", "no-cache");
@@ -3915,6 +3952,17 @@ void handleConfigUpload() {
   if (body.indexOf("\"dxclocator\"") >= 0) {
     String dxclocator = extractJsonString(body, "dxclocator");
     if(dxclocator.length() <= 6){ DxcLocator = dxclocator; eepromWriteStr(DxcLocator, 219, 6); }
+  }
+
+  // A backup from before the remote CW key has none of its fields, and keeps
+  // whatever this interface has.
+  if (body.indexOf("\"rkeyport\"") >= 0) {
+    String err = rkeyApplyConfig(extractJsonBool(body, "rkeyenable", false),
+                                 extractJsonString(body, "rkeyoutput"),
+                                 String(parseField("rkeyport", 1, 65535)),
+                                 String(parseField("rkeydelay", 10, 1000)),
+                                 extractJsonString(body, "rkeykey"));
+    if (err.length()) Serial.println("CFG | " + err + " -- remote CW key not restored");
   }
 
   if (body.indexOf("\"btname\"") >= 0) {
@@ -5583,6 +5631,7 @@ void setupWebServer(void){
   webServer.on("/setup/wifi-try",      HTTP_POST, handleWifiTryStart);
   webServer.on("/setup/wifi-try.json", HTTP_GET,  handleWifiTryStatus);
   webServer.on("/trxnet-peers.json", HTTP_GET, handleTrxNetPeers);
+  webServer.on("/rkey.json", HTTP_GET, handleRkeyStatus);
   webServer.on("/trxnet-topics.json", HTTP_GET, handleTrxTopics);
   webServer.on("/pa.json", HTTP_GET, handlePaJson);
   webServer.on("/pa/cmd", HTTP_POST, handlePaCmd);
@@ -5948,6 +5997,23 @@ void setup(){
     // 360-399 DXC map host (40B)
     DxcMapHost = eepromReadStr(360, 40);
 
+    // 400-420 Paddle2IP remote CW key
+    {
+      uint8_t f = EEPROM.read(RKEY_EEPROM_FLAGS);
+      RkeyEnable = (f != 0xff) && (f & 0x01);
+      RkeyOutput = (f != 0xff && (f & 0x02)) ? 1 : 0;
+      uint16_t p = EEPROM.readUShort(RKEY_EEPROM_PORT);
+      if (p != 0xffff && p != 0) RkeyPort = p;
+      uint16_t d = EEPROM.readUShort(RKEY_EEPROM_DELAY);
+      if (d >= 10 && d <= 1000) RkeyDelayMs = d;
+      uint8_t any = 0, blank = 0xff;
+      for (uint8_t i = 0; i < 16; i++) {
+        RkeyKey[i] = EEPROM.read(RKEY_EEPROM_KEY + i);
+        any |= RkeyKey[i]; blank &= RkeyKey[i];
+      }
+      RkeyKeySet = any != 0 && blank != 0xff;
+    }
+
   }
 //------------------------------------------
 
@@ -6158,6 +6224,7 @@ void setup(){
     } else {
       Serial.println("TRXNET| disabled (NET_ID=0x00)");
     }
+    rkeyStart();
 
     #if defined(WDT)
       // WDT
@@ -6269,6 +6336,7 @@ void loop(){
   _TIMED("WifiTry",         wifiTryTick())
   _TIMED("IcomScan",        icomScanTick())
   _TIMED("TrxNet",          TrxNetLoop())
+  _TIMED("Rkey",            rkeyLoop())
   _TIMED("DxcLoop",         DxcLoop())
   _TIMED("AprsIs",          aprsisLoop())
   _TIMED("dxcRaw",          dxcHandleRawClient())
@@ -9084,6 +9152,178 @@ bool sendCW(){
 }
 
 //-------------------------------------------------------------------------------------------------------
+// Paddle2IP remote CW key, the sketch's side: configuration, the KEY pin, and
+// the two jobs that need the radio link. The server itself is rkey_server.h,
+// its socket task rkey_net.h.
+
+// 32 hex digits. Paddle2IP shows its key as the oi3.cfg line "[RkeyKey=...]",
+// so the whole line is taken as well.
+bool rkeyParseKey(const String &text, uint8_t out[16]) {
+  String v = text;
+  v.trim();
+  if (v.startsWith("[RkeyKey=") && v.endsWith("]")) v = v.substring(9, v.length() - 1);
+  if (v.length() != 32) return false;
+  for (uint8_t i = 0; i < 32; i++) if (!isxdigit((unsigned char)v[i])) return false;
+  for (uint8_t i = 0; i < 16; i++) out[i] = (uint8_t)strtol(v.substring(2 * i, 2 * i + 2).c_str(), nullptr, 16);
+  return true;
+}
+
+String rkeyKeyHex() {
+  if (!RkeyKeySet) return "";
+  char h[33];
+  for (uint8_t i = 0; i < 16; i++) snprintf(h + 2 * i, 3, "%02x", RkeyKey[i]);
+  return String(h);
+}
+
+void rkeyStoreConfig() {
+  EEPROM.writeByte(RKEY_EEPROM_FLAGS, (RkeyEnable ? 0x01 : 0) | (RkeyOutput ? 0x02 : 0));
+  EEPROM.writeUShort(RKEY_EEPROM_PORT, RkeyPort);
+  EEPROM.writeUShort(RKEY_EEPROM_DELAY, RkeyDelayMs);
+  for (uint8_t i = 0; i < 16; i++) EEPROM.writeByte(RKEY_EEPROM_KEY + i, RkeyKeySet ? RkeyKey[i] : 0xff);
+}
+
+// The SETUP form and a config restore both land here. Nothing is stored unless
+// all of it is valid. Returns why it was refused, "" = stored (the caller commits).
+String rkeyApplyConfig(bool enable, const String &output, const String &port,
+                       const String &delay, const String &key) {
+  bool gpio = output == "gpio";
+  long p = port.length() ? port.toInt() : 5690;
+  long d = delay.length() ? delay.toInt() : 120;
+  if (p < 1 || p > 65535) return "Remote CW key: the UDP port is 1-65535";
+  if (p == TRXNET_PORT)   return "Remote CW key: that UDP port is TrxNet's";
+  if (d < 10 || d > 1000) return "Remote CW key: the playout delay is 10-1000 ms";
+  if (gpio && !CAP_GPIO)  return "Remote CW key: the KEY output exists only on the interface box";
+  uint8_t k[16];
+  bool keySet = false;
+  String kt = key;
+  kt.trim();
+  if (kt.length()) {
+    if (!rkeyParseKey(kt, k)) return "Remote CW key: the shared key is 32 hex characters";
+    uint8_t any = 0;
+    for (uint8_t i = 0; i < 16; i++) any |= k[i];
+    keySet = any != 0;                       // all zero = the placeholder, not a key
+  }
+  if (enable && !keySet) return "Remote CW key: on, but no shared key";
+  RkeyEnable  = enable;
+  RkeyOutput  = gpio ? RKEY_OUT_GPIO : RKEY_OUT_CIV;
+  RkeyPort    = (uint16_t)p;
+  RkeyDelayMs = (uint16_t)d;
+  RkeyKeySet  = keySet;
+  if (keySet) memcpy(RkeyKey, k, 16);
+  rkeyStoreConfig();
+  return "";
+}
+
+#if CAP_GPIO && defined(FSK_KEYING)
+// The KEY jack is an open collector on GPIO 33: HIGH closes it to ground, key
+// down (FSK's space level). LOW, the idle level, is what RTTY leaves it at too.
+static void rkeyKeyPin(bool down) { digitalWrite(FSK_OUT, down ? HIGH : LOW); }
+#endif
+
+void rkeyStart() {
+  if (!RkeyEnable) { Serial.println("RKEY| off"); return; }
+  void (*pin)(bool) = nullptr;
+  #if CAP_GPIO && defined(FSK_KEYING)
+    pin = rkeyKeyPin;
+  #endif
+  if (!rkeyNetBegin(RkeyKey, RkeyKeySet, RkeyOutput, RkeyPort, RkeyDelayMs, pin)) {
+    Serial.print("RKEY| not started: "); Serial.println(rkeyNetError);
+  }
+}
+
+// CI-V mode byte for the paddle's display. A data mode keeps its base mode's
+// byte: "USB-D" is USB with DATA on.
+static uint8_t rkeyModeByte(const char *mode) {
+  static const struct { const char *name; uint8_t b; } t[] = {
+    {"LSB", 0x00}, {"USB", 0x01}, {"AM", 0x02}, {"CW", 0x03}, {"RTTY", 0x04}, {"FM", 0x05},
+    {"WFM", 0x06}, {"CW-R", 0x07}, {"RTTY-R", 0x08}, {"DV", 0x17},
+  };
+  for (size_t i = 0; i < sizeof(t) / sizeof(t[0]); i++) {
+    size_t l = strlen(t[i].name);
+    if (strncmp(mode, t[i].name, l) == 0 && (mode[l] == 0 || strcmp(mode + l, "-D") == 0)) return t[i].b;
+  }
+  return 0xff;
+}
+
+void rkeyLoop() {
+  if (!rkey) return;
+  RkeyServer &s = *rkey;
+  char mode[sizeof(modes)];
+  copyModesText(mode, sizeof(mode));
+  // The radio keyer is reached by CI-V 0x17, which a TrxNet slot refuses.
+  s.rigLink = radioLinkUp() && (s.output == RKEY_OUT_GPIO || radioSlots[0].transport != RADIO_TRXNET);
+  s.rigCw   = strcmp(mode, "CW") == 0 || strcmp(mode, "CW-R") == 0;
+  s.rigMode = rkeyModeByte(mode);
+  s.rigFreq = frequency;
+  s.rigTx   = stateTx;
+  if (s.output != RKEY_OUT_CIV || !s.rigLink) return;
+
+  // The radio's keyer sends at the paddle's speed: set on every new session and
+  // WPM change. Icom keying speed 0000-0255 spans 6-48 WPM.
+  static uint8_t  speedWpm = 0;
+  static uint16_t speedSession = 0;
+  uint8_t frame[36];
+  if (rkeyConnected(s, micros()) && (s.wpm != speedWpm || s.session != speedSession)) {
+    uint8_t w = s.wpm < 6 ? 6 : (s.wpm > 48 ? 48 : s.wpm);
+    uint16_t raw = (uint16_t)(((uint32_t)(w - 6) * 255 + 21) / 42);
+    uint8_t p[] = {0x0C, (uint8_t)(raw / 100), (uint8_t)((((raw / 10) % 10) << 4) | (raw % 10))};
+    size_t n = buildSimpleCatFrame(0x14, p, sizeof(p), frame, sizeof(frame));
+    if (n && catWriteFrame(frame, n, false)) { speedWpm = s.wpm; speedSession = s.session; }
+  }
+
+  char text[30];                                  // 0x17 takes up to 30 characters
+  uint8_t len = rkeyTakeText(s, text, sizeof(text));
+  if (!len) return;
+  size_t n = buildSimpleCatFrame(CMD_SEND_CW_MSG, (const uint8_t*)text, len, frame, sizeof(frame));
+  if (n && catWriteFrame(frame, n, true)) {
+    statusFlashKick();
+    if (Debug) { Serial.print("RKEY| CW "); Serial.write((const uint8_t*)text, len); Serial.println(); }
+  }
+}
+
+void handleRkeyStatus() {
+  String j;
+  j.reserve(640);
+  j += "{\"enabled\":"; j += RkeyEnable ? "true" : "false";
+  j += ",\"output\":\""; j += RkeyOutput ? "gpio" : "civ"; j += "\"";
+  j += ",\"port\":"; j += RkeyPort;
+  j += ",\"error\":\""; j += configJsonEscape(String(rkeyNetError)); j += "\"";
+  if (rkey) {
+    RkeyServer &s = *rkey;
+    uint32_t now = micros();
+    j += ",\"running\":"; j += (rkeyNetError[0] == 0) ? "true" : "false";
+    j += ",\"connected\":"; j += rkeyConnected(s, now) ? "true" : "false";
+    j += ",\"peer\":\"";
+    if (s.peerValid) { j += IPAddress(s.peerIp).toString(); j += ":"; j += s.peerPort; }
+    j += "\"";
+    j += ",\"lastPacketMs\":"; j += s.rxPkts ? String((now - s.lastPktUs) / 1000UL) : String("null");
+    j += ",\"wpm\":"; j += s.wpm;
+    j += ",\"delayMs\":"; j += s.output == RKEY_OUT_GPIO ? (unsigned)(rkeyDUs(s) / 1000UL) : 0u;
+    j += ",\"muted\":"; j += s.muted ? "true" : "false";
+    j += ",\"allowed\":"; j += rkeyAllowed(s) ? "true" : "false";
+    j += ",\"radioLink\":"; j += s.rigLink ? "true" : "false";
+    j += ",\"radioCw\":"; j += s.rigCw ? "true" : "false";
+    // 16 47 as last polled: 0 off, 1 semi, 2 full. Off is not refused -- keying
+    // then plays the sidetone only, which is how one practises -- but said.
+    j += ",\"bkin\":"; j += (unsigned)stateVoxMode;
+    j += ",\"rxPkts\":"; j += s.rxPkts;
+    j += ",\"late\":"; j += s.lateEv;
+    j += ",\"lost\":"; j += s.lostEv;
+    j += ",\"badTag\":"; j += s.badAuth;
+    j += ",\"undecoded\":"; j += s.undecoded;
+    j += ",\"aborts\":"; j += s.aborts;
+    j += ",\"lastAbort\":\""; j += s.lastAbort ? s.lastAbort : ""; j += "\"";
+    char tr[RKEY_TRACE + 1];
+    tr[rkeyTraceCopy(s, tr, RKEY_TRACE)] = 0;
+    j += ",\"text\":\""; j += configJsonEscape(String(tr)); j += "\"";
+  }
+  j += "}";
+  webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  webServer.sendHeader("Connection", "close");
+  webServer.send(200, "application/json", j);
+}
+
+//-------------------------------------------------------------------------------------------------------
 void sendFsk(){
   #if defined(FSK_KEYING)
         #if defined(serialECHO )
@@ -9884,6 +10124,16 @@ void handleSet() {
       long id = v.length() ? strtol(v.c_str(), nullptr, 16) : 0;
       if (id < 0 || id > 255) id = 0;
       if (PA_NET_ID != (byte)id) { PA_NET_ID = (byte)id; EEPROM.writeByte(69, (byte)id); }
+    }
+
+    // Remote CW key. The port field is always in the form, so its presence says
+    // the form carried the section -- the checkbox alone cannot, being absent
+    // whenever it is off.
+    if (requestHasArg("rkeyport")) {
+      String err = rkeyApplyConfig(requestHasArg("rkeyenable"), requestArg("rkeyoutput"),
+                                   requestArg("rkeyport"), requestArg("rkeydelay"),
+                                   requestArg("rkeykey"));
+      if (err.length()) { setupCivAddrErr = err; ERRdetect = 1; }
     }
 
     {

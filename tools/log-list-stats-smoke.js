@@ -7,8 +7,9 @@
 // What it guards: the fold counts every log the way the Alt+S palette counts
 // one (dupes within a log once, the same call in two logs twice, deleted QSOs
 // out, USB/LSB = SSB, CW-R = CW, no frequency = "?"), lays it out band by mode
-// with both sums next to their labels -- Σ the first row and the first column --
-// ignores the filter, and remembers whether it was open.
+// with both sums next to their labels -- Σ the first row and the first column,
+// each with its share in % right beside it -- ignores the filter, and remembers
+// whether it was open. Also the filter's own ✕ that clears it.
 
 const http = require("http"), fs = require("fs"), path = require("path");
 const {spawn} = require("child_process");
@@ -146,25 +147,34 @@ const PAGE_SCRIPT = `
       fold ? (fold.previousElementSibling || {}).className + " / " + (fold.nextElementSibling || {}).className : "");
 
     const r = rows();
-    check("header: Σ right after the label, then modes in order",
-      r[0] === "|Σ|CW|SSB|RTTY", r[0]);
+    check("header: Σ right after the label, % right of it, then modes in order",
+      r[0] === "|Σ|%|CW|SSB|RTTY", r[0]);
     check("the Σ row comes first, under the header",
-      r[1] === "Σ|7|4|2|1", r[1]);
-    check("bands are rows in frequency order, '?' last, each with its Σ first",
-      r.slice(2).join(" ; ") === "160m|1|·|·|1 ; 80m|1|·|1|· ; 40m|1|1|·|· ; 20m|3|2|1|· ; ?|1|1|·|·",
-      r.slice(2).join(" ; "));
+      r[1] === "Σ|7||4|2|1", r[1]);
+    check("the % row sits under the Σ row, each mode's share of all QSOs",
+      r[2] === "%|||57|29|14", r[2]);
+    check("bands are rows in frequency order, '?' last, each with its Σ and % first",
+      r.slice(3).join(" ; ") === "160m|1|14|·|·|1 ; 80m|1|14|·|1|· ; 40m|1|14|1|·|· ; 20m|3|43|2|1|· ; ?|1|14|1|·|·",
+      r.slice(3).join(" ; "));
     check("no multipliers in it", !/MULT/.test(r.join(" ")), "");
 
     // ---- the filter leaves it alone --------------------------------------
-    const s = $("lmSearch");
+    const s = $("lmSearch"), clr = $("lmSearchClear");
+    check("an empty filter shows no ✕", clr && clr.hidden, !clr ? "no button" : clr.hidden ? "" : "visible");
     s.value = "cqww";
     s.dispatchEvent(new Event("input", {bubbles: true}));
     await sleep(120);
     check("the filter does not change the statistics",
-      rows()[1] === "Σ|7|4|2|1", rows()[1]);
-    s.value = "";
-    s.dispatchEvent(new Event("input", {bubbles: true}));
+      rows()[1] === "Σ|7||4|2|1", rows()[1]);
+    check("a typed filter shows the ✕", clr && !clr.hidden);
+    clr.click();
     await sleep(120);
+    check("✕ empties the filter", s.value === "", JSON.stringify(s.value));
+    check("✕ hides itself again", clr.hidden);
+    check("✕ brings the footer back to all logs",
+      /^2 logs · /.test(document.querySelector(".lm-log-total").textContent.trim()),
+      document.querySelector(".lm-log-total").textContent.trim());
+    check("✕ leaves the cursor in the filter", document.activeElement === s);
 
     // ---- open state is remembered ----------------------------------------
     $("lmStats").open = true;
@@ -181,7 +191,7 @@ const PAGE_SCRIPT = `
     await LogDB.addQso(q(b.id, "OK1ZZ", 14030000, "CW"));
     await reopenModal();
     check("a QSO logged since is counted on the next opening",
-      rows()[1] === "Σ|8|5|2|1", rows()[1]);
+      rows()[1] === "Σ|8||5|2|1", rows()[1]);
   } catch (error) {
     check("the test script ran to the end", false, String(error && error.stack || error));
   }

@@ -1274,9 +1274,12 @@ body {
 .st-table.lm-stats-table .st-lbl { font-size: 13px; color: var(--dark-muted); }
 .st-table.lm-stats-table .st-sum { border-left: none; border-right: 1px solid #555555; }
 .st-table.lm-stats-table thead th { border-bottom: 1px solid #555555; }
-.st-table.lm-stats-table tr.lm-st-sumrow > * { font-weight: 700; border-bottom: 1px solid #555555; }
+.st-table.lm-stats-table tr.lm-st-sumrow > * { font-weight: 700; }
 .st-table.lm-stats-table tr.lm-st-sumrow .st-lbl { color: var(--dark-text); }
-.st-table.lm-stats-table tbody tr:not(.lm-st-sumrow):hover > * { background: #3a3a3a; }
+/* The shares sit beside their sums: % column right of Σ, % row under Σ. */
+.st-table.lm-stats-table .lm-st-pct { color: var(--dark-muted); border-right: 1px solid #555555; }
+.st-table.lm-stats-table tr.lm-st-pctrow > * { color: var(--dark-muted); border-bottom: 1px solid #555555; }
+.st-table.lm-stats-table tbody tr:not(.lm-st-sumrow):not(.lm-st-pctrow):hover > * { background: #3a3a3a; }
 
 .lm-log-total {
   padding: 6px 10px 2px;
@@ -1294,15 +1297,22 @@ body {
   margin-bottom: 10px;
 }
 
-.lm-search {
+.lm-search-wrap {
+  position: relative;
   flex: 1;
   max-width: 200px;
+  display: flex;
+}
+
+.lm-search {
+  flex: 1;
+  min-width: 0;
   background: #222222;
   border: 1px solid #555555;
   color: var(--dark-text);
   font-family: var(--font-mono);
   font-size: 14px;
-  padding: 4px 10px;
+  padding: 4px 26px 4px 10px;
   border-radius: 8px;
   outline: none;
 }
@@ -1310,6 +1320,25 @@ body {
 .lm-search:focus {
   border-color: var(--btn-on-bd);
 }
+
+/* Our own clear button, so it looks the same in every browser. */
+.lm-search::-webkit-search-cancel-button { -webkit-appearance: none; display: none; }
+
+.lm-search-clear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--dark-muted);
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 4px;
+  cursor: pointer;
+}
+.lm-search-clear:hover { color: #ff5c5c; }
+.lm-search-clear[hidden] { display: none; }
 
 .lm-del-all-row {
   display: flex;

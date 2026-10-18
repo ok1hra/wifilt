@@ -11,6 +11,36 @@ published.
 
 ## Working tree — not committed
 
+**QRPlog log manager: ✕ clears the filter, STATISTICS shows shares in %.**
+
+* The *Saved logs* filter box has its own **✕** (shown only while something is typed): it
+  empties the filter, refolds the years and leaves the cursor in the box.
+* STATISTICS puts each sum's share of all QSOs right beside it — a **%** column right of the Σ
+  column, a **%** row under the Σ row; whole percent, `<1` for a share that rounds to zero.
+  `tools/log-list-stats-smoke.js` 20/20.
+
+**Remote CW key: a Paddle2IP keys TRX1 over the network.**
+
+* **What it is.** [Paddle2IP](https://github.com/ok1hra/paddle2ip) runs its own iambic keyer and
+  sidetone on an M5Stack Dial and sends the key edges, stamped with the keyer's ideal times, to
+  UDP 5690. WIFILT now answers it as an Open Interface III does (`rkey_proto.h`, identical copy
+  of the one in paddle2ip and oi3; receive, nonce, mute and playout rules ported from oi3
+  `rkey.ino`). New SETUP section *Remote CW key* (EEPROM 400–420): on/off, keying, port, shared
+  key with *Generate*, playout delay, and a live block from `/rkey.json`.
+* **Two ways to key, because ICOM-LAN has no edge keying.** The only CW the radio takes over the
+  network is text for its own keyer (CI-V `17`). *Radio keyer*: the edges are decoded back into
+  characters (the paddle's timing is exact, so 2 and 5 dits split them with a dit to spare),
+  prosigns go as `^XY`, and the radio's keyer speed is set to the paddle's WPM (`14 0C`). Works
+  over ICOM-LAN and on the PC build, one character late. *KEY output*: the box replays the edges
+  on GPIO 33 from an esp_timer, the operator's own timing a playout delay later. Box only.
+* **Off the main loop.** A task of its own blocks in `select()` and stamps each datagram on
+  arrival; `loop()` only publishes the radio's state and sends the decoded text. The playout
+  timer enforces the 0.3 s link timeout and the 3 s max key-down by itself.
+* **Tests.** `tools/rkey-server-smoke.cpp` (simulated paddle, network with loss and jitter,
+  timing to the microsecond, authentication, safety) and `tools/rkey-native-check.sh` (native
+  build + fake IC-705 in CW + paddle2ip's `rkey_test.py send/attack`: the text arrives as
+  `17`, the speed as `14 0C`). Not yet tried with a real paddle or radio.
+
 **DXC: the Spotter column filters by the spotter's continent, several at once.**
 
 * **What it is for.** On a Reverse Beacon feed a station is heard by skimmers all over the

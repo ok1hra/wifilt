@@ -112,8 +112,9 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
  · [9.5 TrxNet](#95-trxnet)
  · [9.6 TX audio gain](#96-tx-audio-gain)
  · [9.7 LOG](#97-log)
- · [9.8 Remote management of JS8 unattended operation](#98-remote-management-of-js8-unattended-operation)
- · [9.9 Save, download and upload the configuration](#99-save-download-and-upload-the-configuration)
+ · [9.8 Remote CW key](#98-remote-cw-key)
+ · [9.9 Remote management of JS8 unattended operation](#99-remote-management-of-js8-unattended-operation)
+ · [9.10 Save, download and upload the configuration](#910-save-download-and-upload-the-configuration)
 
 **[10. LOGSYNC](#10-logsync)**
  · [10.1 Where your QSOs live](#101-where-your-qsos-live)
@@ -620,7 +621,8 @@ storage exception, back up regularly, or set up GIT LOG SYNC.
 
 **LOG** opens the log manager.
 
-*Saved logs* lists every log in this browser with its QSO count, filtered by the search box.
+*Saved logs* lists every log in this browser with its QSO count, filtered by the search box;
+the **✕** at its right end clears the filter.
 Each row has five actions:
 
 | Action | Effect |
@@ -636,7 +638,10 @@ Each row has five actions:
 **STATISTICS**, a fold under the saved logs, counts the QSOs of **every** log in the
 browser by band and mode; the filter does not narrow it. Bands are the rows, modes the
 columns, and both sums sit next to their labels — the **Σ** column right after the band,
-the **Σ** row right under the mode names, with the grand total where they meet. QSOs are
+the **Σ** row right under the mode names, with the grand total where they meet. Each sum
+has its share of all QSOs beside it: a **%** column right of the Σ column and a **%** row
+under the Σ row (whole percent; `<1` for a share too small to round up; the obvious 100 %
+of the grand total is left out). QSOs are
 counted the way the [Statistics palette](#316-statistics) counts one log: a duplicate
 within a log once, the same station in two logs twice, CW-R as CW, USB and LSB as SSB, a
 QSO with no frequency under **?**. That is why its total can be lower than the QSO count in
@@ -1382,7 +1387,7 @@ The settings are stored on the interface, not in the browser, so every browser t
 this interface syncs to the same repository without being set up again. The token is never
 shown back after saving; **remove** deletes it. Anyone on your network can read the token
 back from the interface, which is why it should be limited to this one repository and
-nothing else. It is not part of *Download config* ([section 9.9](#99-save-download-and-upload-the-configuration)).
+nothing else. It is not part of *Download config* ([section 9.10](#910-save-download-and-upload-the-configuration)).
 
 The browser needs an internet connection to sync. The interface itself does not.
 
@@ -2602,7 +2607,7 @@ and would otherwise carry a badge on every line of a chat.
    anything that arrived for you.
 
 Unattended operation can also be revoked remotely from SETUP — see
-[section 9.8](#98-remote-management-of-js8-unattended-operation).
+[section 9.9](#99-remote-management-of-js8-unattended-operation).
 
 ### 5.14 TELEMETRY
 
@@ -2735,7 +2740,7 @@ station's schedule.
 Once the profile is on the interface it is **shared**: every browser that opens DATA reads
 it, so a setting changed on the tablet is in force on the phone as well. That includes the
 APRS-IS gate — the login is part of the profile, and so it is also part of the configuration
-backup in [section 9.9](#99-save-download-and-upload-the-configuration).
+backup in [section 9.10](#910-save-download-and-upload-the-configuration).
 
 #### What the station answers to STATUS?
 
@@ -3641,8 +3646,8 @@ Below the steps the page has two groups. **Calibration and modes** holds the TX 
 overview ([section 9.6](#96-tx-audio-gain)) and buttons that open the SETTINGS of each mode
 page — JS8, WSPR, RTTY, Mercury — directly (`/data.html#settings` and so on): settings every
 mode shares live here, each mode's own settings live on its page. **Advanced — not needed
-for a first QSO** holds DX Cluster, TrxNet, LOG and the remote management of unattended
-operation.
+for a first QSO** holds DX Cluster, the remote CW key, TrxNet, LOG and the remote management
+of unattended operation.
 
 Each section carries a badge saying where its values live:
 
@@ -3840,7 +3845,58 @@ The blocked list has two different effects, which is worth knowing before you us
   traffic list, the map and every automatic function. They are discarded silently, with no
   error, and transmission to them is refused outright.
 
-### 9.8 Remote management of JS8 unattended operation
+### 9.8 Remote CW key
+
+`eeprom`
+
+![Remote CW key](img/setup-remote-cw-key.png)
+
+Key TRX1 from a [Paddle2IP](https://github.com/ok1hra/paddle2ip) — a paddle on an M5Stack
+Dial that runs its own iambic keyer and sidetone and sends the key edges over the network,
+stamped with the keyer's exact times. The interface answers it the way an Open Interface III
+does, so the paddle shows this radio's frequency, mode and the link quality.
+
+| Field | Meaning |
+|---|---|
+| **Accept a Paddle2IP** | listen for the paddle. Off by default. |
+| **Keying** | how the edges reach the air — see below |
+| **UDP port** | where the paddle sends to. Default `5690`, the paddle's default too. In Paddle2IP enter this interface's address and this port as the server. |
+| **Shared key** | 32 hex characters, the same in both. Paste the key Paddle2IP shows (its whole `[RkeyKey=...]` line works too), or press **Generate** here and type this one into the paddle. Packets signed with any other key are ignored, and so are replayed ones. |
+| **Playout delay ms** | KEY output only, shown only there: how long after the paddle each edge is played. Used when *Delay D* on the paddle is `0`. LAN 30, internet 80–150, LTE 200 and more; it raises itself after a late edge. |
+
+All of it takes effect after **Save & Restart**.
+
+**The two ways of keying.** ICOM-LAN has no way to key the transmitter edge by edge: the only
+CW the radio takes over the network is text for its own keyer (CI-V `17`). So the choice is:
+
+| | **Radio keyer (CI-V text)** | **KEY output (cable)** |
+|---|---|---|
+| How | the edges are decoded back into characters and the radio's keyer sends them | the interface closes the **KEY** jack itself, each edge a fixed delay after the paddle |
+| Needs | nothing but the radio link — works over ICOM-LAN, over CI-V and on the PC build | the interface box, a cable from **KEY** to the radio's key jack set to a straight key |
+| On the air | about one character late (a character is known once its letter gap has passed), in the radio's timing | the operator's own timing, the playout delay late |
+| Speed | the radio's keyer speed is set to the paddle's WPM on connect and on every change, so QRPLog's CW macros go out at that speed too. The radio keyer stops at 48 WPM. | anything the paddle does |
+
+Either way the radio has to be in **CW or CW-R** — nothing is keyed in any other mode — and
+transmits only with **BK-IN** on (semi or full); with BK-IN off it plays the sidetone and
+nothing else, which is fine for practice. The live block says which. Prosigns go
+through: a character keyed with no letter gap that is no character of its own (`SK`, `AS`, …)
+is sent as the two letters joined with `^`, so the radio keys exactly the same elements.
+
+The paddle box decides when a word ends; spaces come from its pauses (5 dits and more). A
+pause of more than 3 seconds starts a new over without a space.
+
+**Safety.** Nothing is keyed unless the radio is linked and in CW. A link that falls silent
+releases the key within 0.3 s, a single key-down is cut after 3 s, and after any of that — or
+lost packets, or a new session — the stream stays **muted until the next word**, so a broken
+character never goes out. With the KEY output the key is released by its own timer, whatever
+the rest of the interface is doing.
+
+**Paddle** below shows the link live: who is connected, the radio's state, the paddle's WPM,
+packets received and edges lost or late, and the text it keyed, decoded (`<SK>` = joined
+characters, `*` = a character cut by an abort). *Refused* counts packets with a wrong key or
+tampered with.
+
+### 9.9 Remote management of JS8 unattended operation
 
 `live`
 
@@ -3862,7 +3918,7 @@ and visible on the station computer for anything to transmit at all.
 Because this is running state and nothing else, it resets when the device restarts. That is
 deliberate: a station should not come back from a power cut still armed.
 
-### 9.9 Save, download and upload the configuration
+### 9.10 Save, download and upload the configuration
 
 **Save & Restart** at the bottom of the page writes everything and reboots.
 
@@ -3878,7 +3934,8 @@ undo. When restoring a device from scratch, upload the file **first**, before se
 anything by hand.
 
 The file holds the whole station: WiFi, the radios and their saved presets, identity, DXC,
-CW and frequency memories, the log settings and QRPlog macros, every TX audio calibration,
+CW and frequency memories, the remote CW key with its shared key, the log settings and QRPlog
+macros, every TX audio calibration,
 the JS8, WSPR, RTTY and Mercury settings (including their band schedules), the Mercury
 tuning and the band decoder. Not in it:
 

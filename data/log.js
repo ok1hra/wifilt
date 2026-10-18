@@ -219,7 +219,10 @@
         <section class="lm-section" id="lmListSection">
           <div class="lm-list-header">
             <span class="lm-section-title" style="margin:0">Saved logs</span>
-            <input id="lmSearch" class="lm-search" type="search" placeholder="filter…" autocomplete="off" spellcheck="false">
+            <span class="lm-search-wrap">
+              <input id="lmSearch" class="lm-search" type="search" placeholder="filter…" autocomplete="off" spellcheck="false">
+              <button id="lmSearchClear" class="lm-search-clear" type="button" title="Clear filter" hidden>✕</button>
+            </span>
           </div>
           <div id="lmLogList" class="lm-log-list"></div>
           <div class="lm-del-all-row">
@@ -289,6 +292,12 @@
     document.getElementById('lmNewForm').addEventListener('submit', onNewFormSubmit);
     document.getElementById('lmLogList').addEventListener('click', onLogListClick);
     document.getElementById('lmSearch').addEventListener('input', applyFilter);
+    document.getElementById('lmSearchClear').addEventListener('click', () => {
+      const inp = document.getElementById('lmSearch');
+      inp.value = '';
+      applyFilter();
+      inp.focus();
+    });
     document.getElementById('lmDeleteAll').addEventListener('click', onDeleteAll);
 
     // uppercase fields
@@ -571,8 +580,10 @@
   // like a year. Bands are the rows because seasons collect more bands than
   // modes, and both sums sit right next to their labels -- Σ the first column
   // and the first row -- so a band or mode total never has to be traced across
-  // the whole table. It ignores the filter on purpose: it answers "what is in
-  // all my logs", and the footer already counts what the filter matched.
+  // the whole table. Each sum has its share of all QSOs beside it: a % column
+  // right of Σ and a % row under it. It ignores the filter on purpose: it
+  // answers "what is in all my logs", and the footer already counts what the
+  // filter matched.
   const STATS_OPEN_KEY = 'wifilt-log-list-stats-open';
 
   function _statsFoldOpen() {
@@ -582,22 +593,34 @@
   function _makeStatsFold(st) {
     const zero = '<span class="st-zero">&middot;</span>';
     const cell = n => n ? String(n) : zero;
+    // Whole percent of all QSOs; a share too small to round to 1 still shows
+    // it is there rather than reading as nothing.
+    const pct  = n => {
+      if (!n || !st.total) return zero;
+      const p = Math.round(n * 100 / st.total);
+      return p ? String(p) : '&lt;1';
+    };
     const det  = document.createElement('details');
     det.className = 'lm-stats';
     det.id        = 'lmStats';
     det.open      = _statsFoldOpen();
 
-    let h = '<tr><th class="st-lbl"></th><th class="st-sum">&Sigma;</th>';
+    let h = '<tr><th class="st-lbl"></th><th class="st-sum">&Sigma;</th><th class="lm-st-pct">%</th>';
     st.modes.forEach(m => { h += `<th>${_esc(m)}</th>`; });
     h += '</tr>';
     let b = '<tr class="lm-st-sumrow"><th class="st-lbl">&Sigma;</th>' +
-            `<td class="st-sum">${st.total}</td>`;
+            `<td class="st-sum">${st.total}</td><td class="lm-st-pct"></td>`;
     st.modes.forEach(m => { b += `<td>${cell(st.modeTotal[m])}</td>`; });
+    b += '</tr>';
+    b += '<tr class="lm-st-pctrow"><th class="st-lbl">%</th>' +
+         '<td class="st-sum"></td><td class="lm-st-pct"></td>';
+    st.modes.forEach(m => { b += `<td>${pct(st.modeTotal[m])}</td>`; });
     b += '</tr>';
     st.bands.forEach(band => {
       const row = st.cells[band] || {};
       b += `<tr data-band="${_esc(band)}"><th class="st-lbl">${_esc(band)}</th>` +
-           `<td class="st-sum">${cell(st.bandTotal[band])}</td>`;
+           `<td class="st-sum">${cell(st.bandTotal[band])}</td>` +
+           `<td class="lm-st-pct">${pct(st.bandTotal[band])}</td>`;
       st.modes.forEach(m => { b += `<td>${cell(row[m])}</td>`; });
       b += '</tr>';
     });
@@ -621,6 +644,8 @@
     if (!container) return;
     const searchEl = document.getElementById('lmSearch');
     const query    = searchEl ? searchEl.value.trim().toLowerCase() : '';
+    const clearEl  = document.getElementById('lmSearchClear');
+    if (clearEl) clearEl.hidden = !(searchEl && searchEl.value);
 
     const filtered = _allLogs.reduce((acc, log, i) => {
       const match = !query

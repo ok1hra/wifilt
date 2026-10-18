@@ -349,6 +349,13 @@ dodge a birdie transmitted nothing at all while the log recorded the report as s
 CW and RTTY text comes from the QRPLog macros — see the QRPLog chapter in
 [SOFTWARE.md](SOFTWARE.md).
 
+**A remote paddle.** With SETUP → Remote CW key set to *KEY output*, a
+[Paddle2IP](https://github.com/ok1hra/paddle2ip) on the network keys this jack directly, edge by
+edge, a fixed playout delay after the operator (key down = the open collector closes to ground).
+Cable KEY to the radio's key jack, set that jack to a straight key and turn BK-IN on. The other
+setting, *Radio keyer*, needs no cable at all: it sends the paddle's characters as CI-V text.
+See SOFTWARE.md, section 9.8.
+
 [![RTTY + PTT keying](hw/rtty-key.png)](https://youtube.com/shorts/b0uTiIwEsbw)
 
 ---

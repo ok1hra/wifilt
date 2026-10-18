@@ -977,7 +977,7 @@ function report() {
   check("pending: the chip marks exactly the sections the form submits",
     JSON.stringify(pend.chipOwners) === JSON.stringify(
       ["dxcSection", "identitySection", "logSettingsSection",
-       "radioSection", "trxnetSection", "wifiSection"])
+       "radioSection", "rkeySection", "trxnetSection", "wifiSection"])
     && pend.txGainChip === false && pend.unattendedChip === false);
   // Adoption into a spine step hides the section's own summary, which used to be
   // the only place a chip could live.

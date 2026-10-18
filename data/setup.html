@@ -562,6 +562,54 @@
           </div>
         </details>
 
+        <details class="setup-section" id="rkeySection">
+          <summary class="setup-section-title">Remote CW key <span class="setup-local-badge" title="Stored in NVS on the interface. A firmware flash never writes there, so these survive an update.">eeprom</span></summary>
+          <!-- Paddle2IP keys its own sidetone and sends key edges; rkey_server.h
+               turns them into CW on TRX1. The live block below is /rkey.json. -->
+          <div class="setup-section-body">
+            <p class="setup-note">Key TRX1 from a <a href="https://github.com/ok1hra/paddle2ip" target="_blank" rel="noopener">Paddle2IP</a> paddle anywhere on the network. The paddle box plays its own sidetone and sends the key edges here. The radio has to be in CW or CW-R with BK-IN on.</p>
+            <label class="checkbox-row">
+              <input type="checkbox" name="rkeyenable">
+              Accept a Paddle2IP
+              <span class="help-tip" data-tip="Listen for the paddle on the UDP port below. Takes effect after Save &amp; Restart.">?</span>
+            </label>
+            <label>Keying
+              <div class="input-with-tip">
+                <select name="rkeyoutput" id="rkeyOutput">
+                  <option value="civ">Radio keyer (CI-V text)</option>
+                  <option value="gpio">KEY output (cable)</option>
+                </select>
+                <span class="help-tip" data-tip="Radio keyer: the paddle's characters are decoded and the radio's own keyer sends them, at the paddle's WPM (the radio's keyer speed is set to it). Works over ICOM-LAN with no cable, but goes out about one character late, in the radio's timing, and the radio keyer tops out at 48 WPM. KEY output: the interface box keys the KEY jack itself, with the operator's exact timing a fixed delay later. Needs a cable from KEY to the radio's key jack set to straight key. Only on the interface box.">?</span>
+              </div>
+            </label>
+            <label>UDP port
+              <div class="input-with-tip">
+                <input type="number" name="rkeyport" min="1" max="65535" placeholder="5690" value="">
+                <span class="help-tip" data-tip="Where the paddle sends to. Enter this interface's address and this port as the server in Paddle2IP. Default 5690.">?</span>
+              </div>
+            </label>
+            <label>Shared key
+              <div class="input-with-tip">
+                <input type="password" id="rkeyKeyField" name="rkeykey" maxlength="44" spellcheck="false" autocomplete="off" placeholder="32 hex characters" value="">
+                <button type="button" class="pw-toggle" data-target="rkeyKeyField" aria-label="Show key" title="Show / hide key"><svg class="pw-eye" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="pw-eye-off" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+                <button type="button" id="btnRkeyGenerate" class="use-ip-btn" title="Fill in a new random key">Generate</button>
+                <span class="help-tip" data-tip="The same 128-bit key as in Paddle2IP. Paste the key it shows, or its whole [RkeyKey=...] line, or press Generate here and enter this key into Paddle2IP. Packets signed with any other key are ignored.">?</span>
+              </div>
+            </label>
+            <label id="rkeyDelayRow">Playout delay ms
+              <div class="input-with-tip">
+                <input type="number" name="rkeydelay" min="10" max="1000" placeholder="120" value="">
+                <span class="help-tip" data-tip="KEY output only. How long after the paddle each edge is played, so network jitter never stretches a mark. Used when Delay D on the paddle is 0. LAN 30, internet 80-150, LTE 200 and more; raised by itself after late edges.">?</span>
+              </div>
+            </label>
+            <div class="trxnet-devices">
+              <div class="trxnet-devices-head">Paddle <span class="trxnet-devices-live">live</span></div>
+              <dl class="unattended-grid" id="rkeyGrid"></dl>
+              <pre id="rkeyText" class="unattended-log" title="What the paddle keyed, decoded (newest right). &lt;SK&gt; = joined characters, * = cut by an abort."></pre>
+            </div>
+          </div>
+        </details>
+
       </form>
 
       <div class="setup-form spiffs-form">
@@ -675,6 +723,7 @@
       vertical-align: middle;
     }
 
+    #rkeyDelayRow[hidden]{display:none}
     .unattended-grid{display:grid;grid-template-columns:auto 1fr;gap:.25rem .75rem;margin:.5rem 0}
     .unattended-grid dt{opacity:.75}
     .unattended-grid dd{margin:0;font-variant-numeric:tabular-nums}
@@ -774,7 +823,8 @@
           'ssid', 'pswd', 'ssid2', 'pswd2', 'trxnetport', 'trxnetprio', 'panetid',
           'baud',
           'dxchost', 'dxcport',
-          'dxccall', 'dxclocator', 'dxcmaphost', 'blockedDxcc'
+          'dxccall', 'dxclocator', 'dxcmaphost', 'blockedDxcc',
+          'rkeyenable', 'rkeyoutput', 'rkeyport', 'rkeydelay', 'rkeykey'
         ];
         ['trx1', 'trx2', 'trx3'].forEach(function (prefix) {
           ['label', 'transport', 'civaddr', 'netid', 'lanip', 'lanuser', 'lanpass', 'localtrx'].forEach(function (suffix) {
@@ -924,6 +974,12 @@
             var needed = node.dataset.capsRequires;
             node.hidden = platformCaps[needed] === false;
           });
+
+          // The KEY output is a pin on the box. Same rule as CI-V below: a
+          // stored choice stays visible, so the operator sees why it cannot work.
+          var rkeyOutput = document.getElementById('rkeyOutput');
+          var gpioOption = rkeyOutput && rkeyOutput.querySelector('option[value="gpio"]');
+          if (gpioOption) gpioOption.disabled = platformCaps.gpio === false && rkeyOutput.value !== 'gpio';
 
           // CI-V needs a UART. The PC binary has none -- it reaches radios only
           // over IP -- so offering the option would let an operator configure a
@@ -2440,6 +2496,85 @@
         setInterval(function () {
           if (document.getElementById('unattendedSection').open) refresh();
         }, 3000);
+      })();
+
+      // ── Remote CW key (Paddle2IP) ───────────────────────────────────────────
+      (function () {
+        var section = document.getElementById('rkeySection');
+        var grid = document.getElementById('rkeyGrid');
+        var textBox = document.getElementById('rkeyText');
+        if (!section || !grid) return;
+
+        // The delay only means something to the KEY output. Hidden, not
+        // disabled: a disabled field leaves the form, and the save would then
+        // reset the stored value.
+        var output = document.getElementById('rkeyOutput');
+        function showDelay() { document.getElementById('rkeyDelayRow').hidden = output.value !== 'gpio'; }
+        output.addEventListener('change', showDelay);
+        section.addEventListener('toggle', showDelay);
+
+        // Any 128 random bits will do; getRandomValues works on plain HTTP.
+        document.getElementById('btnRkeyGenerate').addEventListener('click', function () {
+          var bytes = new Uint8Array(16);
+          crypto.getRandomValues(bytes);
+          var field = document.getElementById('rkeyKeyField');
+          field.value = Array.prototype.map.call(bytes, function (b) {
+            return ('0' + b.toString(16)).slice(-2);
+          }).join('');
+          field.type = 'text';                   // it has to be copied into the paddle
+          field.dispatchEvent(new Event('input', {bubbles: true}));
+        });
+
+        function row(name, value, bad) {
+          var dt = document.createElement('dt');
+          dt.textContent = name;
+          var dd = document.createElement('dd');
+          dd.textContent = value;
+          if (bad) dd.className = 'unattended-bad';
+          grid.appendChild(dt);
+          grid.appendChild(dd);
+        }
+
+        function render(st) {
+          grid.textContent = '';
+          if (!st.enabled) {
+            row('State', 'off', false);
+            textBox.hidden = true;
+            return;
+          }
+          textBox.hidden = false;
+          if (st.error) {
+            row('State', 'not listening: ' + st.error, true);
+            return;
+          }
+          row('State', st.connected ? 'paddle connected, ' + st.peer
+            : (st.peer ? 'paddle silent (last ' + st.peer + ')' : 'waiting for the paddle on UDP ' + st.port),
+            !st.connected);
+          row('Keying', st.output === 'gpio' ? 'KEY output' : 'radio keyer (CI-V text)', false);
+          row('Radio', !st.radioLink ? 'no link'
+            : (!st.radioCw ? 'not in CW, nothing is keyed'
+            : (st.bkin === 0 ? 'CW, BK-IN off: sidetone only, nothing transmitted' : 'CW')),
+            !st.radioLink || !st.radioCw || st.bkin === 0);
+          if (st.lastPacketMs === null || st.lastPacketMs === undefined) return;
+          row('Paddle', st.wpm + ' WPM' + (st.output === 'gpio' ? ', delay ' + st.delayMs + ' ms' : '')
+            + (st.muted ? ', muted until the next word' : ''), false);
+          row('Packets', st.rxPkts + ' received, ' + st.lost + ' edges lost, ' + st.late + ' late',
+            st.lost > 0);
+          if (st.badTag) row('Refused', st.badTag + ' with a wrong key or tampered', true);
+          if (st.undecoded) row('Undecoded', st.undecoded + ' characters', false);
+          if (st.aborts) row('Aborts', st.aborts + (st.lastAbort ? ', last: ' + st.lastAbort : ''), false);
+          textBox.textContent = st.text || '';
+        }
+
+        function refresh() {
+          fetch('/rkey.json', {cache: 'no-store'})
+            .then(function (r) { return r.json(); })
+            .then(render)
+            .catch(function () { grid.textContent = 'Status unavailable.'; });
+        }
+
+        section.addEventListener('toggle', function () { if (section.open) refresh(); });
+        setInterval(function () { if (section.open) refresh(); }, 1000);
       })();
 
       // ── Pending changes ───────────────────────────────────────────────────
