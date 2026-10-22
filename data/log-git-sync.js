@@ -365,13 +365,18 @@
   var GUIDE_URL = 'https://github.com/ok1hra/wifilt/blob/main/SOFTWARE.md#git-log-sync';
   var STORE_KEY = 'wifilt-git-sync-panel';       // {open, x, y, gap}
   var LAST_KEY  = 'wifilt-git-sync-last';        // ISO time this browser last synced
+  var BASE_KEY  = 'wifilt-git-sync-base';        // {"repo|branch|path": {sha, at}} synced against
+  var CHECK_EVERY = 5 * 60 * 1000;               // back on the tab: look at git again after this
   var STEPS = ['config', 'ref', 'download', 'merge', 'apply', 'upload', 'commit', 'done'];
 
   var cfg = null;            // /git-backup.json as last read
   var cfgLoaded = false;
   var busy = false;
   var pending = 0;           // QSO writes since this browser's last sync
-  var lastError = null;      // {text, collision}
+  var lastError = null;      // {text, collision, fromCheck}
+  var incoming = null;       // {n, more, commits, never}: in git, not here; n null = can't tell
+  var checkNote = '';        // why the last look at git said nothing
+  var lastCheckAt = 0, checking = false, toldIncoming = 0, syncGen = 0;
   var confirmWait = null;    // resolve() of the delete-a-log question
   var btn, btnCfg, el, pos = null, gap = null, placed = null, open = false;
 
@@ -476,6 +481,7 @@
       });
     }).then(function (res) {
       if (!res.ok && !(what === 'ref' && (res.status === 409 || res.status === 404)) &&
+          !(what === 'check' && res.status === 409) &&
           !(what === 'update ref' && res.status === 422)) {
         throw ghError(res.status, res.body, what);
       }
@@ -652,7 +658,7 @@
 
   function attempt(n, result) {
     var devId = deviceId();
-    var head = null, baseTree = null, empty = false, snap, remote, m;
+    var head = null, headAt = '', baseTree = null, empty = false, snap, remote, m;
     setProgress('ref', 0);
     return gh('GET', repoPath() + '/git/ref/heads/' + encodeURIComponent(branchOf(cfg)), undefined, 'ref')
       .then(function (res) {
@@ -660,7 +666,7 @@
         if (res.status === 404) throw ghError(404, res.body, 'branch "' + branchOf(cfg) + '"');
         head = res.body.object.sha;
         return gh('GET', repoPath() + '/git/commits/' + head, undefined, 'commit')
-          .then(function (c) { baseTree = c.body.tree.sha; });
+          .then(function (c) { baseTree = c.body.tree.sha; headAt = commitDate(c.body); });
       })
       .then(function () {
         setProgress('download', 0);
@@ -696,13 +702,15 @@
       })
       .then(function () {
         result.outCount = m.outCount;
-        if (!m.remoteChanged) { markSynced(snap.at); return; }
+        if (!m.remoteChanged) { markSynced(snap.at, head && { sha: head, at: headAt }); return; }
         setProgress('upload', 0);
         var text = serializeFile(m.merged, new Date().toISOString());
         var nQso = m.merged.stores.qso.filter(function (q) { return !q.deleted; }).length;
         var message = 'GIT LOG SYNC: ' + nQso + ' QSO in ' + m.merged.stores.logs.length +
                       ' logs (' + deviceLabel() + ')';
-        if (empty) return createFirst(text, message, result).then(function () { markSynced(snap.at); });
+        if (empty) return createFirst(text, message, result).then(function (at) {
+          markSynced(snap.at, result.sha && { sha: result.sha, at: at });
+        });
         return gh('POST', repoPath() + '/git/blobs', { content: text, encoding: 'utf-8' }, 'upload', 120000)
           .then(function (b) {
             return gh('POST', repoPath() + '/git/trees', { base_tree: baseTree, tree: [
@@ -724,7 +732,7 @@
                   return attempt(n + 1, result);
                 }
                 result.sha = c.body.sha;
-                markSynced(snap.at);
+                markSynced(snap.at, { sha: c.body.sha, at: commitDate(c.body) });
               });
           });
       });
@@ -736,12 +744,126 @@
     setProgress('commit', 0);
     return gh('PUT', repoPath() + '/contents/' + encodePath(pathOf(cfg)),
               { message: message, content: utf8ToBase64(text), branch: branchOf(cfg) }, 'create file', 120000)
-      .then(function (r) { result.sha = (r.body.commit && r.body.commit.sha) || ''; });
+      .then(function (r) {
+        result.sha = (r.body.commit && r.body.commit.sha) || '';
+        return commitDate(r.body.commit);
+      });
   }
 
-  function markSynced(at) {
+  // `base` is the commit this browser is now level with: its own push, or the
+  // head it found when there was nothing to push.
+  function markSynced(at, base) {
     try { localStorage.setItem(LAST_KEY, at); } catch (_) {}
+    if (base) setBase(base);
+    syncGen++;
+    incoming = { n: 0, commits: [] };
+    toldIncoming = 0;
+    checkNote = '';
     recount();
+  }
+
+  // ── what git has that this browser has not ──────────────────────────────────
+  //
+  // The commits after the sync point that touch the file are what a sync would
+  // bring in. GitHub filters by path, so a commit that touches only something
+  // else in the repository (the viewer, a README) does not count. Only a look,
+  // never a sync: that stays one click, because it writes here and may ask.
+
+  function commitDate(c) {
+    return (c && c.committer && c.committer.date) || new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+  }
+
+  function baseKey() { return cfg.repo + '|' + branchOf(cfg) + '|' + pathOf(cfg); }
+
+  function readBases() {
+    try { return JSON.parse(localStorage.getItem(BASE_KEY) || 'null'); } catch (_) { return null; }
+  }
+
+  function setBase(b) {
+    var all = readBases() || {};
+    all[baseKey()] = b;
+    try { localStorage.setItem(BASE_KEY, JSON.stringify(all)); } catch (_) {}
+  }
+
+  function commitInfo(c) {
+    var msg = ((c.commit && c.commit.message) || '').split('\n')[0];
+    var m = /^GIT LOG SYNC: (.*) \(([^()]*)\)$/.exec(msg);
+    return { sha: c.sha, at: commitDate(c.commit), by: m ? m[2] : '', text: m ? m[1] : msg };
+  }
+
+  function checkRemote() {
+    if (busy || checking || !isConfigured()) return Promise.resolve();
+    checking = true;
+    lastCheckAt = Date.now();
+    var gen = syncGen;
+    var bases = readBases();
+    var base = bases && bases[baseKey()];
+    var q = '/commits?sha=' + encodeURIComponent(branchOf(cfg)) + '&path=' + encodeURIComponent(pathOf(cfg)) +
+            '&per_page=' + (base ? 100 : 5) + (base ? '&since=' + encodeURIComponent(base.at) : '');
+    return gh('GET', repoPath() + q, undefined, 'check', 6000).then(function (res) {
+      if (busy || gen !== syncGen) return;     // a sync has moved the point meanwhile
+      var list = (res.status !== 409 && Array.isArray(res.body)) ? res.body : [];
+      if (!base) {
+        // Synced before there was a sync point (only the time is known), or
+        // never synced to this repository from here: only the latter is worth
+        // a word, the former is one sync away from exact.
+        incoming = list.length ? { n: null, commits: list.map(commitInfo), never: !!bases || !lastSyncAt() }
+                               : { n: 0, commits: [] };
+      } else {
+        // `since` is inclusive and in whole seconds; above the point in the
+        // list is newer, and if the point did not touch the file, the date says.
+        var i = list.map(function (c) { return c.sha; }).indexOf(base.sha);
+        var news = (i >= 0 ? list.slice(0, i) : list.filter(function (c) { return commitDate(c.commit) > base.at; }))
+          .map(commitInfo);
+        incoming = { n: news.length, more: news.length >= 100, commits: news };
+      }
+      checkNote = '';
+      if (lastError && lastError.fromCheck) lastError = null;
+      var count = incoming.n === null ? (incoming.never ? 1 : 0) : incoming.n;
+      if (count > toldIncoming) tellIncoming();
+      toldIncoming = count;
+    }, function (e) {
+      if (e && e.network) checkNote = 'Could not check git (offline) at ' + new Date().toISOString().slice(11, 16) + ' UTC.';
+      else lastError = { text: (e && e.message) || String(e), fromCheck: true };
+    }).then(function () {
+      checking = false;
+      renderButton();
+      render();
+    });
+  }
+
+  function downText() {
+    if (!incoming || incoming.n === 0) return '';
+    return '↓' + (incoming.n === null ? '?' : incoming.n + (incoming.more ? '+' : ''));
+  }
+
+  function commitLine(c) {
+    return c.at.replace('T', ' ').slice(0, 16) + ' UTC' + (c.by ? ' ' + c.by : '') + ' — ' + c.text;
+  }
+
+  function incomingText() {
+    if (!incoming || incoming.n === 0) return '';
+    if (incoming.n === null) {
+      return 'Can\'t tell what\'s new in git — this browser has no sync point in this repository yet. ' +
+             'One sync fixes it.\nNewest in git: ' + commitLine(incoming.commits[0]);
+    }
+    var n = incoming.n + (incoming.more ? '+' : '');
+    return n + ' new commit' + (incoming.n === 1 ? '' : 's') + ' in git since this browser\'s last sync:\n' +
+      incoming.commits.slice(0, 5).map(commitLine).join('\n') +
+      (incoming.commits.length > 5 ? '\n…' : '');
+  }
+
+  function onVisible() {
+    if (document.visibilityState === 'visible' && Date.now() - lastCheckAt >= CHECK_EVERY) checkRemote();
+  }
+
+  function tellIncoming() {
+    var by = [];
+    incoming.commits.forEach(function (c) { if (c.by && by.indexOf(c.by) < 0) by.push(c.by); });
+    var what = incoming.n === null ? 'Git has a log this browser has never synced'
+      : 'Git has ' + incoming.n + (incoming.more ? '+' : '') + ' new commit' + (incoming.n === 1 ? '' : 's') +
+        (by.length ? ' from ' + by.join(', ') : '');
+    showHint(what + ' — click GIT LOG SYNC', 8000);
   }
 
   // Deleting a log this browser shows is the one thing a sync may not do
@@ -809,12 +931,14 @@
       btn.textContent = 'SYNC… ' + progress.step;
       btn.style.setProperty('--gs-p', Math.round(progressFraction() * 100) + '%');
     } else {
-      btn.textContent = 'GIT LOG SYNC' + (conf && pending > 0 ? ' (' + pending + ')' : '');
+      btn.textContent = 'GIT LOG SYNC' + (conf && pending > 0 ? ' (' + pending + ')' : '') +
+                        (conf && downText() ? ' ' + downText() : '');
       btn.style.removeProperty('--gs-p');
     }
     btn.disabled = busy;
     btn.classList.toggle('gs-busy', busy);
     btn.classList.toggle('gs-error', !busy && !!lastError);
+    btn.classList.toggle('gs-incoming', !busy && !lastError && conf && !!downText());
     if (conf) {
       btn.classList.toggle('btn-backup-pending', !busy && pending > 0);
       if (pending > 0) global.addEventListener('beforeunload', beforeUnload);
@@ -836,6 +960,8 @@
            (ls.sha ? ', ' + ls.sha.slice(0, 7) : '');
     }
     if (pending > 0) t += '\n' + pending + ' change(s) here not in git yet.';
+    if (incomingText()) t += '\n' + incomingText();
+    if (checkNote) t += '\n' + checkNote;
     return t + '\n⚙ settings & guide';
   }
 
@@ -900,6 +1026,7 @@
         '<div class="gs-prog" id="gsProg" hidden><div class="gs-prog-bar"><i id="gsProgFill"></i></div>' +
           '<span id="gsProgText"></span></div>' +
         '<div class="gs-status" id="gsStatus"></div>' +
+        '<div class="gs-status gs-in" id="gsIn" hidden></div>' +
         '<form class="gs-form" id="gsForm" autocomplete="off">' +
           '<label>Repository<input id="gsRepo" placeholder="owner/name" spellcheck="false"></label>' +
           '<label>Branch<input id="gsBranch" placeholder="main" spellcheck="false"></label>' +
@@ -998,9 +1125,12 @@
       lastError = null;
       fillForm();
       showHint('GIT LOG SYNC settings saved');
+      incoming = null;
+      toldIncoming = 0;
       recount();
       renderButton();
       render();
+      checkRemote();
     }, function (e) {
       lastError = { text: e.message };
       render();
@@ -1081,6 +1211,12 @@
         (pending > 0 ? '<br>' + pending + ' change(s) here not in git yet.' : '');
     } else st.textContent = 'Set up, never synced from here yet.';
 
+    var inBox = document.getElementById('gsIn');
+    var inText = conf ? incomingText() : '';
+    inBox.hidden = !inText && !checkNote;
+    inBox.classList.toggle('gs-dim', !inText);
+    inBox.innerHTML = esc(inText || checkNote).replace(/\n/g, '<br>');
+
     document.getElementById('gsTok').innerHTML = c.token
       ? 'token saved ✓ · <button type="button" class="gs-link" data-gs="forget-token">remove</button>'
       : '<span class="gs-dim">Fine-grained token, this one repository only, "Contents: Read and write", with an expiry. ' +
@@ -1122,8 +1258,8 @@
     if (!open && confirmWait) confirmWait(false);
   }
 
-  function showHint(text) {
-    if (typeof global.showHint === 'function') global.showHint(text, 4000);
+  function showHint(text, ms) {
+    if (typeof global.showHint === 'function') global.showHint(text, ms || 4000);
   }
 
   // ── mount ───────────────────────────────────────────────────────────────────
@@ -1139,7 +1275,8 @@
     global.addEventListener('resize', function () { if (el && open) place(); });
     if (global.LogDB && LogDB.onQsoWrite) LogDB.onQsoWrite(onWrite);
     renderButton();
-    loadCfg().then(function () { recount(); renderButton(); render(); });
+    document.addEventListener('visibilitychange', onVisible);
+    loadCfg().then(function () { recount(); renderButton(); render(); checkRemote(); });
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);
@@ -1152,6 +1289,8 @@
     isOpen: function () { return open; },
     isBusy: function () { return busy; },
     pending: function () { return pending; },
+    incoming: function () { return incoming; },
+    checkRemote: checkRemote,
     core: core,
     // the smoke harness points this at its fake GitHub
     _setApi: function (u) { API = u; },

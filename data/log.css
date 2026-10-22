@@ -1712,6 +1712,10 @@ input.mx-serial-bad           { border-color: var(--conn-fail); }
   color: #ffffff;
 }
 
+/* Amber, and ↓N in the text: git has commits this browser has not synced yet.
+   No fill of its own, so it sits on top of the unsaved fill when both are true. */
+#btnGitSync.gs-incoming { border-color: var(--amber); color: var(--amber); }
+
 /* ── DXC Band Display ────────────────────────────────────────────────────── */
 
 .dxc-band-box {
@@ -2629,6 +2633,8 @@ body {
 .pa-btn.gs-danger { border-color: #8a3a3a; color: #ff9a9a; }
 
 .gs-status { font-size: 11px; line-height: 1.4; color: #c9d3df; }
+.gs-status.gs-in { margin-top: 4px; color: var(--amber); }
+.gs-status.gs-in.gs-dim { color: var(--pa-dim); }
 .gs-error-msg {
   font-size: 11px; line-height: 1.4; color: #ff9a9a;
   border: 1px solid #5a2a2a; border-radius: 4px; padding: 5px 6px; background: #241618;

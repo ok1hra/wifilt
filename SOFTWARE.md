@@ -1339,6 +1339,18 @@ The button has two halves:
   row reports the result, e.g. `Git sync: +14 in, 3 out, a1b2c3d`. A count in brackets,
   `GIT LOG SYNC (12)`, is the number of changes in this browser that are not in git yet.
   While there are any, the button is coloured and closing the page asks first.
+
+  The other direction is checked too: when QRPLog loads, and when you come back to the
+  tab after at least 5 minutes away, it asks GitHub whether another device has synced since
+  this browser last did. If so, the button shows `↓2` in amber (e.g.
+  `GIT LOG SYNC (12) ↓2`), the line above the input row says once
+  `Git has 2 new commits from hra2 — click GIT LOG SYNC`, and hovering the button lists
+  them. This only looks: nothing is downloaded or written until you click. Only commits
+  that change the log file count, so an update of the web viewer or the README does not.
+  `↓?` means this browser has no sync point in this repository yet (it last synced before
+  this check existed, or never synced to this repository): one sync makes the count exact.
+  Without internet the check stays quiet; a token GitHub refuses turns the button red, as
+  a failed sync does.
 - **⚙** opens a small movable palette with the settings, the last sync and a link to this
   guide. Like the PA palette, its buttons never take the cursor out of *Call*. `Esc` closes
   it, unless something is being transmitted: then `Esc` aborts the transmission, as it does

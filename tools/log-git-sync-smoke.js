@@ -33,14 +33,17 @@ let gitCfg = {};
 
 // ── the fake GitHub ──────────────────────────────────────────────────────────
 const gh = { token: "tok123", head: null, commits: {}, blobs: {}, trees: {}, n: 0,
-             fail422: 0, drop: false, delay: 120, puts: 0 };
+             fail422: 0, drop: false, delay: 120, puts: 0, checks: 0 };
 const newSha = () => (++gh.n).toString(16).padStart(40, "0");
 const treeAt = c => (c && gh.commits[c]) ? gh.trees[gh.commits[c].tree] : {};
+// GitHub dates commits in whole seconds; two apart keeps them in order.
+let clock = Date.now() - 3600e3;
+const tick = () => new Date(clock += 2000).toISOString().replace(/\.\d+Z$/, "Z");
 function commit(files, message) {
   const t = newSha();
   gh.trees[t] = files;
   const c = newSha();
-  gh.commits[c] = { tree: t, parent: gh.head, message };
+  gh.commits[c] = { tree: t, parent: gh.head, message, date: tick() };
   gh.head = c;
   return c;
 }
@@ -98,7 +101,7 @@ async function handleGh(request, response, url, json) {
   let m;
   if (request.method === "GET" && (m = /^git\/commits\/(\w+)$/.exec(p))) {
     if (!gh.commits[m[1]]) return json(404, { message: "Not Found" });
-    return json(200, { sha: m[1], tree: { sha: gh.commits[m[1]].tree } });
+    return json(200, { sha: m[1], tree: { sha: gh.commits[m[1]].tree }, committer: { date: gh.commits[m[1]].date } });
   }
   if (request.method === "GET" && (m = /^contents\/(.+)$/.exec(p))) {
     const text = treeAt(url.searchParams.get("ref"))[decodeURIComponent(m[1])];
@@ -111,7 +114,7 @@ async function handleGh(request, response, url, json) {
     if (gh.head) return json(422, { message: "sha wasn't supplied" });
     gh.puts++;
     const c = commit({ [decodeURIComponent(m[1])]: Buffer.from(body.content, "base64").toString("utf8") }, body.message);
-    return json(201, { commit: { sha: c } });
+    return json(201, { commit: { sha: c, committer: { date: gh.commits[c].date } } });
   }
   if (request.method === "POST" && p === "git/blobs") {
     const s = newSha();
@@ -127,8 +130,22 @@ async function handleGh(request, response, url, json) {
   }
   if (request.method === "POST" && p === "git/commits") {
     const s = newSha();
-    gh.commits[s] = { tree: body.tree, parent: body.parents[0], message: body.message };
-    return json(201, { sha: s });
+    gh.commits[s] = { tree: body.tree, parent: body.parents[0], message: body.message, date: tick() };
+    return json(201, { sha: s, committer: { date: gh.commits[s].date } });
+  }
+  // newest first, only the commits that changed `path`, none older than `since`
+  if (request.method === "GET" && p === "commits") {
+    gh.checks++;
+    if (!gh.head) return json(409, { message: "Git Repository is empty." });
+    const file = url.searchParams.get("path"), since = url.searchParams.get("since") || "";
+    const per = +url.searchParams.get("per_page") || 30, out = [];
+    for (let c = gh.head; c && out.length < per; c = gh.commits[c].parent) {
+      const k = gh.commits[c];
+      if (k.date < since) break;
+      if (gh.trees[k.tree][file] !== treeAt(k.parent)[file])
+        out.push({ sha: c, commit: { message: k.message, committer: { date: k.date } } });
+    }
+    return json(200, out);
   }
   if (request.method === "PATCH" && p === "git/refs/heads/main") {
     if (gh.fail422 > 0 || gh.commits[body.sha].parent !== gh.head) {
@@ -161,11 +178,12 @@ const server = http.createServer(async (request, response) => {
   if (url.pathname.startsWith("/gh/")) return handleGh(request, response, url, json);
   if (url.pathname === "/test/gh") {
     const b = JSON.parse((await readBody(request)) || "{}");
-    if (b.seed != null) commit(Object.assign({}, treeAt(gh.head), { [FILE]: b.seed }), "device B");
+    if (b.seed != null) commit(Object.assign({}, treeAt(gh.head), { [FILE]: b.seed }), b.message || "device B");
+    if (b.other != null) commit(Object.assign({}, treeAt(gh.head), { [b.other]: "rev " + gh.n }), "viewer");
     if (b.token != null) gh.token = b.token;
     if (b.fail422 != null) gh.fail422 = b.fail422;
     if (b.drop != null) gh.drop = b.drop;
-    return json({ commits: Object.keys(gh.commits).length, head: gh.head, puts: gh.puts,
+    return json({ commits: Object.keys(gh.commits).length, head: gh.head, puts: gh.puts, checks: gh.checks,
                   file: treeAt(gh.head)[FILE] || null,
                   message: gh.head ? gh.commits[gh.head].message : null });
   }
@@ -245,15 +263,20 @@ const PAGE_SCRIPT = `
 
   try {
     for (let i = 0; i < 80 && !(window.LogGitSync && window.LogManager && window.LogDB); i++) await sleep(100);
-    await sleep(700);
+    // before the page's own look at git on load can go out to the real one
     LogGitSync._setApi(location.origin + "/gh");
+    await sleep(700);
     const core = LogGitSync.core;
 
     if (phase === "2") {
-      await waitFor(() => /\\(2\\)/.test($("btnGitSync").textContent), 4000);
+      await waitFor(() => /\\(2\\) ↓1$/.test($("btnGitSync").textContent), 4000);
       check("F5: the counter is recounted from the database",
             /GIT LOG SYNC \\(2\\)/.test($("btnGitSync").textContent), $("btnGitSync").textContent);
       check("F5: still coloured as unsaved", $("btnGitSync").classList.contains("btn-backup-pending"));
+      check("load: the look at git finds the commit made meanwhile, beside the counter",
+            $("btnGitSync").textContent === "GIT LOG SYNC (2) ↓1" && $("btnGitSync").classList.contains("gs-incoming"),
+            $("btnGitSync").textContent);
+      check("load: and says so once, naming the device", /^Git has 1 new commit from hra2 — click GIT LOG SYNC$/.test(hint()), hint());
       await syncAndWait();
       check("F5: sync clears it", $("btnGitSync").textContent === "GIT LOG SYNC" &&
             !$("btnGitSync").classList.contains("btn-backup-pending"), $("btnGitSync").textContent);
@@ -450,6 +473,90 @@ const PAGE_SCRIPT = `
           f.deleted_logs.some(t => t.id === logY.id));
     check("one record per line in git", f.stores.qso.length === (await ghCtl()).file.split("\\n").filter(l => /"call"/.test(l)).length);
 
+    // ── what git has that this browser has not: the look on load / back on the tab
+    {
+      const BASE = "wifilt-git-sync-base", KEY = "o/r|main|QSO-database.json";
+      const label = () => $("btnGitSync").textContent;
+      const amber = () => $("btnGitSync").classList.contains("gs-incoming");
+      const point = () => (JSON.parse(localStorage.getItem(BASE) || "{}") || {})[KEY];
+      let s0 = await ghCtl();
+      check("a sync leaves its point: the head it is level with", point() && point().sha === s0.head &&
+            /^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\dZ$/.test(point().at), JSON.stringify(point()));
+      await LogGitSync.checkRemote();
+      check("level with git: no ↓", label() === "GIT LOG SYNC" && !amber(), label());
+      const n0 = (await allQso()).length;
+      await ghCtl({ seed: s0.file + "\\n", message: "GIT LOG SYNC: 9 QSO in 2 logs (hra2)" });
+      await LogGitSync.checkRemote();
+      check("a commit from elsewhere: ↓1 in amber", label() === "GIT LOG SYNC ↓1" && amber(), label());
+      check("... a toast names the device", /^Git has 1 new commit from hra2 — click GIT LOG SYNC$/.test(hint()), hint());
+      check("... the title lists it", /1 new commit in git since[\\s\\S]* UTC hra2 — 9 QSO in 2 logs/.test($("btnGitSync").title),
+            $("btnGitSync").title);
+      check("... only a look: nothing written here", (await allQso()).length === n0 && !LogGitSync.isBusy());
+      $("logHint").textContent = "";
+      await LogGitSync.checkRemote();
+      check("the same commit again: no second toast", hint() === "", hint());
+      await ghCtl({ other: "index.html" });
+      await LogGitSync.checkRemote();
+      check("a commit that leaves the log file alone is not counted", label() === "GIT LOG SYNC ↓1", label());
+      LogGitSync.setOpen(true);
+      check("the palette says it too", !$("gsIn").hidden && /1 new commit/.test($("gsIn").textContent), $("gsIn").textContent);
+      LogGitSync.setOpen(false);
+      await syncAndWait();
+      check("a sync clears ↓", label() === "GIT LOG SYNC" && !amber(), label());
+      await ghCtl({ other: "README.md" });
+      await LogGitSync.checkRemote();
+      check("after it, a viewer-only commit still counts nothing", label() === "GIT LOG SYNC", label());
+      await LogDB.addQso(q(log.id, "OK1AA"));
+      await syncAndWait();
+      s0 = await ghCtl();
+      check("own push: the point is our own commit", point() && point().sha === s0.head && /OK1AA/.test(s0.file));
+      await LogGitSync.checkRemote();
+      check("... and it is not news", label() === "GIT LOG SYNC", label());
+
+      // back on the tab: again only after 5 minutes
+      const c0 = (await ghCtl()).checks;
+      document.dispatchEvent(new Event("visibilitychange"));
+      await sleep(400);
+      check("back on the tab within 5 min: no look", (await ghCtl()).checks === c0);
+      const realNow = Date.now;
+      Date.now = () => realNow() + 6 * 60 * 1000;
+      document.dispatchEvent(new Event("visibilitychange"));
+      Date.now = realNow;
+      await sleep(400);
+      check("back on the tab after 5 min: looks again", (await ghCtl()).checks === c0 + 1, String((await ghCtl()).checks - c0));
+
+      // no sync point
+      const saved = localStorage.getItem(BASE);
+      localStorage.removeItem(BASE);
+      $("logHint").textContent = "";
+      await LogGitSync.checkRemote();
+      check("synced before there were sync points: ↓?", label() === "GIT LOG SYNC ↓?" && amber(), label());
+      check("... the title says why", /no sync point in this repository yet/.test($("btnGitSync").title), $("btnGitSync").title);
+      check("... without a toast: one sync away from exact", hint() === "", hint());
+      localStorage.setItem(BASE, JSON.stringify({ "x/y|main|QSO-database.json": { sha: "0", at: "2026-01-01T00:00:00Z" } }));
+      await LogGitSync.checkRemote();
+      check("never synced to this repository: ↓? and a toast", label() === "GIT LOG SYNC ↓?" &&
+            /^Git has a log this browser has never synced — click GIT LOG SYNC$/.test(hint()), label() + " / " + hint());
+      localStorage.setItem(BASE, saved);
+      await LogGitSync.checkRemote();
+      check("point back: level again", label() === "GIT LOG SYNC", label());
+
+      // offline is quiet, a refused token is not
+      await ghCtl({ drop: true });
+      $("logHint").textContent = "";
+      await LogGitSync.checkRemote();
+      check("offline: no red, no toast, a note in the title", !$("btnGitSync").classList.contains("gs-error") &&
+            hint() === "" && /Could not check git \\(offline\\) at \\d\\d:\\d\\d UTC/.test($("btnGitSync").title), $("btnGitSync").title);
+      await ghCtl({ drop: false, token: "other" });
+      await LogGitSync.checkRemote();
+      check("401 on the look: red, the reason in the palette", $("btnGitSync").classList.contains("gs-error") &&
+            /401/.test($("gsError").textContent), $("gsError").textContent);
+      check("... but the palette does not open by itself", !shown());
+      await ghCtl({ token: "tok123" });
+      await LogGitSync.checkRemote();
+      check("token fixed: the next look clears the red", !$("btnGitSync").classList.contains("gs-error"));
+    }
+
     // ── a bad token: nothing written, the palette says why
     await LogDB.addQso(q(log.id, "OK2ZZ"));
     const n1 = (await allQso()).length;
@@ -478,6 +585,8 @@ const PAGE_SCRIPT = `
     // ── two QSOs unsynced, then F5
     await LogDB.addQso(q(log.id, "SM1AA"));
     await LogDB.addQso(q(log.id, "SP1BB"));
+    // ...and meanwhile another device syncs: the look on load must find it
+    await ghCtl({ seed: (await ghCtl()).file + "\\n\\n", message: "GIT LOG SYNC: 12 QSO in 2 logs (hra2)" });
     sessionStorage.setItem("gsSmokeChecks", JSON.stringify(checks));
     sessionStorage.setItem("gsSmokePhase", "2");
     location.reload();
