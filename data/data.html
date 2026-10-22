@@ -561,13 +561,13 @@
 
   <script src="/ports.js"></script>
   <script src="/wake-lock.js?v=b487b3dc"></script>
-  <script src="/lan-gate.js?v=e297f7ab"></script>
+  <script src="/lan-gate.js?v=75f2464b"></script>
   <script src="/mgrs.js?v=6a363b6c"></script>
   <script src="/fw-version.js?v=b29c5317"></script>
   <script src="/js8-settings.js?v=b1e44675"></script>
   <script src="/station-identity.js?v=a1a20249"></script>
   <script src="/station-profile.js?v=317b4ccb"></script>
-<script src="/setup-spine.js?v=54e58741"></script>
+<script src="/setup-spine.js?v=22f5d2f4"></script>
 <script>
   // The spine follows the operator here for one reason: the transmit check is
   // the only step of it that cannot be done on SETUP, because that page has no
@@ -617,7 +617,7 @@
   <script src="/audio-health.js?v=9efe092e"></script>
   <script src="/js8-aud1.js?v=7fa0379a"></script>
   <!-- The station's calibration table and the ALC limiter, shared with WSPR. -->
-  <script src="/tx-gain-cal.js?v=32892cb6"></script>
+  <script src="/tx-gain-cal.js?v=4fdb24e3"></script>
   <script src="/tx-alc-guard.js?v=b024d0ae"></script>
 
   <script src="/js8-audio.js?v=5e84ab41"></script>
@@ -628,14 +628,14 @@
        level into watts and must never disagree with the WSPR page about how. -->
   <!-- One table of Icom models: watts for WSPR, menu paths for the setup guides. -->
   <script src="/icom-models.js?v=ddc6caa5"></script>
-  <script src="/trx-help.js?v=4767f20f"></script>
+  <script src="/trx-help.js?v=f5681ddd"></script>
   <script>TrxHelp.mount(document, {kind: "js8"});</script>
   <script src="/wspr-core.js?v=981ff9bf"></script>
   <!-- WsprTx joins WsprCore because the calibration carrier is a STREAMED single
        tone -- the only kind whose level can move while it plays, which is what
        the search needs eight or nine times inside one keying. Must follow both. -->
   <script src="/wspr-tx.js?v=20c527f9"></script>
-  <script src="/tx-gain-cal-ui.js?v=9f454af0"></script>
+  <script src="/tx-gain-cal-ui.js?v=1d9dc3bb"></script>
   <!-- The batch plan, identical to the WSPR page's: the sequencer decides the order
        and the panel executes its intents. Both must follow tx-gain-cal-ui.js. -->
   <script src="/tx-gain-mod-level.js?v=42af6a2a"></script>
@@ -652,7 +652,7 @@
   <script src="/tx-pledge.js?v=5750feea"></script>
   <script src="/settings-fold.js?v=b75dee54"></script>
   <script src="/station-map.js?v=7bd5311c"></script>
-  <script src="/data.js?v=f292598a"></script>
+  <script src="/data.js?v=a2d2e4eb"></script>
   <script src="/compression.js?v=768da432"></script>
 </body>
 </html>

@@ -128,7 +128,7 @@
     audioDb: -90,
     lastOffsetHz: 1500,       // where the last (or current) transmission landed
     pendingFrequency: 0,      // a hand-tuned band waiting for the radio to confirm
-    helpShownForSetup: false, // latch: the setup dialog opens once per bad state
+    helpShownForSetup: false, // radio unusable for the beacon: ? opens with the warning
     fwRev: "",                // reported by /state; goes into wsprnet's version field
     rxSpots: [],              // the chosen period, newest first, as loaded from / added to the store
     rxCapped: false,          // the period held more than RX_LOAD_LIMIT spots
@@ -757,8 +757,8 @@
   //
   // A radio that is neither in a data mode nor anywhere near a WSPR dial
   // frequency has not been set up for this page at all -- most likely it is
-  // still where the operator left it after voice or JS8. Rather than refuse
-  // quietly at the first slot, open the setup card that says what to change.
+  // still where the operator left it after voice or JS8. The dial goes red, and
+  // ? then opens the setup card with a warning on what to change.
   //
   // Both conditions have to hold: USB-D on a random frequency is a legitimate
   // mid-tune state, and so is sitting on a WSPR frequency in USB while the
@@ -773,13 +773,11 @@
     return !WsprCore.PRESETS.some(preset => Math.abs(preset.hz - hz) <= DIAL_TOLERANCE_HZ);
   }
 
+  // No longer opens the guide by itself (operator request 2026-10-22): the red
+  // dial frequency already says it. Remembered so ? opens with the warning.
   function maybeOfferSetupHelp() {
-    const unusable = state.radio.connected && Boolean(state.radio.mode) &&
-                     state.radio.mode !== "USB-D" && offDialFrequency();
-    // Latched: it opens on the transition into that state, not on every poll,
-    // so dismissing it does not start a fight with the one-second poller.
-    if (unusable && !state.helpShownForSetup) openSetupHelp("mode");
-    state.helpShownForSetup = unusable;
+    state.helpShownForSetup = state.radio.connected && Boolean(state.radio.mode) &&
+                              state.radio.mode !== "USB-D" && offDialFrequency();
   }
 
   function openSetupHelp(reason = "manual") {
@@ -3211,7 +3209,8 @@
       closeTimetablePanel();
       closeFrequencyMenu();
     });
-    dom.trxHelpButton.addEventListener("click", () => openSetupHelp("manual"));
+    dom.trxHelpButton.addEventListener("click",
+      () => openSetupHelp(state.helpShownForSetup ? "mode" : "manual"));
     dom.trxHelpDialog.addEventListener("click", event => {
       if (event.target === dom.trxHelpDialog) dom.trxHelpDialog.close();
     });

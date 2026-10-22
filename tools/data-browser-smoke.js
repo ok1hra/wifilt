@@ -2081,6 +2081,10 @@ f.onload=()=>{
       checks.usbModeNeutral=!d.querySelector('#trxMode').classList.contains('incompatible');
       f.contentWindow.__dataTest.setRadioMode('CW');
       checks.incompatibleMode=d.querySelector('#trxMode').classList.contains('incompatible')&&d.querySelector('#trxMode').title.includes('USB');
+      // The amber mode button is the signal; the guide no longer pops up by
+      // itself (2026-10-22), but ? opens it with the mode warning on top.
+      checks.modeHelpNotAuto=d.querySelector('#trxHelpDialog').open===false;
+      d.querySelector('#trxHelpButton').click();
       checks.modeHelp=d.querySelector('#trxHelpDialog').open===true&&d.querySelector('#trxHelpModeWarning').hidden===false;
       d.querySelector('#trxHelpDialog .trx-help-close').click();
       f.contentWindow.__dataTest.setRadioMode('USB');

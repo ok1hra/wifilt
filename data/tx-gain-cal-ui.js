@@ -204,6 +204,8 @@
     }
 
     blockingReason() {
+      const localTrx = TxGainCal.localTrxBlock();
+      if (localTrx) return localTrx;
       const page = this.page.blockingReason();
       if (page) return page;
       if (!this.identity()) {
@@ -491,7 +493,7 @@
       const identity = this.identity();
       const stored = identity ? this.store.entry(identity.key) : null;
       const problem = this.blockingReason();
-      this.dom.target.textContent = identity
+      this.dom.target.textContent = identity && !TxGainCal.localTrxBlock()
         ? `Will measure ${identity.model} on ${identity.band} at ${identity.percent} %` +
           (stored ? ` (previous knee ${stored.knee})` : " (never calibrated)")
         : problem || "";

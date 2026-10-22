@@ -105,7 +105,7 @@
     const params = new URLSearchParams(root.location.search);
     if (params.has("test") && params.get("lanFixture"))
       query.set("fixture", params.get("lanFixture"));
-    let ready = false, detail = "", slot = 0;
+    let ready = false, detail = "", slot = 0, localTrx = false;
     try {
       // Deadline so a gate check caught by a WiFi burst fails into its own
       // "not reachable" path instead of parking a pooled connection forever.
@@ -129,10 +129,13 @@
       }
       ready = missing.length === 0;
       detail = missing.join(" · ");
+      // SETUP's LOCAL-TRX checkbox on that slot: the "radio" is the local-trx
+      // bridge, whatever model name it reports -- no ALC/MOD level over CI-V.
+      localTrx = Boolean(slot) && config[`trx${slot}localtrx`] === true;
     } catch (error) {
       detail = `Unable to read the radio configuration: ${error.message}`;
     }
-    result = {ready, detail, slot};
+    result = {ready, detail, slot, localTrx};
     return result;
   }
 
@@ -189,6 +192,7 @@
     result: () => result,
     config: () => config,
     slot: () => (result ? result.slot : 0),
+    localTrx: () => Boolean(result && result.localTrx),
   };
 
   if (typeof module === "object" && module.exports) module.exports = LanGate;

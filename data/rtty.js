@@ -1550,6 +1550,13 @@
   Promise.all([LanGate.gate(), adoptStationSettings()]).then(([ready]) => {
     if (!ready) return;
 
+    // Behind local-trx the FSK keyer IS that TrxNet device (its OI3 peer,
+    // NET_ID from local-trx's Step 3) -- say so, or "Internal" looks right.
+    if (LanGate.localTrx && LanGate.localTrx()) {
+      const trxnet = dom.rttyFskOutputMode.querySelector('option[value="trxnet"]');
+      if (trxnet) trxnet.textContent = "External (TrxNet device) (local-trx)";
+    }
+
     dom.rttySquelchInput.min = String(RttySettings.SQUELCH_DB_MIN);
     dom.rttySquelchInput.max = String(RttySettings.SQUELCH_DB_MAX);
     // The slider always shows the LEVEL (squelchOnDb), on or off --

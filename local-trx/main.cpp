@@ -11,12 +11,14 @@
 // --config-dir flag, but the three UDP sockets bind INADDR_ANY (see
 // icom_lan_server.cpp) -- what matters is what the operator types into
 // wifilt's Setup ICOM-LAN field, which --bind-ip does not change.
+#include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -243,6 +245,71 @@ class AudioDeviceKeeper {
   std::chrono::steady_clock::time_point nextTry_;
 };
 
+// The keying port gets the same retry as the audio devices above instead of
+// a one-shot open at startup. Windows opens a COM port exclusively, and a
+// wizard Save starts the new process (CreateProcess) while the old one --
+// still holding the Step 3 test line open -- is only just exiting. A single
+// lost race there left every PTT going to LoggingKeyLine for the whole
+// session: CAT worked, JS8 never keyed (field report, IC-7300 on Windows,
+// 2026-10-22). Until the port opens, key/PTT are logged, not dropped.
+class KeyLineKeeper : public LocalTrx::KeyLine {
+ public:
+  KeyLineKeeper(LocalTrx::SerialKeyLine &serial, LoggingKeyLine &fallback, const LocalTrx::Config &config)
+      : serial_(serial), fallback_(fallback), port_(config.keying.port),
+        keyLine_(config.keying.keyLine), pttLine_(config.keying.pttLine) {}
+
+  // Main loop only. A no-op once open, and when no keying.port is configured.
+  void keep() {
+    if (port_.empty() || open_.load()) return;
+    const auto now = std::chrono::steady_clock::now();
+    if (tried_ && now < nextTry_) return;
+    tried_ = true;
+    nextTry_ = now + std::chrono::seconds(5);
+    std::string error;
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (serial_.open(&error)) {
+      open_ = true;
+      std::printf("local-trx: keying via %s (key=%s, ptt=%s)\n", port_.c_str(), keyLine_.c_str(),
+                  pttLine_.c_str());
+      std::fflush(stdout);
+    } else if (error != lastError_) {
+      std::fprintf(stderr,
+                   "warning: keying serial port unavailable (%s) -- logging key/PTT instead, "
+                   "retrying every 5 s\n",
+                   error.c_str());
+      lastError_ = error;
+    }
+  }
+
+  // KeyRunner's thread. The mutex only guards the switch-over from the
+  // fallback to the real port; it is never contended while CW is keying.
+  void setKey(bool down) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (open_.load()) serial_.setKey(down); else fallback_.setKey(down);
+  }
+  // PTT transitions are rare enough to log on the real port too -- without
+  // this, "did wifilt ask for PTT at all?" had no answer on a live station.
+  void setPtt(bool on) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!open_.load()) { fallback_.setPtt(on); return; }
+    serial_.setPtt(on);
+    std::printf("[ptt] %s (%s %s)\n", on ? "ON" : "off", port_.c_str(), pttLine_.c_str());
+    std::fflush(stdout);
+  }
+
+ private:
+  LocalTrx::SerialKeyLine &serial_;
+  LoggingKeyLine &fallback_;
+  std::string port_;
+  std::string keyLine_;
+  std::string pttLine_;
+  std::mutex mutex_;
+  std::atomic<bool> open_{false};
+  bool tried_ = false;
+  std::string lastError_;
+  std::chrono::steady_clock::time_point nextTry_;
+};
+
 void printHelp() {
   std::printf(
       "local-trx -- PC-side ICOM-LAN-radio impersonator for native wifilt\n\n"
@@ -395,24 +462,16 @@ int main(int argc, char **argv) {
   // FSK-over-TrxNet, since the two are mode-exclusive and share one physical
   // key line. Real DTR/RTS when keying.port is configured and opens; falls
   // back to LoggingKeyLine otherwise (empty port, or the adapter is not
-  // actually on the desk) rather than refusing to start -- CAT/keying-text
-  // still all work, just without a physical line moving.
+  // actually on the desk, or still held by the process a wizard Save just
+  // replaced) rather than refusing to start, and keeps retrying the port
+  // from the main loop -- CAT/keying-text still all work meanwhile, just
+  // without a physical line moving.
   LoggingKeyLine loggingKeyLine;
   LocalTrx::SerialKeyLine serialKeyLine(config.keying.port, config.keying.baud,
                                         config.keying.keyLine, config.keying.pttLine);
-  LocalTrx::KeyLine *keyLine = &loggingKeyLine;
-  if (!config.keying.port.empty()) {
-    std::string keyError;
-    if (serialKeyLine.open(&keyError)) {
-      keyLine = &serialKeyLine;
-      std::printf("local-trx: keying via %s (key=%s, ptt=%s)\n", config.keying.port.c_str(),
-                  config.keying.keyLine.c_str(), config.keying.pttLine.c_str());
-    } else {
-      std::fprintf(stderr, "warning: keying serial port unavailable (%s) -- logging key/PTT instead\n",
-                   keyError.c_str());
-    }
-  }
-  LocalTrx::KeyRunner keyer(*keyLine, config.keying.cwWpm);
+  KeyLineKeeper keyLineKeeper(serialKeyLine, loggingKeyLine, config);
+  keyLineKeeper.keep();
+  LocalTrx::KeyRunner keyer(keyLineKeeper, config.keying.cwWpm);
 
   // RX audio (bod 2, fáze 2, no PTT interaction): only attempted when
   // explicitly configured -- an empty audio.inputDevice means "not set up
@@ -484,6 +543,7 @@ int main(int argc, char **argv) {
   while (!g_stop) {
     server.poll();
     trxnetPeer.poll();
+    keyLineKeeper.keep();
     if (audioCapturePtr) captureKeeper.keep(audioCapture);
     if (audioPlaybackPtr) playbackKeeper.keep(audioPlayback);
     if (webUi) webUi->poll();

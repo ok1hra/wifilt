@@ -2460,9 +2460,10 @@ function renderHeader() {
   dom.trxMode.classList.toggle("incompatible",connected && !modeCompatible);
   dom.trxMode.title=connected && !modeCompatible ? "JS8Call-ICOM requires USB or USB-D" : "TRX mode";
   renderTrxPower(connected,rfPowerAuto.renderField());
-  const incompatible=connected && Boolean(state.radio.mode) && !modeCompatible;
-  if(incompatible && !state.help.incompatibleActive)openTrxHelp("mode");
-  state.help.incompatibleActive=incompatible;
+  // The amber TRX mode button is the whole signal; the guide no longer pops up
+  // over the page on a mode change (operator request 2026-10-22). Pressing ?
+  // while the mode is wrong still opens it with the mode warning on top.
+  state.help.incompatibleActive=connected && Boolean(state.radio.mode) && !modeCompatible;
   dom.radioBar.classList.toggle("tx",transmitting);
   document.body.classList.toggle("radio-transmitting",transmitting);
   const starting=!state.startup.ready;
@@ -8378,7 +8379,7 @@ function confirmJs8Leave(event) {
 }
 function bind() {
   dom.modeSelect.addEventListener("change",()=>selectMode(dom.modeSelect.value));
-  dom.trxHelpButton.addEventListener("click",()=>openTrxHelp("manual"));
+  dom.trxHelpButton.addEventListener("click",()=>openTrxHelp(state.help.incompatibleActive ? "mode" : "manual"));
   dom.trxReconnect.addEventListener("click",reconnectRadio);
   // Takes the operator to the mail, nothing more: the message stays unread until
   // its own row is clicked, so the bar cannot clear itself by being looked at.

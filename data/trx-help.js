@@ -53,6 +53,8 @@
     + "vertical-align:middle}"
     + ".trx-help-detected{margin:0 0 12px;color:#7e918b;font-size:12px}"
     + ".trx-help-detected strong{color:#d9e7e2}"
+    + ".trx-help-tune{margin:6px 0;padding-left:20px;color:#d9e7e2}"
+    + ".trx-help-tune li{margin:0 0 5px}"
     + ".trx-help-untested{margin:10px 0 0;padding:9px 11px;border-left:3px solid #e0a020;"
     + "background:#1d1609;color:#e8d9bf;font-size:12px;line-height:1.5}";
 
@@ -191,6 +193,59 @@
     return steps;
   }
 
+  // ---- the guide for a radio behind local-trx -------------------------------
+
+  // A pseudo-model, picked by SETUP's LOCAL-TRX checkbox on the LAN slot rather
+  // than by the name the radio reports: local-trx can be told to call itself
+  // "IC-7300", and the IC-7300 guide would then send the operator into network
+  // menus a USB-only radio does not have. Nothing behind local-trx answers the
+  // ALC meter or the MOD level, so the TX level is set by hand with TUNE --
+  // tx-gain-cal.js's localTrxBlock() points here for exactly that.
+  const LOCAL_TRX = Object.freeze({label: "LOCAL-TRX", localTrx: true, tested: true});
+
+  function localTrxActive() {
+    const gate = root.LanGate;
+    return Boolean(gate && gate.localTrx && gate.localTrx());
+  }
+
+  function localTrxSteps(kind) {
+    const tuneButton = kind === "wspr" ? "TX TUNE" : "TUNE";
+    return [
+      step("Set up local-trx itself",
+        "Open local-trx's own setup page (port 8765 on the PC running it): Step 1 the radio's "
+        + "USB sound card for receive and transmit, Step 2 CAT, Step 3 the serial PTT/key "
+        + "adapter. Its Test PTT button must key the radio. Tick Enable, Save. On this "
+        + `interface's SETUP the TRX stays ${code("ICOM-LAN")} with ${code("LOCAL-TRX")} `
+        + "ticked."),
+      step("Put the radio in a data mode",
+        `Mode ${code("USB-D")} (or ${code("USB")} on a radio without a data mode), a filter `
+        + "of about 3 kHz, speech compressor off, VOX off. The radio's data audio input must "
+        + `be the one local-trx plays into — on an IC-7300 ${code("MENU → SET → Connectors → "
+        + "MOD Input → DATA MOD")} set to ${code("USB")}.`),
+      // Built by hand, not with step(): a list inside step()'s <p> is invalid
+      // markup and the browser would split the paragraph around it.
+      "<li><strong>Set the TX audio level by hand with TUNE</strong>"
+        + "<p>Automatic TX gain needs the radio's ALC meter, which local-trx cannot report, so "
+        + "the level is set by watching the radio instead:</p>"
+        + '<ol class="trx-help-tune">'
+        + "<li>Choose the band and the RF power you will really use, into a dummy load or a "
+        + "matched antenna. Switch the radio's meter to <b>ALC</b>.</li>"
+        + `<li>In SETTINGS set ${code("TX audio gain")} low, ${code("0.15")}, and tick `
+        + `${code("Enable radio TX")}.</li>`
+        + `<li>Press ${code(tuneButton)}: the radio sends one steady tone.</li>`
+        + `<li>Raise ${code("TX audio gain")} by ${code("0.05")} and press `
+        + `${code(tuneButton)} again, until the ALC needle just starts to move. Then go back `
+        + `down one step (${code("0.05")}). The power meter should now show about the RF `
+        + "power you set.</li>"
+        + `<li>ALC already moves at ${code("0.1")}: turn down the radio's USB/ACC MOD level `
+        + "or the PC's playback volume for the radio's sound card. No power even at "
+        + `${code("0.8")}: turn those up instead.</li>`
+        + "</ol>"
+        + "<p>One TX audio gain serves JS8 and WSPR. Repeat after a big change of power or "
+        + "band.</p></li>",
+    ];
+  }
+
   // ---- the guide for a radio we do not have a row for ----------------------
 
   // Everything the five known radios agree on, plus the one case where the model
@@ -227,7 +282,7 @@
   // whole model table exists to get right, sitting above a body that correctly
   // said LAN for four of the five. It follows the model now, which means it has to
   // be repainted like everything else, and says neither when no model is chosen.
-  const netWord = model => (model ? model.net : "THE NETWORK");
+  const netWord = model => (!model ? "THE NETWORK" : model.localTrx ? "LOCAL-TRX" : model.net);
 
   const KINDS = {
     js8:  {eyebrow: model => `JS8CALL-ICOM OVER ${netWord(model)}`,
@@ -250,7 +305,8 @@
   // it a late /state or /setup-data.json answer would yank the guide out from under
   // someone who deliberately opened a different model -- which is the whole point
   // of the switcher existing.
-  let state = {kind: "js8", reported: "", selected: null, doc: null, userPicked: false};
+  let state = {kind: "js8", reported: "", selected: null, doc: null, userPicked: false,
+               localTrx: false};
 
   function switcher(detected, selected) {
     const buttons = Models.MODELS.map(model => {
@@ -261,6 +317,11 @@
         + ` aria-pressed="${isSelected ? "true" : "false"}"`
         + `${isDetected ? ' title="Detected on the air"' : ""}>${escapeHtml(model.label)}</button>`;
     });
+    if (state.localTrx || (selected && selected.localTrx)) {
+      buttons.push(`<button type="button" class="trx-help-model`
+        + `${state.localTrx ? " trx-help-model-detected" : ""}" data-help-model="local"`
+        + ` aria-pressed="${selected && selected.localTrx ? "true" : "false"}">LOCAL-TRX</button>`);
+    }
     // The generic guide stays reachable even when a model is detected: the radio may
     // be bridged, in which case none of the model menu paths apply.
     buttons.push(`<button type="button" class="trx-help-model" data-help-model="0"`
@@ -271,6 +332,11 @@
 
   function detectedLine(detected, reported) {
     const name = String(reported || "").trim();
+    if (state.localTrx) {
+      return '<p class="trx-help-detected">Connected through <strong>local-trx</strong>'
+        + (name ? ` (it reports itself as ${escapeHtml(name)})` : "")
+        + " — the radio's own network menus do not apply.</p>";
+    }
     if (detected) {
       return `<p class="trx-help-detected">Detected: <strong>${escapeHtml(name)}</strong> — `
         + `full output ${detected.watts} W, CI-V ${escapeHtml(detected.civAddr)}h.</p>`;
@@ -288,7 +354,8 @@
     const kind = KINDS[state.kind] || KINDS.js8;
     const detected = Models.findModel(state.reported);
     const model = state.selected;
-    const steps = model ? kind.steps(model) : genericSteps();
+    const steps = !model ? genericSteps()
+      : model.localTrx ? localTrxSteps(state.kind) : kind.steps(model);
     const untested = model && !model.tested
       ? '<p class="trx-help-untested">The IC-705 is the model this interface has been verified '
         + `against. The ${escapeHtml(model.label)} exposes the same Network Control and `
@@ -317,7 +384,9 @@
     const heading = doc.getElementById("trxHelpTitle");
     const warning = doc.getElementById("trxHelpModeWarning");
     const eyebrow = doc.getElementById("trxHelpEyebrow");
-    if (warning) warning.innerHTML = kind.warning;
+    if (warning) warning.innerHTML = state.selected && state.selected.localTrx
+      ? `The radio is not in a data mode. Set ${code("USB-D")} (or ${code("USB")}) on the radio.`
+      : kind.warning;
     if (eyebrow) eyebrow.textContent = kind.eyebrow(state.selected);
     if (heading) heading.textContent = title();
     if (content) content.innerHTML = body();
@@ -378,11 +447,15 @@
   // Called whenever /state reports a model, or the remembered one arrives from
   // /setup-data.json. Cheap to call on every poll: identical input is a no-op, so
   // it does not rebuild the dialog behind the operator's cursor.
+  // Also re-reads LanGate's LOCAL-TRX flag, which arrives with /setup-data.json
+  // and can lag the first model name.
   function setReportedModel(reported) {
     const next = String(reported == null ? "" : reported);
-    if (next === state.reported) return;
+    const localTrx = localTrxActive();
+    if (next === state.reported && localTrx === state.localTrx) return;
     state.reported = next;
-    if (!state.userPicked) state.selected = Models.findModel(next);
+    state.localTrx = localTrx;
+    if (!state.userPicked) state.selected = localTrx ? LOCAL_TRX : Models.findModel(next);
     repaint();
   }
 
@@ -390,7 +463,8 @@
   // reports a real model number whose menu paths still do not apply.
   function selectModel(number) {
     state.userPicked = true;
-    state.selected = Models.MODELS.find(model => model.number === Number(number)) || null;
+    state.selected = number === "local" ? LOCAL_TRX
+      : Models.MODELS.find(model => model.number === Number(number)) || null;
     repaint();
   }
 

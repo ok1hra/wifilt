@@ -723,11 +723,15 @@ addEventListener("unhandledrejection", event => {
 
     // The fixture parks the radio on a JS8 frequency in plain USB, which is
     // neither a data mode nor within 500 Hz of any WSPR dial frequency -- the
-    // state the setup card exists for. It must open by itself.
-    check("an unusable radio opens the setup help by itself",
-          await wait(() => $("trxHelpDialog").open, 6000),
-          "open=" + $("trxHelpDialog").open);
-    check("and the card says why", !$("trxHelpModeWarning").hidden);
+    // state the setup card exists for. Since 2026-10-22 the red dial says so
+    // and the card waits for ?, which then opens with the warning.
+    check("an unusable radio turns the dial red",
+          await wait(() => $("trxFrequency").classList.contains("off-dial"), 6000),
+          "class=" + $("trxFrequency").className);
+    check("but does not open the setup help by itself", !$("trxHelpDialog").open);
+    $("trxHelpButton").click();
+    check("? opens it and the card says why",
+          $("trxHelpDialog").open && !$("trxHelpModeWarning").hidden);
     $("trxHelpDialog").close();
 
     check("the TRX button names the LAN slot",

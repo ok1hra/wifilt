@@ -423,6 +423,19 @@
   // unknown. A calibration filed under a guessed model, or a power the radio
   // has not confirmed, would be worse than none -- it would be applied without
   // anyone being asked.
+  // SETUP's LOCAL-TRX checkbox on the LAN slot (lan-gate.js). local-trx answers
+  // neither the ALC meter (15 13) nor the MOD level (1A 05), whatever model name
+  // it is told to report -- a search would key a carrier for 20 s and then fail
+  // on "the radio never answered the ALC meter". Every ALC-driven tool (this
+  // one's panel, CAL PLAN, Mercury's) asks this first. "" when not local-trx.
+  const LOCAL_TRX_REASON = "local-trx cannot report the radio's ALC, so the TX level is set" +
+    " by hand: TUNE and the radio's own ALC meter — the ? guide on the JS8Call or WSPR page" +
+    " explains how";
+  function localTrxBlock() {
+    const gate = typeof globalThis !== "undefined" ? globalThis.LanGate : null;
+    return gate && gate.localTrx && gate.localTrx() ? LOCAL_TRX_REASON : "";
+  }
+
   function identityFor({model, frequencyHz, percent, rfPowerSeen}) {
     const band = bandOf(frequencyHz);
     if (!model || !band || rfPowerSeen !== true) return null;
@@ -591,7 +604,7 @@
   }
 
   return {TxGainCal, TxGainStore, DEFAULTS, ULAW_BYTES_PER_SECOND, CAL_SWR_LIMIT,
-          bandOf, entryKey, identityFor, resolveGain,
+          bandOf, entryKey, identityFor, resolveGain, LOCAL_TRX_REASON, localTrxBlock,
           compact, expand, STORE_URL, SCHEMA_VERSION, migrate,
           entryStatus, seedFrom, toDb, fromDb};
 });

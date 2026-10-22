@@ -97,6 +97,8 @@
     }
 
     blockingReason() {
+      const localTrx = TxGainCal.localTrxBlock();
+      if (localTrx) return localTrx;
       const page = this.page.blockingReason();
       if (page) return page;
       if (this._running) return "a calibration is already running";
