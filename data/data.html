@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>JS8Call-ICOM — WIFILT</title>
-  <link rel="stylesheet" href="/data.css?v=4a642c91">
+  <link rel="stylesheet" href="/data.css?v=a5acb95d">
 </head>
 <body class="startup-pending lan-gate-checking">
   <header class="site-topbar">
@@ -86,6 +86,11 @@
     <span id="trxPower" class="trx-power" hidden>
       <span class="pwr-bar" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
       <b id="trxPowerWatts">--</b>
+    </span>
+    <!-- IC-705 supply: battery gauge or DC, from the Vd meter (trx-supply.js). -->
+    <span id="trxSupply" class="trx-supply" hidden>
+      <span class="bat" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      <b>--</b>
     </span>
     <span id="linkState" class="live">● OFFLINE</span>
     <button id="trxReconnect" class="trx-reconnect" type="button" hidden>Reconnect</button>
@@ -627,7 +632,8 @@
   <!-- Only for RADIO_FULL_POWER_W / fullPowerWatts: the header turns the CI-V
        level into watts and must never disagree with the WSPR page about how. -->
   <!-- One table of Icom models: watts for WSPR, menu paths for the setup guides. -->
-  <script src="/icom-models.js?v=6f6a1202"></script>
+  <script src="/icom-models.js?v=488de8ff"></script>
+  <script src="/trx-supply.js?v=4837e4c0"></script>
   <script src="/trx-help.js?v=f5681ddd"></script>
   <script>TrxHelp.mount(document, {kind: "js8"});</script>
   <script src="/wspr-core.js?v=981ff9bf"></script>
@@ -638,7 +644,7 @@
   <script src="/tx-gain-cal-ui.js?v=1d9dc3bb"></script>
   <!-- The batch plan, identical to the WSPR page's: the sequencer decides the order
        and the panel executes its intents. Both must follow tx-gain-cal-ui.js. -->
-  <script src="/tx-gain-mod-level.js?v=07590d90"></script>
+  <script src="/tx-gain-mod-level.js?v=276cf934"></script>
   <script src="/tx-gain-plan.js?v=6df74d9e"></script>
   <script src="/tx-gain-plan-store.js?v=6d5a572b"></script>
   <script src="/tx-mode-powers.js?v=f14b9900"></script>
@@ -652,7 +658,7 @@
   <script src="/tx-pledge.js?v=5750feea"></script>
   <script src="/settings-fold.js?v=b75dee54"></script>
   <script src="/station-map.js?v=7bd5311c"></script>
-  <script src="/data.js?v=0733e623"></script>
+  <script src="/data.js?v=2ff25a7c"></script>
   <script src="/compression.js?v=768da432"></script>
 </body>
 </html>

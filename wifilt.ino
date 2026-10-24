@@ -868,6 +868,13 @@ int incomingByte = 0;   // for incoming serial data
   // Survives a WDT/panic reset (not power loss) so a reset that happened with
   // the radio keyed is reportable instead of silent.
   RTC_NOINIT_ATTR uint32_t rtcPttWasKeyed;
+  // Set by FallbackToAPmode() just before its restart: "this boot is AP". It is
+  // not in EEPROM on purpose -- a home WiFi that was down or out of range at one
+  // boot must be looked for again at the next one, not wait for someone to
+  // re-save the settings. A 32-bit magic because RTC_NOINIT is garbage after
+  // power-on, and a power cycle is exactly when the WiFi should be retried.
+  RTC_NOINIT_ATTR uint32_t rtcApOnce;
+  static const uint32_t AP_ONCE_MAGIC = 0xA9F0BA5Eu;
   static const size_t AUD1_WS_RX_BYTE_BUDGET = 32768; // yield even when browser continuously streams
   static const uint32_t AUD1_WS_SLOT_BACKLOG_GRACE_MS = 100;
   String DxcHost = "";
@@ -5851,15 +5858,21 @@ void setup(){
     }
     Serial.begin(BaudRate);
 
-    // 0 APmode
+    // 0 APmode -- one boot only. 0xff is a device that has never been
+    // configured, which stays in AP until it is. A stored true (the serial
+    // console's A command, or a firmware older than this one, whose WiFi
+    // fallback wrote it here) is consumed: AP now, the WiFi again at the next
+    // restart. Settings are saved with it false anyway.
+    bool apOnce = (rtcApOnce == AP_ONCE_MAGIC);
+    rtcApOnce = 0;
     if(EEPROM.read(0)==0xff){
       APmode=true;
+    }else if(EEPROM.readBool(0)==1){
+      APmode=true;
+      EEPROM.writeBool(0, false);
+      EEPROM.commit();
     }else{
-      if(EEPROM.readBool(0)==1){
-        APmode=true;
-      }else{
-        APmode=false;
-      }
+      APmode=apOnce;
     }
 
     #if !CAP_WIFI
@@ -7298,10 +7311,12 @@ bool ConnectWiFiProfile(byte profile, int maxTryCount) {
 }
 
 //-------------------------------------------------------------------------------------------------------
+// AP for the next boot only (rtcApOnce): the boot after that scans for the
+// configured WiFi again. This used to store APmode in EEPROM, which left a
+// device whose WiFi was merely down at power-on in AP mode for good.
 void FallbackToAPmode() {
   APmode = true;
-  EEPROM.writeBool(0, true);
-  EEPROM.commit();
+  rtcApOnce = AP_ONCE_MAGIC;
   delay(500);
   ESP.restart();
 }
@@ -9497,7 +9512,7 @@ void cliHandleByte(uint8_t b){
 
     // A
     }else if(incomingByte==65 || incomingByte==97){
-      Serial.println("   Switch to AP mode and restart? (y/n)");
+      Serial.println("   Restart to AP mode (this boot only, WiFi again after the next restart)? (y/n)");
       EnterChar();
       if(incomingByte==89 || incomingByte==121){
         EEPROM.writeBool(0, true);

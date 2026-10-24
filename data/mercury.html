@@ -7,7 +7,7 @@
 <!-- Shares data.css with JS8Call-ICOM/WSPR (topbar, subnav, radio-bar, gate-card)
      so the three cannot drift apart; mercury.css carries only what is genuinely
      Mercury's, same split as wspr.css. -->
-<link rel="stylesheet" href="/data.css?v=4a642c91">
+<link rel="stylesheet" href="/data.css?v=a5acb95d">
 <link rel="stylesheet" href="/mercury.css?v=33aa9ebc">
 </head>
 <!-- lan-gate.js clears the checking class once it knows whether ICOM-LAN is set
@@ -112,6 +112,11 @@
   <span id="trxPower" class="trx-power" hidden>
     <span class="pwr-bar" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
     <b id="trxPowerWatts">--</b>
+  </span>
+  <!-- IC-705 supply: battery gauge or DC, from the Vd meter (trx-supply.js). -->
+  <span id="trxSupply" class="trx-supply" hidden>
+    <span class="bat" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+    <b>--</b>
   </span>
   <span id="radioModel" class="radio-model" title="Model reported by the radio itself">--</span>
   <span id="aud1State" class="pill aud1-state" title="The audio channel to the radio.">AUD1 —</span>
@@ -303,11 +308,12 @@
      only new piece -- the bridge to Mercury's own carrier. js8-presets.js is
      loaded only so the plan can warn about JS8's calling window the same way
      it already warns about WSPR's (registerBusyWindows). -->
-<script src="/icom-models.js?v=6f6a1202"></script>
+<script src="/icom-models.js?v=488de8ff"></script>
+<script src="/trx-supply.js?v=4837e4c0"></script>
 <script src="/js8-presets.js?v=7131988f"></script>
 <script src="/wspr-core.js?v=981ff9bf"></script>
 <script src="/tx-gain-cal.js?v=4fdb24e3"></script>
-<script src="/tx-gain-mod-level.js?v=07590d90"></script>
+<script src="/tx-gain-mod-level.js?v=276cf934"></script>
 <script src="/tx-gain-plan.js?v=6df74d9e"></script>
 <script src="/tx-gain-plan-store.js?v=6d5a572b"></script>
 <script src="/tx-gain-plan-ui.js?v=620769e1"></script>
@@ -320,6 +326,6 @@
 <script src="/mercury-tuning.js?v=e5a811f0"></script>
 <script src="/audio-health.js?v=9efe092e"></script>
 <script src="/settings-fold.js?v=b75dee54"></script>
-<script src="/mercury.js?v=390287cd"></script>
+<script src="/mercury.js?v=2e182852"></script>
 </body>
 </html>

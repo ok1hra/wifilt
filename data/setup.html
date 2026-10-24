@@ -54,7 +54,7 @@
       <div id="setupSpineHost"></div>
       <script src="/ports.js"></script>
       <script src="/port-move-banner.js?v=7e3a569f"></script>
-      <script src="/icom-models.js?v=6f6a1202"></script>
+      <script src="/icom-models.js?v=488de8ff"></script>
       <script src="/wspr-core.js?v=981ff9bf"></script>
       <script src="/station-profile.js?v=317b4ccb"></script>
       <script src="/tx-mode-powers.js?v=f14b9900"></script>
@@ -689,7 +689,8 @@
         <p class="footnote">After reboot the interface scans and starts with whichever configured network
           it can see, strongest first — not always profile 1. If that one refuses it alternates to the
           other; after four failed attempts, or when neither network is on the air, it falls back to AP
-          mode. AP mode is also reachable from the USB-C serial console.</p>
+          mode — for that boot only: the next restart looks for the WiFi again. AP mode is also
+          reachable from the USB-C serial console.</p>
       </div>
 
       <div class="backup-row">

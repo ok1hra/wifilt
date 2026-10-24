@@ -247,7 +247,9 @@
         // 2.5 s timeout before the first carrier buys nothing.
         const setting = kind
           ? await this.read(battery ? row.maxPowerBatteryCmd : row.maxPowerExternalCmd) : null;
-        let watts = setting ? row.maxPowerStepsW[parseInt(setting.value.slice(0, 2), 16)] : 0;
+        // Exactly one byte, or it is not the setting the table thinks it is.
+        let watts = setting && setting.value.length === 2
+          ? row.maxPowerStepsW[parseInt(setting.value, 16)] : 0;
         if (!(watts > 0)) watts = battery ? row.batteryWatts : row.watts;
         const percent = Math.max(1, Math.min(100, Math.floor(100 * watts / row.watts)));
         return {limited: percent < 100, percent, watts, battery,

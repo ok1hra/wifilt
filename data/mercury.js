@@ -519,6 +519,7 @@
 
   function renderTrxPower(connected) {
     dom.trxPower.hidden = !connected;
+    TrxSupply.render(dom.trxSupply, connected ? state.radio : null, liveRadioModel());
     if (!connected) return;
     // Before the radio has answered 14 0A the firmware reports a fabricated
     // default -- show nothing rather than that (same trap data.js's own
@@ -1234,7 +1235,7 @@
       "fileInput", "transferEstimate", "sendButton", "cancelButton", "transferProgress", "receivedFiles",
       "cqButton", "heardStations",
       "trxFrequency", "trxFrequencyValue", "trxSlotLabel", "frequencyMenu",
-      "trxMode", "trxPower", "trxPowerWatts", "linkState", "trxReconnect",
+      "trxMode", "trxPower", "trxPowerWatts", "trxSupply", "linkState", "trxReconnect",
       "freqTimetableButton", "freqTimetableValue", "freqTimetablePanel", "freqTimetableEnable",
       "freqTimetableClear", "freqTimetableClose", "freqTimetableGrid", "freqTimetablePopover",
       "planButton", "planField",

@@ -261,7 +261,7 @@ check("every level round-trips",
   // 1A 0B (supply type) and the Max TX Power setting for that supply.
 
   {
-    const iface = makeInterface({answers: {"1A0B": "01", "1A050136": "03"}});
+    const iface = makeInterface({answers: {"1A0B": "01", "1A050036": "03"}});
     const client = new Mod.ModLevelClient({send: iface.send, fetchImpl: iface.fetchImpl,
                                           model: 705});
     client.error = "earlier MOD message";
@@ -274,7 +274,7 @@ check("every level round-trips",
   }
 
   {
-    const iface = makeInterface({answers: {"1A0B": "01", "1A050136": "02"}});
+    const iface = makeInterface({answers: {"1A0B": "01", "1A050036": "02"}});
     const client = new Mod.ModLevelClient({send: iface.send, fetchImpl: iface.fetchImpl,
                                           model: 705});
     const ceiling = await client.readPowerCeiling();
@@ -282,15 +282,31 @@ check("every level round-trips",
   }
 
   {
-    const iface = makeInterface({answers: {"1A0B": "00", "1A050137": "04"}});
+    const iface = makeInterface({answers: {"1A0B": "00", "1A050037": "04"}});
     const client = new Mod.ModLevelClient({send: iface.send, fetchImpl: iface.fetchImpl,
                                           model: 705});
     const ceiling = await client.readPowerCeiling();
     check("on external power with 10 W allowed there is no limit",
       !ceiling.limited && ceiling.percent === 100 && ceiling.battery === false,
       JSON.stringify(ceiling));
-    check("and the battery setting was never asked", !iface.state.reads.includes("1A050136"),
+    check("and the battery setting was never asked", !iface.state.reads.includes("1A050036"),
       iface.state.reads.join(","));
+  }
+
+  {
+    const row = require(path.join(__dirname, "..", "data", "icom-models.js")).findModel(705);
+    check("Max TX Power is read at 1A 05 00 36 / 00 37, not the LCD backlight at 01 36 / 01 37",
+      row.maxPowerBatteryCmd === "1A050036" && row.maxPowerExternalCmd === "1A050037",
+      row.maxPowerBatteryCmd + " " + row.maxPowerExternalCmd);
+  }
+
+  {
+    const iface = makeInterface({answers: {"1A0B": "01", "1A050036": "0128"}});
+    const client = new Mod.ModLevelClient({send: iface.send, fetchImpl: iface.fetchImpl,
+                                          model: 705});
+    const ceiling = await client.readPowerCeiling();
+    check("a two-byte answer is not a power step: the battery default applies",
+      ceiling.percent === 50 && ceiling.watts === 5, JSON.stringify(ceiling));
   }
 
   {
@@ -312,7 +328,7 @@ check("every level round-trips",
   }
 
   {
-    const answers = {"1A0B": "00", "1A050137": "04", "1A050136": "03"};
+    const answers = {"1A0B": "00", "1A050037": "04", "1A050036": "03"};
     const iface = makeInterface({answers});
     const client = new Mod.ModLevelClient({send: iface.send, fetchImpl: iface.fetchImpl,
                                           model: 705});

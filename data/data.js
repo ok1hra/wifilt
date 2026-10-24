@@ -98,7 +98,7 @@ const dom = {
   radioBar:document.querySelector(".radio-bar"), trxFrequency:$("trxFrequency"),
   trxFrequencyValue:$("trxFrequencyValue"), trxSlotLabel:$("trxSlotLabel"),
   trxMode:$("trxMode"), trxDot:$("trxDot"),
-  trxPower:$("trxPower"), trxPowerWatts:$("trxPowerWatts"),
+  trxPower:$("trxPower"), trxPowerWatts:$("trxPowerWatts"), trxSupply:$("trxSupply"),
   rfPowerField:$("rfPowerField"), rfPercent:$("rfPercent"), rfPercentWatts:$("rfPercentWatts"),
   rfPercentSet:$("rfPercentSet"), rfPercentState:$("rfPercentState"),
   trxPowerSegments:Array.from(document.querySelectorAll("#trxPower .pwr-bar i")),
@@ -2363,6 +2363,7 @@ function formatWatts(watts) {
 // only the number beside it goes to "--".
 function renderTrxPower(connected,mismatch=false) {
   dom.trxPower.hidden=!connected;
+  TrxSupply.render(dom.trxSupply,connected ? state.radio : null,liveRadioModel());
   // The settings panel opens collapsed, so the bar carries the same state: it is
   // always on screen and it is where anyone looks for power in the first place.
   dom.trxPower.classList.toggle("mismatch",connected && mismatch);

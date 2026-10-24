@@ -69,14 +69,23 @@
       // forces Keying Polarity to Normal if it answers Reverse.
       rttyMarkFreqCmd: "1A050050", rttyKeyingPolarityCmd: "1A050052",
       // Same PDF: 1A 0B = type of power supply (00 = external, 01 = battery
-      // pack), 1A 05 01 36 / 01 37 = Max TX Power for battery / DC 13.8 V, one
-      // raw byte indexing maxPowerStepsW. 14 0A still accepts 100 % on battery,
+      // pack), 1A 05 00 36 / 00 37 = Max TX Power for battery / DC 13.8 V, one
+      // raw byte indexing maxPowerStepsW. NOT 01 36 / 01 37: the PDF prints two
+      // columns side by side and those are LCD Backlight / Backlight Auto Adjust
+      // -- read as a power step, Auto Adjust ON (01) capped the radio at 1 W. 14 0A still accepts 100 % on battery,
       // the output just stops at the ceiling -- so nothing above it is worth a
       // calibration carrier. batteryBelowVolts is the fallback when 1A 0B does
       // not answer: a BP-272 is 7.4 V nominal, the DC input 13.8 V +-15 %.
       powerSupplyCmd: "1A0B",
-      maxPowerBatteryCmd: "1A050136", maxPowerExternalCmd: "1A050137",
+      maxPowerBatteryCmd: "1A050036", maxPowerExternalCmd: "1A050037",
       maxPowerStepsW: [0.5, 1, 2.5, 5, 10], batteryWatts: 5, batteryBelowVolts: 10,
+      // Battery gauge in the DATA pages' radio bar (trx-supply.js). The radio
+      // reports no charge level over CI-V -- only 15 15 Vd (0000 = 0 V, 0075 =
+      // 5 V, 0241 = 16 V) and 1A 0B, which is itself "based on the current
+      // voltage". So the four cells are voltage steps of a 2-cell Li-ion pack
+      // (BP-272, 7.2 V nominal, 8.4 V full) at rest: an estimate, said so in
+      // the tooltip, not Icom's own indicator.
+      batteryLevelsV: [7.0, 7.4, 7.7, 8.0],
     },
     {
       number: 7300, label: "IC-7300MK2", watts: 100, civAddr: "B6",

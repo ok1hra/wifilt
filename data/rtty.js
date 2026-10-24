@@ -51,7 +51,7 @@
   const dom = {};
   for (const id of [
     "trxFrequencyValue", "trxMode", "radioModel", "linkState", "trxFrequency",
-    "frequencyMenu", "trxSlotLabel", "trxReconnect", "trxPower", "trxPowerWatts",
+    "frequencyMenu", "trxSlotLabel", "trxReconnect", "trxPower", "trxPowerWatts", "trxSupply",
     "aud1State", "ttControl", "planField", "planButton", "planButtonValue", "calField",
     "sessionBusy", "sessionBusyWhere", "sessionTakeover",
     "rttyReverse", "rttySquelch", "rttySnr",
@@ -382,6 +382,7 @@
         tx: Boolean(json.tx),
         rfPower: Number(json.rfPower) || 0,
         rfPowerSeen: json.rfPowerSeen === true,
+        supplyVolts: Number(json.supplyVolts) || 0,
       };
       // Item 13: a write is owed on page load and again whenever the link
       // returns -- only for a reply that actually arrived, so it is the
@@ -1046,6 +1047,7 @@
 
     const percent = radioPercent();
     dom.trxPower.hidden = percent === null;
+    TrxSupply.render(dom.trxSupply, state.radio, liveRadioModel());
     if (percent !== null) {
       const fullWatts = WsprCore.fullPowerWatts(liveRadioModel());
       dom.trxPowerWatts.textContent = fullWatts

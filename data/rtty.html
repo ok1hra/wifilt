@@ -8,7 +8,7 @@
      gate-card) so the four cannot drift apart; rtty.css carries only what is
      genuinely RTTY's, same split as wspr.css/mercury.css.
      docs/rtty-implementace.md -- grilled 2026-08-27. -->
-<link rel="stylesheet" href="/data.css?v=4a642c91">
+<link rel="stylesheet" href="/data.css?v=a5acb95d">
 <link rel="stylesheet" href="/rtty.css?v=8a9de7c1">
 <!-- ?popup=1 strips this page down to the modem itself, hiding both nav
      bars. QRPLOG's RTTY button opened it that way until 2026-09-07, when it
@@ -73,6 +73,11 @@
   <span id="trxPower" class="trx-power" hidden>
     <span class="pwr-bar" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
     <b id="trxPowerWatts">--</b>
+  </span>
+  <!-- IC-705 supply: battery gauge or DC, from the Vd meter (trx-supply.js). -->
+  <span id="trxSupply" class="trx-supply" hidden>
+    <span class="bat" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+    <b>--</b>
   </span>
   <span id="radioModel" class="radio-model" title="Model reported by the radio itself">--</span>
   <span id="aud1State" class="pill aud1-state" title="The audio channel to the radio.">AUD1 —</span>
@@ -388,7 +393,8 @@
      wspr-tx.js), reused as a generic ALC-knee probe regardless of which page
      mounts it (data.js/wspr.js do exactly this too; only Mercury's own
      much-higher-PAPR DATAC1 burst needed a different carrier). -->
-<script src="/icom-models.js?v=6f6a1202"></script>
+<script src="/icom-models.js?v=488de8ff"></script>
+<script src="/trx-supply.js?v=4837e4c0"></script>
 <script src="/js8-presets.js?v=7131988f"></script>
 <script src="/wspr-core.js?v=981ff9bf"></script>
 <script src="/wspr-tx.js?v=20c527f9"></script>
@@ -398,7 +404,7 @@
 <script src="/rf-power-auto.js?v=1a8b8766"></script>
 <script src="/tx-gain-cal.js?v=4fdb24e3"></script>
 <script src="/tx-gain-cal-ui.js?v=1d9dc3bb"></script>
-<script src="/tx-gain-mod-level.js?v=07590d90"></script>
+<script src="/tx-gain-mod-level.js?v=276cf934"></script>
 <script src="/tx-gain-plan.js?v=6df74d9e"></script>
 <script src="/tx-gain-plan-store.js?v=6d5a572b"></script>
 <script src="/tx-mode-powers.js?v=f14b9900"></script>
@@ -413,6 +419,6 @@
 <script src="/rtty-afsk-tx.js?v=998de20c"></script>
 <script src="/rtty-stream-feed.js?v=855b19dd"></script>
 <script src="/settings-fold.js?v=b75dee54"></script>
-<script src="/rtty.js?v=ccaa44c4"></script>
+<script src="/rtty.js?v=e97c8dad"></script>
 </body>
 </html>
