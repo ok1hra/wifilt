@@ -603,6 +603,30 @@
           return;
         }
 
+        // An IC-705 on its battery accepts 100 % and stops at 5 W, so the 100 %
+        // column measured the 50 % output again and filed it as 100 %. Columns
+        // above the ceiling are left for a run on external power -- the stored
+        // plan keeps them, and RUN then measures only what is still missing.
+        this.busyNote = "reading the radio's power supply…";
+        this.render();
+        const radio = this.page.radio ? this.page.radio() : {};
+        const ceiling = await this.mod.readPowerCeiling({supplyVolts: Number(radio.supplyVolts) || 0});
+        let runPlan = this.plan;
+        this.ceilingNote = "";
+        if (ceiling.limited && this.plan.powers.some(percent => percent > ceiling.percent)) {
+          const keep = this.plan.powers.map(percent => percent <= ceiling.percent);
+          const above = this.plan.powers.filter(percent => percent > ceiling.percent);
+          if (!keep.some(Boolean)) {
+            this.message = `${ceiling.text} — every column is above that, nothing to measure`;
+            return;
+          }
+          runPlan = {powers: this.plan.powers.filter((_, index) => keep[index]),
+                     rows: this.plan.rows.map(row => ({...row,
+                       cells: row.cells.filter((_, index) => keep[index])}))};
+          this.ceilingNote = `${ceiling.text} — ${above.map(percent => `${percent} %`).join(", ")} ` +
+            `left out; run again on external power to measure ${above.length > 1 ? "them" : "it"}`;
+        }
+
         this.busyNote = measureAll
           ? "preparing a fresh measurement of every selected cell…"
           : "preparing the stored MOD transition for verification…";
@@ -617,11 +641,12 @@
         }
 
         this.run = new TxGainPlan.TxGainPlanRun({
-          plan: this.plan, modLevel, measureAll, resumeTransition,
+          plan: runPlan, modLevel, measureAll, resumeTransition,
           resolve: cell => this.store.entry(TxGainCal.entryKey(
             this.page.model(), cell.band, cell.percent)),
         });
         this.run.begin();
+        this.message = this.ceilingNote;
         this.page.onPlanChange(true);
         this.snapshotRadio();
         started = true;
@@ -1007,6 +1032,9 @@
         this.message = (this.message ? this.message + " · " : "") +
           `${snapshot.modAdvice.reason} (${snapshot.modAdvice.band} knee ` +
           `${snapshot.modAdvice.knee.toFixed(3)}, ${snapshot.modAdvice.offDb} dB off)`;
+      if (this.ceilingNote)
+        this.message = (this.message ? this.message + " · " : "") + this.ceilingNote;
+      this.ceilingNote = "";
       this.render();
     }
 

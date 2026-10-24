@@ -357,8 +357,13 @@ const ALC_KNEE = 0.31;                  // the single-shot tests' fixed radio
 const CIV_SETTINGS = {
   "1A050117": {bytes: 2, what: "WLAN MOD level"},
   "1A050119": {bytes: 1, what: "DATA MOD input"},
+  // An IC-705 on DC with Max TX Power 10 W: the CAL PLAN asks before its first
+  // carrier, and a silent radio would cost every run a 2.5 s timeout.
+  "1A0B": {bytes: 1, what: "power supply type"},
+  "1A050137": {bytes: 1, what: "Max TX Power (DC)"},
 };
-const civSettings = {"1A050117": 128, "1A050119": 3};   // 3 = WLAN
+// 3 = WLAN; 1A 0B 0 = external supply; 01 37 4 = 10 W
+const civSettings = {"1A050117": 128, "1A050119": 3, "1A0B": 0, "1A050137": 4};
 const civRead = {seq: 0, cmd: "", reply: ""};
 let civReadMissing = false, civReadSilent = false;
 

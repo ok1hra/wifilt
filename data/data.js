@@ -2418,6 +2418,22 @@ function renderTrxPower(connected,mismatch=false) {
 // this page's own original fetch/poll shape exactly, just now confined to
 // this one config object instead of spread across the functions this
 // replaces.
+//
+// The ceiling is the radio's, not the operator's: an IC-705 on its battery stops
+// at 5 W = 50 %, so a stored 100 % is written as 50 % until the DC cable is back.
+// Read over CI-V, so it waits while the calibration (which owns the one-slot
+// /civread mailbox while it runs or starts) or a transmission is in progress.
+const powerCeiling = new TxGainModLevel.PowerCeilingWatch({
+  client: new TxGainModLevel.ModLevelClient({
+    send: payload => fetch(RADIO_CMD_URL, {method: "POST", signal: fetchDeadline(),
+      headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)})
+      .then(response => response.json()),
+    model: () => IcomModels.modelNumber(liveRadioModel()),
+  }),
+  busy: () => state.calRunning || state.planRunning || Boolean(gainPlan && gainPlan.starting) ||
+    radioTransmitting(),
+  onChange: () => { renderHeader(); renderControls(); },
+});
 const rfPowerAuto = RfPowerAuto.create({
   dom: {input: dom.rfPercent, set: dom.rfPercentSet,
         watts: dom.rfPercentWatts, state: dom.rfPercentState, field: dom.rfPowerField},
@@ -2441,6 +2457,8 @@ const rfPowerAuto = RfPowerAuto.create({
   }),
   onWrite: percent => setJs8Setting("rfPercent", percent),
   render: () => { renderHeader(); renderControls(); },
+  ceilingPercent: () => powerCeiling.percent(),
+  ceilingText: () => powerCeiling.text(),
 });
 
 function renderHeader() {
@@ -8124,7 +8142,7 @@ async function pollRadio() {
     if(root_TrxHelp())root_TrxHelp().setReportedModel(liveRadioModel());
     const activityFrequencyChanged=selectActivityFrequency(state.radio.frequency);
     if (state.pendingFrequency && state.radio.frequency===state.pendingFrequency) state.pendingFrequency=null;
-    rfPowerAuto.onPollSuccess(); gpsTrackTick();
+    powerCeiling.update(state.radio); rfPowerAuto.onPollSuccess(); gpsTrackTick();
     ensureAudio(); if(activityFrequencyChanged)renderActivity(); renderHeader(); renderControls();
   } catch (error) {
     // Deliberately not through rfPowerAuto.onPollSuccess(): a fetch that never

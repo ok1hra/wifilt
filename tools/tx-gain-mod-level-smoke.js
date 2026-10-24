@@ -254,6 +254,84 @@ check("every level round-trips",
       !input.known && input.raw === null, JSON.stringify(input));
   }
 
+  // ---- RF power ceiling -----------------------------------------------------
+  //
+  // An IC-705 on its battery accepts 100 % on 14 0A and stops at 5 W: a CAL PLAN
+  // with a 100 % column measured the 50 % output twice. The ceiling comes from
+  // 1A 0B (supply type) and the Max TX Power setting for that supply.
+
+  {
+    const iface = makeInterface({answers: {"1A0B": "01", "1A050136": "03"}});
+    const client = new Mod.ModLevelClient({send: iface.send, fetchImpl: iface.fetchImpl,
+                                          model: 705});
+    client.error = "earlier MOD message";
+    const ceiling = await client.readPowerCeiling();
+    check("an IC-705 on its battery tops out at 50 %",
+      ceiling.limited && ceiling.battery && ceiling.percent === 50 && ceiling.watts === 5,
+      JSON.stringify(ceiling));
+    check("and the message names the cause", /battery: max 5 W = 50 %/.test(ceiling.text), ceiling.text);
+    check("the ceiling read leaves the MOD error alone", client.error === "earlier MOD message");
+  }
+
+  {
+    const iface = makeInterface({answers: {"1A0B": "01", "1A050136": "02"}});
+    const client = new Mod.ModLevelClient({send: iface.send, fetchImpl: iface.fetchImpl,
+                                          model: 705});
+    const ceiling = await client.readPowerCeiling();
+    check("a battery Max TX Power of 2.5 W is 25 %", ceiling.percent === 25, JSON.stringify(ceiling));
+  }
+
+  {
+    const iface = makeInterface({answers: {"1A0B": "00", "1A050137": "04"}});
+    const client = new Mod.ModLevelClient({send: iface.send, fetchImpl: iface.fetchImpl,
+                                          model: 705});
+    const ceiling = await client.readPowerCeiling();
+    check("on external power with 10 W allowed there is no limit",
+      !ceiling.limited && ceiling.percent === 100 && ceiling.battery === false,
+      JSON.stringify(ceiling));
+    check("and the battery setting was never asked", !iface.state.reads.includes("1A050136"),
+      iface.state.reads.join(","));
+  }
+
+  {
+    const iface = makeInterface({answers: {}});
+    const client = new Mod.ModLevelClient({send: iface.send, fetchImpl: iface.fetchImpl,
+                                          model: 705});
+    const ceiling = await client.readPowerCeiling({supplyVolts: 7.9});
+    check("a silent 1A 0B falls back on the supply voltage",
+      ceiling.limited && ceiling.battery && ceiling.percent === 50, JSON.stringify(ceiling));
+  }
+
+  {
+    const iface = makeInterface({answers: {"1A0B": "01"}});
+    const client = new Mod.ModLevelClient({send: iface.send, fetchImpl: iface.fetchImpl,
+                                          model: 7610});
+    const ceiling = await client.readPowerCeiling();
+    check("a model without supply commands is not asked at all",
+      !ceiling.limited && iface.state.reads.length === 0, iface.state.reads.join(","));
+  }
+
+  {
+    const answers = {"1A0B": "00", "1A050137": "04", "1A050136": "03"};
+    const iface = makeInterface({answers});
+    const client = new Mod.ModLevelClient({send: iface.send, fetchImpl: iface.fetchImpl,
+                                          model: 705});
+    let changes = 0;
+    const watch = new Mod.PowerCeilingWatch({client, onChange: () => changes++});
+    const settle = async () => { while (watch.reading) await new Promise(r => setTimeout(r, 20)); };
+    watch.update({connected: true, supplyVolts: 13.8});
+    await settle();
+    check("the watch starts with no limit on DC", watch.percent() === null && changes === 0);
+    answers["1A0B"] = "01";
+    watch.update({connected: true, supplyVolts: 13.5});
+    await settle();
+    check("a TX-sized sag does not trigger a re-read", watch.percent() === null);
+    watch.update({connected: true, supplyVolts: 8.1});
+    await settle();
+    check("pulling the DC cable re-reads and caps at 50 %",
+      watch.percent() === 50 && changes === 1, `${watch.percent()} ${changes}`);
+  }
+
   console.log(`${checks - failures}/${checks} checks passed`);
   if (failures) process.exitCode = 1;
 })();

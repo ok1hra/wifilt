@@ -68,6 +68,15 @@
       // 2026-08-29: data/rtty.js reads both on entering RTTY/RTTY-R and
       // forces Keying Polarity to Normal if it answers Reverse.
       rttyMarkFreqCmd: "1A050050", rttyKeyingPolarityCmd: "1A050052",
+      // Same PDF: 1A 0B = type of power supply (00 = external, 01 = battery
+      // pack), 1A 05 01 36 / 01 37 = Max TX Power for battery / DC 13.8 V, one
+      // raw byte indexing maxPowerStepsW. 14 0A still accepts 100 % on battery,
+      // the output just stops at the ceiling -- so nothing above it is worth a
+      // calibration carrier. batteryBelowVolts is the fallback when 1A 0B does
+      // not answer: a BP-272 is 7.4 V nominal, the DC input 13.8 V +-15 %.
+      powerSupplyCmd: "1A0B",
+      maxPowerBatteryCmd: "1A050136", maxPowerExternalCmd: "1A050137",
+      maxPowerStepsW: [0.5, 1, 2.5, 5, 10], batteryWatts: 5, batteryBelowVolts: 10,
     },
     {
       number: 7300, label: "IC-7300MK2", watts: 100, civAddr: "B6",

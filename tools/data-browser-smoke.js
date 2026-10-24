@@ -797,8 +797,27 @@ f.onload=()=>{
       checks.wifiHandoffFinishes=!!holder.querySelector('#wifiHandoffGo')&&
         !!holder.querySelector('a[href="http://wifilt.local/"]')&&
         !!holder.querySelector('a[href="http://192.168.1.55/"]')&&
-        /Reconnect to/.test(holder.textContent);
+        /Reconnect to/.test(holder.textContent)&&
+        !holder.querySelector('.wifi-handoff-sheet');
       holder.remove();
+      // Same handover inside Android's captive-portal sign-in window: it dies
+      // with the hotspot, so the page must say so and hand over the address
+      // before the restart instead of promising to open it afterwards.
+      sw.setupWifiHandoff.signInSheet=true;
+      const sheetHolder=sd.createElement('div');
+      sd.body.appendChild(sheetHolder);
+      const sheetMsg=sd.createElement('p');
+      sheetHolder.appendChild(sheetMsg);
+      sw.setupWifiHandoff.run(sheetMsg);
+      await new Promise(resolve=>setTimeout(resolve,2400));
+      checks.wifiHandoffSignInSheet=!!sheetHolder.querySelector('.wifi-handoff-sheet')&&
+        !!sheetHolder.querySelector('#wifiHandoffCopy');
+      sheetHolder.querySelector('#wifiHandoffDone').click();
+      await new Promise(resolve=>setTimeout(resolve,200));
+      checks.wifiHandoffSignInSheetReconnect=/sign-in window closes/.test(sheetHolder.textContent)&&
+        sheetHolder.querySelector('.wifi-handoff-url a')?.getAttribute('href')==='http://192.168.1.55/';
+      sheetHolder.remove();
+      sw.setupWifiHandoff.signInSheet=false;
       // Unattended panel: armed, but the fixture says the modem tab has been
       // silent for 31 s. A timer alone would still read "armed" -- the point of
       // the panel is that this state is visibly flagged.

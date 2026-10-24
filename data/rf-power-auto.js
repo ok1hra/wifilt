@@ -57,6 +57,11 @@
   //   onWrite(percent)     -> void               persist the chosen target
   //     (setJs8Setting/settings.rfPercent+saveSettings/etc.)
   //   render()             -> void               the page's own render pass
+  //   ceilingPercent()     -> number|null       optional: the highest percent
+  //     that still raises the output right now (an IC-705 on its battery stops
+  //     at 50 %). The stored target is kept; only what reaches the radio is
+  //     capped, so the full value comes back on external power by itself.
+  //   ceilingText()        -> string            optional: why, for the message
   function create(config) {
     let rfAppliedPercent = null;   // last percent written AND confirmed by readback
     let rfKnobTouched = false;     // operator moved it; the automation stands down
@@ -67,6 +72,16 @@
     // the box -- without it the number is lost the moment focus leaves the
     // field on the way to the SET button beside it.
     let rfDraft = null;
+    let rfCeiling = null;          // last ceilingPercent() seen, to notice a change
+
+    function ceiling() {
+      const value = config.ceilingPercent ? config.ceilingPercent() : null;
+      return Number.isFinite(value) && value >= 1 ? value : null;
+    }
+    function capped(percent) {
+      const top = ceiling();
+      return percent !== null && top !== null && percent > top ? top : percent;
+    }
 
     function noteKnob() {
       if (rfAutoArmed || rfAppliedPercent === null) return;
@@ -98,7 +113,7 @@
       if (rfAutoBusy || !rfAutoArmed || rfKnobTouched) return;
       if (config.blocked()) return;
       if (Date.now() < rfAutoRetryMs) return;
-      const target = config.targetPercent();
+      const target = capped(config.targetPercent());
       // Nothing chosen, nothing to apply -- no safe value to invent for a
       // page nobody has configured.
       if (target === null) { rfAutoArmed = false; return; }
@@ -140,7 +155,7 @@
       config.dom.input.value = String(percent);
       config.dom.set.disabled = true;
       try {
-        await writePercent(percent);
+        await writePercent(capped(percent));
         config.onWrite(percent);
         // A fresh decision stands the automation back up after a turn of the knob.
         rfKnobTouched = false; rfAutoArmed = false; rfAutoRetryMs = 0; rfLastError = "";
@@ -161,12 +176,13 @@
       const radio = config.radio();
       const seen = radio.rfPowerSeen === true;
       const radioPercent = seen ? WsprCore.civPercent(radio.rfPower) : null;
-      const target = config.targetPercent();
+      const stored = config.targetPercent();
+      const target = capped(stored);
       // Nothing stored yet: show what the radio is on, so SET means "adopt
       // this" rather than making the operator guess a number to type.
       if (rfDraft === null && document.activeElement !== config.dom.input)
-        config.dom.input.value = String(target ?? radioPercent ?? "");
-      const shown = Number(rfDraft ?? config.dom.input.value) || 0;
+        config.dom.input.value = String(stored ?? radioPercent ?? "");
+      const shown = capped(Number(rfDraft ?? config.dom.input.value) || 0);
       const fullWatts = config.fullWatts();
       // Through percentToLevel()/255, not a flat percent-of-full multiply
       // (code-review 2026-08-28: RTTY-ICOM's own copy used to do the flat
@@ -179,8 +195,12 @@
       if (config.dom.field) config.dom.field.classList.toggle("mismatch", mismatch);
       // One line, one source of truth: a failed write outranks everything,
       // then the disagreement, then nothing.
+      const limitNote = stored !== null && target !== stored
+        ? `${config.ceilingText ? config.ceilingText() : `the radio tops out at ${target} %`}` +
+          ` — running at ${target} %, ${stored} % returns on external power.`
+        : "";
       const message = rfLastError ? rfLastError
-        : !mismatch ? ""
+        : !mismatch ? limitNote
         : `The radio is on ${radioPercent} %, not the ${target} % set here` +
           (rfKnobTouched
             ? " — changed on the radio, so it is not written automatically until you press SET."
@@ -199,6 +219,10 @@
       const radio = config.radio();
       if (radio.connected && !rfLinkWasUp) rfAutoArmed = true;
       rfLinkWasUp = radio.connected;
+      // Battery in or DC out: the power the radio should be on has changed even
+      // though nobody touched the setting, so it is owed a write again.
+      const top = ceiling();
+      if (top !== rfCeiling) { rfCeiling = top; rfAutoArmed = true; }
       noteKnob();
       applyAuto();
     }

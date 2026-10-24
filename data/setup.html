@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Setup — WIFILT</title>
-  <link rel="stylesheet" href="/setup.css?v=269edd1f">
+  <link rel="stylesheet" href="/setup.css?v=fa5acede">
 </head>
 <body>
   <header class="topbar">
@@ -54,7 +54,7 @@
       <div id="setupSpineHost"></div>
       <script src="/ports.js"></script>
       <script src="/port-move-banner.js?v=7e3a569f"></script>
-      <script src="/icom-models.js?v=ddc6caa5"></script>
+      <script src="/icom-models.js?v=6f6a1202"></script>
       <script src="/wspr-core.js?v=981ff9bf"></script>
       <script src="/station-profile.js?v=317b4ccb"></script>
       <script src="/tx-mode-powers.js?v=f14b9900"></script>
@@ -1800,8 +1800,43 @@
       // softAP, so every probe here is cross-origin and no answer can be read --
       // but `no-cors` still resolves on a reachable host and rejects on a dead
       // one, and reachable is the entire question.
+      // The deadline matters for the name: where mDNS does not work, a .local
+      // lookup can hang for seconds before failing, and the address that DOES
+      // answer must not wait behind it.
       function reachable(url) {
-        return fetch(url, { mode: 'no-cors', cache: 'no-store' }).then(function () { return url; });
+        var opts = { mode: 'no-cors', cache: 'no-store' };
+        if (window.AbortSignal && AbortSignal.timeout) opts.signal = AbortSignal.timeout(1500);
+        return fetch(url, opts).then(function () { return true; }, function () { return false; });
+      }
+
+      // Android's captive-portal sign-in window is a WebView ("; wv)" in the
+      // UA); iOS's is a WebKit sheet with no "Safari/" token. Neither is a
+      // browser: the OS closes it the moment the hotspot disappears, so nothing
+      // this page schedules after the restart ever runs, and no new page opens.
+      // The operator has to carry the address out of it by hand.
+      function detectSignInSheet() {
+        var ua = navigator.userAgent;
+        return /; wv\)/.test(ua) || (/iPhone|iPad|iPod/.test(ua) && !/Safari\//.test(ua));
+      }
+
+      // Plain http on 192.168.4.1 is not a secure context, so navigator.clipboard
+      // is usually absent; the textarea + execCommand path still works there.
+      function copyText(text) {
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(text).catch(function () {});
+          return true;
+        }
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        var ok = false;
+        try { ok = document.execCommand('copy'); } catch (e) {}
+        ta.remove();
+        return ok;
       }
 
       // The end of the handover, and it has to BE an end. Leaving the operator
@@ -1810,34 +1845,45 @@
       // the radio clients still refusing because APmode says so. So this
       // restarts, waits for the device to come back on the real network, and
       // takes the operator there.
-      function renderReconnect(box, d) {
+      function renderReconnect(box, d, copied) {
         var byName = 'http://' + d.host + '.local/';
         var byIp = 'http://' + d.ip + '/';
+        var ssid = d.ssid || 'your network';
+        var lead = handoff.signInSheet
+          ? 'This sign-in window closes by itself in a moment and cannot open the device. Once ' +
+            'this phone is back on <b>' + ssid + '</b>, open Chrome (or Safari) and enter the ' +
+            'address below' + (copied ? ' — it is already copied, just paste it.' : '.')
+          : 'The hotspot is gone — the device is restarting onto your own network. Switch this ' +
+            'phone or computer back to <b>' + ssid + '</b>. This page opens the device by itself ' +
+            'as soon as it answers.';
         box.innerHTML =
-          '<h2>Reconnect to ' + (d.ssid || 'your network') + '</h2>' +
-          '<p class="wifi-handoff-lead">The hotspot is gone — the device is restarting onto your ' +
-            'own network. Switch this phone or computer back to <b>' + (d.ssid || 'your network') +
-            '</b>. This page opens the device by itself as soon as it answers.</p>' +
-          '<p class="wifi-handoff-url"><a href="' + byName + '">' + byName + '</a></p>' +
-          '<p class="wifi-handoff-alt">If the name does not resolve on your network, use the ' +
-            'address instead: <a href="' + byIp + '">' + byIp + '</a></p>' +
+          '<h2>Reconnect to ' + ssid + '</h2>' +
+          '<p class="wifi-handoff-lead">' + lead + '</p>' +
+          '<p class="wifi-handoff-url"><a href="' + byIp + '">' + byIp + '</a></p>' +
+          '<p class="wifi-handoff-alt">Usually also reachable by name: ' +
+            '<a href="' + byName + '">' + byName + '</a></p>' +
           '<button type="button" class="wifi-handoff-btn" id="wifiHandoffGo">Open the device now</button>';
+        // The address, not the name: it is the one thing known to have worked
+        // a moment ago, while .local does not resolve at all on many phones.
         document.getElementById('wifiHandoffGo').addEventListener('click', function () {
-          window.location.href = byName;
+          window.location.href = byIp;
         });
         // Both are tried because they fail differently: mDNS may not resolve at
         // all on some networks, and the lease may hand out a different address
-        // than the one the join reported. Whichever answers first wins, and the
-        // name is preferred when both do, because it survives the next lease.
-        var done = false;
+        // than the one the join reported. The name is preferred when it answers,
+        // because it survives the next lease and is the origin the browser's
+        // logs live under; otherwise the address that answered is where we go.
+        var done = false, busy = false;
         var poll = setInterval(function () {
-          if (done) return;
-          Promise.any ? Promise.any([reachable(byName), reachable(byIp)])
-              .then(function () { if (done) return; done = true; clearInterval(poll);
-                window.location.href = byName; })
-              .catch(function () {})
-            : reachable(byIp).then(function () { if (done) return; done = true;
-                clearInterval(poll); window.location.href = byName; }).catch(function () {});
+          if (done || busy) return;
+          busy = true;
+          Promise.all([reachable(byName), reachable(byIp)]).then(function (ok) {
+            busy = false;
+            if (done || (!ok[0] && !ok[1])) return;
+            done = true;
+            clearInterval(poll);
+            window.location.href = ok[0] ? byName : byIp;
+          });
         }, 2000);
       }
 
@@ -1854,15 +1900,32 @@
             '<a href="http://' + d.host + '.local/">http://' + d.host + '.local/</a>. ' +
             'Give the device a fixed lease in your router and the address stops moving.</p>' +
           '<div class="wifi-handoff-qr" id="wifiHandoffQr"></div>' +
+          (handoff.signInSheet
+            ? '<p class="wifi-handoff-sheet">This is the phone\'s sign-in window, not a browser. ' +
+                'It closes when the hotspot shuts down and cannot follow the device to ' +
+                (d.ssid || 'your network') + '. Copy or note the address now.</p>' +
+              '<button type="button" class="wifi-handoff-btn wifi-handoff-copy" id="wifiHandoffCopy">' +
+                'Copy address</button>'
+            : '') +
           '<p class="wifi-handoff-foot">This hotspot shuts down when you continue, and the device ' +
             'comes back on ' + (d.ssid || 'your network') + ' only.</p>' +
           '<button type="button" class="wifi-handoff-btn" id="wifiHandoffDone">Restart and reconnect</button>';
         host.appendChild(box);
         qrInto(document.getElementById('wifiHandoffQr'), url);
+        var copied = false;
+        var copyBtn = document.getElementById('wifiHandoffCopy');
+        if (copyBtn) copyBtn.addEventListener('click', function () {
+          copied = copyText(url + '/');
+          copyBtn.textContent = copied ? 'Copied' : 'Copy failed — note it by hand';
+        });
         document.getElementById('wifiHandoffDone').addEventListener('click', function () {
           if (window.setupChanges) window.setupChanges.leaving();
+          // Last chance to carry the address out of a sign-in window: this
+          // click is a user gesture, the next screen will not live long enough
+          // to get one.
+          if (handoff.signInSheet && !copied) copied = copyText(url + '/');
           fetch('/restart', { method: 'POST' }).catch(function () {});
-          renderReconnect(box, d);
+          renderReconnect(box, d, copied);
         });
       }
 
@@ -1922,7 +1985,11 @@
           .catch(function () { msgEl.textContent = 'Saved. Restart the device to apply.'; });
       }
 
-      window.setupWifiHandoff = { available: available, run: run, showLastKnown: showLastKnown };
+      // signInSheet is a property, not a call, so a test can force either form.
+      var handoff = window.setupWifiHandoff = {
+        available: available, run: run, showLastKnown: showLastKnown,
+        signInSheet: detectSignInSheet()
+      };
       showLastKnown();
     }());
   </script>

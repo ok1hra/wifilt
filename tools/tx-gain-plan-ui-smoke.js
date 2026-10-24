@@ -66,7 +66,54 @@ check("an old unmarked MOD mismatch infers a verification owner",
   legacyResume.owner.percent === 100 && legacyResume.target === 104,
   JSON.stringify(legacyResume));
 
-if (failures) {
-  console.error(`${failures}/${checks} checks failed`);
-  process.exitCode = 1;
-} else console.log(`${checks}/${checks} checks passed`);
+// An IC-705 on its battery accepts 100 % and stops at 5 W. The run must leave the
+// columns above the ceiling out -- and keep them in the stored plan for later.
+async function ceilingRun(ceiling, powers) {
+  globalThis.TxGainPlan = require("../data/tx-gain-plan.js");
+  globalThis.TxGainCal = {entryKey: (model, band, percent) => `${model}|${band}|${percent}`};
+  const panel = Ui.create({mount: null,
+    resultStore: {entry: () => null},
+    planStore: {plan: () => ({powers, rows: [
+      {band: "20m", hz: 14095600, cells: powers.map(() => 1)},
+    ]})},
+    cal: {resolved: () => ({gain: 0.25, calibrated: false})},
+    model: () => "IC-705", send: async () => {}, modelNumber: () => 705,
+    radio: () => ({supplyVolts: 7.9}), onPlanChange: () => {},
+    wsprPresets: [], js8Presets: []});
+  panel.mod = {capability: {readable: true}, readLevel: async () => 40,
+    readInput: async () => ({known: false}), readPowerCeiling: async () => ceiling};
+  panel.blockingReason = () => "";
+  panel.resumeTransitionFor = async () => null;
+  panel.snapshotRadio = () => {};
+  panel.pump = () => {};
+  await panel.begin(false);
+  return panel;
+}
+
+(async () => {
+  const battery = {limited: true, percent: 50, watts: 5, battery: true,
+    text: "IC-705 on battery: max 5 W = 50 %"};
+  const capped = await ceilingRun(battery, [10, 50, 100]);
+  const runPowers = capped.run ? capped.run.orderedCells().map(cell => cell.percent) : [];
+  check("on battery the 100 % column is left out of the run",
+    runPowers.join() === "10,50", runPowers.join());
+  check("the stored plan keeps it", capped.plan.powers.join() === "10,50,100", capped.plan.powers.join());
+  check("and the panel says why", /battery: max 5 W = 50 % — 100 % left out/.test(capped.message),
+    capped.message);
+
+  const nothing = await ceilingRun(battery, [80, 100]);
+  check("a plan entirely above the ceiling does not start",
+    !nothing.run && /every column is above/.test(nothing.message), nothing.message);
+
+  const dc = await ceilingRun({limited: false, percent: 100}, [10, 50, 100]);
+  const dcPowers = dc.run ? dc.run.orderedCells().map(cell => cell.percent) : [];
+  check("on external power every column runs", dcPowers.join() === "10,50,100", dcPowers.join());
+  report();
+})();
+
+function report() {
+  if (failures) {
+    console.error(`${failures}/${checks} checks failed`);
+    process.exitCode = 1;
+  } else console.log(`${checks}/${checks} checks passed`);
+}

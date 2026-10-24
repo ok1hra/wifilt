@@ -951,6 +951,18 @@ label.setup-radio-enable {
 .wifi-handoff-btn:hover {
   background: rgba(0, 136, 0, 0.5);
 }
+.wifi-handoff-sheet {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  color: var(--warn);
+  font-size: 13px;
+  line-height: 1.5;
+  border: 1px solid var(--warn);
+  border-radius: 8px;
+}
+.wifi-handoff-copy {
+  margin: 0 0 18px;
+}
 
 /* ---- Icom LAN scan results ----
    Same visual language as the TrxNet device list below, but the rows are

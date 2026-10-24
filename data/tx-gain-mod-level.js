@@ -225,11 +225,90 @@
       if (!this.original || this.original === this.value) return null;
       return this.writeLevel(this.original);
     }
+
+    // The highest percent of the 14 0A scale that still raises the output. An
+    // IC-705 on its battery takes 100 % without complaint and stops at 5 W, so a
+    // calibration at 100 % measured the 50 % cell again and filed it under the
+    // wrong power. Only models whose supply commands are in icom-models.js are
+    // asked; everything else is {limited: false}. Never touches this.error,
+    // which belongs to the MOD level messages.
+    async readPowerCeiling({supplyVolts = 0} = {}) {
+      const row = this.capability.model;
+      const none = {limited: false, percent: 100, watts: 0, battery: null, text: ""};
+      if (!row || !row.powerSupplyCmd || !(row.watts > 0)) return none;
+      const savedError = this.error;
+      try {
+        const kind = await this.read(row.powerSupplyCmd);
+        let battery = null;
+        if (kind) battery = parseInt(kind.value.slice(0, 2), 16) === 1;
+        else if (Number(supplyVolts) > 0) battery = Number(supplyVolts) < row.batteryBelowVolts;
+        if (battery === null) return none;
+        // A radio that ignored 1A 0B will ignore its neighbour too; another
+        // 2.5 s timeout before the first carrier buys nothing.
+        const setting = kind
+          ? await this.read(battery ? row.maxPowerBatteryCmd : row.maxPowerExternalCmd) : null;
+        let watts = setting ? row.maxPowerStepsW[parseInt(setting.value.slice(0, 2), 16)] : 0;
+        if (!(watts > 0)) watts = battery ? row.batteryWatts : row.watts;
+        const percent = Math.max(1, Math.min(100, Math.floor(100 * watts / row.watts)));
+        return {limited: percent < 100, percent, watts, battery,
+                text: `${row.label} on ${battery ? "battery" : "external power"}: ` +
+                      `max ${watts} W = ${percent} %`};
+      } finally {
+        this.error = savedError;
+      }
+    }
+  }
+
+  // Keeps readPowerCeiling() current for a page that writes power by itself
+  // (the JS8 power bar). Re-read when the link comes up and whenever the supply
+  // voltage moves by more than a TX sag -- plugging in or pulling the DC cable
+  // moves it by about 5 V. `busy()` holds the read off while something else may
+  // own the one-slot /civread mailbox or the radio is transmitting.
+  class PowerCeilingWatch {
+    constructor({client, busy, onChange} = {}) {
+      this.client = client;
+      this.busy = busy || (() => false);
+      this.onChange = onChange || (() => {});
+      this.ceiling = null;
+      this.readVolts = 0;
+      this.wasConnected = false;
+      this.reading = false;
+      this.retryAt = 0;
+      this.owed = true;
+    }
+
+    // null = no limit known; otherwise the percent nothing should go above.
+    percent() { return this.ceiling && this.ceiling.limited ? this.ceiling.percent : null; }
+    text() { return this.ceiling && this.ceiling.limited ? this.ceiling.text : ""; }
+
+    update(radio) {
+      const connected = Boolean(radio && radio.connected);
+      if (connected && !this.wasConnected) this.owed = true;
+      this.wasConnected = connected;
+      if (!connected || this.reading) return;
+      const row = this.client.capability.model;
+      if (!row || !row.powerSupplyCmd) {
+        if (this.ceiling) { this.ceiling = null; this.onChange(); }
+        return;
+      }
+      const volts = Number(radio.supplyVolts) || 0;
+      if (volts > 0 && this.readVolts > 0 && Math.abs(volts - this.readVolts) >= 2) this.owed = true;
+      if (!this.owed || Date.now() < this.retryAt || this.busy()) return;
+      this.reading = true;
+      this.client.readPowerCeiling({supplyVolts: volts}).then(ceiling => {
+        this.owed = false;
+        this.readVolts = volts;
+        const before = this.percent();
+        this.ceiling = ceiling;
+        if (this.percent() !== before) this.onChange();
+      }, () => { this.retryAt = Date.now() + 10000; })
+        .finally(() => { this.reading = false; });
+    }
   }
 
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const spaced = command => String(command).replace(/(..)(?=.)/g, "$1 ");
 
-  return {ModLevelClient, capability, bcdPayload, decodeBcd, spaced,
+  return {ModLevelClient, PowerCeilingWatch, capability, bcdPayload, decodeBcd, spaced,
           READ_URL, READ_TIMEOUT_MS, READ_POLL_MS};
 });
