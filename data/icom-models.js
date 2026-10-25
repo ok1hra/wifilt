@@ -81,11 +81,13 @@
       maxPowerStepsW: [0.5, 1, 2.5, 5, 10], batteryWatts: 5, batteryBelowVolts: 10,
       // Battery gauge in the DATA pages' radio bar (trx-supply.js). The radio
       // reports no charge level over CI-V -- only 15 15 Vd (0000 = 0 V, 0075 =
-      // 5 V, 0241 = 16 V) and 1A 0B, which is itself "based on the current
-      // voltage". So the four cells are voltage steps of a 2-cell Li-ion pack
-      // (BP-272, 7.2 V nominal, 8.4 V full) at rest: an estimate, said so in
-      // the tooltip, not Icom's own indicator.
-      batteryLevelsV: [7.0, 7.4, 7.7, 8.0],
+      // 5 V, 0241 = 16 V), 1A 0B (itself "based on the current voltage") and
+      // 1A 05 00 71, which is the Charging (Power ON) SETTING, not whether the
+      // pack is charging or full. So the gauge copies the radio's own
+      // three-segment icon from the voltage, as the operator read it off a
+      // BP-272 on 2026-10-25: three down to 7.6 V, two down to 7.3 V, then one,
+      // which turns red below 7.0 V. Shutdown voltage not measured.
+      batteryCellsV: [7.3, 7.6], batteryLowBelowV: 7.0,
     },
     {
       number: 7300, label: "IC-7300MK2", watts: 100, civAddr: "B6",

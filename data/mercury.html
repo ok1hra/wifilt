@@ -7,7 +7,7 @@
 <!-- Shares data.css with JS8Call-ICOM/WSPR (topbar, subnav, radio-bar, gate-card)
      so the three cannot drift apart; mercury.css carries only what is genuinely
      Mercury's, same split as wspr.css. -->
-<link rel="stylesheet" href="/data.css?v=a5acb95d">
+<link rel="stylesheet" href="/data.css?v=f2b6802b">
 <link rel="stylesheet" href="/mercury.css?v=33aa9ebc">
 </head>
 <!-- lan-gate.js clears the checking class once it knows whether ICOM-LAN is set
@@ -115,7 +115,7 @@
   </span>
   <!-- IC-705 supply: battery gauge or DC, from the Vd meter (trx-supply.js). -->
   <span id="trxSupply" class="trx-supply" hidden>
-    <span class="bat" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+    <span class="bat" aria-hidden="true"><i></i><i></i><i></i></span><small>DC</small>
     <b>--</b>
   </span>
   <span id="radioModel" class="radio-model" title="Model reported by the radio itself">--</span>
@@ -308,15 +308,15 @@
      only new piece -- the bridge to Mercury's own carrier. js8-presets.js is
      loaded only so the plan can warn about JS8's calling window the same way
      it already warns about WSPR's (registerBusyWindows). -->
-<script src="/icom-models.js?v=488de8ff"></script>
-<script src="/trx-supply.js?v=4837e4c0"></script>
+<script src="/icom-models.js?v=98e0e049"></script>
+<script src="/trx-supply.js?v=121671a1"></script>
 <script src="/js8-presets.js?v=7131988f"></script>
 <script src="/wspr-core.js?v=981ff9bf"></script>
 <script src="/tx-gain-cal.js?v=4fdb24e3"></script>
 <script src="/tx-gain-mod-level.js?v=276cf934"></script>
 <script src="/tx-gain-plan.js?v=6df74d9e"></script>
 <script src="/tx-gain-plan-store.js?v=6d5a572b"></script>
-<script src="/tx-gain-plan-ui.js?v=620769e1"></script>
+<script src="/tx-gain-plan-ui.js?v=71990c73"></script>
 <script src="/mercury-gain-cal.js?v=f5da40dd"></script>
 <!-- §6.7 waterfall: same shared module JS8/WSPR use, unmodified.
      §6.6 settings: mercury-tuning.js is a separate store from

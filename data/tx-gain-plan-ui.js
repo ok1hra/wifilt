@@ -456,7 +456,8 @@
                  : resolved.stale ? String(resolved.why || "TRX MOD differs from the measurement")
                  : `No calibration for ${resolved.band || "this band"} @ ` +
                    `${resolved.percent || "?"} % — this transmission would use the manual gain`)
-        : "TX gain calibration plan";
+        // The value can end in an ellipsis on a phone, so the title says it whole.
+        : `TX gain calibration plan · ${text}`;
     }
 
     // ---- editing -----------------------------------------------------------

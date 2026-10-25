@@ -29,22 +29,29 @@
     const volts = radio.tx && rxVolts > 0 ? rxVolts : live;
     if (!(volts > 0)) return null;
     const battery = volts < row.batteryBelowVolts;
-    const steps = row.batteryLevelsV || [];
-    const cells = battery ? steps.filter(threshold => volts >= threshold).length : 0;
-    const low = battery && cells <= 1;
-    const shown = `${volts.toFixed(1)} V`;
+    // The first segment stays lit down to shutdown, as on the radio; the rest
+    // go out at batteryCellsV. Below batteryLowBelowV the last one turns red.
+    // Judged on the tenth of a volt that is shown, so "7.6 V" never sits beside
+    // two segments; the thresholds were read off the radio at that resolution.
+    const shown = Math.round(volts * 10) / 10;
+    const steps = row.batteryCellsV || [];
+    const total = steps.length + 1;
+    const cells = battery ? 1 + steps.filter(threshold => shown >= threshold).length : 0;
+    const low = battery && shown < (row.batteryLowBelowV || 0);
     return {
-      battery, volts, cells, low,
-      text: battery ? shown : `DC ${shown}`,
+      battery, volts, cells, total, low,
+      text: `${volts.toFixed(1)} V`,
       title: battery
-        ? `${row.label} on battery · ${volts.toFixed(2)} V · ${cells}/${steps.length} — estimated ` +
-          "from the voltage of a 2-cell Li-ion pack; the radio reports no charge level" +
+        ? `${row.label} on battery · ${volts.toFixed(2)} V · ${cells}/${total} — the radio's own ` +
+          "segments, judged from the voltage; it reports no charge level" +
           (radio.tx ? " · held at the last receive reading while transmitting" : "")
-        : `${row.label} on external power · ${volts.toFixed(2)} V`,
+        : `${row.label} on external power · ${volts.toFixed(2)} V — the radio reports the supply ` +
+          "voltage only, not the pack's or whether it is charging",
     };
   }
 
-  // `el` is the static #trxSupply markup: <span class="bat"><i>×4</i></span><b></b>.
+  // `el` is the static #trxSupply markup: <span class="bat"><i>×3</i></span>
+  // <small>DC</small><b></b> -- the icon on battery, the DC label otherwise.
   function render(el, radio, model) {
     if (!el) return;
     if (radio && radio.connected && !radio.tx && Number(radio.supplyVolts) > 0)

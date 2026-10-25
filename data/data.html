@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>JS8Call-ICOM — WIFILT</title>
-  <link rel="stylesheet" href="/data.css?v=a5acb95d">
+  <link rel="stylesheet" href="/data.css?v=f2b6802b">
 </head>
 <body class="startup-pending lan-gate-checking">
   <header class="site-topbar">
@@ -41,7 +41,7 @@
     <button id="trxHelpButton" class="trx-help-button" type="button" aria-haspopup="dialog" aria-controls="trxHelpDialog" aria-label="Radio setup help" title="Radio setup help">?</button>
     <div class="trx-control">
       <button id="trxFrequency" class="trx-frequency" type="button" aria-expanded="false">
-        <span id="trxDot" class="trx-dot"></span><span><small id="trxSlotLabel">TRX</small><b id="trxFrequencyValue">--.---.---</b></span><span class="unit">MHz</span><span>▾</span>
+        <span id="trxDot" class="trx-dot"></span><span><small id="trxSlotLabel">TRX</small><b id="trxFrequencyValue">--.---.---</b></span><span class="unit">MHz</span><span class="chevron">▾</span>
       </button>
       <section id="frequencyMenu" class="frequency-menu" hidden aria-label="JS8 dial frequencies"></section>
     </div>
@@ -89,7 +89,7 @@
     </span>
     <!-- IC-705 supply: battery gauge or DC, from the Vd meter (trx-supply.js). -->
     <span id="trxSupply" class="trx-supply" hidden>
-      <span class="bat" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      <span class="bat" aria-hidden="true"><i></i><i></i><i></i></span><small>DC</small>
       <b>--</b>
     </span>
     <span id="linkState" class="live">● OFFLINE</span>
@@ -632,8 +632,8 @@
   <!-- Only for RADIO_FULL_POWER_W / fullPowerWatts: the header turns the CI-V
        level into watts and must never disagree with the WSPR page about how. -->
   <!-- One table of Icom models: watts for WSPR, menu paths for the setup guides. -->
-  <script src="/icom-models.js?v=488de8ff"></script>
-  <script src="/trx-supply.js?v=4837e4c0"></script>
+  <script src="/icom-models.js?v=98e0e049"></script>
+  <script src="/trx-supply.js?v=121671a1"></script>
   <script src="/trx-help.js?v=f5681ddd"></script>
   <script>TrxHelp.mount(document, {kind: "js8"});</script>
   <script src="/wspr-core.js?v=981ff9bf"></script>
@@ -648,7 +648,7 @@
   <script src="/tx-gain-plan.js?v=6df74d9e"></script>
   <script src="/tx-gain-plan-store.js?v=6d5a572b"></script>
   <script src="/tx-mode-powers.js?v=f14b9900"></script>
-  <script src="/tx-gain-plan-ui.js?v=620769e1"></script>
+  <script src="/tx-gain-plan-ui.js?v=71990c73"></script>
   <script src="/dxcc.js?v=c56ee081"></script>
   <script src="/log-db.js?v=4325395d"></script>
   <!-- RF-power auto-apply/knob-detection engine, shared with RTTY-ICOM

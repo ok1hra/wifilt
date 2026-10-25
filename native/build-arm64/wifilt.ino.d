@@ -8,9 +8,9 @@ build-arm64/wifilt.ino.o: ../wifilt.ino arduino/Arduino.h \
  arduino/Stream.h arduino/IPAddress.h net/Server.h net/socket_compat.h \
  platform/esp_wifi.h platform/esp_coexist.h fs/FS.h fs/LittleFS.h \
  net/WebServer.h net/mbedtls/sha1.h net/lwip/sockets.h \
- ../net_nonblocking.h net/ESPmDNS.h net/DNSServer.h net/WiFiUdp.h \
- net/Udp.h /home/dan/Arduino/libraries/TrxNet/src/TrxNet.h net/Udp.h \
- ../icomLanClient.h ../icom_lan_wire.h ../icom_lan_audio_tx.h \
+ ../net_nonblocking.h ../wifi_link_probe.h net/ESPmDNS.h net/DNSServer.h \
+ net/WiFiUdp.h net/Udp.h /home/dan/Arduino/libraries/TrxNet/src/TrxNet.h \
+ net/Udp.h ../icomLanClient.h ../icom_lan_wire.h ../icom_lan_audio_tx.h \
  ../icom_lan_tx_history.h platform/freertos/FreeRTOS.h \
  platform/freertos_compat.h platform/freertos/task.h ../radio_transport.h \
  ../aud1_tx_state.h ../unattended_guard.h ../unattended_events.h \
@@ -49,6 +49,7 @@ net/WebServer.h:
 net/mbedtls/sha1.h:
 net/lwip/sockets.h:
 ../net_nonblocking.h:
+../wifi_link_probe.h:
 net/ESPmDNS.h:
 net/DNSServer.h:
 net/WiFiUdp.h:

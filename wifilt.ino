@@ -142,7 +142,7 @@ volatile bool cwIpSendPending = false;
 #ifndef LOOP_WARN_MS
   #define LOOP_WARN_MS 200
 #endif
-#define REV 20261024
+#define REV 20261025
 #define WIFI
 #define FSK_KEYING  // RTTY by keying the FSK + PTT outputs (was UDP_TO_FSK, from when a UDP port fed it)
 #define WDT         // watchdog timer
@@ -337,6 +337,10 @@ volatile bool btConnectPending = false;
   // meaning across lwip and Winsock -- see the header for why errno alone is not
   // portable and what it silently breaks.
   #include "net_nonblocking.h"
+  #include "wifi_link_probe.h"   // gateway probe rules, shared with a host regression test
+  #if !defined(WIFILT_NATIVE)
+  #include "ping/ping_sock.h"
+  #endif
   // #include <ETH.h>
   // int SsidPassSize = (sizeof(SsidPass)/sizeof(char *))/2; //array size
   // int SelectSsidPass = -1;
@@ -354,6 +358,15 @@ volatile bool btConnectPending = false;
   uint8_t wifiLastBssid[6];
   bool    wifiLastBssidValid = false;
   String  wifiLastSsid;
+  // Associated-but-dead link detector, see wifi_link_probe.h. The ping session
+  // runs in its own IDF task; its callbacks only bump these counters.
+  WifiLinkProbe wifiProbe;
+  #if !defined(WIFILT_NATIVE)
+  esp_ping_handle_t wifiPingSession = nullptr;
+  #endif
+  volatile uint32_t wifiPingReplies = 0, wifiPingTimeouts = 0;
+  volatile bool wifiPingEnded = false;
+  uint32_t wifiPingRepliesSeen = 0, wifiPingTimeoutsSeen = 0;
   unsigned long webQuietUntil = 0;
   byte ActiveWifiProfile = 0;
   String MACString;
@@ -1335,6 +1348,7 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   // builder hid it by generating the correct prototype above this one; a call
   // with a single argument would have compiled and then failed at link time.
   void WiFiRetryActiveProfile(const char *reason, bool hardReset);
+  void WifiLinkProbeService(bool linkUp);
 
   // ---------------------------------------------------------------------------
   // Prototypes the Arduino builder used to generate for us.
@@ -6669,9 +6683,11 @@ void Watchdog(){
           wifiLastSsid = WiFi.SSID();
           wifiLastBssidValid = true;
         }
+        WifiLinkProbeService(true);
         WifiTimer = currentMillis;
         statusLedSteady();
       } else {
+        WifiLinkProbeService(false);
         if (WifiDownSince == 0) WifiDownSince = currentMillis;
         statusLedSteady();
         unsigned long downFor = currentMillis - WifiDownSince;
@@ -7202,6 +7218,86 @@ bool WiFiStationReady() {
   if (APmode) return true;
   if (WiFi.status() != WL_CONNECTED) return false;
   return (uint32_t)WiFi.localIP() != 0;
+}
+
+//-------------------------------------------------------------------------------------------------------
+// Runs on the WiFi watchdog tick. One endless ping session to the gateway
+// lives in its own IDF task, so loop() stalls cannot fake a missed reply; here
+// we only read its counters and walk the ladder in wifi_link_probe.h.
+void WifiLinkProbeService(bool linkUp) {
+#if !defined(WIFILT_NATIVE)
+  static bool stopping = false;
+  // Deleting a session whose task still waits for a reply is not safe, so a
+  // gateway change stops it first and deletes it once on_ping_end has run.
+  if (stopping) {
+    if (!wifiPingEnded) return;
+    esp_ping_delete_session(wifiPingSession);
+    wifiPingSession = nullptr;
+    stopping = false;
+  }
+  uint32_t replies = wifiPingReplies, timeouts = wifiPingTimeouts;
+  uint32_t newReplies = replies - wifiPingRepliesSeen, newTimeouts = timeouts - wifiPingTimeoutsSeen;
+  wifiPingRepliesSeen = replies;
+  wifiPingTimeoutsSeen = timeouts;
+  if (!linkUp) { wifiProbeLinkDown(wifiProbe); return; }
+
+  IPAddress gw = WiFi.gatewayIP();
+  if ((uint32_t)gw == 0) return;
+  if (wifiProbeSetGateway(wifiProbe, (uint32_t)gw) && wifiPingSession) {
+    wifiPingEnded = false;
+    esp_ping_stop(wifiPingSession);
+    stopping = true;
+    return;
+  }
+  if (!wifiPingSession) {
+    esp_ping_config_t cfg = ESP_PING_DEFAULT_CONFIG();
+    cfg.count = ESP_PING_COUNT_INFINITE;
+    cfg.interval_ms = WIFI_PROBE_INTERVAL_MS;
+    cfg.timeout_ms = WIFI_PROBE_TIMEOUT_MS;
+    cfg.data_size = 32;
+    IP_ADDR4(&cfg.target_addr, gw[0], gw[1], gw[2], gw[3]);
+    esp_ping_callbacks_t cbs = {};
+    cbs.on_ping_success = [](esp_ping_handle_t, void *) { wifiPingReplies++; };
+    cbs.on_ping_timeout = [](esp_ping_handle_t, void *) { wifiPingTimeouts++; };
+    cbs.on_ping_end     = [](esp_ping_handle_t, void *) { wifiPingEnded = true; };
+    wifiPingEnded = false;
+    if (esp_ping_new_session(&cfg, &cbs, &wifiPingSession) != ESP_OK) {
+      wifiPingSession = nullptr;
+      return;
+    }
+    esp_ping_start(wifiPingSession);
+    return;
+  }
+
+  // A reply anywhere in the window proves the path; order inside it is unknown.
+  if (newReplies) {
+    if (wifiProbeReply(wifiProbe)) {
+      Serial.print("WIFI| gateway ");
+      Serial.print(gw);
+      Serial.println(" answers ping, dead-link probe armed");
+    }
+    return;
+  }
+  for (uint32_t i = 0; i < newTimeouts; i++) {
+    WifiProbeAction action = wifiProbeTimeout(wifiProbe, stateTx);
+    if (action == WIFI_PROBE_NONE) continue;
+    Serial.print(millis());
+    Serial.print(" WIFI| gateway ");
+    Serial.print(gw);
+    Serial.print(" silent ");
+    Serial.print(WIFI_PROBE_MISS_LIMIT);
+    Serial.println("x, link dead although associated");
+    if (action == WIFI_PROBE_RESTART) {
+      Serial.println(" WIFI| dead link survived reconnect and radio reset, restarting ESP");
+      delay(100);
+      ESP.restart();
+    }
+    WiFiRetryActiveProfile("dead link", action == WIFI_PROBE_RADIO_RESET && !btClientConnected);
+    break;
+  }
+#else
+  (void)linkUp;   // the host OS owns the network on native builds
+#endif
 }
 
 //-------------------------------------------------------------------------------------------------------

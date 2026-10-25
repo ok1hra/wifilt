@@ -141,7 +141,7 @@ button { color: inherit; cursor: pointer; }
 .trx-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 7px var(--cyan); }
 .pending .trx-dot { background: var(--amber); box-shadow: 0 0 7px var(--amber); }
 .chevron { color: var(--muted); }
-.trx-mode { min-width:48px; padding:6px 8px; border:1px solid transparent; border-radius:4px; background:#101b19; color:#b7cac4; font-weight:750; text-align:center; }
+.trx-mode { min-width:48px; padding:6px 8px; border:1px solid transparent; border-radius:4px; background:#101b19; color:#b7cac4; font-weight:750; text-align:center; white-space:nowrap; }
 .trx-mode.incompatible { border-color:var(--amber); background:#2b1d0d; color:var(--amber); box-shadow:0 0 7px #ffbf6933; }
 /* Ten segments over the timetable button's own height. `flex:1` divides what is
    left after the gaps, so the bar keeps its ten discrete steps at 42 px and at
@@ -152,21 +152,25 @@ button { color: inherit; cursor: pointer; }
 .trx-power .pwr-bar i { flex:1; border-radius:1px; background:#14231f; }
 .trx-power .pwr-bar i.on { background:var(--cyan); }
 .trx-power b { font:800 13px/1.05 ui-monospace, SFMono-Regular, Consolas, monospace; color:#b7cac4; white-space:nowrap; }
-/* IC-705 supply beside the power bar. A battery outline of four cells, filled
-   from the left; on DC only the voltage. Amber at one cell or none. */
-.trx-supply { display:flex; align-items:center; gap:5px; }
-.trx-supply .bat { display:none; position:relative; gap:1px; width:22px; height:11px; padding:1px;
-  border:1px solid #6c837c; border-radius:2px; }
-.trx-supply .bat::after { content:""; position:absolute; right:-4px; top:3px; width:2px; height:3px;
-  border-radius:0 1px 1px 0; background:#6c837c; }
+/* IC-705 supply beside the power bar: an upright three-segment battery (the
+   radio's own icon) or a DC label, with the voltage under it. Stacked rather
+   than side by side so it costs the width of the voltage and no more, and the
+   phone layout can keep the number. Red below 7.0 V, as on the radio. */
+.trx-supply { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; }
+.trx-supply .bat { display:none; position:relative; flex-direction:column-reverse; gap:1px;
+  width:11px; height:20px; margin-top:3px; padding:1px; border:1px solid #6c837c; border-radius:2px; }
+.trx-supply .bat::after { content:""; position:absolute; top:-4px; left:2px; width:5px; height:2px;
+  border-radius:1px 1px 0 0; background:#6c837c; }
 .trx-supply.battery .bat { display:flex; }
 .trx-supply .bat i { flex:1; border-radius:1px; background:#14231f; }
 .trx-supply .bat i.on { background:var(--cyan); }
-.trx-supply b { font:800 13px/1.05 ui-monospace, SFMono-Regular, Consolas, monospace; color:#b7cac4; white-space:nowrap; }
-.trx-supply.low .bat { border-color:var(--amber); }
-.trx-supply.low .bat::after { background:var(--amber); }
-.trx-supply.low .bat i.on { background:var(--amber); }
-.trx-supply.low b { color:var(--amber); }
+.trx-supply small { color:var(--muted); font-size:8px; font-weight:800; letter-spacing:.12em; }
+.trx-supply.battery small { display:none; }
+.trx-supply b { font:800 10px/1 ui-monospace, SFMono-Regular, Consolas, monospace; color:#b7cac4; white-space:nowrap; }
+.trx-supply.low .bat { border-color:var(--red); }
+.trx-supply.low .bat::after { background:var(--red); }
+.trx-supply.low .bat i.on { background:var(--red); }
+.trx-supply.low b { color:var(--red); }
 .trx-reconnect {
   padding:6px 10px; border:1px solid var(--amber); border-radius:4px;
   background:#2b1d0d; color:var(--amber); font-size:11px; font-weight:850;
@@ -204,6 +208,11 @@ button { color: inherit; cursor: pointer; }
 .freq-timetable:hover, .freq-timetable[aria-expanded="true"] { border-color: var(--cyan); background: #10231f; }
 .freq-timetable small { display: block; color: var(--muted); font-size: 8px; font-weight: 800; letter-spacing: .12em; }
 .freq-timetable b { display: block; font: 800 14px/1.05 ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .02em; color: var(--muted); }
+/* One line each, whatever the button is given: on a phone "CAL PLAN 6 CELLS"
+   wrapped to four lines and spilled out of the 41 px button. What does not fit
+   ends in an ellipsis; the button's title carries the whole text. */
+.freq-timetable > span:first-child { min-width: 0; }
+.freq-timetable small, .freq-timetable b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .freq-timetable.active { border-color: var(--green); background: #0c2018; }
 .freq-timetable.active b { color: var(--green); }
 .freq-timetable .chevron { color: var(--muted); }
@@ -996,16 +1005,23 @@ button { color: inherit; cursor: pointer; }
   .site-topbar .tabs { gap:4px; padding:6px 0; }
   .trx-help-button { width:28px; height:28px; flex-basis:28px; order:3; }
   .trx-control { flex: 1; min-width: 0; }
-  .trx-frequency { width: 100%; height: 41px; padding-inline: 7px; }
+  .trx-frequency { width: 100%; height: 41px; padding-inline: 7px; gap: 4px; }
   .trx-frequency strong { font-size: 15px; }
+  /* The header row is over-full on a phone once a real frequency, mode and
+     model are in it, and the frequency is the one thing that must not be cut.
+     So the unit and the chevron go (the button is the target, the number is
+     plainly MHz), and so does the model name -- SETUP and the help dialog say
+     which radio it is. */
+  .trx-frequency .unit, .trx-frequency .chevron { display: none; }
+  .radio-model { display: none; }
+  /* The spacer took an equal share of the row with the two flex buttons (60 px
+     of nothing). Here the buttons fill the row themselves. */
+  .spacer { flex: 0 0 0; }
   .trx-mode { min-width: 46px; font-size: 12px; }
   /* The bar costs 8 px and carries the percentage; the watts cost ~33 px the
      two flex controls beside it do not have. Keep the bar, drop the number. */
   .trx-power .pwr-bar { height: 41px; }
   .trx-power b { display: none; }
-  /* Same trade for the supply: the gauge stays, the volts go -- except on DC,
-     where the volts are all there is. */
-  .trx-supply.battery b { display: none; }
   .frequency-menu { position: fixed; top: 51px; left: 5px; right: 5px; width: auto; }
   .frequency-menu header { align-items: flex-start; flex-direction: column; gap: 1px; }
   /* The header stacks here, so "push it right" has nothing to push against;
@@ -1015,7 +1031,13 @@ button { color: inherit; cursor: pointer; }
   .frequency-preset { display: block; padding: 7px; }
   .frequency-preset strong, .frequency-preset span { display: block; }
   .tt-control { flex: 1; min-width: 0; }
-  .freq-timetable { width: 100%; height: 41px; padding-inline: 7px; }
+  /* Room for "CAL PLAN" and "6 CELLS" on one line each: the chevron goes (the
+     whole button is the target), and so do some padding and the label's
+     letter-spacing. */
+  .freq-timetable { width: 100%; height: 41px; padding-inline: 5px; gap: 3px; }
+  .freq-timetable .chevron { display: none; }
+  .freq-timetable small { letter-spacing: .04em; }
+  .freq-timetable b { font-size: 12px; }
   .freq-timetable-panel { position: fixed; top: 51px; left: 5px; right: 5px; width: auto; }
   .freq-timetable-panel header { flex-direction: column; }
   .tt-grid { grid-template-columns: 1fr; }

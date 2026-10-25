@@ -11,6 +11,20 @@ published.
 
 ## Working tree — not committed
 
+**WiFi: an associated link that carries no data is now caught in about 30 s.**
+
+* **The failure.** After ~12 h in JS8 the page blinked `⚠ OFFLINE` and the IC-705 stopped
+  answering on LAN (its WLAN icon stayed on), yet the console said `WIFI-status 3` with an IP.
+  The watchdog only checks "connected and IP ≠ 0", so it waited until DHCP could no longer renew
+  the lease (`reconnecting no ip ... ip=0.0.0.0`); one reconnect then fixed everything at once.
+* **Gateway probe** (`wifi_link_probe.h`, ESP32 only). An endless IDF ping session in its own
+  task pings the gateway every 10 s (2 s timeout), so a slow `loop()` cannot fake a miss. Three
+  misses in a row while the link looks up → reconnect to the same AP; still silent → WiFi radio
+  off/on; still silent → `ESP.restart()`, never while keyed. Any reply resets the ladder.
+* **Never on a router that drops ping**: the probe arms only after the gateway has answered
+  once (`WIFI| gateway … answers ping, dead-link probe armed`), and stays armed across reconnects
+  to the same gateway. `tools/wifi-link-probe-smoke.cpp` covers the ladder.
+
 **QRPlog log manager: ✕ clears the filter, STATISTICS shows shares in %.**
 
 * The *Saved logs* filter box has its own **✕** (shown only while something is typed): it
