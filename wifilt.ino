@@ -367,6 +367,9 @@ volatile bool btConnectPending = false;
   volatile uint32_t wifiPingReplies = 0, wifiPingTimeouts = 0;
   volatile bool wifiPingEnded = false;
   uint32_t wifiPingRepliesSeen = 0, wifiPingTimeoutsSeen = 0;
+  // Bumped wherever a frame demonstrably arrived from a browser (a request, or
+  // transfer progress = its ACKs); the radio has its own counter in lanClient.
+  uint32_t wifiInboundCount = 0, wifiInboundSeen = 0;
   unsigned long webQuietUntil = 0;
   byte ActiveWifiProfile = 0;
   String MACString;
@@ -395,6 +398,7 @@ volatile bool btConnectPending = false;
       if (_currentClient.connected()) {
         lastPeer = _currentClient.remoteIP();
         lastUri = _currentUri;
+        wifiInboundCount++;
       }
       return WebServer::_currentClientWrite(b, l);
     }
@@ -3034,6 +3038,7 @@ bool handleFileFromSPIFFS(const String &path){
     if (n > 0) {
       sent += (size_t)n;
       lastProgress = millis();
+      wifiInboundCount++;   // send space only frees up as the browser's ACKs arrive
     } else if (n < 0) {
       transferOk = false;
     }
@@ -7239,6 +7244,9 @@ void WifiLinkProbeService(bool linkUp) {
   uint32_t newReplies = replies - wifiPingRepliesSeen, newTimeouts = timeouts - wifiPingTimeoutsSeen;
   wifiPingRepliesSeen = replies;
   wifiPingTimeoutsSeen = timeouts;
+  uint32_t inbound = wifiInboundCount + lanClient.radioRxCount();
+  bool otherTraffic = inbound != wifiInboundSeen;
+  wifiInboundSeen = inbound;
   if (!linkUp) { wifiProbeLinkDown(wifiProbe); return; }
 
   IPAddress gw = WiFi.gatewayIP();
@@ -7278,6 +7286,7 @@ void WifiLinkProbeService(bool linkUp) {
     }
     return;
   }
+  if (otherTraffic) { wifiProbeTraffic(wifiProbe); return; }
   for (uint32_t i = 0; i < newTimeouts; i++) {
     WifiProbeAction action = wifiProbeTimeout(wifiProbe, stateTx);
     if (action == WIFI_PROBE_NONE) continue;

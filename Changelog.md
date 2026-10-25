@@ -24,6 +24,12 @@ published.
 * **Never on a router that drops ping**: the probe arms only after the gateway has answered
   once (`WIFI| gateway … answers ping, dead-link probe armed`), and stays armed across reconnects
   to the same gateway. `tools/wifi-link-probe-smoke.cpp` covers the ladder.
+* **A lost ping alone is not a dead link.** First field run: Ctrl+F5 on the JS8 page pushed
+  ~2 MB of assets over a congested channel, pings failed to even leave the box
+  (`ping_sock: send error=0`), and the probe reconnected a link that was busy delivering the
+  browser's ACKs. Any frame that demonstrably arrived since the last tick — a datagram from the
+  radio (`IcomLanClient::radioRxCount()`), a browser request, transfer progress — now resets the
+  count like a reply, without arming.
 
 **QRPlog log manager: ✕ clears the filter, STATISTICS shows shares in %.**
 

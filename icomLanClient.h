@@ -201,6 +201,9 @@ public:
   }
   // CI-V stream is actually delivering data and not mid-recovery.
   bool catHealthy() const { return state == LAN_CONNECTED && civGotData && !civRecovering; }
+  // Every datagram the radio sent us, any channel, never stall-forgiven: raw
+  // proof that WiFi delivers frames, for the dead-link probe in the sketch.
+  uint32_t radioRxCount() const { return radioRxPackets; }
   // Audio sub-stream linked and delivering fresh payload (firmware-side RX-live).
   bool audioReady() const {
     return audioOpened && audioGotHere && (millis() - audioLastDataMs) < LAN_AUDIO_FRESH_MS;
@@ -667,6 +670,7 @@ private:
   static const uint32_t LAN_RADIO_OFF_MS = 4000;
   bool radioDataSeen = false;
   uint32_t lastRadioDataMs = 0;
+  uint32_t radioRxPackets = 0;
   uint32_t civNextOpen = 0, lastFreqPoll = 0, lastCivDataMs = 0, lastCtrlRxMs = 0;
   uint32_t civLastAyt = 0, civLastReady = 0, civLastPing = 0, civLastIdle = 0;
   uint32_t civRequestSentMs = 0, civHealthProbeSentMs = 0, civRecoveryStartedMs = 0;
@@ -1171,7 +1175,11 @@ private:
   // Only the configured radio may drive session state. A datagram that lands on
   // one of our local ports from any other source is drained and ignored, so
   // stray or spoofed traffic cannot refresh session health or inject CAT/audio.
-  bool fromRadio(WiFiUDP& u) { return u.remoteIP() == radioIP; }
+  bool fromRadio(WiFiUDP& u) {
+    if (u.remoteIP() != radioIP) return false;
+    radioRxPackets++;
+    return true;
+  }
 
   void pumpControl() {
     int n;

@@ -17,6 +17,13 @@
 //
 // Escalation without an intervening reply: reconnect (seconds, keeps all RAM
 // state) -> radio off/on -> ESP.restart(), the restart never while keyed.
+//
+// A lost ping alone is not a dead link. Ctrl+F5 on the JS8 page (2026-10-25)
+// streamed ~2 MB of assets over a congested channel: the ping task logged
+// `ping_sock: send error=0` (WiFi TX queue full), three misses in a row fired
+// a reconnect on a link that was busily delivering the browser's ACKs. So any
+// frame that demonstrably arrived -- from the radio, or a browser request or
+// transfer progress -- counts as proof the path works, without arming.
 
 #include <stdint.h>
 
@@ -58,6 +65,13 @@ inline bool wifiProbeReply(WifiLinkProbe &p) {
   p.misses = 0;
   p.stage = 0;
   return newlyArmed;
+}
+
+// Other inbound traffic since the last tick: the path works, but only a ping
+// reply says this gateway answers ICMP, so this never arms.
+inline void wifiProbeTraffic(WifiLinkProbe &p) {
+  p.misses = 0;
+  p.stage = 0;
 }
 
 inline WifiProbeAction wifiProbeTimeout(WifiLinkProbe &p, bool txActive) {

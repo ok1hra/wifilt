@@ -61,6 +61,23 @@ int main() {
   assert(missRound(p, true) == WIFI_PROBE_RECONNECT);
   assert(missRound(p, true) == WIFI_PROBE_RADIO_RESET);
 
+  // Other inbound traffic resets misses and the ladder like a reply...
+  wifiProbeReply(p);
+  assert(wifiProbeTimeout(p, false) == WIFI_PROBE_NONE);
+  assert(wifiProbeTimeout(p, false) == WIFI_PROBE_NONE);
+  wifiProbeTraffic(p);
+  assert(wifiProbeTimeout(p, false) == WIFI_PROBE_NONE);
+  assert(wifiProbeTimeout(p, false) == WIFI_PROBE_NONE);
+  assert(wifiProbeTimeout(p, false) == WIFI_PROBE_RECONNECT);
+  wifiProbeTraffic(p);
+  assert(missRound(p) == WIFI_PROBE_RECONNECT);
+  // ...but never arms a probe whose gateway has not answered ping.
+  WifiLinkProbe quiet;
+  wifiProbeSetGateway(quiet, gw);
+  wifiProbeTraffic(quiet);
+  assert(!quiet.armed);
+  for (int i = 0; i < 10; ++i) assert(wifiProbeTimeout(quiet, false) == WIFI_PROBE_NONE);
+
   // Same gateway keeps the state, a new one disarms.
   assert(!wifiProbeSetGateway(p, gw));
   assert(p.armed);
