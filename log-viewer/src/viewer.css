@@ -10,6 +10,20 @@
   --del: #b42318;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* The map (viewer-map.js reads these: canvas and Leaflet need real colours) */
+  --map-site: #d1242f;
+  --map-loc: #1f6feb;
+  --map-state: #8250df;
+  --map-dxcc: #1a7f37;
+  --map-focus: #e8590c;
+  --map-text: #1c2430;
+  --map-halo: rgba(255, 255, 255, 0.9);
+  --map-sea: #dbe9f6;
+  --map-land: #f3f1ea;
+  --map-border: #8c8574;
+  --map-ring: #6b7a8c;
+  --map-night: #0a1430;
+  --map-night-strength: 1;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -23,6 +37,20 @@
     --accent-bg: rgba(106, 165, 255, 0.14);
     --row-alt: #171d25;
     --del: #ff8a80;
+    --map-site: #ff6b6b;
+    --map-loc: #6aa5ff;
+    --map-state: #c297ff;
+    --map-dxcc: #4ac26b;
+    --map-focus: #ffa94d;
+    --map-text: #dfe6ef;
+    --map-halo: rgba(18, 22, 28, 0.9);
+    --map-sea: #0f1d2c;
+    --map-land: #263241;
+    --map-border: #6b7d94;
+    --map-ring: #7d8da3;
+    --map-night: #000000;
+    /* black on a dark map needs a little more of it to show */
+    --map-night-strength: 1.3;
     color-scheme: dark;
   }
 }
@@ -41,6 +69,14 @@ button {
 button:hover { border-color: var(--accent); }
 code { font-family: var(--mono); font-size: 12px; background: var(--accent-bg); padding: 0 3px; border-radius: 3px; }
 
+/* Statistics left, the map right, the log under both at full width. The top
+   part has a height of its own, so the log keeps the rest of the window. */
+.upper {
+  display: grid; grid-template-columns: minmax(340px, 1fr) minmax(380px, 1.25fr);
+  height: clamp(340px, 52vh, 640px); padding-right: 16px; min-height: 0;
+}
+.upper.map-folded { grid-template-columns: 1fr auto; height: auto; }
+.upper > .top { overflow: auto; min-height: 0; }
 .top { padding: 12px 16px 8px; display: flex; flex-direction: column; gap: 8px; }
 .title-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
 h1 { margin: 0; font-size: 20px; }
@@ -76,14 +112,16 @@ h1 { margin: 0; font-size: 20px; }
 .chk { font-size: 13px; color: var(--dim); display: inline-flex; align-items: center; gap: 4px; }
 .spacer { flex: 1; }
 .cols-wrap { position: relative; }
+/* Fixed, placed by viewer.js (placeColsMenu): the statistics column it opens
+   from scrolls, and would cut an absolute menu off after its first row. */
 .cols-menu {
-  position: absolute; z-index: 20; top: 110%; left: 0; min-width: 160px;
+  position: fixed; z-index: 20; min-width: 160px; overflow: auto;
   background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
   padding: 6px 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.18);
   display: grid; grid-template-columns: 1fr 1fr; gap: 2px 12px;
 }
 /* [hidden] has to win over the display above, or the menu never closes. */
-.cols-menu[hidden], .help[hidden], .msg[hidden] { display: none; }
+.cols-menu[hidden], .help[hidden], .msg[hidden], .map-bar select[hidden] { display: none; }
 .cols-menu label { font-size: 13px; white-space: nowrap; display: flex; gap: 4px; align-items: center; }
 .help {
   font-size: 13px; color: var(--dim); background: var(--panel);
@@ -105,6 +143,12 @@ h1 { margin: 0; font-size: 20px; }
   font-size: 12px; font-weight: 600; color: var(--dim); padding: 6px 6px 2px; cursor: pointer; user-select: none;
 }
 .hrow > div:hover { color: var(--accent); }
+.hrow > div { position: relative; }
+/* The grip on the right edge of every header: drag to resize, double-click to fit. */
+.rz { position: absolute; top: 0; right: 0; bottom: 0; width: 7px; cursor: col-resize; touch-action: none; }
+.rz::after { content: ""; position: absolute; top: 5px; bottom: 3px; right: 2px; border-right: 1px solid var(--line); }
+.rz:hover::after, .resizing .rz::after { border-color: var(--accent); }
+body.resizing, body.resizing * { cursor: col-resize !important; user-select: none; }
 .hrow .sorted { color: var(--accent); }
 .frow > div { padding: 2px 3px 6px; overflow: visible; }
 .frow input {
@@ -114,12 +158,34 @@ h1 { margin: 0; font-size: 20px; }
 .frow input:focus { outline: none; border-color: var(--accent); }
 .frow input.active { border-color: var(--accent); background: var(--accent-bg); }
 .frow input.bad { border-color: var(--del); }
+.fpick { display: flex; gap: 2px; }
+.fpick .pick { padding: 0 4px; font-size: 11px; line-height: 1; border-radius: 4px; }
+.log-pal {
+  position: fixed; z-index: 30; overflow: auto; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22); padding: 4px; font-size: 13px;
+}
+.log-pal[hidden] { display: none; }
+.lp-head { padding: 4px 6px 6px; color: var(--dim); border-bottom: 1px solid var(--line); margin-bottom: 2px; }
+.lp-head b { color: var(--text); }
+.lp-row, .lp-any {
+  display: grid; grid-template-columns: 1fr auto auto 3.5em; gap: 10px; width: 100%; text-align: left;
+  border: none; border-radius: 4px; background: none; padding: 3px 6px; font: 12px var(--mono);
+}
+.lp-row:hover, .lp-any:hover { background: var(--accent-bg); }
+.lp-row.on { background: var(--accent-bg); color: var(--accent); font-weight: 700; }
+.lp-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lp-my, .lp-date { color: var(--dim); }
+.lp-n { text-align: right; font-weight: 600; }
+.lp-any { display: block; margin-top: 2px; border-top: 1px solid var(--line); border-radius: 0 0 4px 4px; color: var(--accent); }
+.cols-menu .reset-w { grid-column: 1 / -1; margin-top: 6px; }
 .gbody { position: relative; width: max-content; min-width: 100%; }
 .gwin { position: absolute; left: 0; right: 0; top: 0; }
 .drow { height: 26px; align-items: center; font: 13px var(--mono); border-bottom: 1px solid transparent; }
 .drow:nth-child(even) { background: var(--row-alt); }
 .drow:hover { background: var(--accent-bg); }
 .drow.deleted { color: var(--del); text-decoration: line-through; }
+.drow { cursor: pointer; }
+.drow.sel { background: var(--accent-bg); box-shadow: inset 3px 0 0 var(--map-focus); }
 .num { text-align: right; }
 .c-call { font-weight: 700; }
 .msg {
@@ -127,6 +193,79 @@ h1 { margin: 0; font-size: 20px; }
   background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px;
 }
 .foot { padding: 6px 16px 10px; font-size: 12px; color: var(--dim); }
+
+/* ── the map ── */
+.mapbox { display: flex; flex-direction: column; gap: 4px; padding-top: 12px; min-height: 0; min-width: 0; }
+.map-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 13px; }
+.map-bar button { padding: 2px 8px; }
+.map-bar input[type="text"] {
+  font: 12px var(--mono); color: var(--text); background: var(--bg); width: 7em;
+  border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px; text-transform: uppercase;
+}
+.map-bar input.bad { border-color: var(--del); }
+.map-bar select { font: inherit; font-size: 12px; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+.seg { display: inline-flex; }
+.seg button { border-radius: 0; margin-left: -1px; }
+.seg button:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
+.seg button:last-child { border-radius: 0 6px 6px 0; }
+.seg button.on { background: var(--accent-bg); border-color: var(--accent); color: var(--accent); position: relative; }
+.map-time { display: inline-flex; align-items: center; gap: 4px; }
+.map-exp { display: inline-flex; align-items: center; gap: 4px; color: var(--dim); }
+.map-time input[type="range"] { width: 100px; }
+.map-time-lbl { font: 12px var(--mono); color: var(--dim); min-width: 3em; }
+.map-area {
+  flex: 1; min-height: 0; position: relative; overflow: hidden;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--map-sea);
+}
+.map-l, .map-az { position: absolute; inset: 0; }
+.map-l { background: var(--map-sea); }
+.map-az canvas { display: block; }
+.map-msg {
+  position: absolute; inset: 40% 16px auto; text-align: center; color: var(--dim); z-index: 1000;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+}
+.map-msg[hidden], .az-pop[hidden] { display: none; }
+.map-note { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 12px; color: var(--dim); min-height: 1.4em; }
+.lg { display: inline-flex; align-items: center; gap: 4px; }
+.lg i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.lg i.site { background: var(--map-site); }
+.lg i.loc { background: var(--map-loc); }
+.lg i.state { background: var(--map-state); }
+.lg i.dxcc { background: var(--map-dxcc); }
+.mapbox.folded .map-area, .mapbox.folded .map-note, .mapbox.folded .map-bar > :not(#mapFold):not(.spacer) { display: none; }
+.map-labels { position: absolute; left: 0; top: 0; pointer-events: none; }
+.map-pop { font-size: 12px; min-width: 200px; }
+.map-pop .h { font-size: 13px; margin-bottom: 2px; }
+.map-pop .dim { color: var(--dim); }
+.map-pop table { border-collapse: collapse; font: 12px var(--mono); margin: 4px 0; }
+.map-pop td { padding: 0 8px 0 0; white-space: nowrap; }
+.map-pop td.c { font-weight: 700; }
+.map-pop .map-filter { margin-top: 6px; }
+.az-pop {
+  position: absolute; z-index: 10; max-width: 340px; max-height: 70%; overflow: auto;
+  background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+.az-close { float: right; border: none; background: none; font-size: 16px; line-height: 1; padding: 0 2px; }
+.leaflet-container { font: 12px var(--sans); background: var(--map-sea); }
+.leaflet-tooltip.site-tip {
+  font: 700 12px var(--sans); color: var(--map-site); background: var(--map-halo);
+  border: none; box-shadow: none; padding: 0 4px;
+}
+.leaflet-tooltip.site-tip::before { display: none; }
+@media (prefers-color-scheme: dark) {
+  /* OSM has no dark tiles; turned negative they read well enough at night. */
+  .osm-tiles { filter: invert(1) hue-rotate(180deg) brightness(0.9) contrast(0.85); }
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--panel); color: var(--text); }
+  .leaflet-bar a { background: var(--panel); color: var(--text); border-color: var(--line); }
+  .leaflet-control-attribution { background: rgba(26, 32, 41, 0.8) !important; color: var(--dim); }
+}
+
+@media (max-width: 900px) {
+  .upper, .upper.map-folded { display: block; height: auto; padding-right: 0; }
+  .mapbox { padding: 0 16px 8px; }
+  .map-area { flex: none; height: 340px; }
+}
 
 @media (max-width: 640px) {
   .top { padding: 10px 16px 6px; }

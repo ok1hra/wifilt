@@ -13,10 +13,13 @@
  *   - QSOs imported from old ADIF logs carry no DXCC data; it is looked up here
  *     with the same dxcc.js the interface uses, for display only;
  *   - filters, sorting and "show deleted" live in the address (#...), so a
- *     link opens the same view; which columns are hidden is personal and stays
- *     in this browser;
+ *     link opens the same view; which columns are hidden, and how wide they
+ *     are, is personal and stays in this browser;
+ *   - the ▾ in the Log filter lists the logs it matches, with their QSO counts;
  *   - ADIF/CSV export of the rows shown, through log-export.js -- the very
- *     file the interface exports with, so the two can never disagree.
+ *     file the interface exports with, so the two can never disagree;
+ *   - a map of the rows shown beside the statistics (viewer-map.js); clicking
+ *     a row marks its point and sets the grey line to its time.
  *
  * Only the rows in view are in the DOM: a log of 16 000 QSOs is normal here.
  */
@@ -24,6 +27,8 @@
 
   var ROW_H = 26;
   var COLS_KEY = 'wifilt-log-viewer-cols';
+  var WIDTHS_KEY = 'wifilt-log-viewer-widths';
+  var MIN_W = 36, MAX_W = 800;
   var MODE_FOLD = { 'CW-R': 'CW', 'CWR': 'CW', 'USB': 'SSB', 'LSB': 'SSB', 'RTTY-R': 'RTTY', 'RTTYR': 'RTTY' };
   var BAND_ORDER = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m',
                     '2m', '1.25m', '70cm', '33cm', ''];
@@ -61,8 +66,10 @@
   var sort = { k: 'when', dir: -1 };
   var showDeleted = false;
   var hidden = loadHidden();
+  var widths = loadWidths();     // k -> px, only the columns someone resized
   var logsById = {};
   var fileInfo = null;
+  var selected = null;   // the row last clicked, marked in the table and on the map
 
   var $ = function (id) { return document.getElementById(id); };
 
@@ -138,6 +145,7 @@
   function build(f) {
     logsById = {};
     (f.stores.logs || []).forEach(function (l) { logsById[l.id] = l; });
+    ViewerMap.setLogs(logsById);
     all = f.stores.qso.map(function (q) {
       var log = logsById[q.logId] || {};
       var d = fillDxcc(q, log) || {};
@@ -229,11 +237,14 @@
     sortRows();
     writeHash();
     renderStats();
+    // The filters, not the sort order: sorting the table must not refit the map.
+    ViewerMap.update(shown, JSON.stringify(filters) + (showDeleted ? '+deleted' : ''));
     renderFilterState();
     $('count').textContent = shown.length === all.length ? shown.length + ' rows'
                                                          : shown.length + ' of ' + all.length + ' rows';
     $('gbody').style.height = (shown.length * ROW_H) + 'px';
     renderRows(true);
+    if (!$('logPal').hidden) renderLogPal();
     showMsg(all.length && !shown.length ? 'No QSO matches these filters.' : '');
   }
 
@@ -281,6 +292,7 @@
     COLS.forEach(function (c) { if (filters[c.k]) p.set(c.k, filters[c.k]); });
     if (sort.k !== 'when' || sort.dir !== -1) p.set('sort', (sort.dir < 0 ? '-' : '') + sort.k);
     if (showDeleted) p.set('deleted', '1');
+    ViewerMap.writeParams(p);
     var h = p.toString();
     var url = location.pathname + location.search + (h ? '#' + h : '');
     if (url !== location.pathname + location.search + location.hash) history.replaceState(null, '', url);
@@ -300,6 +312,7 @@
     } else sort = { k: 'when', dir: -1 };
     showDeleted = p.get('deleted') === '1';
     $('showDeleted').checked = showDeleted;
+    ViewerMap.readParams(p);
     document.querySelectorAll('.frow input').forEach(function (inp) {
       inp.value = filters[inp.getAttribute('data-k')] || '';
     });
@@ -309,8 +322,10 @@
 
   function visibleCols() { return COLS.filter(function (c) { return !hidden[c.k]; }); }
 
+  function colW(c) { return widths[c.k] || c.w; }
+
   function template() {
-    return visibleCols().map(function (c) { return c.w + 'px'; }).join(' ');
+    return visibleCols().map(function (c) { return colW(c) + 'px'; }).join(' ');
   }
 
   function renderHeader() {
@@ -319,11 +334,17 @@
       '<div class="grow hrow" style="grid-template-columns:' + tpl + '">' + cols.map(function (c) {
         var mark = sort.k === c.k ? (sort.dir < 0 ? ' ▼' : ' ▲') : '';
         return '<div data-sort="' + c.k + '" class="' + (c.num ? 'num ' : '') + (mark ? 'sorted' : '') +
-               '" title="Sort by ' + esc(c.t) + '">' + esc(c.t) + mark + '</div>';
+               '" title="Sort by ' + esc(c.t) + '">' + esc(c.t) + mark +
+               '<span class="rz" data-rz="' + c.k + '" title="Drag to resize, double-click to fit"></span></div>';
       }).join('') + '</div>' +
       '<div class="grow frow" style="grid-template-columns:' + tpl + '">' + cols.map(function (c) {
-        return '<div><input data-k="' + c.k + '" value="' + esc(filters[c.k] || '') + '" placeholder="' +
-               (c.num ? '>, <, a-b' : 'filter') + '" aria-label="Filter ' + esc(c.t) + '" spellcheck="false"></div>';
+        var inp = '<input data-k="' + c.k + '" value="' + esc(filters[c.k] || '') + '" placeholder="' +
+                  (c.num ? '>, <, a-b' : 'filter') + '" aria-label="Filter ' + esc(c.t) + '" spellcheck="false">';
+        if (c.k === 'log') {
+          return '<div class="fpick">' + inp + '<button type="button" class="pick" title="Choose a log" ' +
+                 'aria-label="Choose a log" aria-expanded="' + !$('logPal').hidden + '">▾</button></div>';
+        }
+        return '<div>' + inp + '</div>';
       }).join('') + '</div>';
     renderFilterState();
   }
@@ -341,7 +362,8 @@
     var cols = visibleCols(), tpl = template(), html = [];
     for (var i = first; i < last; i++) {
       var r = shown[i];
-      html.push('<div class="grow drow' + (r.deleted ? ' deleted' : '') + '" style="grid-template-columns:' + tpl + '">' +
+      html.push('<div class="grow drow' + (r.deleted ? ' deleted' : '') + (r === selected ? ' sel' : '') +
+        '" data-i="' + i + '" style="grid-template-columns:' + tpl + '">' +
         cols.map(function (c) {
           var v = esc(r[c.k]);
           return '<div class="' + (c.num ? 'num ' : '') + (c.cls || '') + '" title="' + v + '">' + v + '</div>';
@@ -444,9 +466,9 @@
     return COLS.some(function (c) { return !!compiled[c.k]; });
   }
 
-  function rowsForExport() {
+  function rowsForExport(list) {
     // The order of the log, not of the screen: by time.
-    return shown.slice().sort(function (a, b) { return a.when < b.when ? -1 : a.when > b.when ? 1 : 0; })
+    return (list || shown).slice().sort(function (a, b) { return a.when < b.when ? -1 : a.when > b.when ? 1 : 0; })
       .map(function (r) { return Object.assign({}, r.q, { dxcc: r.q.dxcc || (Object.keys(r.d).length ? r.d : null) }); });
   }
 
@@ -460,8 +482,143 @@
     setTimeout(function () { document.body.removeChild(a); URL.revokeObjectURL(url); }, 500);
   }
 
-  function exportName(ext) {
-    return 'wifilt-log-' + stamp() + (anyFilter() ? '-filtered' : '') + '.' + ext;
+  function exportName(ext, tag) {
+    return 'wifilt-log-' + stamp() + (anyFilter() ? '-filtered' : '') + (tag || '') + '.' + ext;
+  }
+
+  function exportRows(list, ext, tag) {
+    var qsos = rowsForExport(list);
+    if (ext === 'adi') {
+      download(LogExport.adifFromQsos(qsos, function (q) { return logsById[q.logId] || {}; }),
+               exportName('adi', tag), 'text/plain;charset=utf-8;');
+    } else {
+      download(LogExport.csvFromQsos(qsos), exportName('csv', tag), 'text/csv;charset=utf-8;');
+    }
+  }
+
+  // ── column widths: drag the edge of a header, double-click it to fit ──────
+
+  function loadWidths() {
+    try { return JSON.parse(localStorage.getItem(WIDTHS_KEY) || '{}') || {}; } catch (_) { return {}; }
+  }
+
+  function saveWidths() {
+    try { localStorage.setItem(WIDTHS_KEY, JSON.stringify(widths)); } catch (_) {}
+  }
+
+  // While dragging, only the template changes: no row is built again.
+  function setTemplate() {
+    var tpl = template();
+    document.querySelectorAll('#grid .grow').forEach(function (g) { g.style.gridTemplateColumns = tpl; });
+  }
+
+  var drag = null, justResized = false;
+
+  function onResizeDown(e) {
+    var h = e.target.closest('.rz');
+    if (!h) return;
+    e.preventDefault();
+    var k = h.getAttribute('data-rz');
+    drag = { k: k, x: e.clientX, w: colW(COL[k]) };
+    if (h.setPointerCapture) h.setPointerCapture(e.pointerId);
+    document.body.classList.add('resizing');
+  }
+
+  function onResizeMove(e) {
+    if (!drag) return;
+    widths[drag.k] = Math.round(Math.max(MIN_W, Math.min(MAX_W, drag.w + e.clientX - drag.x)));
+    setTemplate();
+  }
+
+  function onResizeUp() {
+    if (!drag) return;
+    drag = null;
+    // The click that ends a drag on a header must not sort by it.
+    justResized = true;
+    setTimeout(function () { justResized = false; }, 0);
+    document.body.classList.remove('resizing');
+    saveWidths();
+  }
+
+  // As wide as the longest value among the rows shown (the first 5000).
+  var measure = null;
+  function fitColumn(k) {
+    var c = COL[k];
+    measure = measure || document.createElement('canvas').getContext('2d');
+    var mono = getComputedStyle(document.body).getPropertyValue('--mono');
+    measure.font = '600 12px ' + getComputedStyle(document.body).fontFamily;
+    var w = measure.measureText(c.t + ' ▼').width;
+    measure.font = (c.cls === 'c-call' ? '700 ' : '') + '13px ' + mono;
+    for (var i = 0; i < shown.length && i < 5000; i++) w = Math.max(w, measure.measureText(String(shown[i][k])).width);
+    widths[k] = Math.round(Math.max(MIN_W, Math.min(MAX_W, w + 18)));
+    saveWidths();
+    setTemplate();
+  }
+
+  // ── the log palette: which logs the Log filter matches, how big each is ───
+
+  // Every log the other filters leave QSOs in, with how many; narrowed by
+  // the text in the Log filter. An exact pick (=name) lists them all, so
+  // another one can be picked.
+  function logChoices() {
+    var tests = COLS.filter(function (c) { return c.k !== 'log' && compiled[c.k]; })
+                    .map(function (c) { return compiled[c.k]; });
+    var by = {}, list = [];
+    all.forEach(function (r) {
+      if (r.deleted && !showDeleted) return;
+      for (var i = 0; i < tests.length; i++) if (!tests[i](r)) return;
+      var e = by[r.log];
+      if (!e) { e = by[r.log] = { name: r.log, n: 0, from: '', my: {} }; list.push(e); }
+      e.n++;
+      if (r.date && (!e.from || r.date < e.from)) e.from = r.date;
+      if (r.my) e.my[r.my] = true;
+    });
+    var raw = String(filters.log || '').trim().toLowerCase();
+    var text = raw.charAt(0) === '=' ? '' : raw;
+    return {
+      text: text,
+      list: list.filter(function (e) { return !text || e.name.toLowerCase().indexOf(text) >= 0; })
+                .sort(function (a, b) { return a.from < b.from ? 1 : a.from > b.from ? -1 : 0; }),
+    };
+  }
+
+  function renderLogPal() {
+    var ch = logChoices(), list = ch.list, cur = String(filters.log || '').trim().toLowerCase();
+    var n = list.reduce(function (s, e) { return s + e.n; }, 0);
+    $('logPal').innerHTML =
+      '<div class="lp-head"><b>' + list.length + (list.length === 1 ? ' log' : ' logs') + '</b> · ' + n + ' QSO' +
+      (ch.text ? ' · matching “' + esc(ch.text) + '”' : '') + '</div>' +
+      '<div class="lp-list">' + list.map(function (e) {
+        return '<button type="button" class="lp-row' + (cur === '=' + e.name.toLowerCase() ? ' on' : '') +
+               '" data-log="' + esc(e.name) + '"><span class="lp-name">' + esc(e.name) + '</span>' +
+               '<span class="lp-my">' + esc(Object.keys(e.my).join(' ')) + '</span>' +
+               '<span class="lp-date">' + esc(e.from) + '</span><span class="lp-n">' + e.n + '</span></button>';
+      }).join('') + '</div>' +
+      (cur ? '<button type="button" class="lp-any" data-log="">Any log</button>' : '');
+    placeLogPal();
+  }
+
+  function placeLogPal() {
+    var cell = document.querySelector('.frow .fpick'), pal = $('logPal');
+    if (!cell) { closeLogPal(); return; }
+    var r = cell.getBoundingClientRect(), w = Math.min(460, window.innerWidth - 16);
+    pal.style.width = w + 'px';
+    pal.style.left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8)) + 'px';
+    pal.style.top = (r.bottom + 2) + 'px';
+    pal.style.maxHeight = Math.max(160, window.innerHeight - r.bottom - 14) + 'px';
+  }
+
+  function openLogPal() {
+    $('logPal').hidden = false;
+    renderLogPal();
+    var b = document.querySelector('.frow .pick');
+    if (b) b.setAttribute('aria-expanded', 'true');
+  }
+
+  function closeLogPal() {
+    $('logPal').hidden = true;
+    var b = document.querySelector('.frow .pick');
+    if (b) b.setAttribute('aria-expanded', 'false');
   }
 
   // ── columns menu ────────────────────────────────────────────────────────────
@@ -474,17 +631,50 @@
     try { localStorage.setItem(COLS_KEY, JSON.stringify(hidden)); } catch (_) {}
   }
 
+  // Under the button, or above it when there is no room below.
+  function placeColsMenu() {
+    var m = $('colsMenu'), r = $('colsBtn').getBoundingClientRect();
+    var below = window.innerHeight - r.bottom - 12, above = r.top - 12;
+    m.style.left = Math.max(8, Math.min(r.left, window.innerWidth - m.offsetWidth - 8)) + 'px';
+    if (below >= m.scrollHeight || below >= above) {
+      m.style.top = (r.bottom + 4) + 'px'; m.style.bottom = '';
+      m.style.maxHeight = below + 'px';
+    } else {
+      m.style.top = ''; m.style.bottom = (window.innerHeight - r.top + 4) + 'px';
+      m.style.maxHeight = above + 'px';
+    }
+  }
+
+  function closeColsMenu() {
+    $('colsMenu').hidden = true;
+    $('colsBtn').setAttribute('aria-expanded', 'false');
+  }
+
   function renderColsMenu() {
     $('colsMenu').innerHTML = COLS.map(function (c) {
       return '<label><input type="checkbox" data-col="' + c.k + '"' + (hidden[c.k] ? '' : ' checked') + '> ' + esc(c.t) + '</label>';
-    }).join('');
+    }).join('') + '<button type="button" class="reset-w" id="resetWidths"' + (Object.keys(widths).length ? '' : ' disabled') +
+      '>Reset column widths</button>';
   }
 
   // ── wiring ──────────────────────────────────────────────────────────────────
 
   function wire() {
     $('ghead').addEventListener('input', function (e) { if (e.target.matches('.frow input')) onFilterInput(e); });
+    $('ghead').addEventListener('pointerdown', onResizeDown);
+    $('ghead').addEventListener('pointermove', onResizeMove);
+    $('ghead').addEventListener('pointerup', onResizeUp);
+    $('ghead').addEventListener('pointercancel', onResizeUp);
+    $('ghead').addEventListener('dblclick', function (e) {
+      var h = e.target.closest('.rz');
+      if (h) fitColumn(h.getAttribute('data-rz'));
+    });
     $('ghead').addEventListener('click', function (e) {
+      if (e.target.closest('.pick')) {
+        if ($('logPal').hidden) openLogPal(); else closeLogPal();
+        return;
+      }
+      if (justResized || e.target.closest('.rz')) return;
       var h = e.target.closest('[data-sort]');
       if (!h) return;
       var k = h.getAttribute('data-sort');
@@ -495,6 +685,14 @@
       apply();
     });
     $('grid').addEventListener('scroll', function () { renderRows(false); }, { passive: true });
+    $('gwin').addEventListener('click', function (e) {
+      var d = e.target.closest('.drow');
+      var r = d && shown[Number(d.getAttribute('data-i'))];
+      if (!r) return;
+      selected = r;
+      renderRows(true);
+      ViewerMap.focus(r);
+    });
     window.addEventListener('resize', function () { renderRows(true); });
     $('tiles').addEventListener('click', function (e) {
       var c = e.target.closest('[data-cont]');
@@ -513,10 +711,33 @@
       var m = $('colsMenu');
       m.hidden = !m.hidden;
       $('colsBtn').setAttribute('aria-expanded', String(!m.hidden));
-      if (!m.hidden) renderColsMenu();
+      if (!m.hidden) { renderColsMenu(); placeColsMenu(); }
     });
+    // A fixed menu would stay put while its button moves away.
+    document.querySelector('.upper > .top').addEventListener('scroll', closeColsMenu, { passive: true });
+    window.addEventListener('resize', closeColsMenu);
     document.addEventListener('click', function (e) {
-      if (!e.target.closest('.cols-wrap')) { $('colsMenu').hidden = true; $('colsBtn').setAttribute('aria-expanded', 'false'); }
+      if (!e.target.closest('.cols-wrap')) closeColsMenu();
+      if (!e.target.closest('#logPal') && !e.target.closest('.pick') && !e.target.closest('.fpick input')) closeLogPal();
+    });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeLogPal(); });
+    $('logPal').addEventListener('click', function (e) {
+      var b = e.target.closest('[data-log]');
+      if (!b) return;
+      var name = b.getAttribute('data-log');
+      setFilter('log', name ? '=' + name : '');
+      closeLogPal();
+      apply();
+    });
+    $('grid').addEventListener('scroll', function () { if (!$('logPal').hidden) placeLogPal(); }, { passive: true });
+    window.addEventListener('resize', function () { if (!$('logPal').hidden) placeLogPal(); });
+    $('colsMenu').addEventListener('click', function (e) {
+      if (e.target.id !== 'resetWidths') return;
+      widths = {};
+      saveWidths();
+      e.target.disabled = true;
+      renderHeader();
+      renderRows(true);
     });
     $('colsMenu').addEventListener('change', function (e) {
       var k = e.target.getAttribute('data-col');
@@ -531,13 +752,8 @@
       $('help').hidden = !$('help').hidden;
       $('helpBtn').setAttribute('aria-expanded', String(!$('help').hidden));
     });
-    $('dlAdif').addEventListener('click', function () {
-      download(LogExport.adifFromQsos(rowsForExport(), function (q) { return logsById[q.logId] || {}; }),
-               exportName('adi'), 'text/plain;charset=utf-8;');
-    });
-    $('dlCsv').addEventListener('click', function () {
-      download(LogExport.csvFromQsos(rowsForExport()), exportName('csv'), 'text/csv;charset=utf-8;');
-    });
+    $('dlAdif').addEventListener('click', function () { exportRows(shown, 'adi'); });
+    $('dlCsv').addEventListener('click', function () { exportRows(shown, 'csv'); });
     window.addEventListener('hashchange', function () {
       if (!fileInfo) return;
       readHash();
@@ -551,12 +767,19 @@
     rows: function () { return shown; },
     all: function () { return all; },
     setFilter: function (k, v) { setFilter(k, v); apply(); },
+    map: function () { return ViewerMap.info(); },
   };
 
   // On a phone the table is what there is no room for: the band x mode
   // breakdown starts folded there.
   if (window.matchMedia && window.matchMedia('(max-width: 640px)').matches) $('bmBox').open = false;
 
+  ViewerMap.init({
+    onFilter: function (k, v) { setFilter(k, v); apply(); },
+    onState: writeHash,
+    // The QSOs whose points are in view on the map, in the log's own format.
+    onExport: function (list, ext) { exportRows(list, ext, '-map'); },
+  });
   wire();
   load();
 }());

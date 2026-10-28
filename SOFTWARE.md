@@ -1443,8 +1443,44 @@ What the page offers:
 - **The address keeps the view.** The filters, the sort order and *show deleted* are in the
   address, so a link or a bookmark opens exactly that selection. **Columns ▾** hides
   columns; that choice stays in your browser.
+- **Column widths.** Drag the right edge of a column header to make the column wider or
+  narrower. Double-click the edge to fit the column to its longest value. The widths stay in
+  your browser. **Columns ▾ → Reset column widths** restores them.
+- **Choose a log.** The **▾** next to the *Log* filter lists the logs that the text in the
+  filter matches, newest first, with the station call, the first date and the number of
+  QSOs. So `arrl` shows how many ARRL logs there are. Click a log to show only that log.
+  The counts follow the other filters.
 - **ADIF** and **CSV** download the rows shown. The ADIF is written by the same code as
   QRPLog's own export, with each QSO's own station call and locator.
+- **A map of the rows shown**, to the right of the statistics. It zooms to the QSOs, so a
+  VHF contest shows its part of Europe and not the whole world.
+  - **Red dots are the transmitter sites**, labelled with the callsign. Each locator a log
+    was made from is a dot of its own. A log without a locator is drawn in the middle of
+    its own call's country, as a dashed dot marked `≈`. Enter a locator in **QTH** above
+    the map to place such logs exactly. The QTH locator applies to every log that has no
+    locator of its own.
+  - **A QSO is placed by the locator it received.** Without one, a US or Canadian station
+    goes to the state or province in its exchange (ARRL DX: `PA`, `4 ON`). Otherwise it goes
+    to the middle of its DXCC country. QSOs at one place are one point. The line to a state
+    or a country shows how many QSOs it stands for.
+  - **Map** draws OpenStreetMap tiles. **Azimuthal** is the azimuthal equidistant
+    projection around a transmitter site, with distance rings. Pick the centre when there
+    are several sites. The mouse wheel zooms.
+  - **Dots / Calls** switches between points and callsigns. **lines** turns the lines on
+    and off.
+  - **grey line** shades the night side of the Earth, live by default. The slider moves the
+    time across the period of the rows shown. Click a row of the log to mark its point and
+    set the grey line to the time of that QSO.
+  - Click a point to see its QSOs. The button in the popup filters the log to that locator
+    or country.
+  - **in view ADIF / CSV** downloads the QSOs whose points are on the map right now, after
+    any panning and zooming. QSOs with no place on the map are not included.
+  - The map draws country borders over the tiles.
+
+  The map settings are kept in the address along with the filters. **▾** folds the map away;
+  phones start with it folded. The map loads Leaflet, d3 and the world outlines from public
+  CDNs and its tiles from openstreetmap.org. Without the internet the map is missing, but the
+  log and the statistics still work.
 
 ### 3.16 Statistics
 

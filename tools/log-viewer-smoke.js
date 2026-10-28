@@ -4,7 +4,8 @@
 // The GitHub Pages log viewer (log-viewer/index.html, as built), in headless
 // Chrome, over the real history: the 16 027 QSOs of ic705-history-backup.json
 // turned into the file GIT LOG SYNC writes, plus a handful of QSOs made for
-// the edge cases (12m/2m/20m, USB/LSB, a deleted one, a far one).
+// the edge cases (12m/2m/20m, USB/LSB, a deleted one, a far one), and a
+// second, VHF log from another locator for the map.
 //
 // The size is the point as much as the rules: a filter that answers in a blink
 // over twenty rows can take seconds over sixteen thousand, and a table that
@@ -29,7 +30,15 @@ const mk = (id, call, hz, mode, extra) => Object.assign({ id, logId: LOG, qsoNum
   timestampUtc: "2026-10-02T09:" + String(id).padStart(2, "0") + ":00.000Z", rstSent: "599", rstReceived: "599",
   exchangeReceived: "", frequencyHz: hz, frequencyDisplay: "", mode, trx: "TRX1", dxcc: null, locatorReceived: "",
   createdAtUtc: "2026-10-02T09:00:00.000Z" }, extra || {});
+const VHF = "2026-10-02-VHFSITE2";
+hist.stores.logs.push({ id: VHF, contestName: "VHF SITE2", stationCall: "OK5Z", myLocator: "JN79US",
+                        createdAtUtc: "2026-10-02T08:00:00.000Z", updatedAtUtc: "2026-10-02T08:00:00.000Z", nextQsoNumber: 5 });
+const vhf = (id, call, loc) => mk(id, call, 144300000, "USB", { logId: VHF, qsoNumber: id - 10, locatorReceived: loc });
 hist.stores.qso.push(
+  vhf(11, "OK1KHL", "JO70FD"),
+  vhf(12, "DL0GTH", "JO50WF"),
+  vhf(13, "OE5D", "JN78DK"),
+  vhf(14, "SP6KBL", "JO80LF"),
   mk(1, "VK2AAA", 24940000, "CW"),                               // 12m
   mk(2, "OK2BBB", 144300000, "USB"),                             // 2m
   mk(3, "OK1CCC", 14200000, "LSB"),                              // 20m, SSB
@@ -52,6 +61,7 @@ function finish(result) {
   server.close();
   try { fs.rmSync(profile, { recursive: true, force: true }); } catch (_) {}
   const checks = result.checks || [];
+  for (const s of result.skips || []) console.log("SKIP " + s);
   const failed = checks.filter(c => !c[1]);
   for (const [name, ok, detail] of checks) console.log(`${ok ? "ok  " : "FAIL"} ${name}${detail ? " -- " + detail : ""}`);
   const line = `LOG VIEWER ${failed.length ? "FAIL" : "PASS"} ${checks.length - failed.length}/${checks.length}`;
@@ -76,9 +86,75 @@ const PAGE_SCRIPT = `
     inp.dispatchEvent(new Event("input", {bubbles: true}));
   }
   async function settle() { await sleep(250); }
+  const skips = [];
   async function finishRun() {
     sessionStorage.removeItem("vSmokePhase"); sessionStorage.removeItem("vSmokeChecks");
-    await fetch("/result", {method: "POST", body: JSON.stringify({checks})});
+    await fetch("/result", {method: "POST", body: JSON.stringify({checks, skips})});
+  }
+  async function until(test, ms) {
+    for (let t = 0; t < ms && !test(); t += 100) await sleep(100);
+    return test();
+  }
+
+  // The map loads Leaflet, d3 and the outlines from CDNs: without the
+  // internet these cannot run, and say so instead of failing.
+  async function mapChecks() {
+    $("clearFilters").click();
+    await settle();
+    if (!await until(() => LogViewer.map().leaflet !== "loading" && LogViewer.map().leaflet !== "idle", 15000) ||
+        LogViewer.map().leaflet !== "ready") {
+      skips.push("map: Leaflet not reachable (" + LogViewer.map().leaflet + ") -- no internet?");
+      check("map: without Leaflet the log still works", rows().length === TOTAL - DELETED);
+      return;
+    }
+    typeFilter("date", "=2026-10-02");
+    await settle();
+    let m = LogViewer.map();
+    check("map: two logs from two locators are two transmitter sites", m.sites === 2, m.sites + " sites");
+    typeFilter("date", "");
+    typeFilter("log", "vhf site2");
+    await settle();
+    m = LogViewer.map();
+    const b = m.bounds;
+    check("map: a VHF log is zoomed to its corner of Europe, not the world",
+          b && b.getWest() > -10 && b.getEast() < 40 && b.getSouth() > 35 && b.getNorth() < 62 && m.zoom >= 4,
+          b && b.toBBoxString() + " z" + m.zoom);
+    check("map: one line from the site to each locator", m.points === 4 && m.links === 4, m.points + "/" + m.links);
+    const row = [...document.querySelectorAll(".drow")].find(d => /OE5D/.test(d.textContent));
+    row && row.click();
+    await settle();
+    m = LogViewer.map();
+    check("map: a clicked row marks its point", m.focusKey === "L:JN78DK", m.focusKey);
+    check("map: ...and sets the grey line to its time", m.grayAt === Date.parse("2026-10-02T09:13:00.000Z"),
+          m.grayAt && new Date(m.grayAt).toISOString());
+    check("map: every QSO of the VHF log is in view", m.inView === 4, String(m.inView));
+    {
+      const blobs = [], realCreate = URL.createObjectURL;
+      URL.createObjectURL = b => { blobs.push(b); return realCreate.call(URL, b); };
+      $("mapAdif").click();
+      await sleep(100);
+      URL.createObjectURL = realCreate;
+      const adif = blobs[0] ? await blobs[0].text() : "";
+      check("map: 'in view' ADIF has the QSOs on screen", (adif.match(/<EOR>/g) || []).length === 4 && /OE5D/.test(adif),
+            String((adif.match(/<EOR>/g) || []).length));
+    }
+    check("map: country borders are drawn over the tiles",
+          await until(() => LogViewer.map().borders === "50", 10000), String(LogViewer.map().borders));
+    check("map: the address keeps the grey-line time", /glt=2026-10-02T09%3A13Z/.test(location.hash), location.hash);
+    document.querySelector('#mapBar [data-view="az"]').click();
+    if (!await until(() => LogViewer.map().az === "ready" || LogViewer.map().az === "failed", 15000) ||
+        LogViewer.map().az !== "ready") {
+      skips.push("map: azimuthal libraries not reachable (" + LogViewer.map().az + ")");
+    } else {
+      await sleep(200);
+      m = LogViewer.map();
+      check("map: the azimuthal view fits the VHF log in a few hundred km", m.azRadiusKm > 150 && m.azRadiusKm < 1000,
+            Math.round(m.azRadiusKm) + " km");
+      check("map: the address keeps the azimuthal view", /map=az/.test(location.hash), location.hash);
+    }
+    document.querySelector('#mapBar [data-view="merc"]').click();
+    typeFilter("log", "");
+    await settle();
   }
   try {
     for (let i = 0; i < 100 && !(window.LogViewer && LogViewer.all().length); i++) await sleep(100);
@@ -93,6 +169,10 @@ const PAGE_SCRIPT = `
       check("reload: the sort comes back", /sort=-qrb/.test(location.hash) &&
             document.querySelector('.hrow [data-sort="qrb"]').classList.contains("sorted"));
       check("reload: the hidden column stays hidden", !document.querySelector('.hrow [data-sort="trx"]'));
+      check("reload: a resized column keeps its width",
+            Math.round(document.querySelector('.hrow [data-sort="log"]').getBoundingClientRect().width) ===
+            Number(sessionStorage.getItem("vSmokeLogW")), sessionStorage.getItem("vSmokeLogW"));
+      await mapChecks();
       await finishRun();
       return;
     }
@@ -180,6 +260,45 @@ const PAGE_SCRIPT = `
     $("clearFilters").click();
     await settle();
 
+    // ── the log palette
+    typeFilter("log", "arrl");
+    await settle();
+    document.querySelector(".frow .pick").click();
+    await sleep(50);
+    const arrlLogs = new Set(LogViewer.all().filter(r => !r.deleted && /arrl/i.test(r.log)).map(r => r.log));
+    const palRows = [...document.querySelectorAll("#logPal .lp-row")];
+    check("the log palette lists every log the Log filter matches", !$("logPal").hidden && palRows.length === arrlLogs.size &&
+          new RegExp("^" + arrlLogs.size + " logs").test($("logPal").querySelector(".lp-head").textContent),
+          palRows.length + " vs " + arrlLogs.size + " -- " + $("logPal").querySelector(".lp-head").textContent);
+    const pick = palRows[1];
+    const pickName = pick && pick.getAttribute("data-log");
+    const pickN = pick && Number(pick.querySelector(".lp-n").textContent);
+    pick && pick.click();
+    await settle();
+    check("picking a log filters exactly to it", $("logPal").hidden &&
+          document.querySelector('.frow input[data-k="log"]').value === "=" + pickName &&
+          rows().length === pickN && rows().every(r => r.log === pickName), pickName + " " + rows().length + "/" + pickN);
+    typeFilter("log", "");
+    await settle();
+
+    // ── column widths
+    const colWidth = k => document.querySelector('.hrow [data-sort="' + k + '"]').getBoundingClientRect().width;
+    const grip = document.querySelector('.hrow [data-rz="log"]');
+    const w0 = colWidth("log"), gr = grip.getBoundingClientRect();
+    const pe = (type, x) => grip.dispatchEvent(new PointerEvent(type, {bubbles: true, clientX: x, clientY: gr.top + 5, pointerId: 1}));
+    pe("pointerdown", gr.left + 3); pe("pointermove", gr.left + 83); pe("pointerup", gr.left + 83);
+    await sleep(50);
+    check("dragging a header edge widens the column", Math.abs(colWidth("log") - (w0 + 80)) < 2 &&
+          Math.abs(document.querySelector(".drow > div").getBoundingClientRect().width - colWidth("log")) < 2,
+          Math.round(w0) + " -> " + Math.round(colWidth("log")));
+    check("...without sorting by it", !document.querySelector('.hrow [data-sort="log"]').classList.contains("sorted"));
+    const wc = colWidth("country");
+    document.querySelector('.hrow [data-rz="country"]').dispatchEvent(new MouseEvent("dblclick", {bubbles: true}));
+    await sleep(50);
+    check("double-clicking the edge fits the column to its values", colWidth("country") !== wc,
+          Math.round(wc) + " -> " + Math.round(colWidth("country")));
+    sessionStorage.setItem("vSmokeLogW", String(Math.round(colWidth("log"))));
+
     // ── deleted
     $("showDeleted").click();
     await settle();
@@ -211,6 +330,12 @@ const PAGE_SCRIPT = `
     await settle();
     check("sorting a number column puts the largest first", rows()[0].qrb >= rows()[rows().length - 1].qrb);
     $("colsBtn").click();
+    const unseen = [...document.querySelectorAll("#colsMenu label")].filter(l => {
+      const r = l.getBoundingClientRect(), x = r.left + 8, y = r.top + r.height / 2;
+      return !(y > 0 && y < innerHeight && document.elementFromPoint(x, y) && l.contains(document.elementFromPoint(x, y)));
+    }).map(l => l.textContent.trim());
+    check("the Columns menu shows every column, none cut off", document.querySelectorAll("#colsMenu label").length === 20 &&
+          !unseen.length, unseen.join(","));
     const trx = document.querySelector('#colsMenu input[data-col="trx"]');
     trx.click();
     await settle();

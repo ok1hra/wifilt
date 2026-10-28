@@ -5,7 +5,8 @@
 //
 // One file because of who installs it: an operator copying it into their own
 // log repository through GitHub's "Add file -> Upload files". Several files is
-// several chances to forget one. So the page, its CSS, its script and the two
+// several chances to forget one. So the page, its CSS, its scripts (the map's
+// included -- only the libraries the map draws with come from CDNs) and the two
 // scripts it shares with the interface (data/dxcc.js for the countries,
 // data/log-export.js for ADIF/CSV) are inlined here.
 //
@@ -30,15 +31,18 @@ const parts = {
   CSS:    read(path.join(src, "viewer.css")),
   DXCC:   read(path.join(root, "data", "dxcc.js")),
   EXPORT: read(path.join(root, "data", "log-export.js")),
+  MAPCORE: read(path.join(src, "map-core.js")),
+  MAP:    read(path.join(src, "viewer-map.js")),
   VIEWER: read(path.join(src, "viewer.js")),
 };
 const template = read(path.join(src, "viewer.html"));
 
 // An inlined script must not close its own <script> element by accident.
-for (const k of ["DXCC", "EXPORT", "VIEWER"]) parts[k] = parts[k].replace(/<\/script/gi, "<\\/script");
+for (const k of ["DXCC", "EXPORT", "MAPCORE", "MAP", "VIEWER"]) parts[k] = parts[k].replace(/<\/script/gi, "<\\/script");
 
 const version = crypto.createHash("sha256")
-  .update(template).update(parts.CSS).update(parts.DXCC).update(parts.EXPORT).update(parts.VIEWER)
+  .update(template).update(parts.CSS).update(parts.DXCC).update(parts.EXPORT)
+  .update(parts.MAPCORE).update(parts.MAP).update(parts.VIEWER)
   .digest("hex").slice(0, 8);
 
 let html = template;
