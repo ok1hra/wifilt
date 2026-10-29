@@ -21,8 +21,17 @@ mapfile -t FD_SRCS < <(
   awk '/^OBJS_COMMON = /{flag=1} flag{print} flag && !/\\$/{exit}' "${FD_DIR}/Makefile" \
     | tr -d '\\' | tr ' ' '\n' | grep '\.o$' | sed 's/\.o$/.c/'
 )
-FD_SRC_PATHS=()
-for f in "${FD_SRCS[@]}"; do FD_SRC_PATHS+=("${FD_DIR}/${f}"); done
+# ldpc_codes.c comes from this directory instead (see its header): upstream's
+# table pins all twelve H matrices into the binary. Only the matrices of the
+# enabled DATAC modes are compiled; everything else in OBJS_COMMON stays.
+FD_SRC_PATHS=("${PROTO_DIR}/ldpc_codes.c")
+for f in "${FD_SRCS[@]}"; do
+  case "$f" in
+    ldpc_codes.c|HRA_56_56.c|HRAa_1536_512.c|HRAb_396_504.c|H_128_256_5.c|\
+    H_16200_9720.c|H_2064_516_sparse.c|H_212_158.c) continue ;;
+  esac
+  FD_SRC_PATHS+=("${FD_DIR}/${f}")
+done
 
 SRCS=(
   "${PROTO_DIR}/host-shim.c"

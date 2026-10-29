@@ -58,17 +58,20 @@ function main() {
   if (words.length !== 262144)
     throw new Error(`expected 262144 JSC entries, found ${words.length}`);
 
-  const tableBytes = words.length;
+  // JSC3: the words themselves, NUL-separated, instead of JSC2's length table
+  // followed by the concatenated text. Same bytes either way, but Brotli sees
+  // the word boundaries in the text and the shipped .br is ~21 kB smaller.
+  // NUL, not newline: one upstream word contains "\n", none contains NUL.
   const payloadBytes = words.reduce((sum, word) => sum + word.length, 0);
-  const output = Buffer.allocUnsafe(8 + tableBytes + payloadBytes);
-  output.write("JSC2", 0, "ascii");
+  const output = Buffer.alloc(8 + payloadBytes + words.length - 1);
+  output.write("JSC3", 0, "ascii");
   output.writeUInt32LE(words.length, 4);
-  let dataOffset = 0;
+  let dataOffset = 8;
   for (let i = 0; i < words.length; i += 1) {
-    if (words[i].length > 255)
-      throw new Error(`JSC word ${i} is too long for JSC2: ${words[i].length}`);
-    output.writeUInt8(words[i].length, 8 + i);
-    words[i].copy(output, 8 + tableBytes + dataOffset);
+    if (words[i].includes(0))
+      throw new Error(`JSC word ${i} contains NUL, the JSC3 separator`);
+    if (i > 0) dataOffset += 1;
+    words[i].copy(output, dataOffset);
     dataOffset += words[i].length;
   }
   fs.mkdirSync(path.dirname(path.resolve(process.argv[3])), {recursive: true});

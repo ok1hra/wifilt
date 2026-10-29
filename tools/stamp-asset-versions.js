@@ -108,6 +108,56 @@ function tagPaths(html) {
 
 const htmlFiles = fs.readdirSync(dataDir).filter(name => name.endsWith(".html")).sort();
 
+// ---- 0. worker revs, before the page scripts that carry them are hashed ------
+//
+// A Worker a page script starts itself (mercury.js: `new Worker(...)`) caches
+// like any script, and so does everything it pulls in with importScripts() --
+// none of it has a <script> tag, and the page is not data.js, so neither of the
+// steps below reaches it. The page script carries one version for that whole set
+// in a line of its own:
+//
+//   const MERCURY_WORKER_REV = "..."; // stamped from /mercury-worker.js
+//
+// derived from the worker, every literal it importScripts() (transitively) and,
+// for an Emscripten glue script, the .wasm next to it -- a new mercury-host.wasm
+// paired with a cached mercury-host.js does not even instantiate. The worker hands
+// the ?v= on to its own loads.
+const WORKER_REV_LINE = /(const [A-Z0-9_]+_REV = ")([^"]*)("; \/\/ stamped from (\/[A-Za-z0-9_.\-]+\.js))/g;
+const IMPORT_CALL = /importScripts\(([^)]*)\)/g;
+const SCRIPT_LITERAL = /"([A-Za-z0-9_.\-]+\.js)"/g;
+
+function workerRev(workerPath, referrer) {
+  const seen = new Set();
+  const fingerprint = crypto.createHash("sha256");
+  const visit = assetPath => {
+    if (seen.has(assetPath)) return;
+    seen.add(assetPath);
+    const version = versionOf(assetPath, referrer);
+    if (!version) return;
+    fingerprint.update(`${assetPath} ${version}\n`);
+    if (!assetPath.endsWith(".js")) return;
+    const wasm = assetPath.replace(/\.js$/, ".wasm");
+    if (assetFile(wasm)) visit(wasm);
+    const text = fs.readFileSync(assetFile(assetPath), "utf8");
+    for (const call of text.matchAll(IMPORT_CALL))
+      for (const literal of call[1].matchAll(SCRIPT_LITERAL)) visit(`/${literal[1]}`);
+  };
+  visit(workerPath);
+  return {rev: fingerprint.digest("hex").slice(0, VERSION_CHARS), count: seen.size};
+}
+
+for (const name of fs.readdirSync(dataDir).filter(name => name.endsWith(".js")).sort()) {
+  const file = path.join(dataDir, name);
+  const text = fs.readFileSync(file, "utf8");
+  if (!text.includes("// stamped from /")) continue;
+  const next = text.replace(WORKER_REV_LINE, (whole, prefix, old, suffix, workerPath) => {
+    const {rev, count} = workerRev(workerPath, name);
+    console.log(`    ${name}  ${workerPath} ${rev}  (${count} assets)`);
+    return `${prefix}${rev}${suffix}`;
+  });
+  write(file, next);
+}
+
 // ---- 1. ASSET_REV, before anything hashes data.js itself --------------------
 //
 // assetUrl() falls back to ASSET_REV only for assets the document never loads

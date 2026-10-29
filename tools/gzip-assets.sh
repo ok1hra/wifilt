@@ -42,7 +42,7 @@ find "$DATA_DIR" -type f \
   \( -name '*.html' -o -name '*.css' -o -name '*.js' -o -name '*.wasm' -o -name '*.bin' -o -name '*.txt' \) \
   -print0 | sort -z | while IFS= read -r -d '' file; do
     case "$(basename "$file")" in
-      js8-jsc.bin|js8-decoder.wasm) continue ;;
+      js8-jsc.bin|js8-decoder.wasm|mercury-host.wasm) continue ;;
     esac
     input="$file"
     if [[ "$file" == *.js && -f "${file}.min" ]]; then
@@ -61,10 +61,11 @@ find "$DATA_DIR" -type f \
     zero_gzip_mtime "${file}.gz"
   done
 
-# These two large assets are fetched as opaque Brotli data and expanded in the
-# Worker. Keeping stale gzip copies would exceed the SPIFFS working limit.
+# These large assets are fetched as opaque Brotli data and expanded in the
+# Worker (data/brotli-asset.js). Keeping stale gzip copies would exceed the
+# SPIFFS working limit.
 find "$DATA_DIR" -maxdepth 1 -type f \
-  \( -name 'js8-jsc.bin.gz' -o -name 'js8-decoder.wasm.gz' \) -delete
+  \( -name 'js8-jsc.bin.gz' -o -name 'js8-decoder.wasm.gz' -o -name 'mercury-host.wasm.gz' \) -delete
 
 # Remove orphaned generated files when a source asset was renamed/deleted.
 find "$DATA_DIR" -type f -name '*.gz' -print0 | while IFS= read -r -d '' gz; do

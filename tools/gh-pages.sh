@@ -249,7 +249,7 @@ for asset in data.html data.css data.js dxcc.js js8-adapter.js js8-aud1.js \
   js8-audio.js js8-brotli.js js8-brotli.wasm js8-core.js js8-core.wasm \
   js8-decoder.js js8-decoder.wasm js8-jsc.bin js8-presets.js js8-protocol.js \
   js8-settings.js js8-timebase.js js8-tx.js js8-worker-runtime.js js8-worker.js \
-  BROTLI-LICENSE.txt THIRD-PARTY-NOTICES.txt; do
+  brotli-asset.js BROTLI-LICENSE.txt THIRD-PARTY-NOTICES.txt; do
   require_file "${DATA_DIR}/${asset}" "DATA/JS8 asset ${asset}"
 done
 

@@ -12,7 +12,8 @@
 #   * grants CAP_NET_BIND_SERVICE, without which ports 80, 82 and 83 cannot be
 #     bound -- the binary then moves them to 8080/8082/8083, which works but
 #     changes the browser's origin and with it which QSO log the page shows
-#   * installs a systemd unit that is NOT enabled by default
+#   * installs a systemd unit that is NOT enabled by default -- two, when
+#     local-trx is bundled next to this script
 #
 # It deliberately does not touch the configuration directory. That lives in the
 # user's ~/.config/wifilt and holds callsign, radio credentials and the TX-gain
@@ -39,10 +40,11 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 UNIT=/etc/systemd/system/wifilt.service
+LOCAL_TRX_UNIT=/etc/systemd/system/local-trx.service
 
 if [[ $UNINSTALL -eq 1 ]]; then
-  systemctl disable --now wifilt 2>/dev/null || true
-  rm -f "$UNIT"
+  systemctl disable --now wifilt local-trx 2>/dev/null || true
+  rm -f "$UNIT" "$LOCAL_TRX_UNIT"
   systemctl daemon-reload 2>/dev/null || true
   rm -rf "$PREFIX"
   echo "removed $PREFIX and the service."
@@ -115,6 +117,45 @@ StandardInput=null
 WantedBy=multi-user.target
 EOF
 
+# The headless case (a Raspberry Pi with no desktop, browser on a phone or
+# laptop over WiFi) has no launcher to run and no terminal to keep open, so
+# local-trx gets its own unit -- installed, like wifilt's, but not enabled.
+# Same user as wifilt.service: local-trx's config.json lives in that user's
+# ~/.config too. Nothing in it opens hardware before the wizard has turned
+# "enabled" on; until then it serves only the wizard on :8765, reachable
+# from the network (INADDR_ANY) despite the 127.0.0.1 its log line prints.
+# The wizard's Save re-execs the process in place (same PID), which systemd
+# sees as the service still running, not as a restart.
+if [[ $INSTALLED_LOCAL_TRX -eq 1 ]]; then
+  cat > "$LOCAL_TRX_UNIT" <<EOF
+[Unit]
+Description=local-trx - ICOM LAN bridge for a hamlib/soundcard transceiver
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$RUN_USER
+# Soundcard and serial CAT/DTR/RTS, even when the user is not in these
+# groups -- on a desktop the session grants them, under systemd nothing does.
+SupplementaryGroups=audio dialout
+# No display to open the wizard on; same switch start-wifilt.sh uses.
+Environment=LOCAL_TRX_SKIP_AUTO_OPEN=1
+ExecStart=$PREFIX/local-trx
+Restart=on-failure
+RestartSec=5
+StandardInput=null
+
+[Install]
+WantedBy=multi-user.target
+EOF
+else
+  # An archive without local-trx must not leave a unit pointing at a binary
+  # an earlier install put there.
+  systemctl disable --now local-trx 2>/dev/null || true
+  rm -f "$LOCAL_TRX_UNIT"
+fi
+
 systemctl daemon-reload
 
 # start-wifilt.sh (copied above, if this archive has it) starts wifilt AND
@@ -147,9 +188,15 @@ if [[ $INSTALLED_LOCAL_TRX -eq 1 ]]; then
 
 local-trx (PC bridge for a non-Icom radio, see BUILD.md § 5) was also found
 next to this script and installed to $PREFIX/local-trx.
-It has NO systemd unit and is disabled by default until its own setup
-wizard is used once to turn it on -- $PREFIX/start-wifilt.sh above starts
-it alongside wifilt and opens both wizards' pages; running
-$PREFIX/local-trx directly works too, just on its own.
+
+  start both now     sudo systemctl start wifilt local-trx
+  start at boot      sudo systemctl enable --now wifilt local-trx
+
+then open            http://<this machine's IP>:8765  (local-trx wizard)
+
+It stays disabled until its setup wizard is used once to turn it on; in
+wifilt's SETUP the ICOM-LAN address is then 127.0.0.1. Without systemd,
+$PREFIX/start-wifilt.sh above starts it alongside wifilt and opens both
+wizards' pages; running $PREFIX/local-trx directly works too.
 EOF
 fi

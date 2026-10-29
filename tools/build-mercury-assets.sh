@@ -26,6 +26,14 @@ done
 cp "${PROTOTYPE_DIR}/build-worker/mercury-host.js" "${DATA_DIR}/mercury-host.js"
 cp "${PROTOTYPE_DIR}/build-worker/mercury-host.wasm" "${DATA_DIR}/mercury-host.wasm"
 
+# The workers expand mercury-host.wasm.br (data/mercury-host-loader.js), and
+# Brotli has to be told the output size up front; it moves with every rebuild.
+loader="${DATA_DIR}/mercury-host-loader.js"
+size_line='const MERCURY_HOST_WASM_BYTES = [0-9]*;'
+grep -q "$size_line" "$loader" ||
+  { echo "ERROR: no MERCURY_HOST_WASM_BYTES line in $loader" >&2; exit 1; }
+sed -i "s/${size_line}/const MERCURY_HOST_WASM_BYTES = $(wc -c < "${DATA_DIR}/mercury-host.wasm");/" "$loader"
+
 # The WASM blob just landed, so ASSET_REV and every ?v= have to be re-derived
 # before anything is minified or compressed -- both later steps consume the
 # files this rewrites (same ordering build-js8-assets.sh uses).

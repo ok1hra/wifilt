@@ -649,13 +649,16 @@ else
       # install(1) cannot write over a binary that is currently being executed, so
       # a running service has to go down first -- otherwise the install fails with
       # "Text file busy" halfway through, having already replaced data/.
-      stopped_service=false
-      if systemctl is-active --quiet wifilt 2>/dev/null; then
-        warn "  Služba wifilt běží, instalace by přepisovala běžící binárku."
-        if ask "Zastavit ji na dobu instalace?" Y; then
-          sudo systemctl stop wifilt && stopped_service=true
+      # local-trx.service the same: install.sh overwrites its binary too.
+      stopped_services=()
+      for svc in wifilt local-trx; do
+        if systemctl is-active --quiet "$svc" 2>/dev/null; then
+          warn "  Služba $svc běží, instalace by přepisovala běžící binárku."
+          if ask "Zastavit ji na dobu instalace?" Y; then
+            sudo systemctl stop "$svc" && stopped_services+=("$svc")
+          fi
         fi
-      fi
+      done
       ( cd "$DIST_DIR" \
         && tar xzf "$(basename "$LINUX_ARCHIVE")" \
         && cd wifilt-linux-x86_64 \
@@ -666,7 +669,7 @@ else
         # removes its own copy at the end of `dist` and this removes ours.
         rm -rf "${DIST_DIR}/wifilt-linux-x86_64"
         mark 6 "hotovo"
-        $stopped_service && warn "  Službu jsi zastavil: sudo systemctl start wifilt"
+        [[ ${#stopped_services[@]} -gt 0 ]] && warn "  Služby jsi zastavil: sudo systemctl start ${stopped_services[*]}"
       else
         mark 6 "selhalo"; abort "Instalace selhala." 6
       fi

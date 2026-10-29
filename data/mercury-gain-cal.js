@@ -198,7 +198,9 @@
         () => this.finish({ok: false, reason: "the measurement never reported back (worker timeout)"}),
         WATCHDOG_MS);
 
-      this.worker = new Worker("/mercury-cal-worker.js");
+      // The worker passes this ?v= on to every script and blob it loads.
+      const MERCURY_CAL_WORKER_REV = "80121437"; // stamped from /mercury-cal-worker.js
+      this.worker = new Worker(`/mercury-cal-worker.js?v=${MERCURY_CAL_WORKER_REV}`);
       this.worker.onmessage = event => {
         const msg = event.data || {};
         if (msg.type === "progress") {

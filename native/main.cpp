@@ -172,9 +172,10 @@ void rememberHttpPort(bool explicitPort) {
 }
 
 // What a data/ tree run straight from a checkout is missing. The .br copies of
-// the JS8 modem are generated (tools/gzip-assets.sh), not in git; the page falls
-// back to the plain files, so their absence costs a slower first load -- worth a
-// line, not a refusal. A missing plain file or page is a broken tree.
+// the JS8 and Mercury modems are generated (tools/gzip-assets.sh), not in git;
+// the page falls back to the plain files, so their absence costs a slower first
+// load -- worth a line, not a refusal. A missing plain file or page is a broken
+// tree.
 struct AssetCheck {
   const char *file;
   const char *needs;      // what does not work without it
@@ -186,9 +187,12 @@ const AssetCheck kRequiredAssets[] = {
   {"/js8-core.wasm",     "the JS8 modem"},
   {"/js8-decoder.wasm",  "the JS8 modem"},
   {"/js8-jsc.bin",       "the JS8 dictionary"},
-  {"/js8-brotli.wasm",   "the JS8 modem"},
+  {"/js8-brotli.wasm",   "the JS8 and Mercury modems"},
+  {"/brotli-asset.js",   "the JS8 and Mercury modems"},
+  {"/mercury-host.wasm", "the Mercury modem"},
 };
-const char *const kGeneratedAssets[] = {"/js8-decoder.wasm.br", "/js8-jsc.bin.br"};
+const char *const kGeneratedAssets[] = {"/js8-decoder.wasm.br", "/js8-jsc.bin.br",
+                                        "/mercury-host.wasm.br"};
 
 bool fileExists(const std::string &file) {
   std::ifstream in(nativeJoinPath(nativeDataDir(), file), std::ios::binary);
@@ -228,7 +232,7 @@ void checkAssets() {
   }
   g_assetReportJson = "{\"missing\":[" + missingJson + "],\"generated\":[" + generatedJson + "]}";
   if (generated)
-    printf("WIFILT | assets  the compressed JS8 modem files are not generated -- the page\n"
+    printf("WIFILT | assets  the compressed modem files are not generated -- the page\n"
            "WIFILT |         loads the plain ones (slower first load); ./tools/gzip-assets.sh\n"
            "WIFILT |         makes them\n");
 }

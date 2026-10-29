@@ -5,7 +5,7 @@
 
 const PAGE_PARAMS = new URLSearchParams(location.search);
 const TEST_MODE = PAGE_PARAMS.has("test");
-const ASSET_REV = "a4319a73";
+const ASSET_REV = "c7976df3";
 // Two of the files the worker importScripts() are also loaded by this page with
 // its own <script> tag, and each carried an independent version: the tag in
 // data.html and ASSET_REV here. Nothing forced them to agree, and js8-protocol.js
@@ -1696,8 +1696,9 @@ const workerInit = {
   decoderJs:assetUrl("/js8-decoder.js"),
   decoderWasmBr:assetUrl("/js8-decoder.wasm.br"), decoderWasmSize:895356,
   protocolJs:assetUrl("/js8-protocol.js"),
-  jscUrlBr:assetUrl("/js8-jsc.bin.br"), jscSize:1913889,
+  jscUrlBr:assetUrl("/js8-jsc.bin.br"), jscSize:1913888,
   brotliJs:assetUrl("/js8-brotli.js"), brotliWasm:assetUrl("/js8-brotli.wasm"),
+  brotliAssetJs:assetUrl("/brotli-asset.js"),
   strictEpochAnchoring:true,
 };
 

@@ -43,13 +43,13 @@ while IFS= read -r -d '' file; do
     *.js.min) continue ;;
     *.br)
       case "$(basename "$file")" in
-        js8-jsc.bin.br|js8-decoder.wasm.br) ;;
+        js8-jsc.bin.br|js8-decoder.wasm.br|mercury-host.wasm.br) ;;
         *) [[ -f "${file%.br}.gz" ]] && continue ;;
       esac
       ;;
     *.gz)
       case "$(basename "$file")" in
-        js8-jsc.bin.gz|js8-decoder.wasm.gz) continue ;;
+        js8-jsc.bin.gz|js8-decoder.wasm.gz|mercury-host.wasm.gz) continue ;;
       esac
       ;;
     *.html|*.css|*.js|*.wasm|*.bin|*.txt)

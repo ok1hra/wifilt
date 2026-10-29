@@ -191,10 +191,14 @@ Build: prototype/mercury-prototype/build-host-wasm.sh, build-worker-wasm.sh
 FreeDV / Codec 2
 -----------------
 The same WASM modules statically link the FreeDV data modem (DATAC1/DATAC3/DATAC4/DATAC13/
-DATAC15/DATAC16 modes only), vendored unmodified inside the Mercury source tree.
+DATAC15/DATAC16 modes only), vendored inside the Mercury source tree.
 Copyright (C) David Rowe and the Codec 2 / FreeDV contributors.
 License: GNU Lesser General Public License version 2.1.
 Upstream: https://github.com/drowe67/codec2
+MODIFIED (2026-10-29): modem/freedv/ldpc_codes.c is replaced in the browser build by
+prototype/mercury-prototype/ldpc_codes.c, whose code table lists only the LDPC codes
+of the modes above; the other H_*.c matrices are not compiled in. All other FreeDV
+sources are unmodified. Modifications Copyright (C) 2026 OK1HRA, same LGPL-2.1 terms.
 
 DXCC prefix data
 ----------------

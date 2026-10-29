@@ -12,9 +12,15 @@
 // arbitrary, only the mode's real waveform shape matters for a drive
 // calibration) and stores the result under its OWN key
 // (/mercury-txgain.json, not JS8/WSPR's /txgain.json).
-importScripts("mercury-host.js");
-importScripts("js8-aud1.js");
-importScripts("tx-gain-cal.js");
+// Every script and blob here is served max-age=3600. The page starts this
+// worker with a ?v= that tools/stamp-asset-versions.js derives from all of
+// them; carrying it on keeps a flash from pairing an old cached
+// mercury-host.js with a new mercury-host.wasm (their imports differ).
+const ASSET_QUERY = self.location.search;
+importScripts("mercury-host.js" + ASSET_QUERY, "js8-brotli.js" + ASSET_QUERY,
+              "brotli-asset.js" + ASSET_QUERY, "mercury-host-loader.js" + ASSET_QUERY);
+importScripts("js8-aud1.js" + ASSET_QUERY);
+importScripts("tx-gain-cal.js" + ASSET_QUERY);
 
 const { TxGainCal: TxGainCalClass, TxGainStore, entryKey, bandOf } = self.TxGainCal;
 
@@ -62,7 +68,7 @@ async function main(config) {
   const band = bandOf(frequencyHz);
 
   let m;
-  try { m = await createMercuryHost(); }
+  try { m = await loadMercuryHost(ASSET_QUERY); }
   catch (e) { post({ type: "error", reason: "wasm init failed", detail: e && e.message || String(e) }); return; }
   const cw = (name, ret, args) => m.cwrap(name, ret, args);
   const modePayloadBytes = cw("host_mode_payload_bytes", "number", ["number"]);

@@ -4,14 +4,20 @@ ARG BASE_IMAGE=debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7e
 FROM ${BASE_IMAGE}
 
 COPY prototype/js8-core-prototype/toolchain/toolchain.lock /opt/js8/toolchain.lock
+# The base image's own debian.sources declares this same URI and suite with
+# Signed-By; apt refuses a second entry for it that names no key ("Conflicting
+# values set for option Signed-By"), so the deb-src line has to name the same one.
+# nodejs depends on libnode108 of exactly its own version, but apt resolves that
+# dependency to the newest one (bookworm-security), so it is pinned alongside.
 RUN . /opt/js8/toolchain.lock && \
-    echo 'deb-src http://deb.debian.org/debian bookworm main' > /etc/apt/sources.list.d/js8-src.list && \
+    echo 'deb-src [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://deb.debian.org/debian bookworm main' > /etc/apt/sources.list.d/js8-src.list && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
       build-essential ca-certificates dpkg-dev gzip python3 xz-utils \
       "cmake=${CMAKE_PACKAGE_VERSION}" \
       "emscripten=${EMSCRIPTEN_PACKAGE_VERSION}" \
       "nodejs=${NODE_PACKAGE_VERSION}" \
+      "libnode108=${NODE_PACKAGE_VERSION}" \
       "${BOOST_PACKAGE}=${BOOST_PACKAGE_VERSION}" \
       "libfftw3-dev=${FFTW_PACKAGE_VERSION}" && \
     rm -rf /var/lib/apt/lists/*

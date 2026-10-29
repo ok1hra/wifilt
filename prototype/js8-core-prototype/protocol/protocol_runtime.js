@@ -75,13 +75,29 @@
       this.view = new DataView(this.bytes.buffer, this.bytes.byteOffset,
                                this.bytes.byteLength);
       this.format = String.fromCharCode(...this.bytes.subarray(0, 4));
-      if (this.format !== "JSC1" && this.format !== "JSC2")
+      if (this.format !== "JSC1" && this.format !== "JSC2" && this.format !== "JSC3")
         throw new Error("invalid JSC dictionary");
       this.count = this.view.getUint32(4, true);
       if (this.count !== 262144) throw new Error("unexpected JSC dictionary size");
+      // Bytes between a word's end and the next word's start: JSC3 keeps the
+      // NUL separator in the data, JSC2 has none.
+      this.gap = 0;
       if (this.format === "JSC1") {
         this.dataStart = 8 + (this.count + 1) * 4;
         this.offsets = null;
+      } else if (this.format === "JSC3") {
+        this.dataStart = 8;
+        this.gap = 1;
+        this.offsets = new Uint32Array(this.count + 1);
+        let next = 1;
+        for (let i = this.dataStart; i < this.bytes.length; i += 1) {
+          if (this.bytes[i] !== 0) continue;
+          if (next === this.count) throw new Error("invalid JSC3 payload length");
+          this.offsets[next++] = i - this.dataStart + 1;
+        }
+        if (next !== this.count)
+          throw new Error("invalid JSC3 payload length");
+        this.offsets[this.count] = this.bytes.length - this.dataStart + 1;
       } else {
         this.dataStart = 8 + this.count;
         this.offsets = new Uint32Array(this.count + 1);
@@ -96,7 +112,7 @@
       if (index < 0 || index >= this.count) return "";
       const start = this.offsets ? this.offsets[index] :
         this.view.getUint32(8 + index * 4, true);
-      const end = this.offsets ? this.offsets[index + 1] :
+      const end = this.offsets ? this.offsets[index + 1] - this.gap :
         this.view.getUint32(12 + index * 4, true);
       let result = "";
       for (let i = start; i < end; i += 1)

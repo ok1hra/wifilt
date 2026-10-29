@@ -312,7 +312,9 @@
 
   function startWorker(role, peerCall, myCall) {
     stopWorker();
-    worker = new Worker("/mercury-worker.js");
+    // The worker passes this ?v= on to every script and blob it loads.
+    const MERCURY_WORKER_REV = "a99959a0"; // stamped from /mercury-worker.js
+    worker = new Worker(`/mercury-worker.js?v=${MERCURY_WORKER_REV}`);
     workerRole = role;
     worker.onmessage = (e) => handleWorkerMessage(e.data);
     worker.onerror = (e) => handleWorkerMessage({ type: "error", reason: "worker crashed", detail: e.message });

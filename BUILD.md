@@ -382,9 +382,15 @@ archives (§4's `make -C native dist`) as an additional, optional step — the s
 `local-trx.exe`/`local-trx` binary this section builds, plus its `webui/` wizard assets,
 dropped in next to `wifilt`/`wifilt.exe`. Declining leaves the `wifilt` archive exactly as §4
 produces it. On Linux, §4's `install.sh` copies `local-trx`/`webui/` into `/opt/wifilt`
-alongside `wifilt` whenever it finds them sitting next to itself in the extracted archive —
-with no systemd unit and nothing started, matching `local-trx`'s own `enabled: false`
-default. An archive without `local-trx` bundled installs exactly as before. §4's
+alongside `wifilt` whenever it finds them sitting next to itself in the extracted archive,
+and writes a `local-trx.service` beside `wifilt.service` — installed but not enabled, nothing
+started, matching `local-trx`'s own `enabled: false` default. That unit is what a headless
+box (a Raspberry Pi with no desktop, the browser on a phone or laptop over WiFi) runs:
+`sudo systemctl enable --now wifilt local-trx`, then the wizard at `http://<Pi's IP>:8765/`
+and wifilt at `http://<Pi's IP>/`, with `127.0.0.1` as wifilt's ICOM-LAN address. Both
+HTTP servers listen on every interface; the `127.0.0.1` in `local-trx`'s startup log is only
+what it prints. The unit adds the `audio` and `dialout` groups and suppresses the
+open-a-browser step, neither of which a desktop session would need. An archive without `local-trx` bundled installs exactly as before. §4's
 `start-wifilt.sh`/`.bat` launcher starts it alongside `wifilt` and opens its wizard's tab
 too when it finds it installed; running `/opt/wifilt/local-trx` (or `local-trx.exe`)
 directly, on its own, works exactly the same, just without that second tab appearing

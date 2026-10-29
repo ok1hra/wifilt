@@ -29,10 +29,16 @@
 // (one permanent control-mode, one following peer_tx_mode) because
 // IDLE_IRS covers waiting for EITHER a DATA frame or a MODE_REQ and there is
 // no way to know which without already having decoded it.
-importScripts("mercury-host.js");
-importScripts("js8-aud1.js");
-importScripts("js8-file-transfer.js");
-importScripts("mercury-file.js");
+// Every script and blob here is served max-age=3600. The page starts this
+// worker with a ?v= that tools/stamp-asset-versions.js derives from all of
+// them; carrying it on keeps a flash from pairing an old cached
+// mercury-host.js with a new mercury-host.wasm (their imports differ).
+const ASSET_QUERY = self.location.search;
+importScripts("mercury-host.js" + ASSET_QUERY, "js8-brotli.js" + ASSET_QUERY,
+              "brotli-asset.js" + ASSET_QUERY, "mercury-host-loader.js" + ASSET_QUERY);
+importScripts("js8-aud1.js" + ASSET_QUERY);
+importScripts("js8-file-transfer.js" + ASSET_QUERY);
+importScripts("mercury-file.js" + ASSET_QUERY);
 // Production consumer of docs/mercury-implementace.md ch.8's TX-gain
 // calibration (data/mercury-cal-worker.js finds and stores it, reusing
 // tx-gain-cal.js's own store/search UNCHANGED). Until now nothing ever read
@@ -44,14 +50,14 @@ importScripts("mercury-file.js");
 // own operators keep hand-tuning it) would risk overdrive, not just a wrong
 // number, exactly like tx-gain-cal.js's own entryStatus() staleness check
 // warns about.
-importScripts("icom-models.js");
-importScripts("tx-gain-mod-level.js");
-importScripts("tx-gain-cal.js");
+importScripts("icom-models.js" + ASSET_QUERY);
+importScripts("tx-gain-mod-level.js" + ASSET_QUERY);
+importScripts("tx-gain-cal.js" + ASSET_QUERY);
 // §6.6 (Settings, 2026-08-23 grill-me): ARQ retry/CALLINT/downgrade/mode-
 // ceiling + transfer-size-limit, read once below before CALL/LISTEN is
 // dispatched. See mercury-tuning.js's own header for why this is a
 // different store from mercury-settings.js's MercurySettings.
-importScripts("mercury-tuning.js");
+importScripts("mercury-tuning.js" + ASSET_QUERY);
 
 const EV = {
   APP_LISTEN: 0, APP_STOP_LISTEN: 1, APP_CONNECT: 2, APP_DISCONNECT: 3, APP_DATA_READY: 4,
@@ -189,7 +195,7 @@ async function main(config) {
 
   let m;
   try {
-    m = await createMercuryHost();
+    m = await loadMercuryHost(ASSET_QUERY);
   } catch (e) {
     post({ type: "error", reason: "wasm init failed", detail: e && e.message || String(e) });
     return;

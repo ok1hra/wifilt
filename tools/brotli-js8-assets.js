@@ -3,8 +3,9 @@
 
 const fs=require("fs"), path=require("path"), zlib=require("zlib");
 const directory=path.resolve(process.argv[2] || path.join(__dirname,"..","data"));
+// mercury-host.wasm ships as .br too, expanded by data/brotli-asset.js.
 const candidates=fs.readdirSync(directory).filter(name=>
-  /^js8-.*\.(?:js|wasm|bin)$/.test(name)).sort();
+  /^js8-.*\.(?:js|wasm|bin)$/.test(name) || name==="mercury-host.wasm").sort();
 for(const name of candidates){
   const source=path.join(directory,name), target=`${source}.br`;
   const input=fs.readFileSync(source);

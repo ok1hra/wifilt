@@ -26,7 +26,10 @@ const INIT = {
   protocolJs: "/js8-protocol.js?v=1",
   jscUrlBr: "/js8-jsc.bin.br?v=1", jscSize: JSC_SIZE,
   brotliJs: "/js8-brotli.js?v=1", brotliWasm: "/js8-brotli.wasm?v=1",
+  brotliAssetJs: "/brotli-asset.js?v=1",
 };
+// The real fallback logic lives here, not in the worker: load it as is.
+const BROTLI_ASSET = fs.readFileSync(path.resolve(__dirname, "../data/brotli-asset.js"), "utf8");
 
 // files: path (no query) -> byte length. Anything absent answers 404.
 // statuses: path -> HTTP status to answer instead (e.g. 500).
@@ -55,6 +58,8 @@ async function run(files, statuses = {}) {
           constructor(audio, decoder, anchor, protocol) { this.decoderBytes = decoder.bytes; this.protocol = protocol; }
           state() { return {decoderBytes: this.decoderBytes, jscBytes: this.protocol.jscBytes}; }
         };
+      } else if (name === "/brotli-asset.js") {
+        vm.runInContext(BROTLI_ASSET, context);
       } else if (name === "/js8-brotli.js") {
         context.createJs8Brotli = async () => {
           const heap = new Uint8Array(1 << 16);
