@@ -1064,6 +1064,20 @@
       SPCALL:    '{MYCALL}',
       NRQ:       'nr?',
     },
+    // JTTY (docs/jtty-implementace.md §7): not RTTY's repeated calls and
+    // "599-001", which would cost four to six five-character frames -- each
+    // of these packs into the compact atoms WSJT-X's own function keys send
+    // (CQ = 1 frame, exchange = 2, TU/call/NR? = 1).
+    jtty: {
+      CQ:        'CQ {MYCALL} CQ',
+      TXEXCH:    '{DXCALL} {EXCH}',
+      TXEXCHSP:  '{EXCH}',
+      TXEXCHSP2: '{EXCH}',
+      TU:        '{DXCALL} TU CQ {MYCALL} CQ',
+      CALLTU:    '{DXCALL} TU',
+      SPCALL:    '{MYCALL}',
+      NRQ:       'NR?',
+    },
   };
 
   // ── Live, possibly-customized templates (defaults until /log-macros.json loads) ─
@@ -1071,6 +1085,7 @@
   let macroStore = {
     cw:   Object.assign({}, MacroDefaults.cw),
     rtty: Object.assign({}, MacroDefaults.rtty),
+    jtty: Object.assign({}, MacroDefaults.jtty),
   };
 
   function loadMacroStore() {
@@ -1080,6 +1095,7 @@
         macroStore = {
           cw:   Object.assign({}, MacroDefaults.cw,   (saved && saved.cw)   || {}),
           rtty: Object.assign({}, MacroDefaults.rtty, (saved && saved.rtty) || {}),
+          jtty: Object.assign({}, MacroDefaults.jtty, (saved && saved.jtty) || {}),
         };
       })
       .catch(() => {});  // stay on defaults — RUN/S&P must never be blocked by this
@@ -1093,6 +1109,7 @@
     const body = JSON.stringify({
       cw:   (newStore && newStore.cw)   || {},
       rtty: (newStore && newStore.rtty) || {},
+      jtty: (newStore && newStore.jtty) || {},
     });
     return fetch('/log-macros.json', {
       method: 'POST',
@@ -1103,6 +1120,7 @@
         macroStore = {
           cw:   Object.assign({}, MacroDefaults.cw,   newStore.cw   || {}),
           rtty: Object.assign({}, MacroDefaults.rtty, newStore.rtty || {}),
+          jtty: Object.assign({}, MacroDefaults.jtty, newStore.jtty || {}),
         };
       }
       return ok;
@@ -1139,7 +1157,7 @@
     const loc      = ctx.myLocator || '';
     const myCall   = ctx.stationCall || 'MYCALL';
     const dxCall   = ctx.call || '';
-    const utc      = mg === 'RTTY' ? utcHHMM() : utcHHMMcw(abbrev);
+    const utc      = mg === 'RTTY' || mg === 'JTTY' ? utcHHMM() : utcHHMMcw(abbrev);
 
     let EXCH = '';
     let TU   = '';
@@ -1149,7 +1167,14 @@
       const nStr    = usePrev ? String(prevN).padStart(3, '0') : String(ctx.qsoNumber || 1).padStart(3, '0');
       const nCw     = usePrev ? prevNr : nr;
 
-      if (mg === 'RTTY') {
+      if (mg === 'JTTY') {
+        // Space-separated, so "599 001" packs into one SERIAL frame and a
+        // grid or time follows as its own atom (jtty-codec.js packText).
+        EXCH = ctx.exchangeType === 'NRUTC' ? (rstPlain + ' ' + nStr + ' ' + utcHHMM())
+             : ctx.exchangeType === 'NRLOC' ? (rstPlain + ' ' + nStr + ' ' + loc)
+             : ctx.exchangeType === 'NR'    ? rstPlain + ' ' + nStr
+             : (ctx.exchange ? rstPlain + ' ' + ctx.exchange : rstPlain);
+      } else if (mg === 'RTTY') {
         // Same shape for all three types (only which serial number differs);
         // RTTY never adds a separate "tu" — the doubled group is itself the
         // confirmation.
@@ -1180,7 +1205,7 @@
     }
 
     return {
-      MYCALL: myCall, DXCALL: dxCall, RSTS: mg === 'RTTY' ? rstPlain : rstCw,
+      MYCALL: myCall, DXCALL: dxCall, RSTS: mg === 'RTTY' || mg === 'JTTY' ? rstPlain : rstCw,
       NR: nr, PREVNR: prevNr, LOC: loc, UTC: utc, EXCH: EXCH, TU: TU,
     };
   }
@@ -1203,7 +1228,8 @@
     // the same text a true RTTY/RTTY-R QSO would -- the message content is
     // the protocol, not the transport carrying it.
     if (mg === 'DATA' && ctx._dataAsRtty) mg = 'RTTY';
-    if (mg !== 'CW' && mg !== 'RTTY') return '';  // PHONE/NONE — manual
+    if (mg === 'DATA' && ctx._dataAsJtty) mg = 'JTTY';
+    if (mg !== 'CW' && mg !== 'RTTY' && mg !== 'JTTY') return '';  // PHONE/NONE — manual
 
     const group = macroStore[mg.toLowerCase()] || MacroDefaults[mg.toLowerCase()];
     const tpl = (group && group[type]) || '';
@@ -1332,6 +1358,7 @@ const sbTime      = document.getElementById('sbTime');
 const sbFreq      = document.getElementById('sbFreq');
 const sbMode      = document.getElementById('sbMode');
 const btnRttyPopup = document.getElementById('btnRttyPopup');
+const btnJttyPopup = document.getElementById('btnJttyPopup');
 const macroPreview = document.getElementById('macroPreview');
 const sbContinent = document.getElementById('sbContinent');
 const sbCountry   = document.getElementById('sbCountry');
@@ -1657,6 +1684,9 @@ function renderStatusBar() {
   const rttyModeOk = rttyPopupMg === 'RTTY' || rttyPopupMg === 'DATA';
   const rttyLanOk = !window.RttyPanel || window.RttyPanel.lanReady() !== false;
   btnRttyPopup.hidden = !(rttyModeOk && rttyLanOk);
+  // JTTY is audio only: USB-D/LSB-D, never real RTTY/FSK.
+  const jttyLanOk = !window.JttyPanel || window.JttyPanel.lanReady() !== false;
+  if (btnJttyPopup) btnJttyPopup.hidden = !(rttyPopupMg === 'DATA' && jttyLanOk);
   // Preserve DXCC while call field has content; clear only when empty
   if (inpCall.value.trim()) {
     updateDxccFromCall();
@@ -2405,6 +2435,20 @@ function sendMacroText(macroType) {
   // exactly like a real RTTY QSO's would, just over sendViaRttyIcomPage()
   // instead of /cmd sendCw. JS8Call holding it (JS8 has no free-text keying
   // path of its own) or nobody: refuse, same wording as 'NONE' below.
+  if (mg === 'DATA' && app.aud1Role === 'jtty' && !isOi3) {
+    if (!app.connected) { showHint('TRX not connected'); return; }
+    const ctx = macroCtx({_dataAsJtty: true});
+    const text = LogMacros.buildMacro(macroType, ctx);
+    if (!text) return;
+    const gen = app.qsoGeneration;
+    noteTxStarted();
+    sendAsJtty(text, jttyProfileFor(ctx)).then(() => {
+      if (!RST_BEARING_MACROS.includes(macroType)) return;
+      if (gen !== app.qsoGeneration) return;
+      app.rstSentTx = ctx.rstSent;
+    }).catch(error => showHint(String(error.message || error)));
+    return;
+  }
   if (mg === 'DATA') {
     if (app.aud1Role !== 'rtty' || isOi3) {
       showHint(app.mode + ' cannot be keyed — send manually');
@@ -2570,6 +2614,56 @@ function echoRttyFsk(text) {
   }
 }
 
+// ── JTTY hand-off (docs/jtty-implementace.md §7) ────────────────────────────
+//
+// The same two surfaces as RTTY, the same protocol on its own channel
+// ('wifilt-jtty-tx', answered by jtty.js): the palette in this tab when it holds
+// the session, otherwise whichever JTTY page does. No silent fallback.
+const jttyTxChannel = (() => { try { return new BroadcastChannel('wifilt-jtty-tx'); } catch (_error) { return null; } })();
+const jttyTxWaiters = new Map();
+
+if (jttyTxChannel) jttyTxChannel.onmessage = event => {
+  const msg = event.data || {};
+  if (msg.type !== 'jtty-tx-probe-ack' && msg.type !== 'jtty-tx-result') return;
+  const waiter = jttyTxWaiters.get(msg.requestId);
+  if (!waiter) return;
+  clearTimeout(waiter.timeout);
+  jttyTxWaiters.delete(msg.requestId);
+  if (msg.type === 'jtty-tx-probe-ack') { waiter.resolve(); return; }
+  if (msg.ok) waiter.resolve(); else waiter.reject(new Error(msg.error || 'JTTY send failed'));
+};
+
+function jttyTxWait(requestId, timeoutMs, timeoutMessage) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => { jttyTxWaiters.delete(requestId); reject(new Error(timeoutMessage)); }, timeoutMs);
+    jttyTxWaiters.set(requestId, { resolve, reject, timeout });
+  });
+}
+
+async function sendViaJttyPage(text, profile) {
+  if (!jttyTxChannel) throw new Error('BroadcastChannel is unavailable in this browser');
+  const requestId = rttyTxRequestId();
+  jttyTxChannel.postMessage({ type: 'jtty-tx-probe', requestId: requestId });
+  await jttyTxWait(requestId, 300, 'no JTTY palette or page is open — open the JTTY palette first');
+  jttyTxChannel.postMessage({ type: 'jtty-tx-send', requestId: requestId, text: text, profile: profile });
+  // 16 frames of 1.888 s at most, plus the lead and the drain.
+  await jttyTxWait(requestId, 45000, 'the JTTY page did not confirm the send in time');
+}
+
+function sendAsJtty(text, profile) {
+  const panel = window.JttyPanel;
+  return panel && panel.holdsSession() ? panel.send(text, { profile: profile }) : sendViaJttyPage(text, profile);
+}
+
+// The exchange profile JTTY packs with (jtty-codec.js): a numbered contest
+// exchange is RTTY Roundup's "599 <serial>", one frame instead of two. A free
+// exchange stays Unknown -- Roundup would turn "599 05" (a zone) into a serial.
+// Field Day's class/section needs no profile to be compact.
+function jttyProfileFor(ctx) {
+  const t = ctx && ctx.exchangeType;
+  return t === 'NR' || t === 'NRUTC' || t === 'NRLOC' ? 'rtty-roundup' : 'unknown';
+}
+
 function sendRawText(text) {
   if (!text || !window.LogMacros) return;
   const trxIdx = app.activeTrx - 1;
@@ -2586,6 +2680,11 @@ function sendRawText(text) {
   if (mg === 'DATA' && app.aud1Role === 'rtty' && !isOi3) {
     noteTxStarted();
     sendAsRtty(text).catch(error => showHint(String(error.message || error)));
+    return;
+  }
+  if (mg === 'DATA' && app.aud1Role === 'jtty' && !isOi3) {
+    noteTxStarted();
+    sendAsJtty(text.trim(), jttyProfileFor(macroCtx())).catch(error => showHint(String(error.message || error)));
     return;
   }
   if (mg === 'NONE' || mg === 'DATA') { showHint(app.mode + ' cannot be keyed — send manually'); return; }
@@ -2626,7 +2725,8 @@ function sendRawText(text) {
 // CI-V CW-message command (0x17) takes 30 characters. RTTY spends three of the
 // 36 on its framing, hence 33. The AFSK hand-off has no such buffer; 200 keeps
 // one line one line.
-const FREE_TX_LIMIT = { CW: 30, RTTY: 33, DATA: 200 };
+// JTTY's is the protocol's own: one message is 80 characters (16 frames).
+const FREE_TX_LIMIT = { CW: 30, RTTY: 33, DATA: 200, JTTY: 80 };
 
 const freeTxBar   = document.getElementById('freeTxBar');
 const inpFreeTx   = document.getElementById('inpFreeTx');
@@ -2768,7 +2868,8 @@ function freeTxRoute() {
   if (!app.connected && !isOi3) return { why: 'TRX not connected' };
   if (mg === 'CW' || mg === 'RTTY') return { group: mg, limit: FREE_TX_LIMIT[mg] };
   if (mg === 'DATA' && app.aud1Role === 'rtty' && !isOi3) return { group: 'DATA', limit: FREE_TX_LIMIT.DATA };
-  if (mg === 'DATA') return { why: app.mode + ' — open the RTTY palette first' };
+  if (mg === 'DATA' && app.aud1Role === 'jtty' && !isOi3) return { group: 'JTTY', limit: FREE_TX_LIMIT.JTTY };
+  if (mg === 'DATA') return { why: app.mode + ' — open the RTTY or JTTY palette first' };
   return { why: (app.mode || 'This mode') + ' cannot be keyed — send manually' };
 }
 
@@ -2830,7 +2931,8 @@ function sendFreeTx() {
   // other end, and a space after it, so its last word does not run into the
   // next transmission. CW has no line to start, and a trailing space is only
   // a word gap more of keying.
-  sendRawText(route.group === 'CW' ? text : '\r\n' + text + ' ');
+  // JTTY has no lines and no word gaps to keep: the message is the frames.
+  sendRawText(route.group === 'CW' || route.group === 'JTTY' ? text : '\r\n' + text + ' ');
   closeFreeTx();
 }
 
@@ -2998,6 +3100,7 @@ function noteTxStarted() { _txOptimisticUntil = Date.now() + 1500; }
 function txLikelyRunning() {
   if (app.tx) return true;
   if (window.RttyPanel && window.RttyPanel.txBusy()) return true;
+  if (window.JttyPanel && window.JttyPanel.txBusy()) return true;
   return Date.now() < _txOptimisticUntil;
 }
 
@@ -3636,6 +3739,7 @@ function logCurrentQsoOnly() {
 function loggedMode() {
   if (LogMacros.modeGroup(app.mode) !== 'DATA') return app.mode;
   if (app.aud1Role === 'rtty') return 'RTTY';
+  if (app.aud1Role === 'jtty') return 'JTTY';
   if (app.aud1Role === 'js8')  return 'JS8';
   return app.mode;
 }
@@ -4005,6 +4109,12 @@ function abortTransmission() {
   // there was no way to stop it from here at all, and Esc silently did
   // nothing in USB-D/LSB-D.
   if (window.RttyPanel && window.RttyPanel.txBusy()) { window.RttyPanel.abort(); return; }
+  if (window.JttyPanel && window.JttyPanel.txBusy()) { window.JttyPanel.abort(); return; }
+  // A JTTY page in another tab is paced by that tab: ask it to stop.
+  if (app.aud1Role === 'jtty' && jttyTxChannel) {
+    try { jttyTxChannel.postMessage({ type: 'jtty-tx-abort' }); } catch (_error) {}
+    return;
+  }
   if (isOi3) {
     fetch('/oi3/abort-cw', {
       method: 'POST',
@@ -4253,7 +4363,7 @@ function buildMacroEditorModal() {
   el.innerHTML = `
     <div class="lm-box mx-box">
       <div class="lm-header">
-        <span class="lm-title">CW / RTTY macros</span>
+        <span class="lm-title">CW / RTTY / JTTY macros</span>
         <button class="lm-close" id="mxClose" type="button">✕</button>
       </div>
       <div class="lm-body">
@@ -4279,12 +4389,16 @@ function buildMacroEditorModal() {
         <div class="mx-tabs" role="tablist">
           <button type="button" class="lm-btn mx-tab" id="mxTabCw" data-mode="cw" role="tab">CW<span class="mx-tab-dot" hidden></span></button>
           <button type="button" class="lm-btn mx-tab" id="mxTabRtty" data-mode="rtty" role="tab">RTTY<span class="mx-tab-dot" hidden></span></button>
+          <button type="button" class="lm-btn mx-tab" id="mxTabJtty" data-mode="jtty" role="tab">JTTY<span class="mx-tab-dot" hidden></span></button>
         </div>
         <section class="lm-section mx-panel" id="mxPanelCw" data-mode="cw">
           <div class="lm-form">${rowsHtml('cw')}</div>
         </section>
         <section class="lm-section mx-panel" id="mxPanelRtty" data-mode="rtty">
           <div class="lm-form">${rowsHtml('rtty')}</div>
+        </section>
+        <section class="lm-section mx-panel" id="mxPanelJtty" data-mode="jtty">
+          <div class="lm-form">${rowsHtml('jtty')}</div>
         </section>
         <div class="lm-actions mx-actions">
           <span id="mxStatus" class="mx-status"></span>
@@ -4330,12 +4444,17 @@ function buildMacroEditorModal() {
   return el;
 }
 
+const MACRO_EDITOR_MODES = ['cw', 'rtty', 'jtty'];
+const _mxCap = m => m.charAt(0).toUpperCase() + m.slice(1);
+const macroEditorPanelId = m => 'mxPanel' + _mxCap(m);
+const macroEditorTabId = m => 'mxTab' + _mxCap(m);
+
 function _macroEditorShowTab(mode) {
   const modal = document.getElementById('macroEditorModal');
   if (!modal) return;
-  ['cw', 'rtty'].forEach(m => {
-    document.getElementById(m === 'cw' ? 'mxPanelCw' : 'mxPanelRtty').classList.toggle('lm-hidden', m !== mode);
-    document.getElementById(m === 'cw' ? 'mxTabCw' : 'mxTabRtty').classList.toggle('lm-btn-primary', m === mode);
+  MACRO_EDITOR_MODES.forEach(m => {
+    document.getElementById(macroEditorPanelId(m)).classList.toggle('lm-hidden', m !== mode);
+    document.getElementById(macroEditorTabId(m)).classList.toggle('lm-btn-primary', m === mode);
   });
 }
 
@@ -4370,7 +4489,7 @@ function _macroEditorUpdateDirty(mode, type) {
 }
 
 function _macroEditorUpdateTabDot(mode) {
-  const tab = document.getElementById(mode === 'cw' ? 'mxTabCw' : 'mxTabRtty');
+  const tab = document.getElementById(macroEditorTabId(mode));
   if (!tab) return;
   const anyDiffers = MACRO_EDITOR_TYPES.some(t => {
     const btn = document.querySelector('.mx-default-btn[data-mode="' + mode + '"][data-type="' + t.key + '"]');
@@ -4468,7 +4587,7 @@ function _mxSerialPopulate() {
 function _macroEditorPopulate() {
   if (!window.LogMacros) return;
   const store = LogMacros.getStore();
-  ['cw', 'rtty'].forEach(mode => {
+  MACRO_EDITOR_MODES.forEach(mode => {
     MACRO_EDITOR_TYPES.forEach(t => {
       const inp = document.getElementById(macroEditorFieldId(mode, t.key));
       if (!inp) return;
@@ -4487,6 +4606,7 @@ function _macroEditorStartMode() {
   if (!window.LogMacros) return 'cw';
   let mg = LogMacros.modeGroup(app.mode);
   if (mg === 'DATA' && app.aud1Role === 'rtty') mg = 'RTTY';
+  if (mg === 'DATA' && app.aud1Role === 'jtty') return 'jtty';
   return mg === 'RTTY' ? 'rtty' : 'cw';
 }
 
@@ -4516,8 +4636,8 @@ function onMacroEditorSave() {
     return;
   }
 
-  const newStore = { cw: {}, rtty: {} };
-  ['cw', 'rtty'].forEach(mode => {
+  const newStore = { cw: {}, rtty: {}, jtty: {} };
+  MACRO_EDITOR_MODES.forEach(mode => {
     MACRO_EDITOR_TYPES.forEach(t => {
       const inp = document.getElementById(macroEditorFieldId(mode, t.key));
       newStore[mode][t.key] = inp ? _mxUnescapeCtrl(inp.value) : '';
@@ -4772,7 +4892,7 @@ try {
     // word", not "start a new QSO in a particular mode" -- whatever RUN/S&P
     // the operator was already in stays as it is, and the token goes wherever
     // the operator is actually working right now.
-    if (msg.source === 'rtty') insertWordIntoLog(msg.callsign, msg.trx, focusedLogField());
+    if (msg.source === 'rtty' || msg.source === 'jtty') insertWordIntoLog(msg.callsign, msg.trx, focusedLogField());
     else workDxcSpot(msg.callsign, msg.trx);
   });
 } catch (_) {}

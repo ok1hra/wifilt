@@ -451,6 +451,7 @@ char CwMsg[37] = "";
 #include "aud1_ws_parser.h"     // incremental, non-blocking browser WebSocket framing
 #include "js8_session.h"        // single-operator lock for the JS8LAN page
 #include "rtty_stream.h"        // RTTY decoder/TX text to TrxNet subscribers
+#include "jtty_stream.h"        // JTTY decodes/TX text to TrxNet subscribers
 #include "rkey_net.h"           // Paddle2IP remote CW key: UDP server task
 // See radio_transport.h's own comment on radioLanLocalControlPort(): 0 means
 // "use the real default (50001)", exactly today's behavior on the real
@@ -846,6 +847,9 @@ int incomingByte = 0;   // for incoming serial data
 
   Aud1TxState aud1TxState = AUD1_TX_IDLE;
   static const size_t AUD1_TX_RING_SIZE = IcomLanAudioTx::QUEUE_CAPACITY;
+  // The longest one AUD1 transmission may grow to through tx.extend (JTTY live
+  // entry): 180 s at 48 kHz. A stuck page cannot hold the transmitter longer.
+  static const uint64_t AUD1_TX_EXTEND_CAP_SAMPLES = 180ULL * 48000ULL;
   size_t aud1TxUsed = 0;                    // atomic snapshot mirror for UI/state JSON
   uint32_t aud1TxId = 0, aud1TxExpectedSequence = 0, aud1TxExpectedPackets = 0;
   uint32_t aud1TxReceivedPackets = 0, aud1TxTargetMs = 0;
@@ -857,6 +861,8 @@ int incomingByte = 0;   // for incoming serial data
   Js8Session js8Session;                   // which browser currently owns JS8LAN
   RttyStream rttyStream = {};              // /rtty1 /rtty2 /rtty-tx, rtty_stream.h
   bool aud1TxRtty = false;                 // the AUD1 TX in flight carries RTTY text
+  JttyStream jttyStream = {};              // /jtty-rx /jtty-tx, jtty_stream.h
+  bool aud1TxJtty = false;                 // the AUD1 TX in flight carries JTTY text
   static const char* UNATTENDED_LOG_PATH = "/unattended.log";
   // Deferred unattended-log ring. unattendedLogEvent() is called from the audio
   // hot path (aud1TxAbort/aud1TxTick/aud1HandleControl); a synchronous LittleFS
@@ -1264,6 +1270,8 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void handlePostFskOutput(void);
   void handlePostRttyStream(void);
   void handleGetRttyStream(void);
+  void handlePostJttyStream(void);
+  void handleGetJttyStream(void);
   void handleGetJs8Config(void);
   void handlePostJs8Config(void);
   void handleGetLogMacros(void);
@@ -1611,6 +1619,7 @@ void loadLogConfigVars(void){
   v = extractJsonString(j, "fskNetId");
   if (v.length() > 0) g_lcFskNetId = v;
   rttyStreamSetEnabled(rttyStream, extractJsonBool(j, "rttyStream", false));
+  jttyStreamSetEnabled(jttyStream, extractJsonBool(j, "jttyStream", false));
 }
 
 String jsonEscape(const String &value){
@@ -1807,7 +1816,8 @@ static String buildLogConfigJson(
   const String &blockedDxcc,
   const String &fskOutputMode,
   const String &fskNetId,
-  bool rttyStreamOn
+  bool rttyStreamOn,
+  bool jttyStreamOn
 ) {
   String json;
   json.reserve(256);
@@ -1819,6 +1829,7 @@ static String buildLogConfigJson(
   json += ",\"fskOutputMode\":\""; json += jsonEscape(fskOutputMode); json += "\"";
   json += ",\"fskNetId\":\""; json += jsonEscape(fskNetId); json += "\"";
   json += ",\"rttyStream\":"; json += rttyStreamOn ? "true" : "false";
+  json += ",\"jttyStream\":"; json += jttyStreamOn ? "true" : "false";
   json += "}";
   return json;
 }
@@ -4310,7 +4321,7 @@ void handlePostFskOutput() {
   String nextLogConfig = buildLogConfigJson(
     readLogConfigJson(),
     g_lcTrx1Label, g_lcTrx2Label, g_lcTrx3Label,
-    g_lcBlockedDxcc, fskOutputMode, fskNetId, rttyStream.enabled
+    g_lcBlockedDxcc, fskOutputMode, fskNetId, rttyStream.enabled, jttyStream.enabled
   );
   if (!saveLogConfigJson(nextLogConfig)) {
     webServer.send(500, "application/json", "{\"error\":\"write\"}");
@@ -4330,7 +4341,7 @@ void handlePostRttyStream() {
   String nextLogConfig = buildLogConfigJson(
     readLogConfigJson(),
     g_lcTrx1Label, g_lcTrx2Label, g_lcTrx3Label,
-    g_lcBlockedDxcc, g_lcFskOutputMode, g_lcFskNetId, on
+    g_lcBlockedDxcc, g_lcFskOutputMode, g_lcFskNetId, on, jttyStream.enabled
   );
   if (!saveLogConfigJson(nextLogConfig)) {   // reloads, which applies `on`
     webServer.send(500, "application/json", "{\"error\":\"write\"}");
@@ -4361,6 +4372,49 @@ void handleGetRttyStream() {
   out += "],\"packets\":"; out += String(rttyStream.packets);
   out += ",\"dropped\":"; out += String(rttyStream.droppedChars);
   out += ",\"refused\":"; out += String(rttyStream.refused);
+  out += "}";
+  webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  webServer.sendHeader("Connection", "close");
+  webServer.send(200, "application/json", out);
+}
+
+// The JTTY page's "stream decodes/TX to TrxNet" switch (jtty_stream.h), the
+// same station setting and the same narrow write path as RTTY's just above.
+void handlePostJttyStream() {
+  webServer.sendHeader("Connection", "close");
+  webServer.client().setNoDelay(true);
+  bool on = requestArg("jttyStream") == "1";
+  String nextLogConfig = buildLogConfigJson(
+    readLogConfigJson(),
+    g_lcTrx1Label, g_lcTrx2Label, g_lcTrx3Label,
+    g_lcBlockedDxcc, g_lcFskOutputMode, g_lcFskNetId, rttyStream.enabled, on
+  );
+  if (!saveLogConfigJson(nextLogConfig)) {   // reloads, which applies `on`
+    webServer.send(500, "application/json", "{\"error\":\"write\"}");
+    return;
+  }
+  webServer.send(200, "application/json", "{\"ok\":true}");
+}
+
+void handleGetJttyStream() {
+  uint32_t now = millis();
+  jttyStreamExpire(jttyStream, now);
+  String out = "{\"enabled\":"; out += jttyStream.enabled ? "true" : "false";
+  out += ",\"trxnet\":"; out += trxNetEnabled ? "true" : "false";
+  out += ",\"subs\":[";
+  bool first = true;
+  for (uint8_t i = 0; i < JTTY_STREAM_MAX_SUBS; i++) {
+    const RttyStreamSub& sub = jttyStream.subs[i];
+    if (!sub.used) continue;
+    if (!first) out += ",";
+    first = false;
+    out += "{\"name\":\""; out += jsonEscape(String(sub.name));
+    out += "\",\"expiresS\":"; out += String((JTTY_STREAM_LEASE_MS - (now - sub.lastMs)) / 1000);
+    out += "}";
+  }
+  out += "],\"packets\":"; out += String(jttyStream.packets);
+  out += ",\"dropped\":"; out += String(jttyStream.dropped);
+  out += ",\"refused\":"; out += String(jttyStream.refused);
   out += "}";
   webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   webServer.sendHeader("Connection", "close");
@@ -5585,6 +5639,8 @@ void setupWebServer(void){
   webServer.on("/log-config/fsk", HTTP_POST, handlePostFskOutput);
   webServer.on("/log-config/rtty-stream", HTTP_POST, handlePostRttyStream);
   webServer.on("/rtty-stream.json", HTTP_GET, handleGetRttyStream);
+  webServer.on("/log-config/jtty-stream", HTTP_POST, handlePostJttyStream);
+  webServer.on("/jtty-stream.json", HTTP_GET, handleGetJttyStream);
   webServer.on("/identity",   HTTP_GET,  handleGetIdentity);
   webServer.on("/identity",   HTTP_POST, handlePostIdentity);
   webServer.on("/js8-config.json", HTTP_GET,  handleGetJs8Config);
@@ -5672,6 +5728,7 @@ void setupWebServer(void){
   webServer.on("/datasync", HTTP_GET,  [](){ handleFileFromSPIFFS("/datasync.html"); });
   webServer.on("/data",     HTTP_GET,  [](){ handleFileFromSPIFFS("/data.html"); });
   webServer.on("/rtty",     HTTP_GET,  [](){ handleFileFromSPIFFS("/rtty.html"); });
+  webServer.on("/jtty",     HTTP_GET,  [](){ handleFileFromSPIFFS("/jtty.html"); });
 
   // Band Decoder web configuration (backend runs regardless; this restores the UI).
   webServer.on("/bd", HTTP_GET, [](){
@@ -8100,6 +8157,7 @@ void TrxNetLoop(){
     paTunePlusTick();       // before the publish, so its /s-tune goes out this pass
     paPublishPending();     // after loop(): the peer table is fresh
     rttyStreamDrain(rttyStream, millis(), 4, rttyStreamPublish, nullptr);
+    jttyStreamDrain(jttyStream, millis(), 4, rttyStreamPublish, nullptr);
   }
 }
 
@@ -8157,6 +8215,7 @@ void onTrxAnyTopic(const char* from, const char* path,
   // A listener asking for the RTTY text (rtty_stream.h). Taken here rather than
   // with subscribe(): it costs no _subs slot, and it only writes a table entry.
   if (strcmp(path, "/s-rtty") == 0) { rttyStreamSubscribe(rttyStream, from, data, len, millis()); return; }
+  if (strcmp(path, "/s-jtty") == 0) { jttyStreamSubscribe(jttyStream, from, data, len, millis()); return; }
   if (path[0] == '/' && path[1] == 's' && path[2] == '-') return;
   if (len > TRX_TOPIC_VAL_MAX) return;
 
@@ -10359,7 +10418,7 @@ void handleSet() {
       String nextLogConfig = buildLogConfigJson(
         readLogConfigJson(),
         trx1Label, trx2Label, trx3Label,
-        blockedDxcc, fskOutputMode, fskNetId, rttyStream.enabled
+        blockedDxcc, fskOutputMode, fskNetId, rttyStream.enabled, jttyStream.enabled
       );
       if (!saveLogConfigJson(nextLogConfig)) {
         ERRdetect = 1;
@@ -11249,6 +11308,7 @@ void aud1TxAbort(const String& reason, bool notify){
   // Whatever cut it short -- the operator, a fault, a watchdog -- the rest of an
   // RTTY message did not go out, and /rtty-tx says so.
   if(aud1TxRtty){ rttyStreamAbortTx(rttyStream, millis()); aud1TxRtty = false; }
+  if(aud1TxJtty){ jttyStreamAbortTx(jttyStream, millis()); aud1TxJtty = false; }
   if(IcomLanClient *client = lanRadioClient()) client->setTxTrafficActive(false);
   audioPttOff(); aud1TxResetState(reason.length() ? AUD1_TX_FAULT : AUD1_TX_IDLE);
   if(notify && AudioWsClient.connected()){
@@ -11367,7 +11427,7 @@ void aud1TxTick(bool deferPrebufferMiss){
   }
   if(txSnapshot.drained){
     txClient->setTxTrafficActive(false);
-    audioPttOff(); aud1TxState = AUD1_TX_DRAINED; aud1TxRtty = false;
+    audioPttOff(); aud1TxState = AUD1_TX_DRAINED; aud1TxRtty = false; aud1TxJtty = false;
     AudioSendText("{\"type\":\"tx-drained\",\"txId\":" + String(aud1TxId) + ",\"ptt\":false}");
     Serial.println("AUD1 | TX drained, PTT OFF");
     return;
@@ -11438,6 +11498,10 @@ static uint64_t aud1JsonU64(const String& json, const char* key){
   String value = extractJsonString(json, key);
   return value.length() ? strtoull(value.c_str(), nullptr, 10) : 0;
 }
+static int32_t aud1JsonI32(const String& json, const char* key){
+  String value = extractJsonString(json, key);
+  return value.length() ? (int32_t)strtol(value.c_str(), nullptr, 10) : 0;
+}
 
 static void aud1HandleControl(const String& json){
   String type = extractJsonString(json, "type");
@@ -11476,6 +11540,41 @@ static void aud1HandleControl(const String& json){
     String r2 = extractJsonString(json, "r2");
     rttyStreamAppend(rttyStream, RTTY_STREAM_RX1, r1.c_str(), r1.length(), now);
     rttyStreamAppend(rttyStream, RTTY_STREAM_RX2, r2.c_str(), r2.length(), now);
+    return;
+  }
+  // Decoded JTTY from whichever page holds this socket, for /jtty-rx
+  // (jtty_stream.h): what one message gained since the page last sent it.
+  if(type == "jtty.stream"){
+    String text = extractJsonString(json, "text");
+    jttyStreamRx(jttyStream, (uint8_t)aud1JsonU64(json, "id"), aud1JsonU64(json, "eom") != 0,
+                 (uint16_t)aud1JsonU64(json, "hz"), (int8_t)aud1JsonI32(json, "snr"),
+                 text.c_str(), text.length(), millis());
+    return;
+  }
+  // JTTY live entry (docs/jtty-implementace.md §6): the transmission in flight
+  // grows by one more segment. The browser asks for it before it would send a
+  // packet past the declared end, so every packet still meets the identity and
+  // FIRST/LAST checks below against the totals as they are at that moment.
+  if(type == "tx.extend"){
+    if(!txId || txId != aud1TxId ||
+       !(aud1TxState == AUD1_TX_READY || aud1TxState == AUD1_TX_PREBUFFER || aud1TxState == AUD1_TX_STREAM))
+      return;
+    uint64_t more = aud1JsonU64(json, "samples");
+    uint32_t morePackets = (uint32_t)aud1JsonU64(json, "packets");
+    if(more == 0 || (more % 6) != 0 || morePackets > (more + 959) / 960 + 1){
+      aud1TxAbort("invalid tx.extend"); return;
+    }
+    if(aud1TxTotalSamples + more > AUD1_TX_EXTEND_CAP_SAMPLES){
+      aud1TxAbort("tx.extend over the 180 s cap"); return;
+    }
+    if(aud1TxState == AUD1_TX_STREAM){
+      IcomLanClient *client = lanRadioClient();
+      if(!client || !client->extendAudioTx(more / 6)){ aud1TxAbort("audio scheduler refused tx.extend"); return; }
+    }
+    aud1TxTotalSamples += more; aud1TxExpectedPackets += morePackets;
+    aud1TxDeadlineMs += uint32_t(more / 48);
+    String jttyText = extractJsonString(json, "jttyText");
+    if(jttyText.length()){ aud1TxJtty = true; jttyStreamTx(jttyStream, jttyText.c_str(), jttyText.length(), millis()); }
     return;
   }
   if(type != "tx.prepare") return;
@@ -11530,6 +11629,10 @@ static void aud1HandleControl(const String& json){
   String rttyText = extractJsonString(json, "rttyText");
   aud1TxRtty = rttyText.length() > 0;
   if(aud1TxRtty) rttyStreamAppend(rttyStream, RTTY_STREAM_TX, rttyText.c_str(), rttyText.length(), millis());
+  // JTTY the same, for /jtty-tx; tx.extend adds each later live-entry segment.
+  String jttyText = extractJsonString(json, "jttyText");
+  aud1TxJtty = jttyText.length() > 0;
+  if(aud1TxJtty) jttyStreamTx(jttyStream, jttyText.c_str(), jttyText.length(), millis());
   aud1TxId = txId; aud1TxTotalSamples = totalSamples; aud1TxExpectedPackets = packets;
   aud1TxPrebufferSamples = prebuffer; aud1TxTargetMs = millis() + uint32_t(delayMs);
   aud1TxDeadlineMs = aud1TxTargetMs + uint32_t(totalSamples / 48) + 2500;

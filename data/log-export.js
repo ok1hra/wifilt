@@ -91,6 +91,8 @@
     if (m === 'FSK') return 'RTTY';
     if (m === 'DV')  return 'DIGITALVOICE';
     if (m === 'JS8') return 'MFSK';
+    // JTTY the same way FT4 and JS8 go: MFSK with the mode as SUBMODE.
+    if (m === 'JTTY') return 'MFSK';
     return mode;
   }
 
@@ -99,7 +101,8 @@
   // returns 'MFSK' for it). Everything else this logger writes has no
   // meaningful submode, so this returns '' and adifField() drops the tag.
   function adifSubmode(mode) {
-    return (mode || '').toUpperCase() === 'JS8' ? 'JS8' : '';
+    const m = (mode || '').toUpperCase();
+    return m === 'JS8' || m === 'JTTY' ? m : '';
   }
 
   function qsoToAdif(q, stationCall, myLocator) {

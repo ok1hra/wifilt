@@ -22,7 +22,7 @@
   "use strict";
 
   var KEYS = {js8: "wifilt.data.js8-settings", wspr: "wifilt.wspr.v1",
-              rtty: "wifilt.data.rtty-settings"};
+              rtty: "wifilt.data.rtty-settings", jtty: "wifilt.data.jtty-settings"};
   // The WSPR page's own cap (wspr.js POWER_CEILING_W): the levels it offers.
   var WSPR_CEILING_W = 10;
 
@@ -79,6 +79,10 @@
     var rtty = half("rtty");
     var rttyPercent = wholePercent(rtty && rtty.rfPercent);
     if (rttyPercent) out.push({mode: "RTTY", percent: rttyPercent, detail: rttyPercent + " %"});
+
+    var jtty = half("jtty");
+    var jttyPercent = wholePercent(jtty && jtty.rfPercent);
+    if (jttyPercent) out.push({mode: "JTTY", percent: jttyPercent, detail: jttyPercent + " %"});
     return out;
   }
 

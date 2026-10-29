@@ -315,6 +315,14 @@ public:
     return ok;
   }
 
+  bool extendAudioTx(uint64_t moreBytes) {
+    if (!audioRuntime) return false;
+    audioLock();
+    bool ok = audioRuntime->tx.extend(moreBytes);
+    audioUnlock();
+    return ok;
+  }
+
   void cancelAudioTx(IcomLanAudioTx::Fault fault = IcomLanAudioTx::FAULT_NONE) {
     if (!audioRuntime) return;
     audioLock();

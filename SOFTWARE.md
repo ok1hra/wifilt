@@ -32,6 +32,7 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
  · [3.4 Working a station](#34-working-a-station)
  · [3.5 CW and RTTY macros](#35-cw-and-rtty-macros)
  · [3.6 The RTTY palette](#36-the-rtty-palette)
+ · [3.6b The JTTY palette](#36b-the-jtty-palette)
  · [3.7 The status bar](#37-the-status-bar)
  · [3.8 Duplicate and partial-call search](#38-duplicate-and-partial-call-search)
  · [3.9 Blocked DXCC](#39-blocked-dxcc)
@@ -81,6 +82,14 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
  · [6.5 TX — sending](#65-tx--sending)
  · [6.6 SETTINGS](#66-settings)
  · [6.7 What the page takes from the radio](#67-what-the-page-takes-from-the-radio)
+
+**[6b. DATA — JTTY](#6b-data--jtty)**
+ · [6b.1 What the mode and the page are](#6b1-what-the-mode-and-the-page-are)
+ · [6b.2 Header](#6b2-header)
+ · [6b.3 Waterfall](#6b3-waterfall)
+ · [6b.4 RX — Band activity and RX frequency](#6b4-rx--band-activity-and-rx-frequency)
+ · [6b.5 TX — sending](#6b5-tx--sending)
+ · [6b.6 SETTINGS](#6b6-settings)
 
 **[7. DATA — WSPR](#7-data--wspr)**
  · [7.1 What the beacon does](#71-what-the-beacon-does)
@@ -1028,6 +1037,28 @@ transmit-gain calibration — lives on the full RTTY-ICOM page under the **DATA*
 ([section 6](#6-data--rtty-icom)). The palette follows whatever you set there, live, and
 changing a setting on that page reaches an open palette without a reload. The button is
 hidden unless ICOM-LAN is configured, since without it there is no audio to listen to.
+
+### 3.6b The JTTY palette
+
+In `USB-D` and `LSB-D` a **JTTY** button appears beside **RTTY**. It opens the same kind of
+floating window for JTTY ([section 6b](#6b-data--jtty)): the waterfall with the RX passband,
+and below it what the JTTY page calls *RX frequency* — messages within ±70 Hz of the RX offset
+and anything with your call, a line each, growing frame by frame. The title bar shows the mode
+and the RX/TX offsets (`USB-D!` with a `!` means the radio is not in a data mode).
+
+**Click the waterfall** to listen and answer there (Shift+click: transmit there only); **click
+a word** to put it into Call or Exch exactly as in the RTTY palette; **double-click a line** to
+tune to that station and take its call.
+
+The palette holds the radio audio like the RTTY palette does, and only one of the two is open
+at a time: opening one closes the other. While it holds the audio, everything QRPLog sends in
+`USB-D`/`LSB-D` goes out as JTTY — the macros, **Alt+K** (up to 80 characters, the size of one
+JTTY message) and **Esc** to stop. A JTTY page open in another tab is used the same way when
+the palette is closed. The macros have their own **JTTY** tab in the macro editor; the defaults
+are WSJT-X's compact forms — `CQ {MYCALL} CQ`, `{DXCALL} {EXCH}`, `{EXCH}`,
+`{DXCALL} TU CQ {MYCALL} CQ`, `{DXCALL} TU`, `{MYCALL}`, `NR?` — and `{EXCH}` is `599 001`
+with spaces, so a numbered exchange is packed under the RTTY Roundup profile in one frame.
+Live entry is the JTTY page's only.
 
 ### 3.7 The status bar
 
@@ -3133,6 +3164,99 @@ makes no sense — the sync is simply skipped and the settings stand as they are
 
 ---
 
+## 6b. DATA — JTTY
+
+**`/jtty.html`** — the **JTTY** tab of the DATA page.
+
+### 6b.1 What the mode and the page are
+
+JTTY is the keyboard-to-keyboard mode WSJT-X 3.2 introduced: it is operated like RTTY —
+transmissions start whenever you send, no time slots — but it is 4-tone GFSK with strong
+error correction, so it copies far below where RTTY gives up (about −14 dB in 2500 Hz) and
+a frame either arrives correct or not at all. Each frame is 1.888 s and about 127 Hz wide;
+a message is 1 to 16 frames, at most 80 characters. Calls, `CQ <call> CQ`, `599 <serial>`,
+grids and the common phrases (`AGN?`, `NR?`, `TU` …) pack into one frame each; free text
+takes five characters a frame. The page is compatible with WSJT-X 3.2/3.3 on the air — the
+modem is a port of WSJT-X's own (see [section 13](#13-component-licences)).
+
+It **needs a radio on ICOM-LAN** and holds the same single-operator session as JS8Call-ICOM,
+WSPR, RTTY-ICOM and Mercury: open it while one of them runs and it shows *The radio is driven
+from somewhere else* with **TAKE THE SESSION OVER HERE**. Put the radio in **USB-D**: JTTY
+always goes out as audio. Like RTTY there is a floating palette in QRPLog for contest work
+([section 3.6b](#36b-the-jtty-palette)); this page owns the settings.
+
+### 6b.2 Header
+
+The frequency button opens WSJT-X's JTTY dial frequencies (still preliminary in WSJT-X):
+160 m 1.839, 80 m 3.572, 40 m 7.078, 30 m 10.140, **20 m 14.090** (the main meeting place),
+17 m 18.104, 15 m 21.090, 12 m 24.920, 10 m 28.090, 6 m 50.160, 2 m 144.160 MHz — the dial
+is set as it is, the signal is dial + audio offset. The button turns red off those channels.
+**CAL PLAN**, mode, power and supply are as on the RTTY page ([section 6.2](#62-header-frequency-cal-plan-mode-power-session)).
+Then three pills:
+
+| Pill | Meaning |
+|---|---|
+| **F TOL 100** | How far around the RX offset the receiver searches first and hardest. Click cycles 20/50/100/200/500 Hz. |
+| **UNKNOWN** / **FIELD DAY** / **ROUNDUP** | The exchange profile. It changes only how compactly your own text is packed: under RTTY Roundup `599 001` goes in one frame instead of two, and `599 05` is sent as `599 005`. The other station reads the same text either way. |
+| **DEC 12 · 48 ms** | Frames decoded so far, and how long the last receive window took — on a slow phone, keep it well under 470 ms. |
+
+### 6b.3 Waterfall
+
+The green band is the RX passband — a JTTY signal's width at the RX offset. **Click** a signal
+to listen there; TX moves with it (you answer where you listen) unless **Hold TX** is on.
+**Shift+click** moves only TX, drawn as a red line. Every decode leaves its SNR on the
+waterfall for twenty seconds. Zoom 100/200/400 % centres on the RX offset.
+
+### 6b.4 RX — Band activity and RX frequency
+
+Two logs, as in WSJT-X. **Band activity** lists everything decoded: UTC, SNR, audio
+frequency, text. **RX frequency** lists what is within ±70 Hz of the RX offset, anything with
+your call in it, and what you send (red, `TX`). A message is one line that grows frame by
+frame while it arrives (amber cursor) and closes on its last frame; `…` means a frame was
+missed, a trailing `…` that the message stopped without its end. CQs are green, messages with
+your call red-tinted.
+
+**Click a word** to put it into QRPLog's Call or Exch field. **Double-click a line** to tune to
+that station and take its call into **DX call**.
+
+The receiver searches the RX offset ± F Tol first and then the **search band** (SETTINGS;
+1200–1800 Hz by default, as WSJT-X does), takes overlapping signals apart by subtracting each
+decoded one, and goes back over the last second when it does.
+
+### 6b.5 TX — sending
+
+**DX call** and **Exch** fill `%H` and `%E`; your call (`%M`) comes from SETUP → Identity.
+**F1–F8** are WSJT-X's function keys — `CQ %M CQ`, `%H %E`, `%H TU CQ %M CQ`, `%M`, `%H`,
+`TU NOW %Q %E`, `%H AGN?`, `%E` — sent as WSJT-X's own compact frames (the F-keys work while
+the focus is in TX or nowhere). Edit them under SETTINGS → ADVANCED; an edited key is packed as
+text. `%E` is a serial number, a Field Day `1D EMA`, or under RTTY Roundup a serial or a
+state/province; a key whose call or exchange does not fit is refused, never sent differently.
+
+**Message** + **Enter** sends a whole message; the counter beside it says how many frames and
+seconds that is. A text over 80 characters goes out as one continuing message.
+
+**Live entry** (**LIVE** or **Alt+J**) is WSJT-X 3.3's: it starts transmitting at once and sends
+what you type as you type it — after a pause of 1.5 s, or in batches of words — keeping PTT on
+with `<<<<<` filler frames between (receivers drop the filler). Text already sent is locked.
+**Enter** sends the rest as the end of the message and lets PTT drop; with nothing typed for
+the *Live entry idle stop* time it ends by itself. **Esc** or **ABORT** stops any transmission
+at once. One transmission is never longer than 180 s.
+
+### 6b.6 SETTINGS
+
+**Transmit**: TRX RF power (as on the RTTY page), TX offset, **Hold TX**, **Live entry** on/off
+and its idle stop. The TX level is the CAL PLAN calibration RTTY, JS8 and WSPR share.
+**ADVANCED**: RX offset, F Tol, search band (wider costs CPU — keep the default on a phone),
+exchange profile, the eight function keys (**DEFAULTS** restores them), and **TrxNet text
+stream** — decoded JTTY on `/jtty-rx` and every transmission on `/jtty-tx` to TrxNet devices
+that subscribe with `/s-jtty` (`tools/jtty-stream-listen.py` is the reference listener).
+The settings travel with the station like RTTY's; the RX and TX offsets stay in each browser.
+
+A JTTY QSO logged in QRPLog is logged as **JTTY** and exported to ADIF as `MODE=MFSK
+SUBMODE=JTTY`.
+
+---
+
 ## 7. DATA — WSPR
 
 **`/wspr.html`** — the **WSPR** tab of the DATA page.
@@ -4219,7 +4343,7 @@ distributes, including the firmware and filesystem images served by the web inst
 
 The parts that came from elsewhere, with their own copyright and licence, are listed in
 [data/THIRD-PARTY-NOTICES.txt](data/THIRD-PARTY-NOTICES.txt) — the same notice the device
-serves from its own web UI, linked in the footer of the SETUP, JS8, WSPR and Mercury pages.
+serves from its own web UI, linked in the footer of the SETUP, JS8, RTTY, JTTY, WSPR and Mercury pages.
 
 | Component | Origin | Licence |
 |---|---|---|
@@ -4227,6 +4351,7 @@ serves from its own web UI, linked in the footer of the SETUP, JS8, WSPR and Mer
 | Icom LAN passcode and packet layouts in `icomLanClient.h` | [wfview](https://gitlab.com/eliggett/wfview/) — W6EL, M0VSE | GPL-3.0 |
 | JS8 encoder and decoder (`data/js8-*.wasm`) | [JS8Call-improved](https://github.com/JS8Call-improved/JS8Call-improved) and its JS8/WSJT-X heritage | GPL-3.0 |
 | WSPR protocol constants in `data/wspr-core.js` | WSJT-X — K1JT and the WSJT-X team | GPL-3.0 |
+| JTTY modem (`data/jtty-codec.js`, `data/jtty-modem.js`) — port of WSJT-X `lib/jtty` | WSJT-X — K1JT, K9AN and the WSJT-X team | GPL-3.0 |
 | Mercury ARQ engine, linked into `data/mercury-host.wasm`/`data/mercury-worker.js` | [Rhizomatica/mercury](https://github.com/Rhizomatica/mercury) — Rafael Diniz | GPL-3.0-or-later |
 | FreeDV data modem, linked into the same Mercury WASM modules | [Codec 2 / FreeDV](https://github.com/drowe67/codec2) — David Rowe and contributors | LGPL-2.1 |
 | FFTW 3.3.10, linked into `js8-decoder.wasm` | [fftw.org](https://fftw.org/); source vendored in `third_party/fftw/` | GPL-2.0-or-later |

@@ -1061,6 +1061,14 @@
     if (wanted && lanReady === false) return;
     if (wanted === open && el) return;
     open = wanted;
+    // The JTTY palette (log-jtty-panel.js) holds the same session with the
+    // same token: only one of the two is ever open. Its release beacon carries
+    // that token too, so this claim waits until the beacon has landed.
+    var handover = 0;
+    if (open && global.JttyPanel && global.JttyPanel.isOpen()) {
+      global.JttyPanel.setOpen(false);
+      handover = 400;
+    }
     if (open && !el) build();
     if (el) el.style.display = open ? '' : 'none';
     if (open) {
@@ -1075,7 +1083,8 @@
       // WITHOUT force. Restoring a remembered "open" on a page reload must
       // never silently take the radio from a running beacon on another
       // machine -- the operator asks for that explicitly, with TAKE OVER.
-      claimSession(false);
+      if (handover) scheduleSessionRetry(handover);
+      else claimSession(false);
       pollState();
       readModLevel();
     } else {

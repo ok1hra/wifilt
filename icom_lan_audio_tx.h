@@ -131,6 +131,15 @@ class IcomLanAudioTx {
     return true;
   }
 
+  // JTTY live entry (AUD1 tx.extend, docs/jtty-implementace.md §6): the
+  // transmission grows while it plays. Only before the drain tail starts --
+  // once remaining reached zero the end has been announced and stands.
+  bool extend(uint64_t moreBytes) {
+    if (fault_ != FAULT_NONE || !armed_ || draining_ || drained_ || moreBytes == 0) return false;
+    total_ += moreBytes;
+    return true;
+  }
+
   PollResult poll(uint32_t now, const uint8_t*& packet, size_t& length) {
     packet = nullptr;
     length = 0;

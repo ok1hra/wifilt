@@ -91,3 +91,8 @@
 *.zip
 /convert_logs.py
 /AGENTS.md
+
+# WSJT-X sample recording for tools/jtty-modem-test.js -- 726 kB, fetched, not kept:
+#   curl -L -o tools/fixtures/jtty/260807_134110.wav \
+#     https://raw.githubusercontent.com/WSJTX/wsjtx/v3.3.0-beta5/samples/JTTY/260807_134110.wav
+/tools/fixtures/jtty/*.wav

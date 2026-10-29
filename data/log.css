@@ -2529,6 +2529,30 @@ body {
 }
 .rtty-panel-busy button:hover { background: #4a3016; color: #fff; }
 
+/* ── JTTY palette (log-jtty-panel.js) ──────────────────────────────────────
+   The RTTY palette's frame, scope and cards, reused by class; what differs is
+   the RX area -- jtty-rxlog.js lines, not the RTTY tape. A scoped restatement
+   of jtty.css's line rules, for the same reason the RTTY rules above restate
+   rtty.css: the DOM contract is shared, the surroundings are not. */
+.jtty-panel { --amber: #f0b44c; }
+.jtty-panel-rx { padding: 3px 6px 6px; }
+.jtty-panel-rx .jtty-rx-empty { color: var(--muted); padding-top: 6px; }
+.jtty-panel-rx .jtty-line { display: flex; gap: 6px; white-space: nowrap; }
+.jtty-panel-rx .jtty-col { flex: none; color: var(--muted); }
+.jtty-panel-rx .jtty-t { width: 6ch; }
+.jtty-panel-rx .jtty-snr { width: 3.5ch; text-align: right; }
+.jtty-panel-rx .jtty-hz { width: 4.5ch; text-align: right; }
+.jtty-panel-rx .jtty-text { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; word-break: break-word; }
+.jtty-panel-rx .jtty-tok { cursor: pointer; border-radius: 3px; }
+.jtty-panel-rx .jtty-tok:hover { color: var(--cyan); text-decoration: underline; }
+.jtty-panel-rx .jtty-cq .jtty-text { color: #9fe6a0; }
+.jtty-panel-rx .jtty-to-me { background: rgba(240, 90, 79, .18); }
+.jtty-panel-rx .jtty-me { font-weight: 700; }
+.jtty-panel-rx .jtty-growing .jtty-text::after { content: "▍"; color: var(--amber); }
+.jtty-panel-rx .jtty-expired .jtty-text { opacity: .7; }
+.jtty-panel-rx .jtty-tx .jtty-snr, .jtty-panel-rx .jtty-tx .jtty-text { color: var(--red); }
+.jtty-panel-rx .jtty-tx-failed .jtty-text { text-decoration: line-through; opacity: .65; }
+
 /* ── Statistics palette (Alt+S, log-stats.js) ───────────────────────────────
    The PA palette's frame and type, so the floating palettes read as one set.
    Under the other palettes (PA 90, RTTY 91, CALL 92, Alt+K 93): it is only

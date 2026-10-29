@@ -39,11 +39,11 @@
   // document rather than in a second endpoint that could get out of step with it.
   // RTTY and Mercury the same.
   //
-  //   { "v": 1, "js8": <JS8>, "wspr": <WSPR>, "rtty": <RTTY>, "mercury": <Mercury> }
+  //   { "v": 1, "js8": <JS8>, "wspr": <WSPR>, "rtty": <RTTY>, "mercury": <Mercury>, "jtty": <JTTY> }
   //
   // Every page rewrites the whole file, so every page has to know every half --
   // a half missing from this list is erased by the next save of any other page.
-  var HALVES = ["js8", "wspr", "rtty", "mercury"];
+  var HALVES = ["js8", "wspr", "rtty", "mercury", "jtty"];
   //
   // Paths that stay in THIS browser, as dotted paths into that document.
   var SCHEMA_VERSION = 1;
@@ -54,7 +54,10 @@
     // Where the RTTY decoder listens right now: every click on a signal moves
     // it, so it is the tuning of this moment, not a setting. On the station it
     // would cost a rewrite of this whole file after nearly every contact.
-    "rtty.toneHz"
+    "rtty.toneHz",
+    // JTTY the same: where this browser listens and sends right now.
+    "jtty.rxHz",
+    "jtty.txHz"
   ];
 
   function clone(value) {

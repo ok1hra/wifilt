@@ -1,0 +1,59 @@
+/* JTTY page and QRPlog palette: only what is JTTY's. The page also loads
+   data.css and rtty.css (scope, pills, TX block, settings grid), the palette
+   gets the log rules below through log.css's scoped copy.
+   docs/jtty-implementace.md §5. */
+
+.jtty-rx-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px 10px; }
+@media (max-width: 760px) { .jtty-rx-grid { grid-template-columns: 1fr; } }
+.jtty-rx-pane { min-width: 0; display: flex; flex-direction: column; }
+.jtty-rx-head { font-size: 11px; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; padding: 0 2px 3px; }
+.jtty-rx-log {
+  height: 260px; overflow-y: auto; overflow-x: hidden;
+  border: 1px solid var(--line); border-radius: 6px; background: #071311;
+  font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace; padding: 4px 6px;
+}
+.jtty-rx-empty { padding-top: 6px; }
+.jtty-line { display: flex; gap: 8px; white-space: nowrap; }
+.jtty-col { flex: none; color: var(--muted); }
+.jtty-t { width: 6ch; }
+.jtty-snr { width: 3.5ch; text-align: right; }
+.jtty-hz { width: 4.5ch; text-align: right; }
+.jtty-text { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; word-break: break-word; color: var(--text); }
+.jtty-tok { cursor: pointer; border-radius: 2px; }
+.jtty-tok:hover, .jtty-tok.hover { color: var(--cyan); text-decoration: underline; }
+.jtty-cq .jtty-text { color: #9fe6a0; }
+.jtty-to-me { background: rgba(240, 90, 79, .16); }
+.jtty-to-me .jtty-text { color: #ffd2cc; }
+.jtty-me { font-weight: 700; }
+.jtty-growing .jtty-text::after { content: "▍"; color: var(--amber); animation: jtty-blink 1s steps(2) infinite; }
+@keyframes jtty-blink { 50% { opacity: 0; } }
+.jtty-expired .jtty-text { opacity: .7; }
+.jtty-tx .jtty-snr { color: var(--red); }
+.jtty-tx .jtty-text { color: var(--red); }
+.jtty-tx-failed .jtty-text { text-decoration: line-through; opacity: .65; }
+
+.jtty-qso-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.jtty-qso-row .rtty-tx-field input {
+  width: 14ch; font: 14px ui-monospace, Menlo, Consolas, monospace; text-transform: uppercase;
+  background: #071311; color: var(--text); border: 1px solid var(--line); border-radius: 5px; padding: 4px 6px;
+}
+.jtty-fkeys { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; }
+@media (max-width: 560px) { .jtty-fkeys { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.jtty-fkey {
+  display: flex; gap: 6px; align-items: baseline; min-width: 0;
+  border: 1px solid var(--line); border-radius: 5px; background: #0c1a18; color: var(--text);
+  padding: 4px 7px; cursor: pointer; font: 12px ui-monospace, Menlo, Consolas, monospace; text-align: left;
+}
+.jtty-fkey b { color: var(--cyan); flex: none; }
+.jtty-fkey span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jtty-fkey:hover { border-color: var(--muted); }
+.jtty-fkey:disabled { opacity: .45; cursor: not-allowed; }
+.jtty-tx-preview { margin-left: auto; font-size: 11px; }
+#jttyLive.active, .jtty-live-on { border-color: var(--red); color: var(--red); background: #2a1210; }
+textarea.jtty-committed-text { color: var(--muted); }
+
+.jtty-fkey-editor { grid-column: 1 / -1; }
+.jtty-fkey-editor .settings-group-title { display: flex; gap: 8px; align-items: center; }
+#jttyFkeyEditor { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 10px; margin: 4px 0; }
+#jttyFkeyEditor label { display: flex; gap: 6px; align-items: center; font-size: 12px; }
+#jttyFkeyEditor input { flex: 1; min-width: 0; font: 12px ui-monospace, Menlo, Consolas, monospace; }

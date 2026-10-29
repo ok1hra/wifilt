@@ -424,7 +424,7 @@
       whatNext.appendChild(el("h3", null, "What next — a first QSO"));
       whatNext.appendChild(path(true, "Listen",
         "the station can hear: open JS8 or WSPR and watch the waterfall fill. Nothing transmits.",
-        [["JS8", "/data.html"], ["WSPR", "/wspr.html"], ["RTTY", "/rtty.html"]]));
+        [["JS8", "/data.html"], ["WSPR", "/wspr.html"], ["RTTY", "/rtty.html"], ["JTTY", "/jtty.html"]]));
       whatNext.appendChild(path(calibrated && pledge, "Transmit",
         (model.transmit.localTrx ? "set the TX level by hand with TUNE (? on the JS8 page)"
           : calibrated ? "calibrated" : "calibrate first (CAL PLAN, step 5)") + ", then "

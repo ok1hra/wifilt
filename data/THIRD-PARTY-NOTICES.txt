@@ -159,6 +159,19 @@ lookup3 hash function: Bob Jenkins, 2006, public domain.
 License: GNU GPL version 3.
 Upstream: https://sourceforge.net/projects/wsjt/
 
+JTTY modem (lib/jtty port)
+--------------------------
+data/jtty-codec.js and data/jtty-modem.js are a JavaScript port of the JTTY
+mode of WSJT-X 3.3.0-beta5 (lib/jtty, lib/77bit call28 packing), made by
+RemoteQTH.com (2026): the source grammar and minimum-frame text packing, CRC-12,
+the tail-biting K=10 convolutional code and its list-WAVA decoder, the 4-GFSK
+waveform, sync search, peak-up, signal subtraction, alias rejection and message
+assembly, and the live-entry filler rule.
+Copyright 2001-2026 Joe Taylor (K1JT), Steven Franke (K9AN), G4KLA, N9ADG,
+  DL3WDG, W3SZ, KJ5HST, KD0BTO and the WSJT-X development team.
+License: GNU GPL version 3.
+Upstream: https://github.com/WSJTX/wsjtx (lib/jtty)
+
 horusdemodlib (technique credit, no code)
 ------------------------------------------
 The RTTY-ICOM page's Baudot/ITA2 demodulator (data/rtty-codec.js) is an original,

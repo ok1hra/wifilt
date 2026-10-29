@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>QRPLog — WIFILT</title>
-  <link rel="stylesheet" href="/log.css?v=c1830e51">
+  <link rel="stylesheet" href="/log.css?v=2723d87a">
 </head>
 <body>
   <!-- Split shell (2026-09-07). Everything the log itself is lives in the RIGHT
@@ -297,6 +297,11 @@
              calibration live. -->
         <button id="btnRttyPopup" class="btn-trx" type="button" hidden
                 title="RTTY waterfall and decoded text, over the log">RTTY</button>
+        <!-- JTTY palette (log-jtty-panel.js, docs/jtty-implementace.md §7): the
+             same idea for USB-D/LSB-D. Only one of the two palettes is ever
+             open -- they share the tab's session token. -->
+        <button id="btnJttyPopup" class="btn-trx" type="button" hidden
+                title="JTTY waterfall and decoded messages, over the log">JTTY</button>
         <button class="btn-trx btn-trx-active" data-trx="1" id="btnTrx1" type="button">TRX1</button>
         <button class="btn-trx" data-trx="2" id="btnTrx2" type="button">TRX2</button>
         <button class="btn-trx" data-trx="3" id="btnTrx3" type="button">TRX3</button>
@@ -386,8 +391,8 @@
   <script src="/dxcc.js?v=c56ee081"></script>
   <script src="/log-db.js?v=4325395d"></script>
   <script src="/station-identity.js?v=a1a20249"></script>
-  <script src="/log-export.js?v=beff747a"></script>
-  <script src="/log.js?v=0a5fa4ce"></script>
+  <script src="/log-export.js?v=7afd3001"></script>
+  <script src="/log.js?v=2df0c30d"></script>
   <!-- After log.js: it reads window.LogRadio (for setRunMode) and log.js reads
        window.LogDxcSplit only from inside a channel callback, never at load. -->
   <script src="/log-dxc-split.js?v=295ebac7"></script>
@@ -409,11 +414,11 @@
        documents in its own script list. -->
   <script src="/rtty-codec.js?v=f902ad99"></script>
   <script src="/rtty-afc.js?v=ec376292"></script>
-  <script src="/station-profile.js?v=317b4ccb"></script>
+  <script src="/station-profile.js?v=e6441027"></script>
   <script src="/rtty-settings.js?v=0da8b40b"></script>
   <script src="/spectrum.js?v=7fafbbb5"></script>
   <script src="/audio-health.js?v=9efe092e"></script>
-  <script src="/js8-aud1.js?v=7fa0379a"></script>
+  <script src="/js8-aud1.js?v=378855b1"></script>
   <script src="/js8-tx.js?v=26bed715"></script>
   <script src="/icom-models.js?v=98e0e049"></script>
   <script src="/wspr-core.js?v=981ff9bf"></script>
@@ -425,6 +430,16 @@
   <script src="/rtty-rxlog.js?v=51e1460e"></script>
   <script src="/rtty-afsk-tx.js?v=998de20c"></script>
   <script src="/rtty-stream-feed.js?v=855b19dd"></script>
-  <script src="/log-rtty-panel.js?v=3ac13b18"></script>
+  <script src="/log-rtty-panel.js?v=47d5f0fc"></script>
+  <!-- JTTY palette: the same shared modules the JTTY page runs; jtty-modem.js
+       again as the receiver's Worker (its ?v= is read from this tag). -->
+  <script src="/jtty-settings.js?v=b3bdb35c"></script>
+  <script src="/jtty-codec.js?v=b57af731"></script>
+  <script src="/jtty-modem.js?v=26e3df1c"></script>
+  <script src="/jtty-scope.js?v=620c7340"></script>
+  <script src="/jtty-rxlog.js?v=d1144e1b"></script>
+  <script src="/jtty-rx.js?v=4fe4f4c4"></script>
+  <script src="/jtty-tx.js?v=3669a343"></script>
+  <script src="/log-jtty-panel.js?v=2ceef57e"></script>
 </body>
 </html>

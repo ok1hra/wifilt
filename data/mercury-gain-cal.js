@@ -199,7 +199,7 @@
         WATCHDOG_MS);
 
       // The worker passes this ?v= on to every script and blob it loads.
-      const MERCURY_CAL_WORKER_REV = "80121437"; // stamped from /mercury-cal-worker.js
+      const MERCURY_CAL_WORKER_REV = "1c265e22"; // stamped from /mercury-cal-worker.js
       this.worker = new Worker(`/mercury-cal-worker.js?v=${MERCURY_CAL_WORKER_REV}`);
       this.worker.onmessage = event => {
         const msg = event.data || {};

@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JTTY — WIFILT</title>
+<!-- data.css + rtty.css: the JTTY page is laid out exactly like RTTY-ICOM (same
+     scope, pills, TX block, settings grid); jtty.css carries only what is
+     JTTY's -- the line log, the function keys, live entry.
+     docs/jtty-implementace.md §5. -->
+<link rel="stylesheet" href="/data.css?v=f2b6802b">
+<link rel="stylesheet" href="/rtty.css?v=8a9de7c1">
+<link rel="stylesheet" href="/jtty.css?v=a689855f">
+<script>if (/(?:^|[?&])popup=1(?:&|$)/.test(location.search)) document.documentElement.classList.add("popup-mode");</script>
+</head>
+<body class="lan-gate-checking">
+
+     up, so the page never flashes an interface it is about to replace. -->
+<body class="lan-gate-checking">
+
+<header class="site-topbar">
+  <nav class="tabs" aria-label="Primary">
+    <details class="tab brand-about" style="padding:0;position:relative">
+      <summary title="WIFILT - Web interface for Icom LAN transceivers" aria-label="About WIFILT" style="display:flex;align-items:center;list-style:none;cursor:pointer"><svg viewBox="0 -.01 14.79 16.93" fill="currentColor" aria-hidden="true" style="height:26px;width:auto;display:block"><path d="m6.77 .08c-.23-.06-.44-.09-.66-.08c-.96 .04-1.84 .7-2.1 1.67l-2.14 8.03l1.03-1.19a.68 .68 0 0 1 .13-.11l1.75-6.52c.16-.59 .65-1 1.21-1.07c.19-.03 .38-.02 .57 .03l6.36 1.71c.78 .21 1.23 .99 1.02 1.78l-2.86 10.72c-.21 .79-.99 1.24-1.78 1.03l-3.63-.97a.68 .68 0 0 1-.43 .09l-.05 .13a.68 .68 0 0 1-.39 .37l4.29 1.14c1.19 .32 2.43-.39 2.75-1.58l2.87-10.72c.32-1.2-.38-2.43-1.58-2.76l-6.36-1.7zm5.41 3.74l-5.62-1.49c-.08-.02-.17-.03-.25-.02c-.24 .03-.45 .2-.51 .45l-1.55 5.79l.13 .07a.68 .68 0 0 1 .25 1.03l-.32 .44l.31 .15a.68 .68 0 0 1 .35 .49l.19 .1l.35 .17a.68 .68 0 0 1 .37 .48l.02 .02a.68 .68 0 0 1 .03 .02l.19 .09a.68 .68 0 0 1 .34 .51a.68 .68 0 0 1 .12 .11l3.12 .85c.33 .09 .68-.12 .77-.45l2.15-8.04c.09-.33-.11-.68-.44-.76zm-8.71 5.13v.01l-.04 .01l0-.01l-1.13 1.29l-1.13 1.32l-.18-.11l-.19-.1l.28-.28l.26-.3l-.2-.11l-.19-.1l.09-.1l.1-.09l-.37-.19l-.37-.21l-.2 .19l-.2 .18l.19 .1l.19 .11l-.1 .09l-.09 .09l.19 .1l.19 .11l-.18 .19l-.19 .21l.2 .1l.19 .12l-.17 .19l-.18 .19l.2 .12l.21 .11l-.18 .22l-.17 .2l.21 .12l.2 .12l-.16 .22l-.16 .21l1.76 1.03l1.78 1.03l.11-.25l.13-.25l.2 .11l.2 .11l.17-.38l.17-.37l.21 .11l.22 .11l.36-.92l.36-.94l-.19-.09l-.18-.1l.06-.13l.05-.12l-.18-.1l-.18-.09l-.17 .39l-.17 .38l-.19-.11l-.2-.09l.25-.51l.25-.48l-.35-.18l-.36-.18l-.2 .35l-.19 .35l-.18-.1l-.19-.09l.28-.46l.28-.46l-.33-.18l-.35-.17l-.32 .43l-.3 .45l-.18-.1l-.2-.1l.74-.97l.73-.97l-.3-.14l-.32-.14zm3.08 4.28l-.23 .6l-.15 .42l.46 .12c.18 .04 .37-.06 .42-.24l.1-.37c.04-.19-.07-.38-.25-.43l-.35-.1zm2.43 .65c-.05-.01-.1-.01-.14 0c-.14 .02-.25 .1-.29 .24l-.09 .38c-.05 .19 .06 .37 .24 .42l.52 .15c.18 .05 .37-.07 .42-.25l.1-.38c.05-.18-.05-.37-.24-.42l-.52-.14z"/></svg></summary>
+      <div style="position:absolute;z-index:80;top:calc(100% + 5px);left:0;width:min(300px,calc(100vw - 16px));padding:12px 14px;border:1px solid #4b756c;border-radius:7px;background:#0c1a18;box-shadow:0 16px 44px #000c;text-align:center">
+        <a href="https://github.com/ok1hra/wifilt" target="_blank" rel="noopener" style="display:block;color:#e8f3ee;text-decoration:none"><b style="display:block;font-size:19px;font-weight:800;letter-spacing:.14em">WIFILT</b><span style="display:block;margin-top:5px;font-size:11px;color:#8ba59d">Web interface for Icom LAN transceivers</span></a>
+        <a href="https://remoteqth.com" target="_blank" rel="noopener" style="display:inline-block;margin-top:8px;font-size:11px;color:#8ba59d;text-decoration:none">by RemoteQTH.com</a>
+      </div>
+    </details>
+    <script>document.addEventListener("click",function(e){var b=document.querySelector(".brand-about");if(b.open&&!b.contains(e.target))b.open=false;});</script>
+    <a class="tab" href="/log" target="_blank" rel="noopener">QRPLog</a><a class="tab" href="/dxc.html" onclick="window.open(this.href,'DXC','width=600,height=750,left=0,top=0,menubar=no,location=no,status=no'); return false;">DXC</a>
+    <a class="tab tab-active" href="/data" title="JS8Call-ICOM, WSPR, Mercury, RTTY-ICOM and JTTY over ICOM-LAN">DATA</a><a class="tab" href="/setup" target="_blank" rel="noopener">SETUP</a>
+    <a class="tab" href="/datasync" target="_blank" rel="noopener">LOGSYNC</a><a class="tab bd-nav" href="/bd" target="_blank" rel="noopener" hidden>BD</a>
+    <span id="topbarFw" class="topbar-fw"></span>
+  </nav>
+  <!-- Plain links, no target: shares the js8lan.session token with
+       JS8Call-ICOM/WSPR (docs/rtty-implementace.md §1 decision 9) -- navigating
+       between the three in this tab keeps the lease, exactly as JS8/WSPR
+       already do between themselves. Mercury alone has its own separate
+       lease (mercury-session.js) -- see that page's own header for why. -->
+  <nav class="subtabs" aria-label="DATA mode">
+    <a class="subtab" href="/data">JS8Call-ICOM</a><a class="subtab" href="/rtty.html">RTTY-ICOM</a><a class="subtab subtab-active" href="/jtty.html">JTTY</a><a class="subtab" href="/wspr.html">WSPR</a><a class="subtab" href="/mercury.html">Mercury</a>
+  </nav>
+</header>
+
+<header class="radio-bar">
+  <div class="trx-control">
+    <button id="trxFrequency" class="trx-frequency" type="button" aria-expanded="false" aria-controls="frequencyMenu">
+      <span><small id="trxSlotLabel">TRX</small><b id="trxFrequencyValue">--.---.---</b></span><span class="unit">MHz</span><span class="chevron">▾</span>
+    </button>
+    <section id="frequencyMenu" class="frequency-menu" hidden aria-label="JTTY dial frequencies"></section>
+  </div>
+  <div id="ttControl" class="trx-control tt-control">
+    <button id="planButton" class="freq-timetable" type="button" aria-expanded="false"
+            aria-controls="planField" title="TX gain calibration plan">
+      <span><small>CAL PLAN</small><b id="planButtonValue">--</b></span><span class="chevron">▾</span>
+    </button>
+    <section id="planField" class="freq-timetable-panel" hidden aria-label="TX gain calibration plan"></section>
+  </div>
+  <span id="trxMode" class="trx-mode">---</span>
+  <span id="trxPower" class="trx-power" hidden>
+    <span class="pwr-bar" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+    <b id="trxPowerWatts">--</b>
+  </span>
+  <span id="trxSupply" class="trx-supply" hidden>
+    <span class="bat" aria-hidden="true"><i></i><i></i><i></i></span><small>DC</small>
+    <b>--</b>
+  </span>
+  <span id="radioModel" class="radio-model" title="Model reported by the radio itself">--</span>
+  <span id="aud1State" class="pill aud1-state" title="The audio channel to the radio.">AUD1 —</span>
+  <span id="linkState" class="live">● OFFLINE</span>
+  <button id="trxReconnect" class="trx-reconnect" type="button" hidden>Reconnect</button>
+  <span class="spacer"></span>
+  <!-- F Tol and the exchange profile are the two things changed during
+       operation, so they sit here as pills (click cycles), like RTTY's
+       NORMAL/SQL; the rest is in SETTINGS. -->
+  <button id="jttyFtol" class="rtty-toggle-pill" type="button"
+          title="F Tol: how far around the RX offset the receiver searches first. Click to change.">F TOL —</button>
+  <button id="jttyProfile" class="rtty-toggle-pill" type="button"
+          title="Exchange profile for packing: Unknown, Field Day or RTTY Roundup. Changes only how compactly 599 &lt;serial/state&gt; is sent, never what the other station reads.">—</button>
+  <span id="jttyDecodes" class="pill rtty-snr" title="Decoded frames, and how long the last receive window took">DEC —</span>
+</header>
+
+<main class="data-page rtty-page jtty-page">
+
+  <section id="sessionBusy" class="gate-card session-busy" hidden role="alert">
+    <div class="gate-card-icon" aria-hidden="true">!</div>
+    <div>
+      <h1>The radio is driven from somewhere else</h1>
+      <p>One radio, one operator: JS8Call-ICOM, WSPR, RTTY-ICOM and JTTY all drive the transceiver
+         through a single audio link, so only one page can run at a time.</p>
+      <p id="sessionBusyWhere" class="session-busy-where"></p>
+      <button id="sessionTakeover" class="gate-card-action" type="button">TAKE THE SESSION OVER HERE</button>
+    </div>
+  </section>
+
+  <details class="compact-section spectrum-section" data-section="spectrum" open>
+    <summary><span>Waterfall</span><span id="spectrumSummary" class="summary-status">RX 200–3000 Hz</span>
+      <span class="rtty-zoom-group" role="group" aria-label="Waterfall zoom">
+        <button class="rtty-zoom-pill active" type="button" data-zoom="100">100%</button>
+        <button class="rtty-zoom-pill" type="button" data-zoom="200">200%</button>
+        <button class="rtty-zoom-pill" type="button" data-zoom="400">400%</button>
+      </span>
+    </summary>
+    <!-- Click: RX offset (and TX, unless Hold TX). Shift+click: TX only. -->
+    <div id="jttyScope" class="rtty-scope" title="Click: listen here (TX follows unless Hold TX). Shift+click: transmit here.">
+      <div id="jttyLiveSpectrum" class="rtty-live-spectrum"><canvas id="liveSpectrumCanvas" width="1024" height="81"></canvas></div>
+      <div id="waterfall" class="waterfall">
+        <canvas id="waterfallCanvas" width="1024" height="64"></canvas>
+      </div>
+      <canvas id="jttyScopeOverlay" class="rtty-scope-overlay"></canvas>
+    </div>
+  </details>
+
+  <!-- Like WSJT-X: everything decoded in the band on the left, what is near
+       the RX offset (or carries this station's call) on the right. Click a
+       word: QRPlog's Call/Exch. Double-click a line: listen and answer there. -->
+  <details class="compact-section" data-section="rx" open>
+    <summary><span>RX</span><span id="rxSummary" class="summary-status"></span>
+      <button id="jttyRxClear" class="rtty-clear-pill" type="button" title="Clear both logs">CLEAR</button>
+    </summary>
+    <div class="jtty-rx-grid">
+      <div class="jtty-rx-pane">
+        <div class="jtty-rx-head">Band activity</div>
+        <div id="jttyBandLog" class="jtty-rx-log" aria-live="polite"></div>
+      </div>
+      <div class="jtty-rx-pane">
+        <div class="jtty-rx-head">RX frequency <span id="jttyRxHzLabel"></span></div>
+        <div id="jttyRxLog" class="jtty-rx-log" aria-live="polite"></div>
+      </div>
+    </div>
+  </details>
+
+  <details class="compact-section" data-section="tx" open>
+    <summary><span>TX</span><span id="txSummary" class="summary-status"></span></summary>
+    <div class="rtty-tx-body">
+      <div class="jtty-qso-row">
+        <label class="rtty-tx-field">DX call
+          <input id="jttyHisCall" type="text" maxlength="13" autocapitalize="characters" spellcheck="false">
+        </label>
+        <label class="rtty-tx-field">Exch
+          <input id="jttyExchange" type="text" maxlength="13" autocapitalize="characters" spellcheck="false"
+                 title="%E: a serial number, Field Day '1D EMA', or RTTY Roundup state/province">
+        </label>
+        <span id="jttyMyCall" class="muted" title="This station's call, from SETUP → Identity">--</span>
+      </div>
+      <div id="jttyFkeys" class="jtty-fkeys" role="group" aria-label="Function keys"></div>
+      <label class="rtty-tx-field">Message
+        <textarea id="jttyTxText" rows="2" maxlength="400" placeholder="Enter sends -- Alt+J starts live entry, Esc aborts" autocapitalize="characters" spellcheck="false" enterkeyhint="send"></textarea>
+      </label>
+      <div class="rtty-tx-actions">
+        <button id="jttyLive" class="secondary" type="button"
+                title="Live entry (Alt+J): transmit while typing, PTT held with filler between words. Enter ends the message, Esc aborts.">LIVE</button>
+        <button id="jttyTxAbort" class="secondary" type="button" hidden>ABORT</button>
+        <span id="jttyTxState" class="muted">idle</span>
+        <span id="jttyTxPreview" class="muted jtty-tx-preview"></span>
+      </div>
+    </div>
+  </details>
+
+  <details class="compact-section" data-section="settings" id="jttySettingsSection">
+    <summary><span>SETTINGS</span><span id="settingsSummary" class="summary-status"></span></summary>
+    <div class="settings">
+      <p class="settings-group-title">Transmit</p>
+      <label class="power-field" id="jttyRfPowerField">TRX RF power
+        <span class="power-row">
+          <input id="jttyRfPercent" type="number" min="1" max="100" step="1" inputmode="numeric">
+          <span class="power-unit">%</span>
+          <b id="jttyRfPercentWatts">--</b>
+          <button id="jttyRfPercentSet" type="button">SET</button>
+        </span>
+        <small>Written to the radio when this page opens and after the link returns.
+               Turning the knob on the radio stops that until the next SET.</small>
+        <small id="jttyRfPercentState" class="power-mismatch" hidden></small>
+      </label>
+      <label>TX offset
+        <input id="jttyTxHz" class="rtty-settings-narrow" type="number" min="200" max="2800" step="1" inputmode="numeric">
+        <small>Hz</small>
+      </label>
+      <label>Hold TX
+        <input id="jttyHoldTx" type="checkbox">
+        <small>Keep the TX offset when you click elsewhere on the waterfall. Off: answer where you listen, the RTTY way.</small>
+      </label>
+      <label>Live entry
+        <input id="jttyLiveEntry" type="checkbox">
+        <small>Alt+J / LIVE transmits while you type (WSJT-X 3.3). Off: Enter always sends a whole message.</small>
+      </label>
+      <label>Live entry idle stop
+        <select id="jttyLiveIdle" class="rtty-settings-narrow"></select>
+        <small>End live entry after this long of filler with nothing typed.</small>
+      </label>
+      <small class="cal-hint">TX audio level: <b>CAL PLAN</b> in the bar at the top &mdash; shared with RTTY, JS8 and WSPR.</small>
+      <details class="settings-advanced" id="jttySettingsAdvanced">
+        <summary>ADVANCED <span class="settings-advanced-what">receiver · F Tol · search band · profile · function keys · TrxNet stream</span></summary>
+        <div class="settings settings-advanced-body">
+      <label>RX offset
+        <input id="jttyRxHz" class="rtty-settings-narrow" type="number" min="200" max="2800" step="1" inputmode="numeric">
+        <small>Hz</small>
+      </label>
+      <label>F Tol
+        <select id="jttyFtolSelect" class="rtty-settings-narrow"></select>
+        <small>Searched first, and most thoroughly, around the RX offset.</small>
+      </label>
+      <label>Search band
+        <select id="jttySearch"></select>
+        <small>Where else the receiver looks. Wider costs CPU (phone: keep WSJT-X's).</small>
+      </label>
+      <label>Exchange profile
+        <select id="jttyProfileSelect">
+          <option value="unknown">Unknown</option>
+          <option value="field-day">Field Day</option>
+          <option value="rtty-roundup">RTTY Roundup</option>
+        </select>
+        <small>Only how 599 &lt;number/state&gt; is packed (one frame instead of two). QRPlog's palette picks its own from the contest exchange.</small>
+      </label>
+      <div class="jtty-fkey-editor">
+        <p class="settings-group-title">Function keys <button id="jttyFkeysReset" class="rtty-clear-pill" type="button">DEFAULTS</button></p>
+        <div id="jttyFkeyEditor"></div>
+        <small>%M my call, %H DX call, %Q queued call (= DX call here), %E exchange, %G my grid. The eight WSJT-X defaults go out as compact native frames; anything else is packed as text.</small>
+      </div>
+      <label>TrxNet text stream
+        <input id="jttyStreamEnabled" type="checkbox">
+        <small>Sends decoded JTTY and every JTTY transmission to TrxNet devices that subscribe (/s-jtty). Station-wide.<br><span id="jttyStreamSubs"></span></small>
+      </label>
+        </div>
+      </details>
+    </div>
+    <div id="calField" hidden></div>
+  </details>
+
+</main>
+
+<footer class="js8-page-footer">
+  <a href="https://github.com/ok1hra/wifilt" target="_blank" rel="noopener">GitHub</a><span aria-hidden="true">|</span><a href="/THIRD-PARTY-NOTICES.txt" target="_blank" rel="noopener">Licenses</a>
+</footer>
+
+<script src="/ports.js"></script>
+<script src="/lan-gate.js?v=75f2464b"></script>
+<script src="/fw-version.js?v=b29c5317"></script>
+<script src="/trxnet-peers.js?v=ba918aaf"></script>
+<script src="/station-profile.js?v=e6441027"></script>
+<script src="/station-identity.js?v=a1a20249"></script>
+<script src="/jtty-presets.js?v=5639a675"></script>
+<script src="/jtty-settings.js?v=b3bdb35c"></script>
+<!-- jtty-codec.js + jtty-modem.js: loaded here for TX (and as the receiver
+     fallback); the receiver itself runs jtty-modem.js again as a Worker. -->
+<script src="/jtty-codec.js?v=b57af731"></script>
+<script src="/jtty-modem.js?v=26e3df1c"></script>
+<script src="/spectrum.js?v=7fafbbb5"></script>
+<script src="/audio-health.js?v=9efe092e"></script>
+<script src="/js8-aud1.js?v=378855b1"></script>
+<script src="/js8-tx.js?v=26bed715"></script>
+<script src="/icom-models.js?v=98e0e049"></script>
+<script src="/trx-supply.js?v=121671a1"></script>
+<script src="/js8-presets.js?v=7131988f"></script>
+<script src="/wspr-core.js?v=981ff9bf"></script>
+<script src="/wspr-tx.js?v=20c527f9"></script>
+<script src="/rf-power-auto.js?v=1a8b8766"></script>
+<script src="/tx-gain-cal.js?v=4fdb24e3"></script>
+<script src="/tx-gain-cal-ui.js?v=1d9dc3bb"></script>
+<script src="/tx-gain-mod-level.js?v=276cf934"></script>
+<script src="/tx-gain-plan.js?v=6df74d9e"></script>
+<script src="/tx-gain-plan-store.js?v=6d5a572b"></script>
+<script src="/tx-mode-powers.js?v=840b843a"></script>
+<script src="/tx-gain-plan-ui.js?v=71990c73"></script>
+<script src="/jtty-scope.js?v=620c7340"></script>
+<script src="/jtty-rxlog.js?v=d1144e1b"></script>
+<script src="/jtty-rx.js?v=4fe4f4c4"></script>
+<script src="/jtty-tx.js?v=3669a343"></script>
+<script src="/settings-fold.js?v=b75dee54"></script>
+<script src="/jtty.js?v=7a6a50a1"></script>
+</body>
+</html>

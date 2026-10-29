@@ -251,7 +251,7 @@ check("nothing comes back for a half that is not there",
     (rttyJs.match(/\{localOnly: true\}/g) || []).length === 1
     && (panelJs.match(/\{localOnly: true\}/g) || []).length === 1
     && (mercuryJs.match(/\{localOnly: true\}/g) || []).length === 1);
-  for (const page of ["rtty.html", "log.html", "mercury.html", "setup.html", "data.html", "wspr.html"]) {
+  for (const page of ["rtty.html", "jtty.html", "log.html", "mercury.html", "setup.html", "data.html", "wspr.html"]) {
     const html = fs.readFileSync(path.join(ROOT, "data", page), "utf8");
     check(page + " loads station-profile.js", /<script src="\/station-profile\.js\?v=/.test(html));
   }
