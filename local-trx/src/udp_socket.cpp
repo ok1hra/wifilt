@@ -9,6 +9,11 @@ UdpSocket::~UdpSocket() {
   if (socket_ != WIFILT_INVALID_SOCKET) WIFILT_CLOSE_SOCKET(socket_);
 }
 
+bool UdpSocket::isValidBindIp(const std::string &bindIp) {
+  struct in_addr addr;
+  return bindIp.empty() || ::inet_pton(AF_INET, bindIp.c_str(), &addr) == 1;
+}
+
 bool UdpSocket::begin(const std::string &bindIp, uint16_t port, std::string *error) {
   socket_ = ::socket(AF_INET, SOCK_DGRAM, 0);
   if (socket_ == WIFILT_INVALID_SOCKET) {
@@ -74,6 +79,10 @@ bool UdpSocket::sendTo(const uint8_t *data, size_t len, const UdpPeer &to) {
   int sent = (int)::sendto(socket_, (const char *)data, (int)len, 0,
                            (struct sockaddr *)&target, sizeof(target));
   return sent >= 0;
+}
+
+bool UdpSocket::sendBroadcast(const uint8_t *data, size_t len, uint16_t port) {
+  return nativeSendBroadcast(socket_, data, len, port);
 }
 
 std::string UdpSocket::peerToString(const UdpPeer &peer) {

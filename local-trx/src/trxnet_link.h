@@ -15,7 +15,9 @@
 // Binds 0.0.0.0:<localPort>, never a specific IP -- a specific-IP bind does
 // not receive broadcasts on Linux (trxnet_udp.h), and discovery is broadcasts.
 // localPort 5684 beside a native wifilt that already holds 5683 here; see
-// TrxnetConfig and TrxNet INTEGRATION.md 10b.
+// TrxnetConfig and TrxNet INTEGRATION.md 10b. Then the broadcasts on 5683 are
+// heard through a second socket bound to 255.255.255.255:5683, which no
+// unicast ever reaches (TrxNetUdp::listenForBroadcasts()).
 //
 // Main loop only, except setPtt(), which KeyRunner's thread also calls.
 #pragma once

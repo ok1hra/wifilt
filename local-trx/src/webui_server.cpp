@@ -15,10 +15,22 @@
 #include "hamlib_bridge.h"
 #include "serial_key.h"
 #include "trxnet_link.h"
+#include "udp_socket.h"
+
+// wifilt's REV, passed in by the Makefile (0 = built outside it).
+#ifndef LOCAL_TRX_REV
+#define LOCAL_TRX_REV 0
+#endif
 
 using nlohmann::json;
 
 namespace LocalTrx {
+
+std::string listenIpError(const std::string &listenIp) {
+  return "invalid Listen IP \"" + listenIp + "\": it must be a numeric IPv4 address of this PC, "
+         "not a hostname -- 127.0.0.1 when wifilt runs on this same PC, else this PC's LAN IP "
+         "(e.g. 192.168.1.50)";
+}
 
 WebUiServer::WebUiServer(uint16_t port, std::string webRoot, std::string configDir, bool hardwareLive)
     : port_(port), webRoot_(std::move(webRoot)), configDir_(std::move(configDir)),
@@ -63,6 +75,11 @@ void WebUiServer::setupRoutes() {
 
   server_->on("/api/devices", [this]() { handleDevices(); });
 
+  server_->on("/api/version", HTTP_GET, [this]() {
+    json root;
+    root["rev"] = LOCAL_TRX_REV;
+    server_->send(200, "application/json", root.dump().c_str());
+  });
   server_->on("/api/config", HTTP_GET, [this]() { handleGetConfig(); });
   server_->on("/api/config", HTTP_POST, [this]() { handlePostConfig(); });
 
@@ -116,6 +133,7 @@ void WebUiServer::handleGetConfig() {
   // see config.h), just surface the problem too rather than hiding it.
   json root = json::parse(configToJsonString(config));
   if (!error.empty()) root["_loadError"] = error;
+  if (!startupError_.empty()) root["_startupError"] = startupError_;
   server_->send(200, "application/json", root.dump().c_str());
 }
 
@@ -128,6 +146,12 @@ void WebUiServer::handlePostConfig() {
     err["ok"] = false;
     err["error"] = error;
     server_->send(400, "application/json", err.dump().c_str());
+    return;
+  }
+  // Refused here rather than at the restart's bind, which would end the
+  // process -- and this wizard with it, the only UI that could fix it.
+  if (!UdpSocket::isValidBindIp(config.listenIp)) {
+    sendError(400, listenIpError(config.listenIp));
     return;
   }
   if (!saveConfig(configDir_, config, &error)) {

@@ -49,11 +49,34 @@
     var fillTarget = opts.fillTarget || null;
     var onPick = opts.onPick || null;
     var selected = opts.selected || null;
+    // SETUP only: the duplicate-name warning, and a hook so the page can flag the
+    // section title too. The other pages pick a device, they do not configure one.
+    var showConflicts = !!opts.conflicts;
+    var onConflicts = opts.onConflicts || null;
     var timer = null;
     var last = null;
 
     function note(text) {
       body.innerHTML = '<span class="trxnet-peers-empty">' + esc(text) + '</span>';
+    }
+
+    // Two devices on one name: the peer table follows whichever announced last,
+    // so messages for that name land on either box. Said loudly, with both
+    // addresses, because the list itself can only ever show one row for it.
+    function conflictBanner(list) {
+      var html = '';
+      list.forEach(function (c) {
+        var ips = (c.ips || []).map(esc).join(' and ');
+        html += '<div class="trxnet-conflict" role="alert"><b>&#9888; TrxNet ID conflict: ' +
+          esc(c.name) + '</b> ' +
+          (c.self
+            ? 'is this device\'s own name, and ' + ips + ' announces it too. ' +
+              'Change the TrxNet ID here or on that device.'
+            : 'is announced by ' + ips + '. ' +
+              'Give one of them a different TrxNet ID.') +
+          ' Until then, messages for ' + esc(c.name) + ' reach either device.</div>';
+      });
+      return html;
     }
 
     function row(name, ip, age, cls, badge) {
@@ -87,20 +110,27 @@
       }
       if (d.state === 'ap') { note('TrxNet not active in AP mode'); return; }
       if (d.state === 'disabled') { note('TrxNet disabled'); return; }
+      var conflicts = d.conflicts || [];
+      if (onConflicts) onConflicts(conflicts);
+      var dup = {};
+      conflicts.forEach(function (c) { dup[c.name] = true; });
       var peers = (d.peers || []).slice();
       peers.sort(function (a, b) {
         if (!!b.prio !== !!a.prio) return b.prio - a.prio;   // priority first
         return String(a.name).localeCompare(String(b.name)); // then alphabetical
       });
-      var html = '';
-      if (d.self) html += row(d.self, 'this device', '', 'trxnet-peer-self', '');
+      var html = showConflicts ? conflictBanner(conflicts) : '';
+      var dupBadge = ' <span class="trxnet-dup-badge">DUPLICATE</span>';
+      if (d.self) html += row(d.self, 'this device', '', 'trxnet-peer-self',
+        showConflicts && dup[d.self] ? dupBadge : '');
       if (!peers.length) {
         html += '<span class="trxnet-peers-empty">No devices heard yet</span>';
       } else {
         peers.forEach(function (p) {
+          var isDup = showConflicts && dup[p.name];
           html += row(p.name, p.ip, fmtAge(p.age),
-            p.prio ? 'trxnet-peer-prio' : '',
-            p.prio ? ' <span class="trxnet-prio-badge">PRIO</span>' : '');
+            isDup ? 'trxnet-peer-dup' : p.prio ? 'trxnet-peer-prio' : '',
+            (p.prio ? ' <span class="trxnet-prio-badge">PRIO</span>' : '') + (isDup ? dupBadge : ''));
         });
       }
       body.innerHTML = html;

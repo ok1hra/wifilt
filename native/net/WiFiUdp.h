@@ -54,4 +54,5 @@ private:
   bool                 txOpen = false;
   IPAddress            lastRemote;
   uint16_t             lastRemotePort = 0;
+  NativeBroadcastEcho  broadcastEcho;   // see endPacket()/parsePacket()
 };

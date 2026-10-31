@@ -41,6 +41,7 @@
 </head>
 <body>
 <h1>local-trx setup</h1>
+<p class="note" id="versionLine">FW <span id="fwRev">?</span> · <a href="https://github.com/ok1hra/wifilt" target="_blank" rel="noopener">GitHub</a></p>
 <p class="note">Config is only applied at startup, never live -- Save restarts local-trx itself, no manual step needed, but every field below is frozen at whatever the last restart actually used until that happens.</p>
 
 <fieldset id="modeFieldset">
@@ -88,7 +89,7 @@
     <div>
       <label>Listen IP</label>
       <input id="listenIp">
-      <p class="note">What you type into wifilt's Setup &rarr; ICOM-LAN field to point it at this fake radio.</p>
+      <p class="note">What you type into wifilt's Setup &rarr; ICOM-LAN field to point it at this fake radio. A numeric IP of this PC, not a hostname: 127.0.0.1 when wifilt runs on this same PC, else this PC's LAN IP.</p>
     </div>
   </div>
   <p class="note">These are the values wifilt's Setup &rarr; LOCAL-TRX checkbox prefills by default (CI-V A6, IP 127.0.0.1). Change them here only if you also update them in wifilt.</p>
@@ -323,6 +324,11 @@ function applyRigModels(devices) {
 }
 
 async function loadAll() {
+  // Own fetch, not part of the Promise.all below: an older backend without
+  // /api/version must not stop the form from loading.
+  fetch("/api/version").then(r => r.json())
+    .then(v => { if (v.rev) el("fwRev").textContent = v.rev; })
+    .catch(() => {});
   const [devices, config] = await Promise.all([
     fetch("/api/devices").then(r => r.json()),
     fetch("/api/config").then(r => r.json()),
@@ -333,10 +339,14 @@ async function loadAll() {
   applySerialPorts(el("keyPort"), devices);
   applyRigModels(devices);
 
-  el("modeRun").checked = config.enabled;
-  el("modeConfigure").checked = !config.enabled;
+  // _startupError: config.json says Run, but main.cpp refused to go live
+  // (e.g. a hostname in Listen IP) and runs only this wizard -- show what is
+  // really running, Configure, so the bad field can be fixed.
+  const running = config.enabled && !config._startupError;
+  el("modeRun").checked = running;
+  el("modeConfigure").checked = !running;
   updateModeButtons();
-  setFormLocked(config.enabled);
+  setFormLocked(running);
   el("openBrowserOnStart").checked = config.openBrowserOnStart;
   el("wifiltUrl").value = config.wifiltUrl;
   el("radioName").value = config.identity.radioName;
@@ -365,6 +375,10 @@ async function loadAll() {
   if (config._loadError) {
     el("status").className = "err";
     el("status").textContent = "existing config.json could not be read: " + config._loadError;
+  }
+  if (config._startupError) {
+    el("status").className = "err";
+    el("status").textContent = "Run did not start: " + config._startupError + ". Fix it, then pick Run again.";
   }
 }
 
@@ -425,6 +439,13 @@ async function saveConfig() {
     status.className = result.ok ? "ok" : "err";
     status.textContent = result.ok ? result.note : result.error;
     if (result.ok) waitForRestartThenReload();
+    else {
+      // Refused, nothing saved or restarted -- the Mode radios go back to
+      // what is actually running.
+      el("modeRun").checked = !payload.enabled;
+      el("modeConfigure").checked = payload.enabled;
+      updateModeButtons();
+    }
   } catch (e) {
     status.className = "err";
     status.textContent = "save failed: " + e;

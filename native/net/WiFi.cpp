@@ -4,8 +4,12 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <algorithm>
+#include <chrono>
 #include <map>
+#include <mutex>
 #include <string>
+#include <vector>
 
 #ifdef _WIN32
   #include <iphlpapi.h>
@@ -141,6 +145,186 @@ bool nativeSocketSetNoDelay(wifilt_socket_t socket, bool noDelay) {
   int value = noDelay ? 1 : 0;
   return setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, (const char *)&value,
                     sizeof(value)) == 0;
+}
+
+// ---------------------------------------------------------------------------
+// Own interfaces: nativeAddressIsOwn(), nativeSendBroadcast()
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct OwnInterface {
+  uint32_t address;     // network order
+  uint32_t broadcast;   // network order; 0 = the interface cannot broadcast
+  unsigned index;       // the OS interface index, for IP_PKTINFO
+};
+
+uint64_t steadyMs() {
+  return (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+
+// nativeAddressIsOwn() runs for every datagram a socket receives, and listing
+// the interfaces is a netlink round trip, so the list is reused for two seconds:
+// free in the receive path, still quick to follow a DHCP change. Callers hold
+// g_ownLock.
+std::mutex                g_ownLock;
+std::vector<OwnInterface> g_own;
+uint64_t                  g_ownAt = 0;
+bool                      g_ownValid = false;
+
+void refreshOwnInterfacesLocked() {
+  const uint64_t now = steadyMs();
+  if (g_ownValid && now - g_ownAt < 2000) return;
+  g_own.clear();
+  g_ownAt = now;
+  g_ownValid = true;
+
+#ifdef _WIN32
+  ULONG size = 15 * 1024;
+  IP_ADAPTER_ADDRESSES *adapters = (IP_ADAPTER_ADDRESSES *)malloc(size);
+  if (!adapters) return;
+  if (GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST |
+                           GAA_FLAG_SKIP_DNS_SERVER, nullptr, adapters, &size) == NO_ERROR) {
+    for (IP_ADAPTER_ADDRESSES *a = adapters; a; a = a->Next) {
+      if (a->OperStatus != IfOperStatusUp) continue;
+      if (a->IfType == IF_TYPE_SOFTWARE_LOOPBACK) continue;
+      for (IP_ADAPTER_UNICAST_ADDRESS *u = a->FirstUnicastAddress; u; u = u->Next) {
+        if (u->Address.lpSockaddr->sa_family != AF_INET) continue;
+        const uint32_t own = ((struct sockaddr_in *)u->Address.lpSockaddr)->sin_addr.s_addr;
+        const uint8_t bits = u->OnLinkPrefixLength;
+        // /31 and /32 have no broadcast address of their own.
+        const uint32_t mask = bits == 0 ? 0 : (0xFFFFFFFFu << (32 - bits));
+        const uint32_t broadcast = bits < 31 ? htonl(ntohl(own) | ~mask) : 0;
+        g_own.push_back({own, broadcast, (unsigned)a->IfIndex});
+      }
+    }
+  }
+  free(adapters);
+#else
+  struct ifaddrs *interfaces = nullptr;
+  if (getifaddrs(&interfaces) != 0) return;
+  for (struct ifaddrs *entry = interfaces; entry; entry = entry->ifa_next) {
+    if (!entry->ifa_addr || entry->ifa_addr->sa_family != AF_INET) continue;
+    if (entry->ifa_flags & IFF_LOOPBACK) continue;
+    if (!(entry->ifa_flags & IFF_UP)) continue;
+    const uint32_t own = ((struct sockaddr_in *)entry->ifa_addr)->sin_addr.s_addr;
+    uint32_t broadcast = 0;
+    if ((entry->ifa_flags & IFF_BROADCAST) && entry->ifa_broadaddr)
+      broadcast = ((struct sockaddr_in *)entry->ifa_broadaddr)->sin_addr.s_addr;
+    g_own.push_back({own, broadcast, if_nametoindex(entry->ifa_name)});
+  }
+  freeifaddrs(interfaces);
+#endif
+}
+
+}  // namespace
+
+bool nativeAddressIsOwn(uint32_t networkOrderAddress) {
+  std::lock_guard<std::mutex> guard(g_ownLock);
+  refreshOwnInterfacesLocked();
+  for (const OwnInterface &own : g_own)
+    if (own.address == networkOrderAddress) return true;
+  return false;
+}
+
+bool nativeSendBroadcast(wifilt_socket_t socket, const uint8_t *data, size_t length,
+                         uint16_t port) {
+  if (socket == WIFILT_INVALID_SOCKET) return false;
+  std::vector<OwnInterface> interfaces;
+  {
+    std::lock_guard<std::mutex> guard(g_ownLock);
+    refreshOwnInterfacesLocked();
+    interfaces = g_own;
+  }
+
+  struct sockaddr_in target;
+  memset(&target, 0, sizeof(target));
+  target.sin_family = AF_INET;
+  target.sin_port = htons(port);
+
+  bool tried = false, sent = false;
+#if defined(__linux__)
+  // One copy per interface, not per address: a second address on the same
+  // interface would only send the same frame onto the same wire again.
+  target.sin_addr.s_addr = htonl(INADDR_BROADCAST);
+  std::vector<unsigned> done;
+  for (const OwnInterface &own : interfaces) {
+    if (!own.broadcast || !own.index) continue;
+    if (std::find(done.begin(), done.end(), own.index) != done.end()) continue;
+    done.push_back(own.index);
+    tried = true;
+
+    char control[CMSG_SPACE(sizeof(struct in_pktinfo))];
+    memset(control, 0, sizeof(control));
+    struct iovec iov = {(void *)data, length};
+    struct msghdr message;
+    memset(&message, 0, sizeof(message));
+    message.msg_name = &target;
+    message.msg_namelen = sizeof(target);
+    message.msg_iov = &iov;
+    message.msg_iovlen = 1;
+    message.msg_control = control;
+    message.msg_controllen = sizeof(control);
+    struct cmsghdr *header = CMSG_FIRSTHDR(&message);
+    header->cmsg_level = IPPROTO_IP;
+    header->cmsg_type = IP_PKTINFO;
+    header->cmsg_len = CMSG_LEN(sizeof(struct in_pktinfo));
+    struct in_pktinfo *info = (struct in_pktinfo *)CMSG_DATA(header);
+    info->ipi_ifindex = (int)own.index;
+    info->ipi_spec_dst.s_addr = own.address;   // the source address of this copy
+    if (::sendmsg(socket, &message, 0) >= 0) sent = true;
+  }
+#else
+  std::vector<uint32_t> done;
+  for (const OwnInterface &own : interfaces) {
+    if (!own.broadcast) continue;
+    if (std::find(done.begin(), done.end(), own.broadcast) != done.end()) continue;
+    done.push_back(own.broadcast);
+    tried = true;
+    target.sin_addr.s_addr = own.broadcast;
+    if (::sendto(socket, (const char *)data, (int)length, 0, (struct sockaddr *)&target,
+                 sizeof(target)) >= 0)
+      sent = true;
+  }
+#endif
+
+  if (!tried) {
+    // No interface to fan out to (or none listed): what a plain send would do.
+    target.sin_addr.s_addr = htonl(INADDR_BROADCAST);
+    sent = ::sendto(socket, (const char *)data, (int)length, 0, (struct sockaddr *)&target,
+                    sizeof(target)) >= 0;
+  }
+  return sent;
+}
+
+bool NativeBroadcastEcho::isEcho(uint32_t sourceAddress, uint16_t sourcePort,
+                                 const uint8_t *data, size_t length) {
+  if (!nativeAddressIsOwn(sourceAddress)) return false;
+
+  uint32_t hash = 2166136261u;   // FNV-1a
+  for (size_t i = 0; i < length; i++) {
+    hash ^= data[i];
+    hash *= 16777619u;
+  }
+  // The copies are sent back to back and looped back by the kernel at once;
+  // 200 ms is generous for that and far below the 30 s between two ANNOUNCEs.
+  const uint64_t now = steadyMs();
+  for (const Seen &s : seen) {
+    if (!s.address || now - s.atMs > 200) continue;
+    if (s.port == sourcePort && s.hash == hash && s.length == length &&
+        s.address != sourceAddress)
+      return true;
+  }
+  Seen &slot = seen[next];
+  next = (next + 1) % (sizeof(seen) / sizeof(seen[0]));
+  slot.address = sourceAddress;
+  slot.port = sourcePort;
+  slot.hash = hash;
+  slot.length = length;
+  slot.atMs = now;
+  return false;
 }
 
 // ---------------------------------------------------------------------------

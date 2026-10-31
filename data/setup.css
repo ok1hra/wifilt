@@ -1159,6 +1159,37 @@ button.icom-scan-hit:hover {
   background: rgba(0, 136, 0, 0.35);
   border: 1px solid #507163;
 }
+/* Two devices on one TrxNet name -- same red as .setup-required-warning. */
+.trxnet-conflict {
+  margin: 6px 8px 8px;
+  padding: 8px 10px;
+  border: 1px solid #ff5c67;
+  border-radius: 6px;
+  background: rgba(190, 24, 38, 0.28);
+  color: #ffd3d7;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.trxnet-conflict b {
+  color: #fff;
+}
+.trxnet-peer-dup {
+  border-left-color: #ff5c67;
+}
+.trxnet-peer-dup .trxnet-peer-name {
+  color: #ff9ca4;
+}
+.trxnet-dup-badge {
+  font-size: 10px;
+  font-family: inherit;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  padding: 1px 6px;
+  border-radius: 6px;
+  color: #fff;
+  background: #7f1520;
+  border: 1px solid #ff5c67;
+}
 .trxnet-peer-self {
   border-left-color: var(--muted);
   background: rgba(255, 255, 255, 0.03);

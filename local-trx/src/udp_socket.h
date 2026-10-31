@@ -35,11 +35,21 @@ class UdpSocket {
   // for a config with an unset/blank listenIp rather than refusing to start).
   bool begin(const std::string &bindIp, uint16_t port, std::string *error);
 
+  // What begin() accepts: empty or a numeric IPv4 address. A hostname such
+  // as "wifilt-pi.local" is not -- this is a local bind address, never
+  // resolved. The wizard checks it at Save and main.cpp before going live,
+  // so a bad value never gets as far as a bind that ends the process.
+  static bool isValidBindIp(const std::string &bindIp);
+
   // Non-blocking. Returns the datagram length (>0), 0 when nothing is
   // pending, or a negative value on a real socket error.
   int recv(uint8_t *buf, size_t maxLen, UdpPeer *from);
 
   bool sendTo(const uint8_t *data, size_t len, const UdpPeer &to);
+
+  // 255.255.255.255:port out of every interface (nativeSendBroadcast()). Only
+  // for a socket bound to INADDR_ANY.
+  bool sendBroadcast(const uint8_t *data, size_t len, uint16_t port);
 
   static std::string peerToString(const UdpPeer &peer);
 

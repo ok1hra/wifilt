@@ -97,6 +97,14 @@ $(BUILD_DIR)/%.cpp.o: %.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+# local-trx ships in the same release as wifilt, so it carries wifilt's own
+# REV (same awk as native/Makefile's VERSION) -- shown on the wizard page.
+# Only webui_server.cpp uses it; depending on the .ino rebuilds just that one
+# object when REV moves, since a changed -D alone would not trigger it.
+LOCAL_TRX_REV ?= $(shell awk '/#define REV / { print $$3; exit }' ../wifilt.ino)
+$(BUILD_DIR)/webui_server.cpp.o: CXXFLAGS += -DLOCAL_TRX_REV=$(or $(LOCAL_TRX_REV),0)
+$(BUILD_DIR)/webui_server.cpp.o: ../wifilt.ino
+
 $(BUILD_DIR)/%.c.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@

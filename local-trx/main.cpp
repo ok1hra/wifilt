@@ -60,6 +60,7 @@
 #include "src/trxnet_link.h"
 #include "src/trxnet_peer.h"
 #include "src/trxnet_rig.h"
+#include "src/udp_socket.h"
 #include "src/webui_server.h"
 
 namespace {
@@ -404,12 +405,27 @@ int main(int argc, char **argv) {
   // real. Everything from HamlibRigBackend's rig.open() below onward is
   // skipped entirely in this branch, not just left idle: no hardware is
   // opened, no port is bound.
-  if (!config.enabled) {
-    std::printf("local-trx: disabled in config.json (default) -- running the setup wizard only.\n");
+  //
+  // A config that cannot go live (found live 2026-10-31: listenIp
+  // "wifilt-pi.local", a hostname, ended the process at the ICOM-LAN bind)
+  // lands here too, wizard only, the reason shown on its page -- exiting
+  // would take down the one UI that can fix the mistake.
+  std::string startupError;
+  if (config.enabled && !LocalTrx::UdpSocket::isValidBindIp(config.listenIp)) {
+    startupError = LocalTrx::listenIpError(config.listenIp);
+  }
+  if (!config.enabled || !startupError.empty()) {
+    if (startupError.empty()) {
+      std::printf("local-trx: disabled in config.json (default) -- running the setup wizard only.\n");
+    } else {
+      std::fprintf(stderr, "local-trx: not going live, %s -- running the setup wizard only, fix it there.\n",
+                   startupError.c_str());
+    }
     std::unique_ptr<LocalTrx::WebUiServer> webUi;
     if (webPort != 0) {
       std::string webError;
       webUi = startWizard(webPort, webRoot, configDir, /*hardwareLive=*/false, config, suppressAutoOpen, &webError);
+      if (webUi) webUi->setStartupError(startupError);
       if (webUi) {
         std::printf("local-trx: setup wizard at http://127.0.0.1:%u/ -- open it, configure, check "
                     "\"Enable\", then Save (this restarts local-trx itself).\n",

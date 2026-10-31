@@ -99,11 +99,18 @@ int WiFiUDP::endPacket() {
   if (!txOpen || socket == WIFILT_INVALID_SOCKET) return 0;
   txOpen = false;
 
-  int sent = (int)::sendto(socket, (const char *)txBuffer.data(),
-                           (int)txBuffer.size(), 0,
-                           (struct sockaddr *)&txTarget, sizeof(txTarget));
+  // 255.255.255.255 means every attached network -- TrxNet discovery, the
+  // radio scan's free shot -- which on a PC is more than the default route.
+  bool sent;
+  if (txTarget.sin_addr.s_addr == htonl(INADDR_BROADCAST)) {
+    sent = nativeSendBroadcast(socket, txBuffer.data(), txBuffer.size(),
+                               ntohs(txTarget.sin_port));
+  } else {
+    sent = ::sendto(socket, (const char *)txBuffer.data(), (int)txBuffer.size(), 0,
+                    (struct sockaddr *)&txTarget, sizeof(txTarget)) >= 0;
+  }
   txBuffer.clear();
-  return sent >= 0 ? 1 : 0;
+  return sent ? 1 : 0;
 }
 
 size_t WiFiUDP::write(uint8_t value) { return write(&value, 1); }
@@ -123,9 +130,16 @@ int WiFiUDP::parsePacket() {
   struct sockaddr_in peer;
   socklen_t length = sizeof(peer);
 
-  int got = (int)::recvfrom(socket, (char *)staging, sizeof(staging), 0,
-                            (struct sockaddr *)&peer, &length);
-  if (got <= 0) return 0;
+  int got;
+  do {
+    length = sizeof(peer);
+    got = (int)::recvfrom(socket, (char *)staging, sizeof(staging), 0,
+                          (struct sockaddr *)&peer, &length);
+    if (got <= 0) return 0;
+    // A second copy of a broadcast this host sent out of another interface:
+    // skipped here, so the next datagram is still returned by this same call.
+  } while (broadcastEcho.isEcho(peer.sin_addr.s_addr, ntohs(peer.sin_port), staging,
+                                (size_t)got));
 
   rxBuffer.assign(staging, staging + got);
   rxOffset = 0;

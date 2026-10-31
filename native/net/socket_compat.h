@@ -6,6 +6,9 @@
 // sockets, which is why that code ports across nearly verbatim.
 #pragma once
 
+#include <stddef.h>
+#include <stdint.h>
+
 #ifdef _WIN32
   #ifndef WIN32_LEAN_AND_MEAN
     #define WIN32_LEAN_AND_MEAN
@@ -96,6 +99,52 @@ bool nativeSocketErrorWasInUse(void);
 // unicast is an off-path reflector: a single small query from a spoofed source
 // makes it send a much larger reply to a victim it has no business talking to.
 bool nativeAddressIsOnLocalLink(uint32_t networkOrderAddress);
+
+// True when a network-order IPv4 address is one of this host's own, loopback
+// excluded. What a datagram's source is when another process on this machine
+// sent it out of an interface -- or this process heard its own broadcast.
+bool nativeAddressIsOwn(uint32_t networkOrderAddress);
+
+// Sends one datagram to the limited broadcast 255.255.255.255:port out of EVERY
+// interface that can broadcast, not just the one the routing table picks. On a
+// PC with eth0 and wlan0 a plain sendto() leaves through the default route only,
+// so a TrxNet device on the other network never hears discovery at all (found
+// live 2026-10-31: OI3.03 on eth0, local-trx's PROBE only on wlan0). Each copy
+// carries that interface's own address as its source, so a device answers to an
+// address it can reach.
+//
+// Linux keeps the destination 255.255.255.255 (IP_PKTINFO per interface), which
+// a socket bound to 255.255.255.255 -- see TrxNetUdp's broadcast tap -- still
+// receives; elsewhere each copy goes to the interface's subnet broadcast. The
+// socket must not be bound to a specific address. False when no copy went out.
+bool nativeSendBroadcast(wifilt_socket_t socket, const uint8_t *data, size_t length,
+                         uint16_t port);
+
+// The other half of nativeSendBroadcast(): every copy it sends out of an
+// interface is also delivered back to this host, once per interface, each from
+// a different one of the host's own addresses. A TrxNet node on the same PC then
+// hears one ANNOUNCE as if from two IPs -- its peer table flips between them and
+// TrxNet 1.09 reports the flip as a name conflict. isEcho() is true for the
+// second and later copies: identical payload, same source port, a different own
+// address, within a moment of the first. The first copy passes, so a sender
+// keeps one stable address; unicast and anything from another host never match.
+// One per receiving socket (or per stream, when several sockets feed one).
+class NativeBroadcastEcho {
+public:
+  bool isEcho(uint32_t sourceAddress, uint16_t sourcePort, const uint8_t *data,
+              size_t length);
+
+private:
+  struct Seen {
+    uint32_t address = 0;   // network order; 0 = empty slot
+    uint16_t port = 0;
+    uint32_t hash = 0;
+    size_t   length = 0;
+    uint64_t atMs = 0;
+  };
+  Seen     seen[8];
+  unsigned next = 0;
+};
 
 // Puts a socket into non-blocking mode. The sketch polls everything from its
 // loop and must never block there -- that is the same constraint the box has.

@@ -61,13 +61,27 @@ bool TrxnetLink::begin(std::string *error) {
     if (error) *error = "trxnet: cannot bind UDP port " + std::to_string(config_.localPort);
     return false;
   }
+  // Off the network port, the broadcasts on it are heard through a tap, so a
+  // device that (re)starts is seen at once rather than at its next unicast
+  // ANNOUNCE. Not fatal: without it the node still works, only slower to learn.
+  const char *tap = "";
+  if (config_.localPort != config_.networkPort) {
+    std::string tapError;
+    if (udp_.listenForBroadcasts(config_.networkPort, &tapError)) {
+      tap = ", hears its broadcasts";
+    } else {
+      std::fprintf(stderr, "warning: trxnet: no broadcast tap on port %u (%s) -- devices are "
+                           "learnt from their unicast ANNOUNCE only\n",
+                   config_.networkPort, tapError.c_str());
+    }
+  }
   net_.setPort(config_.localPort);
   net_.setDiscoveryPort(config_.networkPort);
   net_.onAnyTopic(&TrxnetLink::onAnyTopic);
   net_.begin(deviceName_.c_str());
   started_ = true;
-  std::printf("[trxnet] '%s' up on port %u (network port %u)%s%s\n", deviceName_.c_str(),
-              config_.localPort, config_.networkPort, peer_.empty() ? "" : ", device ",
+  std::printf("[trxnet] '%s' up on port %u (network port %u%s)%s%s\n", deviceName_.c_str(),
+              config_.localPort, config_.networkPort, tap, peer_.empty() ? "" : ", device ",
               peer_.c_str());
   std::fflush(stdout);
   return true;

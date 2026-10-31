@@ -36,6 +36,10 @@ class AudioPlayback;
 // And for TrxNet.h (trxnet_link.h).
 class TrxnetLink;
 
+// Why a listenIp was refused, worded for the operator (wizard status line
+// and main.cpp's stderr alike) -- see UdpSocket::isValidBindIp().
+std::string listenIpError(const std::string &listenIp);
+
 class WebUiServer {
  public:
   // webRoot: directory holding index.html (and any static assets) -- mapped
@@ -73,6 +77,10 @@ class WebUiServer {
   // already meant every save needed one anyway.
   bool restartRequested() const { return restartRequested_; }
 
+  // Why main.cpp did not go live despite config.json's "enabled" (and runs
+  // this wizard alone instead) -- handed to the page with GET /api/config.
+  void setStartupError(std::string error) { startupError_ = std::move(error); }
+
  private:
   void setupRoutes();
   void handleDevices();
@@ -91,6 +99,7 @@ class WebUiServer {
   std::string webRoot_;
   std::string configDir_;
   bool hardwareLive_;
+  std::string startupError_;
   std::unique_ptr<WebServer> server_;
 
   // POST /api/test-line's own state (bod: live DTR/RTS test button, asked

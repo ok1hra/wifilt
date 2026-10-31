@@ -25,6 +25,17 @@ class TrxNetUdp : public UDP {
   explicit TrxNetUdp(std::string listenIp);
 
   uint8_t begin(uint16_t port) override;
+
+  // A node listening off the network port (TrxNet 1.08 setDiscoveryPort())
+  // hears no broadcast at all: they go to the network port, which a native
+  // wifilt on this PC holds. This opens a second socket bound to
+  // 255.255.255.255:port -- it receives the broadcasts every node on that
+  // port receives, and never a unicast, so nothing is taken from wifilt
+  // (both sockets set SO_REUSEADDR). Its datagrams join the same stream
+  // parsePacket() returns. False where the OS refuses a bind to the
+  // broadcast address (Windows); the node then learns devices from unicast
+  // only, as before.
+  bool listenForBroadcasts(uint16_t port, std::string *error);
   uint8_t beginMulticast(IPAddress, uint16_t) override { return 0; }   // unused by TrxNet
   void stop() override;
 
@@ -50,6 +61,9 @@ class TrxNetUdp : public UDP {
   std::string listenIp_;
   UdpSocket socket_;
   uint16_t boundPort_ = 0;   // 0 = not bound yet
+  UdpSocket broadcastTap_;
+  bool tapOpen_ = false;
+  NativeBroadcastEcho echo_;   // one stream, so one filter for both sockets
 
   UdpPeer txTarget_;
   bool txOpen_ = false;

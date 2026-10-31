@@ -14,6 +14,13 @@ uint8_t TrxNetUdp::begin(uint16_t port) {
   return 1;
 }
 
+bool TrxNetUdp::listenForBroadcasts(uint16_t port, std::string *error) {
+  if (tapOpen_) return true;
+  if (!broadcastTap_.begin("255.255.255.255", port, error)) return false;
+  tapOpen_ = true;
+  return true;
+}
+
 void TrxNetUdp::stop() {}   // UdpSocket closes in its own destructor
 
 int TrxNetUdp::beginPacket(IPAddress ip, uint16_t port) {
@@ -31,7 +38,11 @@ int TrxNetUdp::beginPacket(const char *, uint16_t) {
 int TrxNetUdp::endPacket() {
   if (!txOpen_) return 0;
   txOpen_ = false;
-  bool ok = socket_.sendTo(txBuffer_.data(), txBuffer_.size(), txTarget_);
+  // Discovery out of every interface -- only from the INADDR_ANY socket; one
+  // bound to a specific address (TrxnetPeer's) sends where it is bound.
+  bool ok = listenIp_.empty() && txTarget_.addr == htonl(INADDR_BROADCAST)
+                ? socket_.sendBroadcast(txBuffer_.data(), txBuffer_.size(), txTarget_.port)
+                : socket_.sendTo(txBuffer_.data(), txBuffer_.size(), txTarget_);
   txBuffer_.clear();
   return ok ? 1 : 0;
 }
@@ -47,8 +58,12 @@ size_t TrxNetUdp::write(const uint8_t *buffer, size_t size) {
 int TrxNetUdp::parsePacket() {
   uint8_t staging[2048];
   UdpPeer from;
-  int got = socket_.recv(staging, sizeof(staging), &from);
-  if (got <= 0) return 0;
+  int got;
+  do {
+    got = socket_.recv(staging, sizeof(staging), &from);
+    if (got <= 0 && tapOpen_) got = broadcastTap_.recv(staging, sizeof(staging), &from);
+    if (got <= 0) return 0;
+  } while (echo_.isEcho(from.addr, from.port, staging, (size_t)got));
   rxBuffer_.assign(staging, staging + got);
   rxOffset_ = 0;
   lastRemote_ = from;

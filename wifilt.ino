@@ -692,6 +692,23 @@ bool trxTopicsFull = false;
 void onTrxAnyTopic(const char* from, const char* path,
                    const uint8_t* data, size_t len);
 
+// One TrxNet name heard from two addresses (library 1.09 onNameConflict()): two
+// devices set to the same NET_ID. The peer table keys on the name and silently
+// follows whichever announced last, so without this the only symptom is messages
+// going to the wrong box. Kept a while after the last sighting so SETUP still
+// shows it between announces; the callback is defined beside onTrxAnyTopic, and
+// declared by hand here for the same two-builds reason as the one above.
+#define TRX_CONFLICT_MAX     4
+#define TRX_CONFLICT_HOLD_MS (2 * TRXNET_PEER_TIMEOUT_MS)
+struct TrxNameConflict {
+  char      name[TRXNET_MAX_DEVICE_NAME];
+  IPAddress ip, otherIp;   // otherIp 0.0.0.0 = the other one is this device
+  uint32_t  lastMs;
+  bool      used;
+};
+TrxNameConflict trxConflicts[TRX_CONFLICT_MAX];
+void onTrxNameConflict(const char* name, IPAddress ip, IPAddress otherIp);
+
 struct PaState {
   bool     seen;        // anything at all has arrived from the amplifier
   uint32_t lastRxMs;    // millis() of the last topic, for the stale check
@@ -1266,6 +1283,7 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void handleGetState(void);
   void handleSetupData(void);
   void handleTrxNetPeers(void);
+  int trxConflictCount(void);
   void handleWebServerLoop(void);
   bool handleFileFromSPIFFS(const String &path);
   void handlePostCmd(void);
@@ -2190,6 +2208,7 @@ void handleSetupData(){
   j += "\"";
   j += ",\"trxnetidIsDefault\":"; j += trxnetidIsDefault ? "true" : "false";
   j += ",\"trxnetDeviceName\":\""; j += configJsonEscape(TRXNET_ID != 0x00 ? String(trxDeviceName) : String("disabled")); j += "\"";
+  j += ",\"trxnetConflicts\":"; j += (trxNetEnabled && !APmode) ? trxConflictCount() : 0;
   j += ",\"trxnetApNote\":\""; j += APmode ? "TrxNet is not active in AP mode - requires WiFi station mode." : ""; j += "\"";
   j += ",\"ssid\":\""; j += configJsonEscape(SSID); j += "\"";
   j += ",\"pswd\":\""; j += configJsonEscape(PSWD); j += "\"";
@@ -2304,6 +2323,21 @@ void handleTrxNetPeers(){
       j += ",\"ip\":\"";   j += p->ip.toString(); j += "\"";
       j += ",\"age\":";    j += age;
       j += ",\"prio\":";   j += trxIsPriorityName(p->name) ? "true" : "false";
+      j += "}";
+    }
+    j += "],\"conflicts\":[";
+    first = true;
+    for (int i = 0; i < TRX_CONFLICT_MAX; i++) {
+      const TrxNameConflict &c = trxConflicts[i];
+      if (!c.used || now - c.lastMs > TRX_CONFLICT_HOLD_MS) continue;
+      if (!first) j += ",";
+      first = false;
+      bool self = (uint32_t)c.otherIp == 0;
+      j += "{\"name\":\""; j += configJsonEscape(String(c.name)); j += "\"";
+      j += ",\"self\":"; j += self ? "true" : "false";
+      j += ",\"ips\":[\""; j += c.ip.toString(); j += "\"";
+      if (!self) { j += ",\""; j += c.otherIp.toString(); j += "\""; }
+      j += "],\"age\":"; j += (now - c.lastMs) / 1000;
       j += "}";
     }
     j += "]";
@@ -6360,6 +6394,7 @@ void setup(){
       net.setPriorityPrefixes(trxPrioCount ? trxPrioPtrs : NULL, trxPrioCount);  // before begin()
       net.begin(trxDeviceName);
       net.onAnyTopic(onTrxAnyTopic);   // discovery tap; costs no _subs slot
+      net.onNameConflict(onTrxNameConflict);
       net.subscribe("/hz",   onTrxHz);
       net.subscribe("/mode", onTrxMode);
       net.subscribe("/s-hz", onTrxSetHz);
@@ -8203,6 +8238,7 @@ void TrxNetLoop(){
     // WiFi reconnected — re-announce to network
     net.begin(trxDeviceName);
     net.onAnyTopic(onTrxAnyTopic);  // dropped by begin() exactly like subscriptions
+    net.onNameConflict(onTrxNameConflict);
     paSubscribeTopics();          // begin() does not carry subscriptions over
     trxNetEnabled = true;
     Serial.print("TRXNET| reconnect begin ");
@@ -8260,6 +8296,52 @@ static const char* trxnetModeToString(uint8_t civMode) {
     case 0x17: return "DV";
     default:   return nullptr;
   }
+}
+
+// Same packet path as onTrxAnyTopic: only writes the table. Our own name heard
+// from our own address is this device's broadcast looped back by the stack
+// (native/Linux), not a second device. A PC has several own addresses and sends
+// discovery out of each interface (nativeSendBroadcast()); the copy that comes
+// back first carries that interface's address, not necessarily WiFi.localIP().
+void onTrxNameConflict(const char* name, IPAddress ip, IPAddress otherIp) {
+  if (!name || !name[0]) return;
+  bool self = (uint32_t)otherIp == 0;
+#if defined(WIFILT_NATIVE)
+  if (self && nativeAddressIsOwn((uint32_t)ip)) return;
+#else
+  if (self && ip == WiFi.localIP()) return;
+#endif
+  uint32_t now = millis();
+  int slot = -1, stalest = -1;
+  uint32_t stalestAge = 0;
+  for (int i = 0; i < TRX_CONFLICT_MAX; i++) {
+    TrxNameConflict &c = trxConflicts[i];
+    if (!c.used || now - c.lastMs > TRX_CONFLICT_HOLD_MS) { if (slot < 0) slot = i; continue; }
+    // A peer conflict flips between the same two addresses -- one entry, either order.
+    bool same = strcmp(c.name, name) == 0 &&
+                ((c.ip == ip && c.otherIp == otherIp) || (!self && c.ip == otherIp && c.otherIp == ip));
+    if (same) { c.lastMs = now; return; }
+    uint32_t age = now - c.lastMs;
+    if (stalest < 0 || age > stalestAge) { stalest = i; stalestAge = age; }
+  }
+  if (slot < 0) slot = stalest;
+  if (slot < 0) return;
+  TrxNameConflict &c = trxConflicts[slot];
+  memset(c.name, 0, sizeof(c.name));
+  strncpy(c.name, name, sizeof(c.name) - 1);
+  c.ip = ip;
+  c.otherIp = otherIp;
+  c.lastMs = now;
+  c.used = true;
+}
+
+// Name conflicts still within TRX_CONFLICT_HOLD_MS, for /trxnet-peers.json.
+int trxConflictCount(){
+  uint32_t now = millis();
+  int n = 0;
+  for (int i = 0; i < TRX_CONFLICT_MAX; i++)
+    if (trxConflicts[i].used && now - trxConflicts[i].lastMs <= TRX_CONFLICT_HOLD_MS) n++;
+  return n;
 }
 
 // Receive /hz from a configured peer — update the matching TRX slot.

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Setup — WIFILT</title>
-  <link rel="stylesheet" href="/setup.css?v=fa5acede">
+  <link rel="stylesheet" href="/setup.css?v=c134ae54">
 </head>
 <body>
   <header class="topbar">
@@ -64,7 +64,7 @@
       <!-- The live TrxNet device list. Shared with the RTTY page's FSK output
            picker and the JS8 TELEMETRY panel, which is why it is a module and
            not a third hand-copied function. -->
-      <script src="/trxnet-peers.js?v=ba918aaf"></script>
+      <script src="/trxnet-peers.js?v=9a2bd921"></script>
       <!-- The identity fields on this page are the only editable copy in the
            product, so the validation they use has to be the same one every other
            page trusts. -->
@@ -310,7 +310,7 @@
                         LOCAL-TRX
                         <span class="help-tip" data-tip="Virtual Icom radio for connecting a non-Icom transceiver, or an Icom radio without LAN, via the local-trx bridge. Since wifilt runs on separate hardware here, enter the LAN IP of the PC running local-trx below — CI-V and login fields are prefilled.">?</span>
                       </label>
-                      <p class="setup-note" data-localtrx-link="trx1" hidden>local-trx detected — <a href="#" target="_blank" rel="noopener">open its settings</a></p>
+                      <p class="setup-note" data-localtrx-link="trx1" hidden><a href="#" target="_blank" rel="noopener">Open local-trx settings ↗</a> <span data-localtrx-status></span></p>
                       <label>Radio IP address
                         <div class="input-with-tip">
                           <input type="text" name="trx1lanip" maxlength="15" placeholder="192.168.1.60" value="">
@@ -377,7 +377,7 @@
                         LOCAL-TRX
                         <span class="help-tip" data-tip="Virtual Icom radio for connecting a non-Icom transceiver, or an Icom radio without LAN, via the local-trx bridge. Since wifilt runs on separate hardware here, enter the LAN IP of the PC running local-trx below — CI-V and login fields are prefilled.">?</span>
                       </label>
-                      <p class="setup-note" data-localtrx-link="trx2" hidden>local-trx detected — <a href="#" target="_blank" rel="noopener">open its settings</a></p>
+                      <p class="setup-note" data-localtrx-link="trx2" hidden><a href="#" target="_blank" rel="noopener">Open local-trx settings ↗</a> <span data-localtrx-status></span></p>
                       <label>Radio IP address
                         <div class="input-with-tip">
                           <input type="text" name="trx2lanip" maxlength="15" placeholder="192.168.1.61" value="">
@@ -438,7 +438,7 @@
                         LOCAL-TRX
                         <span class="help-tip" data-tip="Virtual Icom radio for connecting a non-Icom transceiver, or an Icom radio without LAN, via the local-trx bridge. Since wifilt runs on separate hardware here, enter the LAN IP of the PC running local-trx below — CI-V and login fields are prefilled.">?</span>
                       </label>
-                      <p class="setup-note" data-localtrx-link="trx3" hidden>local-trx detected — <a href="#" target="_blank" rel="noopener">open its settings</a></p>
+                      <p class="setup-note" data-localtrx-link="trx3" hidden><a href="#" target="_blank" rel="noopener">Open local-trx settings ↗</a> <span data-localtrx-status></span></p>
                       <label>Radio IP address
                         <div class="input-with-tip">
                           <input type="text" name="trx3lanip" maxlength="15" placeholder="192.168.1.62" value="">
@@ -626,7 +626,7 @@
       <div class="setup-form spiffs-form">
 
         <details class="setup-section" id="trxnetSection">
-          <summary class="setup-section-title">TrxNet <span class="setup-local-badge" title="Stored in NVS on the interface. A firmware flash never writes there, so these survive an update.">eeprom</span></summary>
+          <summary class="setup-section-title">TrxNet <span class="setup-local-badge" title="Stored in NVS on the interface. A firmware flash never writes there, so these survive an update.">eeprom</span><span id="trxnetConflictWarning" class="setup-required-warning" role="status" hidden>ID CONFLICT</span></summary>
           <div class="setup-section-body">
             <span id="trxnetApNote"></span>
             <label>Own NET_ID
@@ -764,6 +764,19 @@
       // duplicated here rather than shared, since the two apps ship separately.
       var LOCAL_TRX_WEBUI_PORT = 8765;
 
+      // TrxNet name conflict (two devices on one NET_ID): a red badge on the
+      // TrxNet section title, the red frame too while it is closed. Set from
+      // setup-data.json at load, then by the live device list while it polls.
+      window.setTrxnetConflictWarning = function (count) {
+        var badge = document.getElementById('trxnetConflictWarning');
+        var section = document.getElementById('trxnetSection');
+        if (badge) {
+          badge.hidden = !count;
+          badge.textContent = count > 1 ? count + ' ID CONFLICTS' : 'ID CONFLICT';
+        }
+        if (section) section.classList.toggle('setup-section-warning', count > 0);
+      };
+
       function setValue(name, value) {
         var el = document.querySelector('[name="' + name + '"]');
         if (!el || value === undefined || value === null) return;
@@ -821,6 +834,7 @@
             'HW ' + (data.hwRev || '')
           ].filter(Boolean).join(' | ');
         }
+        window.setTrxnetConflictWarning(data.trxnetConflicts || 0);
         var note = document.getElementById('trxnetApNote');
         if (note && data.trxnetApNote) {
           note.className = 'ap-note';
@@ -1038,35 +1052,53 @@
           if (ipInput && localTrxIsNative) ipInput.value = '127.0.0.1';
           refreshLocalTrxLink(prefix);
         }
-        // The Scan button cannot ever find local-trx (it sweeps this device's
-        // own /24 and explicitly skips its own address, so loopback is never a
-        // candidate), so the only way to confirm it is actually there is a
-        // direct probe of its web UI once an IP is known. no-cors is enough --
-        // it resolves for ANY response and only rejects on a real connection
-        // failure, so nothing needs local-trx's server to send CORS headers.
+        // A checked LOCAL-TRX always shows the link to local-trx's own setup
+        // page (new tab) -- it is where CAT/audio/keying get set up, so it is
+        // needed most exactly when local-trx is NOT answering yet. The probe
+        // only adds a status word next to it. The Scan button cannot ever find
+        // local-trx (it sweeps this device's own /24 and explicitly skips its
+        // own address, so loopback is never a candidate), hence a direct probe
+        // of its web UI. no-cors is enough -- it resolves for ANY response and
+        // only rejects on a real connection failure, so nothing needs
+        // local-trx's server to send CORS headers.
         var localTrxProbeToken = {};
         function refreshLocalTrxLink(prefix) {
           var checkbox = document.querySelector('[data-localtrx="' + prefix + '"]');
           var note = document.querySelector('[data-localtrx-link="' + prefix + '"]');
           if (!checkbox || !note) return;
+          var link = note.querySelector('a');
+          var status = note.querySelector('[data-localtrx-status]');
           // Typing in the IP field fires this on every keystroke, so a slow
           // reply to an earlier (now-stale) address must not overwrite what a
           // later probe already decided.
           var token = (localTrxProbeToken[prefix] = (localTrxProbeToken[prefix] || 0) + 1);
+          note.hidden = !checkbox.checked;
+          if (!checkbox.checked) return;
           var ipInput = document.querySelector('[name="' + prefix + 'lanip"]');
-          var ip = (checkbox.checked && ipInput) ? ipInput.value.trim() : '';
-          if (!ip) { note.hidden = true; return; }
+          var ip = ipInput ? ipInput.value.trim() : '';
+          // Loopback means "the PC wifilt itself runs on" -- but in a link it
+          // would point at the BROWSER's machine, so use the host this page
+          // came from instead (the same PC, as the native build sits next to
+          // local-trx there).
+          if (/^(127\.|localhost$)/i.test(ip)) ip = location.hostname;
+          if (link) link.hidden = !ip;
+          if (!ip) {
+            if (status) status.textContent = 'Enter the IP of the PC running local-trx below to get a link to its settings.';
+            return;
+          }
           var url = 'http://' + ip + ':' + LOCAL_TRX_WEBUI_PORT + '/';
-          fetch(url + 'api/config', { mode: 'no-cors', signal: AbortSignal.timeout(800) })
+          if (link) link.href = url;
+          if (status) status.textContent = '(' + ip + ':' + LOCAL_TRX_WEBUI_PORT + ', checking…)';
+          var opts = { mode: 'no-cors' };
+          if (window.AbortSignal && AbortSignal.timeout) opts.signal = AbortSignal.timeout(800);
+          fetch(url + 'api/config', opts)
             .then(function () {
               if (localTrxProbeToken[prefix] !== token) return;
-              var link = note.querySelector('a');
-              if (link) link.href = url;
-              note.hidden = false;
+              if (status) status.textContent = '(' + ip + ':' + LOCAL_TRX_WEBUI_PORT + ', detected)';
             })
             .catch(function () {
               if (localTrxProbeToken[prefix] !== token) return;
-              note.hidden = true;
+              if (status) status.textContent = '(' + ip + ':' + LOCAL_TRX_WEBUI_PORT + ', not answering)';
             });
         }
         document.querySelectorAll('[data-localtrx]').forEach(function (checkbox) {
@@ -1584,7 +1616,11 @@
       TrxnetPeers.mount(
         document.getElementById('trxnetSection'),
         document.getElementById('trxnetPeers'),
-        function () { return lastFocused; }
+        {
+          fillTarget: function () { return lastFocused; },
+          conflicts: true,
+          onConflicts: function (list) { window.setTrxnetConflictWarning(list.length); }
+        }
       );
     }());
 
