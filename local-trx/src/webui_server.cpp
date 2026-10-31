@@ -84,7 +84,19 @@ void WebUiServer::handleDevices() {
   root["audioCapture"] = audio.capture;
   root["audioPlayback"] = audio.playback;
 
-  root["serialPorts"] = listSerialPorts();
+  // udev aliases first -- a fixed name is the one worth picking, the kernel
+  // ttyUSBn behind it can renumber across replugs. serialPortLinks lets the
+  // page show which kernel port each alias currently points at.
+  std::vector<std::string> ports = listSerialPorts();
+  json portList = json::array();
+  json portLinks = json::object();
+  for (const SerialAlias &a : findSerialAliases(ports)) {
+    portList.push_back(a.path);
+    portLinks[a.path] = a.target;
+  }
+  for (const std::string &p : ports) portList.push_back(p);
+  root["serialPorts"] = std::move(portList);
+  root["serialPortLinks"] = std::move(portLinks);
 
   json models = json::array();
   for (const RigModelInfo &m : listRigModels()) {

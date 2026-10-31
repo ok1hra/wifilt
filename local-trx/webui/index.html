@@ -303,7 +303,11 @@ function applyAudioDevices(devices) {
 }
 function applySerialPorts(select, devices) {
   const cur = select.value;
-  fillSelect(select, devices.serialPorts, true);
+  // udev aliases (/dev/ttyUSB.cat) come first and show the kernel port they
+  // currently point at; serialPortLinks is absent on an older backend.
+  const links = devices.serialPortLinks || {};
+  fillSelect(select, devices.serialPorts, true,
+             v => links[v] ? v + " → " + links[v].replace(/^\/dev\//, "") : v);
   setSelectValue(select, cur);
 }
 function applyRigModels(devices) {

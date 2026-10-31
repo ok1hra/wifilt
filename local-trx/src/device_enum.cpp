@@ -1,6 +1,14 @@
 #include "device_enum.h"
 
 #include <algorithm>
+#include <map>
+
+#ifndef _WIN32
+#include <dirent.h>
+#include <limits.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+#endif
 
 // Declarations only -- MINIAUDIO_IMPLEMENTATION lives in its own translation
 // unit (third_party/miniaudio/miniaudio_impl.c), same split audio_bridge.cpp
@@ -42,6 +50,40 @@ std::vector<std::string> listSerialPorts() {
   }
   sp_free_port_list(list);
   return names;
+}
+
+std::vector<SerialAlias> findSerialAliases(const std::vector<std::string> &ports,
+                                           const std::string &dir) {
+  std::vector<SerialAlias> aliases;
+#ifndef _WIN32
+  // Compare canonical paths on both sides: an udev link is usually relative
+  // ("ttyUSB0"), and a listed port could itself be a symlink in principle.
+  std::map<std::string, std::string> byCanonical;
+  for (const std::string &port : ports) {
+    char resolved[PATH_MAX];
+    if (realpath(port.c_str(), resolved)) byCanonical[resolved] = port;
+  }
+  if (byCanonical.empty()) return aliases;
+
+  DIR *d = opendir(dir.c_str());
+  if (!d) return aliases;
+  while (struct dirent *entry = readdir(d)) {
+    std::string path = dir + "/" + entry->d_name;
+    struct stat st;
+    if (lstat(path.c_str(), &st) != 0 || !S_ISLNK(st.st_mode)) continue;
+    char resolved[PATH_MAX];
+    if (!realpath(path.c_str(), resolved)) continue;   // dangling link
+    auto it = byCanonical.find(resolved);
+    if (it != byCanonical.end() && it->second != path) aliases.push_back({path, it->second});
+  }
+  closedir(d);
+  std::sort(aliases.begin(), aliases.end(),
+            [](const SerialAlias &a, const SerialAlias &b) { return a.path < b.path; });
+#else
+  (void)ports;
+  (void)dir;
+#endif
+  return aliases;
 }
 
 namespace {
