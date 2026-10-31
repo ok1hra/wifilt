@@ -219,7 +219,9 @@ volatile bool cwIpSendPending = false;
   401-402 RKEY UDP port (UShort, 0xffff -> 5690)
   403-404 RKEY default playout delay ms (UShort, 0xffff -> 120)
   405-420 RKEY shared SipHash key (16 B; all 0xff = none)
-  421-423 FREE
+  421 WEB pacing     (web_pacer.h; 0xff = never set = platform default:
+                      on for the ESP32 box, off for native; 0 off, 1 on)
+  422-423 FREE
 
   !! Increment EEPROM_SIZE #define !!
 */
@@ -453,6 +455,7 @@ char CwMsg[37] = "";
 #include "rtty_stream.h"        // RTTY decoder/TX text to TrxNet subscribers
 #include "jtty_stream.h"        // JTTY decodes/TX text to TrxNet subscribers
 #include "rkey_net.h"           // Paddle2IP remote CW key: UDP server task
+#include "web_pacer.h"          // file uploads yield to the radio link
 // See radio_transport.h's own comment on radioLanLocalControlPort(): 0 means
 // "use the real default (50001)", exactly today's behavior on the real
 // device and on native/ unless --lan-port-base overrides it.
@@ -923,6 +926,13 @@ int incomingByte = 0;   // for incoming serial data
   uint16_t RkeyDelayMs = 120;
   uint8_t  RkeyKey[16];
   bool     RkeyKeySet  = false;
+
+  // Pace static-file uploads by the radio link's health (web_pacer.h). On by
+  // default only on the box: its single WiFi TX queue is what the uploads fill.
+  // A PC has wired or far stronger WiFi; there it is opt-in.
+  #define WEB_PACING_EEPROM 421
+  bool     webPacing   = CAP_WIFI;
+  WebPacer webPacer;
 
   static const char* LOG_CONFIG_PATH = "/log-config.json";
   static const size_t LOG_CONFIG_MAX_BYTES = 2048;
@@ -2239,6 +2249,7 @@ void handleSetupData(){
   j += ",\"rkeyport\":\""; j += RkeyPort; j += "\"";
   j += ",\"rkeydelay\":\""; j += RkeyDelayMs; j += "\"";
   j += ",\"rkeykey\":\""; j += rkeyKeyHex(); j += "\"";
+  j += ",\"webpacing\":"; j += webPacing ? "true" : "false";
   j += ",\"blockedDxcc\":\""; j += configJsonEscape(g_lcBlockedDxcc); j += "\"";
   // fskOutputMode/fskNetId used to be serialized here too (this is a SEPARATE
   // g_lc* serialization from /log-config's own, feeding setup.html's
@@ -2981,6 +2992,21 @@ void handlePairingReject() {
   webServer.send(200, "application/json", "{\"ok\":true}");
 }
 
+// What web_pacer.h judges an upload by: the LAN radio session's health and,
+// while RX audio streams, how far the audio WebSocket has fallen behind.
+static WebPaceInput webPaceSnapshot(){
+  WebPaceInput in;
+  IcomLanClient *client = lanRadioClient();
+  if (!client || !client->connected()) return in;
+  in.link = true;
+  in.rtxRequests = client->retransmitRequests();
+  in.pingRtt = client->pingRttCivMs();
+  in.pongAgeMs = client->pingReplyAgeCivMs();
+  in.audio = AudioWsClient.connected();
+  in.wsBacklog = wsOutLen;
+  return in;
+}
+
 bool handleFileFromSPIFFS(const String &path){
   // Keep lightweight /state and session heartbeats alive during long WSPR TX,
   // but reject flash-backed asset transfers. Flash cache stalls can pause both
@@ -3036,8 +3062,12 @@ bool handleFileFromSPIFFS(const String &path){
   static uint8_t buf[4096];
   size_t buffered = 0;
   size_t sent = 0;
-  uint32_t lastProgress = millis();
+  // Time the browser has been refusing data, not time spent here: a paced
+  // pause is ours and must not read as a dead browser.
+  uint32_t stalledSince = 0;
   bool transferOk = webFd >= 0;
+  const uint32_t paceStart = millis(), paceCuts = webPacer.cuts, paceHolds = webPacer.holds;
+  bool paced = false;
   while (transferOk && (sent < buffered || f.available())) {
     if (sent == buffered) {
       buffered = f.read(buf, sizeof(buf));
@@ -3045,13 +3075,22 @@ bool handleFileFromSPIFFS(const String &path){
       if (buffered == 0) break;
     }
 
-    int n = netSendNonBlocking(webFd, buf + sent, buffered - sent);
+    size_t want = buffered - sent;
+    if (webPacing) {
+      uint32_t allow = webPaceAllow(webPacer, webPaceSnapshot(), millis());
+      if (allow != WEB_PACE_UNLIMITED) paced = true;
+      if (allow < want) want = allow;
+    }
+    int n = want ? netSendNonBlocking(webFd, buf + sent, want) : 0;
     if (n > 0) {
       sent += (size_t)n;
-      lastProgress = millis();
+      stalledSince = 0;
+      if (webPacing) webPaceSent(webPacer, (uint32_t)n, millis());
       wifiInboundCount++;   // send space only frees up as the browser's ACKs arrive
     } else if (n < 0) {
       transferOk = false;
+    } else if (want && !stalledSince) {
+      stalledSince = millis();
     }
 
     // Do not call webServer.handleClient() recursively here. The radio, TrxNet,
@@ -3067,9 +3106,17 @@ bool handleFileFromSPIFFS(const String &path){
     delay(0);
 
     // Abandon a dead browser instead of monopolising the firmware indefinitely.
-    if (millis() - lastProgress > 15000) transferOk = false;
+    if (stalledSince && millis() - stalledSince > 15000) transferOk = false;
   }
   if (!transferOk) webClient.stop();
+  // One line per upload the pacer actually had to slow down.
+  if (paced && (webPacer.cuts != paceCuts || webPacer.holds != paceHolds)) {
+    uint32_t ms = millis() - paceStart;
+    Serial.printf("HTTP| paced %s %u B in %u ms, %u cuts %u holds, now %u kB/s\n",
+                  servePath.c_str(), (unsigned)f.size(), (unsigned)ms,
+                  (unsigned)(webPacer.cuts - paceCuts), (unsigned)(webPacer.holds - paceHolds),
+                  (unsigned)(webPacer.rate / 1024));
+  }
   f.close();
   webQuietUntil = millis() + 1500;
   return true;
@@ -3809,6 +3856,7 @@ void handleConfigDownload() {
   j += ",\"rkeyport\":";    j += RkeyPort;
   j += ",\"rkeydelay\":";   j += RkeyDelayMs;
   j += ",\"rkeykey\":\"";    j += rkeyKeyHex(); j += "\"";
+  j += ",\"webpacing\":";  j += webPacing ? "true" : "false";
   j += ",\"btname\":\"";     j += configJsonEscape(BT_NAME);     j += "\"";
   webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   webServer.sendHeader("Pragma", "no-cache");
@@ -4000,6 +4048,12 @@ void handleConfigUpload() {
                                  String(parseField("rkeydelay", 10, 1000)),
                                  extractJsonString(body, "rkeykey"));
     if (err.length()) Serial.println("CFG | " + err + " -- remote CW key not restored");
+  }
+
+  // Older backups lack it and keep this interface's choice.
+  if (body.indexOf("\"webpacing\"") >= 0) {
+    webPacing = extractJsonBool(body, "webpacing", webPacing);
+    EEPROM.writeByte(WEB_PACING_EEPROM, webPacing ? 1 : 0);
   }
 
   if (body.indexOf("\"btname\"") >= 0) {
@@ -6102,6 +6156,9 @@ void setup(){
       }
       RkeyKeySet = any != 0 && blank != 0xff;
     }
+
+    // 421 web upload pacing
+    if (EEPROM.read(WEB_PACING_EEPROM) != 0xff) webPacing = EEPROM.read(WEB_PACING_EEPROM) == 1;
 
   }
 //------------------------------------------
@@ -10328,6 +10385,9 @@ void handleSet() {
 
     cwIpOnConnect = requestHasArg("cwIpOnConnect");
     EEPROM.writeBool(136, cwIpOnConnect);
+
+    webPacing = requestHasArg("webpacing");
+    EEPROM.writeByte(WEB_PACING_EEPROM, webPacing ? 1 : 0);
 
     {
       String dxchost = requestArg("dxchost");

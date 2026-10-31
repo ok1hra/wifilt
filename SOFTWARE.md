@@ -124,6 +124,7 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
  · [9.8 Remote CW key](#98-remote-cw-key)
  · [9.9 Remote management of JS8 unattended operation](#99-remote-management-of-js8-unattended-operation)
  · [9.10 Save, download and upload the configuration](#910-save-download-and-upload-the-configuration)
+ · [9.11 Web server](#911-web-server)
 
 **[10. LOGSYNC](#10-logsync)**
  · [10.1 Where your QSOs live](#101-where-your-qsos-live)
@@ -4119,7 +4120,7 @@ The file holds the whole station: WiFi, the radios and their saved presets, iden
 CW and frequency memories, the remote CW key with its shared key, the log settings and QRPlog
 macros, every TX audio calibration,
 the JS8, WSPR, RTTY and Mercury settings (including their band schedules), the Mercury
-tuning and the band decoder. Not in it:
+tuning, the band decoder and the web server's pacing switch. Not in it:
 
 - the **QSO log** — it lives in the browser; back it up in LOGSYNC ([chapter 10](#10-logsync));
 - the **MSG BOX** — stored messages cannot be exported;
@@ -4130,6 +4131,30 @@ tuning and the band decoder. Not in it:
   update does not touch these — they stay in that browser.
 
 The page footer links to the licence notices the device serves from its own filesystem.
+
+### 9.11 Web server
+
+`eeprom`
+
+| Field | Meaning |
+|---|---|
+| **Slow page loads down for the radio link** | while an ICOM-LAN radio is connected, page files go out only as fast as the radio link stays healthy. On by default on the interface box, off on the PC build. |
+
+The interface has one WiFi transmit queue for everything it sends. Opening a page pushes
+up to 2 MB of files into it (the JS8 page alone: modem, decoder, dictionary), and while it
+is full the radio's control and CI-V packets and the RX audio to another browser wait behind
+them. Without pacing, a second browser opening the JS8 page while the first one listened
+could make the radio look switched off for a few seconds (frequency `0`, mode `OFF`, PWR-OUT
+low) and break up the audio, although the LAN session itself never dropped.
+
+With pacing on, the file slows down by itself — to half, and again, down to about 16 kB/s —
+whenever the radio asks for a lost packet again, its pings come back late or stop, or the RX
+audio to a browser falls behind; while the link stays clean the speed climbs back. With no
+radio connected nothing is slowed. A page may take longer to load while audio streams. Each
+file that had to be slowed leaves one line in the serial log, e.g.
+`HTTP| paced /js8-jsc.bin.br 863511 B in 14210 ms, 6 cuts 2 holds, now 48 kB/s`.
+
+Turn it off if pages load too slowly and the radio link has never suffered.
 
 ---
 

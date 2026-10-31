@@ -610,6 +610,17 @@
           </div>
         </details>
 
+        <details class="setup-section" id="webPacingSection">
+          <summary class="setup-section-title">Web server <span class="setup-local-badge" title="Stored in NVS on the interface. A firmware flash never writes there, so these survive an update.">eeprom</span></summary>
+          <div class="setup-section-body">
+            <label class="checkbox-row">
+              <input type="checkbox" name="webpacing">
+              Slow page loads down for the radio link
+              <span class="help-tip" data-tip="While an ICOM-LAN radio is connected, page files are sent only as fast as the radio link stays healthy: slower whenever the radio asks for lost packets, its pings come back late, or RX audio to a browser falls behind. Stops a second browser opening a page from cutting the radio and audio off; a page may take longer to load meanwhile. On by default on the interface box, off on a PC. Turn off if pages load too slowly.">?</span>
+            </label>
+          </div>
+        </details>
+
       </form>
 
       <div class="setup-form spiffs-form">
@@ -835,6 +846,7 @@
         setupNames.forEach(function (name) { setValue(name, data[name]); });
 
         setValue('cwIpOnConnect', data.cwIpOnConnect);
+        setValue('webpacing', data.webpacing);
         setValue('trx2enable', data.trx2enabled);
         setValue('trx3enable', data.trx3enabled);
 

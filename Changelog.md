@@ -11,6 +11,26 @@ published.
 
 ## Working tree — not committed
 
+**Web: page loads no longer cut the radio link off.**
+
+* **The failure.** A second browser opened the JS8 page while RX audio streamed to the first:
+  the radio asked for our packets again and again (`retransmit resent=16 deferred=72`), the
+  gateway ping could not even leave the box (`ping_sock: send error=0`), the CI-V polls went
+  unanswered for over 4 s and the standby check reported `PWR| OFF (LAN standby)` — frequency
+  `0`, mode `OFF`, PWR-OUT low — twice, on a LAN session that never dropped. The file upload
+  had filled the WiFi TX queue; the loop never stalled, so the stall compensation had nothing
+  to forgive.
+* **Pacing** (`web_pacer.h`). While a LAN radio is connected, static files go out through a
+  token bucket that halves on every sign of trouble — a new retransmit request from the radio
+  (also a 150 ms pause), a late CI-V ping or none for 1.5 s, and while audio streams the audio
+  WebSocket queue backing up — and grows back while the link is clean. Floor 16 kB/s, so a page
+  always loads. Beside live audio it starts at 64 kB/s. Every slowed file logs
+  `HTTP| paced …`. `tools/web-pacer-smoke.cpp` covers the rules.
+* **SETUP → Web server** switches it, EEPROM 421, in the config backup too. On by default on
+  the ESP32 box, off on the PC build.
+* A paced pause no longer counts toward the 15 s dead-browser timeout; only the time the
+  browser refuses data does.
+
 **WiFi: an associated link that carries no data is now caught in about 30 s.**
 
 * **The failure.** After ~12 h in JS8 the page blinked `⚠ OFFLINE` and the IC-705 stopped

@@ -374,6 +374,14 @@ public:
   uint32_t pingRttCtrlMs() const { return ctrlPingRtt; }
   uint32_t pingRttCtrlMaxMs() const { return ctrlPingRttMax; }
   uint32_t pingRttCivMs() const { return civPingRtt; }
+  // Since the last CI-V pong, 0 = none on this session yet. civPingRtt alone
+  // keeps its last good value when pongs stop arriving, which hides the worst
+  // case; web_pacer.h needs both.
+  uint32_t pingReplyAgeCivMs() const { return civLastPongMs ? millis() - civLastPongMs : 0; }
+  // Every retransmit request the radio sent, monotonic. The radio asks the
+  // moment it sees a gap in our sequence numbers, so a new one is the earliest
+  // proof that our datagrams are being lost on the way out.
+  uint32_t retransmitRequests() const { return rtxRequests; }
   uint32_t pingRttCivMaxMs() const { return civPingRttMax; }
   uint32_t pingRttAudioMs() const { return audioPingRtt; }
   uint32_t pingRttAudioMaxMs() const { return audioPingRttMax; }
@@ -685,7 +693,8 @@ private:
   // Link-latency samples: last + max-since-boot only (no ring buffer/EWMA), same
   // shape as lanHealthDrops/Stalls/Filled below -- cheap, and immune to multiple
   // independent /state readers racing a reset-on-read scheme.
-  uint32_t civPingRtt = 0, civPingRttMax = 0;
+  uint32_t civPingRtt = 0, civPingRttMax = 0, civLastPongMs = 0;
+  uint32_t rtxRequests = 0;
   uint32_t civReqRtt = 0, civReqRttMax = 0;
   uint8_t auxRot = 0;
   uint8_t txAuxRot = 0;
@@ -924,6 +933,7 @@ private:
 
   bool handleRetransmitRequest(WiFiUDP& u, const uint8_t* packet, int length) {
     if (length < 0x10 || getLE16(packet+4) != 0x01) return false;
+    rtxRequests++;
     if (length == 0x10) {
       respondRetransmit(u, getLE16(packet+6));
       return true;
@@ -1323,6 +1333,7 @@ private:
     lastFreqPoll = 0;
     auxRot = 0;
     civLastAyt = civLastReady = civLastPing = civLastIdle = 0;
+    civLastPongMs = 0;
     setState(LAN_CIV_AYT);
   }
 
@@ -1901,6 +1912,7 @@ private:
     if (n == 0x15 && type == 0x07 && r[0x10] == 0x01) {
       civPingRtt = millis() - getLE32(r+0x11);
       if (civPingRtt > civPingRttMax) civPingRttMax = civPingRtt;
+      civLastPongMs = millis();
       return;
     }
     if (handleRetransmitRequest(civUdp, r, n)) return;
