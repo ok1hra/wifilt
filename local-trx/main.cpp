@@ -56,7 +56,10 @@
 #include "src/icom_lan_server.h"
 #include "src/key_runner.h"
 #include "src/serial_key.h"
+#include "src/trxnet_keying.h"
+#include "src/trxnet_link.h"
 #include "src/trxnet_peer.h"
+#include "src/trxnet_rig.h"
 #include "src/webui_server.h"
 
 namespace {
@@ -254,9 +257,9 @@ class AudioDeviceKeeper {
 // 2026-10-22). Until the port opens, key/PTT are logged, not dropped.
 class KeyLineKeeper : public LocalTrx::KeyLine {
  public:
-  KeyLineKeeper(LocalTrx::SerialKeyLine &serial, LoggingKeyLine &fallback, const LocalTrx::Config &config)
-      : serial_(serial), fallback_(fallback), port_(config.keying.port),
-        keyLine_(config.keying.keyLine), pttLine_(config.keying.pttLine) {}
+  KeyLineKeeper(LocalTrx::SerialKeyLine &serial, LoggingKeyLine &fallback, const LocalTrx::KeyingConfig &keying)
+      : serial_(serial), fallback_(fallback), port_(keying.port),
+        keyLine_(keying.keyLine), pttLine_(keying.pttLine) {}
 
   // Main loop only. A no-op once open, and when no keying.port is configured.
   void keep() {
@@ -437,24 +440,53 @@ int main(int argc, char **argv) {
     return 0;
   }
 
+  // CAT, CW text and/or PTT through a TrxNet device (trxnet_link.h) instead
+  // of hamlib and DTR/RTS. Declared before KeyRunner so it outlives KeyRunner's
+  // thread, which may still be setting PTT on it. A bind failure only leaves
+  // the link deaf (CAT inert, PTT never keyed, both logged) -- same "degrade,
+  // do not refuse to start" rule as a rig that does not open below.
+  std::unique_ptr<LocalTrx::TrxnetLink> trxnetLink;
+  if (config.usesTrxnet()) {
+    trxnetLink = std::make_unique<LocalTrx::TrxnetLink>(config.trxnet);
+    if (!trxnetLink->begin(&error)) {
+      std::fprintf(stderr, "warning: %s -- TrxNet CAT/CW/PTT unavailable (is another TrxNet node "
+                           "already on that port? see trxnet.localPort in the wizard)\n",
+                   error.c_str());
+    }
+    if (config.trxnet.peer.empty()) {
+      std::fprintf(stderr, "warning: trxnet: no device picked -- Scan in the wizard and pick one\n");
+    }
+  }
+
   // A rig that fails to open (wrong port/baud, radio off or unplugged) never
   // stops the process -- found live 2026-09-02, a CAT/keying port mixup used
   // to take the wizard's own web server down with it, locking the operator
   // out of the one UI that could fix the mistake. CachedRigBackend answers
   // inert defaults (0 Hz, USB) until the rig opens, and keeps retrying it.
   // It also owns the only thread that ever talks to hamlib (see cached_rig.h).
-  LocalTrx::HamlibRigBackend hamlibRig((rig_model_t)config.cat.rigModel, config.cat.port, config.cat.baud);
-  const bool rigOpen = hamlibRig.open(&error);
-  if (!rigOpen) {
-    std::fprintf(stderr,
-                 "warning: cannot open rig (model %d, port %s): %s -- CAT reporting inert "
-                 "defaults and retrying (fix cat.port/cat.rigModel in the wizard, still reachable "
-                 "below)\n",
-                 config.cat.rigModel, config.cat.port.c_str(), error.c_str());
+  // cat.backend "trxnet" opens no hamlib at all: TrxnetRigBackend never
+  // blocks, so it needs no cache thread in front of it either.
+  LocalTrx::TrxnetRigBackend trxnetRig;
+  std::unique_ptr<LocalTrx::HamlibRigBackend> hamlibRig;
+  std::unique_ptr<LocalTrx::CachedRigBackend> cachedRig;
+  LocalTrx::RigBackend *rig = &trxnetRig;
+  if (config.catOverTrxnet()) {
+    trxnetLink->attachRig(&trxnetRig);
+  } else {
+    hamlibRig = std::make_unique<LocalTrx::HamlibRigBackend>((rig_model_t)config.cat.rigModel,
+                                                             config.cat.port, config.cat.baud);
+    const bool rigOpen = hamlibRig->open(&error);
+    if (!rigOpen) {
+      std::fprintf(stderr,
+                   "warning: cannot open rig (model %d, port %s): %s -- CAT reporting inert "
+                   "defaults and retrying (fix cat.port/cat.rigModel in the wizard, still reachable "
+                   "below)\n",
+                   config.cat.rigModel, config.cat.port.c_str(), error.c_str());
+    }
+    cachedRig = std::make_unique<LocalTrx::CachedRigBackend>(*hamlibRig, rigOpen);
+    cachedRig->start();
+    rig = cachedRig.get();
   }
-  LocalTrx::CachedRigBackend cachedRig(hamlibRig, rigOpen);
-  cachedRig.start();
-  LocalTrx::RigBackend *rig = &cachedRig;
 
   uint8_t civAddr = parseHexByte(config.identity.civAddress, 0xA6);
 
@@ -466,12 +498,29 @@ int main(int argc, char **argv) {
   // replaced) rather than refusing to start, and keeps retrying the port
   // from the main loop -- CAT/keying-text still all work meanwhile, just
   // without a physical line moving.
+  //
+  // With both CW and PTT over TrxNet nothing is left for the serial adapter,
+  // so it is not opened at all.
+  LocalTrx::KeyingConfig keyingConfig = config.keying;
+  if (config.cwOverTrxnet() && config.pttOverTrxnet()) keyingConfig.port.clear();
   LoggingKeyLine loggingKeyLine;
-  LocalTrx::SerialKeyLine serialKeyLine(config.keying.port, config.keying.baud,
-                                        config.keying.keyLine, config.keying.pttLine);
-  KeyLineKeeper keyLineKeeper(serialKeyLine, loggingKeyLine, config);
+  LocalTrx::SerialKeyLine serialKeyLine(keyingConfig.port, keyingConfig.baud,
+                                        keyingConfig.keyLine, keyingConfig.pttLine);
+  KeyLineKeeper keyLineKeeper(serialKeyLine, loggingKeyLine, keyingConfig);
   keyLineKeeper.keep();
-  LocalTrx::KeyRunner keyer(keyLineKeeper, config.keying.cwWpm);
+  std::unique_ptr<LocalTrx::TrxnetPttKeyLine> trxnetPttLine;
+  LocalTrx::KeyLine *keyLine = &keyLineKeeper;
+  if (config.pttOverTrxnet()) {
+    trxnetPttLine = std::make_unique<LocalTrx::TrxnetPttKeyLine>(keyLineKeeper, *trxnetLink);
+    keyLine = trxnetPttLine.get();
+  }
+  LocalTrx::KeyRunner keyer(*keyLine, config.keying.cwWpm);
+  std::unique_ptr<LocalTrx::TrxnetCwKeying> trxnetCw;
+  LocalTrx::KeyingBackend *keying = &keyer;
+  if (config.cwOverTrxnet()) {
+    trxnetCw = std::make_unique<LocalTrx::TrxnetCwKeying>(*trxnetLink, keyer, config.keying.cwWpm);
+    keying = trxnetCw.get();
+  }
 
   // RX audio (bod 2, fáze 2, no PTT interaction): only attempted when
   // explicitly configured -- an empty audio.inputDevice means "not set up
@@ -502,13 +551,22 @@ int main(int argc, char **argv) {
   if (audioPlaybackPtr) playbackKeeper.keep(audioPlayback);
 
   LocalTrx::IcomLanServer server(config.listenIp, config.identity.radioName, civAddr, *rig,
-                                  &keyer, audioCapturePtr, audioPlaybackPtr, verbose);
+                                  keying, audioCapturePtr, audioPlaybackPtr, verbose);
   if (!server.begin(&error)) {
     std::fprintf(stderr, "%s\nhint: ports 50001-50003 may already be in use\n", error.c_str());
     return 1;
   }
 
-  LocalTrx::TrxnetPeer trxnetPeer(config.listenIp, config.keying.fskNetId, keyer);
+  // wifilt's FSK text: keyed here, or handed on to the TrxNet device.
+  LocalTrx::TrxnetLink *fskLink = config.cwOverTrxnet() ? trxnetLink.get() : nullptr;
+  LocalTrx::TrxnetPeer trxnetPeer(
+      config.listenIp, config.keying.fskNetId,
+      [&keyer, fskLink](const std::string &text) {
+        return fskLink ? fskLink->sendText(text) : keyer.sendFskText(text);
+      },
+      [&keyer, fskLink]() {
+        if (fskLink) fskLink->abortText(); else keyer.abort();
+      });
   if (!trxnetPeer.begin(&error)) {
     std::fprintf(stderr, "trxnet_peer: %s\n", error.c_str());
     return 1;
@@ -530,10 +588,22 @@ int main(int argc, char **argv) {
     }
   }
 
-  std::printf("local-trx: radio '%s' civ=0x%02X, rig model %d on '%s', listenIp=%s "
-              "(informational -- see --bind-ip)\n",
-              config.identity.radioName.c_str(), civAddr, config.cat.rigModel,
-              config.cat.port.c_str(), config.listenIp.c_str());
+  if (config.catOverTrxnet()) {
+    std::printf("local-trx: radio '%s' civ=0x%02X, CAT via TrxNet device '%s', listenIp=%s "
+                "(informational -- see --bind-ip)\n",
+                config.identity.radioName.c_str(), civAddr, config.trxnet.peer.c_str(),
+                config.listenIp.c_str());
+  } else {
+    std::printf("local-trx: radio '%s' civ=0x%02X, rig model %d on '%s', listenIp=%s "
+                "(informational -- see --bind-ip)\n",
+                config.identity.radioName.c_str(), civAddr, config.cat.rigModel,
+                config.cat.port.c_str(), config.listenIp.c_str());
+  }
+  if (config.usesTrxnet()) {
+    std::printf("local-trx: CW/FSK text %s, PTT %s\n",
+                config.cwOverTrxnet() ? "via TrxNet" : "on the serial key line",
+                config.pttOverTrxnet() ? "via TrxNet /s-ptt lease" : "on the serial PTT line");
+  }
   std::fflush(stdout);
 
   std::signal(SIGINT, onSignal);
@@ -543,6 +613,7 @@ int main(int argc, char **argv) {
   while (!g_stop) {
     server.poll();
     trxnetPeer.poll();
+    if (trxnetLink) trxnetLink->poll();
     keyLineKeeper.keep();
     if (audioCapturePtr) captureKeeper.keep(audioCapture);
     if (audioPlaybackPtr) playbackKeeper.keep(audioPlayback);

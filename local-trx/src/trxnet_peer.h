@@ -6,7 +6,8 @@
 // 7679-7692]. local-trx becomes that peer: registers under the same name,
 // subscribes to "/s-cw", and keys FSK through the SAME KeyRunner CW-over-
 // CI-V uses (bod 7: CW and FSK are mode-exclusive and share one physical
-// key line).
+// key line) -- or, with keying.cwBackend "trxnet", hands the text on to the
+// real TrxNet device (trxnet_link.h), which keys FSK itself.
 //
 // Reuses $(TRXNET_DIR)/TrxNet.cpp unmodified via source recompilation (bod
 // 12/15's pattern for icom_lan_wire.h) -- zero diff in the TrxNet library
@@ -14,11 +15,11 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
 
 #include <TrxNet.h>
 
-#include "key_runner.h"
 #include "trxnet_udp.h"
 
 namespace LocalTrx {
@@ -28,7 +29,9 @@ class TrxnetPeer {
   // fskNetId matches wifilt's own config (config.keying.fskNetId here,
   // g_lcFskNetId there) -- the operator sets both to the same value, exactly
   // parallel to typing local-trx's IP into wifilt's ICOM-LAN field.
-  TrxnetPeer(std::string listenIp, uint8_t fskNetId, KeyRunner &keyer);
+  // sendFsk: false = busy, dropped. abort: wifilt's single 0xFF byte.
+  TrxnetPeer(std::string listenIp, uint8_t fskNetId,
+             std::function<bool(const std::string &)> sendFsk, std::function<void()> abort);
 
   bool begin(std::string *error);
   void poll();   // calls TrxNet::loop()
@@ -43,7 +46,8 @@ class TrxnetPeer {
   std::string deviceName_;   // "OI3.<hex fskNetId>"
   TrxNetUdp udp_;
   TrxNet net_;
-  KeyRunner &keyer_;
+  std::function<bool(const std::string &)> sendFsk_;
+  std::function<void()> abort_;
 };
 
 }  // namespace LocalTrx

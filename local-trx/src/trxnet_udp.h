@@ -49,6 +49,7 @@ class TrxNetUdp : public UDP {
  private:
   std::string listenIp_;
   UdpSocket socket_;
+  uint16_t boundPort_ = 0;   // 0 = not bound yet
 
   UdpPeer txTarget_;
   bool txOpen_ = false;

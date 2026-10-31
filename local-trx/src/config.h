@@ -17,12 +17,21 @@ struct AudioConfig {
 };
 
 struct CatConfig {
+  // "hamlib": serial CAT below. "trxnet": the TrxNet device in TrxnetConfig
+  // (an OI3 keyer that talks CI-V to the radio) -- port/baud/rigModel unused.
+  std::string backend = "hamlib";
   std::string port = "/dev/ttyUSB0";
   int         baud = 19200;
   int         rigModel = 1;   // hamlib RIG_MODEL_DUMMY -- see phase 1
 };
 
 struct KeyingConfig {
+  // Each "serial" (DTR/RTS on `port` below) or "trxnet" (TrxnetConfig's
+  // device). cwBackend covers CW and FSK text -- over TrxNet the device keys
+  // it with its own keyer, at its own speed. pttBackend covers every PTT,
+  // audio and the one KeyRunner raises around serial CW/FSK.
+  std::string cwBackend = "serial";
+  std::string pttBackend = "serial";
   std::string port = "/dev/ttyUSB1";   // second, independent serial adapter (bod 6/7)
   int         baud = 1200;
   std::string keyLine = "dtr";         // "dtr" | "rts" -- the other line is always PTT
@@ -31,6 +40,20 @@ struct KeyingConfig {
   // TrxNet peer identity for FSK (bod 15): wifilt's own g_lcFskOutputMode="trxnet"
   // sends here as OI3.<fskNetId>. Independent of CI-V address below.
   uint8_t fskNetId = 0x10;
+};
+
+// The TrxNet device CAT/CW/PTT go through when a backend above says
+// "trxnet" -- see trxnet_link.h. Not the FSK peer identity (keying.fskNetId),
+// which wifilt reaches on loopback.
+struct TrxnetConfig {
+  std::string peer;              // device name picked by the wizard's scan, e.g. "OI3.01"
+  uint8_t netId = 0x01;          // local-trx's own name on the network: "LTX.<netId>"
+  // The port this end listens on. 5684 beside a native wifilt, which already
+  // holds 5683 on this machine (TrxNet 1.08 setDiscoveryPort(); the device
+  // must run 1.08+ to answer). 5683 when wifilt runs elsewhere -- then any
+  // TrxNet version works.
+  uint16_t localPort = 5684;
+  uint16_t networkPort = 5683;   // what every other device uses
 };
 
 // Synthetic radio identity presented at LAN login (bod 3). radioName MUST NOT
@@ -70,7 +93,13 @@ struct Config {
   AudioConfig audio;
   CatConfig cat;
   KeyingConfig keying;
+  TrxnetConfig trxnet;
   IdentityConfig identity;
+
+  bool catOverTrxnet() const { return cat.backend == "trxnet"; }
+  bool cwOverTrxnet() const { return keying.cwBackend == "trxnet"; }
+  bool pttOverTrxnet() const { return keying.pttBackend == "trxnet"; }
+  bool usesTrxnet() const { return catOverTrxnet() || cwOverTrxnet() || pttOverTrxnet(); }
 };
 
 // Default config file location, mirroring native/platform/paths.cpp's pattern

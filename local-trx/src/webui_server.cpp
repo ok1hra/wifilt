@@ -1,6 +1,7 @@
 #include "webui_server.h"
 
 #include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <functional>
 #include <sstream>
@@ -13,6 +14,7 @@
 #include "device_enum.h"
 #include "hamlib_bridge.h"
 #include "serial_key.h"
+#include "trxnet_link.h"
 
 using nlohmann::json;
 
@@ -38,7 +40,16 @@ bool WebUiServer::begin(std::string *error) {
   return true;
 }
 
-void WebUiServer::poll() { server_->handleClient(); }
+void WebUiServer::poll() {
+  server_->handleClient();
+  if (trxnetScanner_) {
+    trxnetScanner_->poll();
+    if (!trxnetScanner_->pttWanted() && millis() - trxnetLastUseMs_ > kTrxnetIdleMs) {
+      trxnetScanner_.reset();
+      std::printf("[trxnet] wizard scanner closed (page idle)\n");
+    }
+  }
+}
 
 void WebUiServer::setupRoutes() {
   server_->on("/", [this]() {
@@ -59,6 +70,9 @@ void WebUiServer::setupRoutes() {
   server_->on("/api/test-cat", HTTP_POST, [this]() { handleTestCat(); });
   server_->on("/api/test-audio", HTTP_POST, [this]() { handleTestAudio(); });
   server_->on("/api/audio-level", HTTP_GET, [this]() { handleAudioLevel(); });
+  server_->on("/api/trxnet-scan", HTTP_POST, [this]() { handleTrxnetScan(); });
+  server_->on("/api/trxnet-peers", HTTP_GET, [this]() { handleTrxnetPeers(); });
+  server_->on("/api/trxnet-test-ptt", HTTP_POST, [this]() { handleTrxnetTestPtt(); });
 
   server_->onNotFound([this]() { server_->send(404, "text/plain", "not found"); });
 }
@@ -381,6 +395,133 @@ void WebUiServer::handleAudioLevel() {
   result["active"] = true;
   result["level"] = (int)((peak / 32767.0) * 100.0);
   server_->send(200, "application/json", result.dump().c_str());
+}
+
+// ---- TrxNet device: scan, list, PTT test ------------------------------------
+// Configure mode only, like every other test above: in Run mode the live
+// TrxnetLink already holds the port (and the form is locked anyway).
+
+void WebUiServer::handleTrxnetScan() {
+  if (hardwareLive_) {
+    sendError(409, "local-trx is running live -- switch to Configure to scan, the live TrxNet "
+                   "node already holds the port.");
+    return;
+  }
+  json req;
+  auto fail = [this](int code, const std::string &message) { sendError(code, message); };
+  if (!parseJsonBody(*server_, &req, fail)) return;
+
+  TrxnetConfig wanted;
+  try {
+    if (req.contains("netId")) wanted.netId = (uint8_t)req["netId"].get<unsigned>();
+    if (req.contains("localPort")) wanted.localPort = (uint16_t)req["localPort"].get<unsigned>();
+    if (req.contains("networkPort")) wanted.networkPort = (uint16_t)req["networkPort"].get<unsigned>();
+  } catch (const json::exception &e) {
+    fail(400, std::string("bad request: ") + e.what());
+    return;
+  }
+  if (wanted.netId == 0x00) {
+    fail(400, "TrxNet ID 00 is reserved as \"disabled\" -- pick 01..FF");
+    return;
+  }
+
+  const bool same = trxnetScanner_ && trxnetScannerConfig_.netId == wanted.netId &&
+                    trxnetScannerConfig_.localPort == wanted.localPort &&
+                    trxnetScannerConfig_.networkPort == wanted.networkPort;
+  if (!same) {
+    if (trxnetScanner_ && trxnetScanner_->pttWanted()) {
+      fail(409, "the TrxNet PTT test is still keyed -- turn it off first");
+      return;
+    }
+    trxnetScanner_.reset();   // its port must be free before the new one binds
+    auto scanner = std::make_unique<TrxnetLink>(wanted);
+    std::string error;
+    if (!scanner->begin(&error)) {
+      fail(500, error + (wanted.localPort == wanted.networkPort
+                             ? " -- a native wifilt on this PC holds it; pick 5684"
+                             : ""));
+      return;
+    }
+    trxnetScanner_ = std::move(scanner);
+    trxnetScannerConfig_ = wanted;
+  } else {
+    trxnetScanner_->probe();   // begin() above already probed a fresh one
+  }
+  trxnetLastUseMs_ = millis();
+  json ok;
+  ok["ok"] = true;
+  ok["name"] = trxnetScanner_->name();
+  server_->send(200, "application/json", ok.dump().c_str());
+}
+
+void WebUiServer::handleTrxnetPeers() {
+  json result;
+  result["active"] = (bool)trxnetScanner_;
+  json list = json::array();
+  if (trxnetScanner_) {
+    trxnetLastUseMs_ = millis();
+    result["name"] = trxnetScanner_->name();
+    result["pttWanted"] = trxnetScanner_->pttWanted();
+    result["pttConfirmed"] = trxnetScanner_->pttConfirmed();
+    for (const TrxnetLink::PeerInfo &p : trxnetScanner_->peers()) {
+      json entry = {{"name", p.name}, {"ip", p.ip}, {"port", p.port}, {"ptt", p.ptt}};
+      if (p.haveHz) entry["hz"] = p.hz;
+      if (p.haveMode) entry["mode"] = p.mode;
+      list.push_back(std::move(entry));
+    }
+  }
+  result["peers"] = std::move(list);
+  server_->send(200, "application/json", result.dump().c_str());
+}
+
+void WebUiServer::handleTrxnetTestPtt() {
+  if (hardwareLive_) {
+    sendError(409, "local-trx is running live -- switch to Configure to use the test buttons.");
+    return;
+  }
+  json req;
+  auto fail = [this](int code, const std::string &message) { sendError(code, message); };
+  if (!parseJsonBody(*server_, &req, fail)) return;
+  if (!req.contains("on")) {
+    fail(400, "missing on");
+    return;
+  }
+  bool on = false;
+  std::string peer;
+  try {
+    on = req["on"].get<bool>();
+    if (req.contains("peer")) peer = req["peer"].get<std::string>();
+  } catch (const json::exception &e) {
+    fail(400, std::string("bad request: ") + e.what());
+    return;
+  }
+  if (!trxnetScanner_) {
+    // Turning off something that is not there is done; turning on needs a scan.
+    if (!on) {
+      json ok;
+      ok["ok"] = true;
+      server_->send(200, "application/json", ok.dump().c_str());
+      return;
+    }
+    fail(409, "scan first");
+    return;
+  }
+  if (on) {
+    if (peer.empty()) {
+      fail(400, "pick a device first");
+      return;
+    }
+    trxnetScanner_->setPeer(peer);
+    if (!trxnetScanner_->peerPresent()) {
+      fail(409, peer + " is not on the network -- scan again");
+      return;
+    }
+  }
+  trxnetScanner_->setPtt(on);
+  trxnetLastUseMs_ = millis();
+  json ok;
+  ok["ok"] = true;
+  server_->send(200, "application/json", ok.dump().c_str());
 }
 
 }  // namespace LocalTrx

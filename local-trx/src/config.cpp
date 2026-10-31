@@ -62,6 +62,7 @@ Config parseConfigJson(const std::string &jsonText, std::string *error) {
 
     if (root.contains("cat")) {
       auto &c = root["cat"];
+      if (c.contains("backend"))  config.cat.backend  = c["backend"].get<std::string>();
       if (c.contains("port"))     config.cat.port     = c["port"].get<std::string>();
       if (c.contains("baud"))     config.cat.baud     = c["baud"].get<int>();
       if (c.contains("rigModel")) config.cat.rigModel = c["rigModel"].get<int>();
@@ -69,12 +70,22 @@ Config parseConfigJson(const std::string &jsonText, std::string *error) {
 
     if (root.contains("keying")) {
       auto &k = root["keying"];
+      if (k.contains("cwBackend"))  config.keying.cwBackend  = k["cwBackend"].get<std::string>();
+      if (k.contains("pttBackend")) config.keying.pttBackend = k["pttBackend"].get<std::string>();
       if (k.contains("port"))     config.keying.port     = k["port"].get<std::string>();
       if (k.contains("baud"))     config.keying.baud     = k["baud"].get<int>();
       if (k.contains("keyLine"))  config.keying.keyLine  = k["keyLine"].get<std::string>();
       if (k.contains("pttLine"))  config.keying.pttLine  = k["pttLine"].get<std::string>();
       if (k.contains("cwWpm"))    config.keying.cwWpm    = k["cwWpm"].get<int>();
       if (k.contains("fskNetId")) config.keying.fskNetId = (uint8_t)k["fskNetId"].get<unsigned>();
+    }
+
+    if (root.contains("trxnet")) {
+      auto &t = root["trxnet"];
+      if (t.contains("peer"))        config.trxnet.peer        = t["peer"].get<std::string>();
+      if (t.contains("netId"))       config.trxnet.netId       = (uint8_t)t["netId"].get<unsigned>();
+      if (t.contains("localPort"))   config.trxnet.localPort   = (uint16_t)t["localPort"].get<unsigned>();
+      if (t.contains("networkPort")) config.trxnet.networkPort = (uint16_t)t["networkPort"].get<unsigned>();
     }
 
     if (root.contains("identity")) {
@@ -115,17 +126,26 @@ std::string configToJsonString(const Config &config) {
     {"outputDevice", config.audio.outputDevice},
   };
   root["cat"] = {
+    {"backend", config.cat.backend},
     {"port", config.cat.port},
     {"baud", config.cat.baud},
     {"rigModel", config.cat.rigModel},
   };
   root["keying"] = {
+    {"cwBackend", config.keying.cwBackend},
+    {"pttBackend", config.keying.pttBackend},
     {"port", config.keying.port},
     {"baud", config.keying.baud},
     {"keyLine", config.keying.keyLine},
     {"pttLine", config.keying.pttLine},
     {"cwWpm", config.keying.cwWpm},
     {"fskNetId", (unsigned)config.keying.fskNetId},
+  };
+  root["trxnet"] = {
+    {"peer", config.trxnet.peer},
+    {"netId", (unsigned)config.trxnet.netId},
+    {"localPort", (unsigned)config.trxnet.localPort},
+    {"networkPort", (unsigned)config.trxnet.networkPort},
   };
   root["identity"] = {
     {"radioName", config.identity.radioName},

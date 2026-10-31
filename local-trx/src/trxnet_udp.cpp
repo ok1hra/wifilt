@@ -5,8 +5,13 @@ namespace LocalTrx {
 TrxNetUdp::TrxNetUdp(std::string listenIp) : listenIp_(std::move(listenIp)) {}
 
 uint8_t TrxNetUdp::begin(uint16_t port) {
+  // Idempotent per port: TrxnetLink binds first to see a failure (TrxNet's
+  // own begin() reports none), then TrxNet::begin() calls this again.
+  if (boundPort_ == port) return 1;
   std::string error;
-  return socket_.begin(listenIp_, port, &error) ? 1 : 0;
+  if (!socket_.begin(listenIp_, port, &error)) return 0;
+  boundPort_ = port;
+  return 1;
 }
 
 void TrxNetUdp::stop() {}   // UdpSocket closes in its own destructor

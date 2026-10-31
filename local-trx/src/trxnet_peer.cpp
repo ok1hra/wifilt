@@ -20,11 +20,13 @@ TrxnetPeer *g_instance = nullptr;
 
 }  // namespace
 
-TrxnetPeer::TrxnetPeer(std::string listenIp, uint8_t fskNetId, KeyRunner &keyer)
+TrxnetPeer::TrxnetPeer(std::string listenIp, uint8_t fskNetId,
+                       std::function<bool(const std::string &)> sendFsk, std::function<void()> abort)
     : deviceName_(makeDeviceName(fskNetId)),
       udp_(std::move(listenIp)),
       net_(udp_),
-      keyer_(keyer) {
+      sendFsk_(std::move(sendFsk)),
+      abort_(std::move(abort)) {
   if (g_instance) {
     std::fprintf(stderr,
                  "trxnet_peer: a TrxnetPeer already exists in this process -- "
@@ -39,11 +41,11 @@ void TrxnetPeer::onSCw(const char *from, const uint8_t *data, size_t len) {
   // means "stop now", not text to key [wifilt.ino:4043-4045].
   if (len == 1 && data[0] == 0xFF) {
     std::printf("[oi3] <- abort from %s\n", from);
-    g_instance->keyer_.abort();
+    g_instance->abort_();
     return;
   }
   std::string text(reinterpret_cast<const char *>(data), len);
-  bool ok = g_instance->keyer_.sendFskText(text);
+  bool ok = g_instance->sendFsk_(text);
   std::printf("[oi3] <- /s-cw from %s: \"%s\" %s\n", from, text.c_str(),
               ok ? "queued" : "BUSY, dropped");
 }

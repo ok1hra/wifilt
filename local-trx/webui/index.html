@@ -15,6 +15,8 @@
   .note { font-size: 0.85em; color: #666; }
   .note.err { color: #b00; }
   .note.ok-inline { color: #1a7a1a; }
+  .peer-list { margin-top: 0.5em; }
+  [hidden] { display: none !important; }
   #status { font-weight: bold; }
   #status.ok { color: #1a7a1a; }
   #status.err { color: #b00; }
@@ -116,6 +118,16 @@
 
 <fieldset id="catFieldset">
   <legend>Step 2: CAT (rig control)</legend>
+  <label>CAT through</label>
+  <select id="catBackend">
+    <option value="hamlib">a serial port on this PC (hamlib)</option>
+    <option value="trxnet">a TrxNet device (e.g. an OI3 keyer at the radio)</option>
+  </select>
+  <p class="note" id="catTrxnetNote" hidden>Frequency and mode go through the TrxNet device
+    picked below. The radio's mode arrives coarse (SSB / CW / FSK / DIGI) and DATA modes
+    (USB-D) cannot be set over TrxNet -- set the radio's data input by hand. No meters, RIT
+    or power over TrxNet.</p>
+  <div id="catHamlibFields">
   <button id="refreshCatBtn" type="button" class="test-btn">Refresh devices</button>
   <label>Serial port</label>
   <select id="catPort"><option value="">(none)</option></select>
@@ -131,10 +143,32 @@
   </div>
   <button id="testCatBtn" type="button" class="test-btn">Test read freq</button>
   <span class="note" id="catTestResult"></span>
+  </div>
 </fieldset>
 
 <fieldset id="keyingFieldset">
   <legend>Step 3: Keying (CW/FSK + PTT)</legend>
+  <div class="row">
+    <div>
+      <label>CW/FSK text keyed by</label>
+      <select id="cwBackend">
+        <option value="serial">this PC, on the serial key line</option>
+        <option value="trxnet">the TrxNet device, its own keyer</option>
+      </select>
+    </div>
+    <div>
+      <label>PTT through</label>
+      <select id="pttBackend">
+        <option value="serial">the serial PTT line</option>
+        <option value="trxnet">the TrxNet device (/s-ptt lease)</option>
+      </select>
+    </div>
+  </div>
+  <p class="note" id="keyTrxnetNote" hidden>Over TrxNet the device keys CW/FSK at its own speed
+    (the WPM below is not sent). PTT over TrxNet is a lease: local-trx renews it every 300 ms and
+    the device drops it by itself 1.5 s after the last renewal, so a crash or a pulled cable
+    cannot leave the radio transmitting. OI3 needs firmware 20261031 or newer for /s-ptt.</p>
+  <div id="keySerialFields">
   <p class="note">A second, independent serial adapter from the CAT port above (bod 6/7) -- one line keys CW/FSK, the other is PTT.</p>
   <button id="refreshKeyBtn" type="button" class="test-btn">Refresh devices</button>
   <label>Serial port</label>
@@ -166,19 +200,51 @@
     </div>
   </div>
   <p class="note err" id="testLineNote" hidden></p>
+  </div>
+</fieldset>
+
+<fieldset id="trxnetFieldset" hidden>
+  <legend>TrxNet device</legend>
+  <p class="note">Used by whatever Steps 2 and 3 send through TrxNet. local-trx joins the TrxNet
+    network as its own node and talks to the one device picked here; audio still uses this PC's
+    sound card (Step 1).</p>
+  <div class="row">
+    <div>
+      <label>Port on this PC</label>
+      <select id="trxnetLocalPort">
+        <option value="5684">5684 -- native wifilt also runs on this PC</option>
+        <option value="5683">5683 -- wifilt runs elsewhere (ESP32, another PC)</option>
+      </select>
+    </div>
+    <div>
+      <label>local-trx TrxNet ID (hex)</label>
+      <input id="trxnetNetId">
+    </div>
+  </div>
+  <p class="note">wifilt on this PC already holds 5683, so local-trx listens on 5684 and the device
+    answers there -- that needs TrxNet 1.08 in the device's firmware. With 5683 any firmware works,
+    but only when nothing else on this PC uses TrxNet. local-trx appears on the network as
+    <strong id="trxnetOwnName">LTX.01</strong>.</p>
+  <button id="trxnetScanBtn" type="button" class="test-btn">Scan network</button>
+  <span class="note" id="trxnetScanNote"></span>
+  <label>Device</label>
+  <select id="trxnetPeer" class="peer-list"><option value="">(none -- scan, then pick)</option></select>
+  <button id="trxnetTestPttBtn" type="button" class="test-btn">Test PTT: OFF</button>
+  <span class="note" id="trxnetPttNote"></span>
+  <p class="note err" id="trxnetErr" hidden></p>
 </fieldset>
 
 <span id="status"></span>
 
 <script>
 function el(id) { return document.getElementById(id); }
-function fillSelect(select, values, keepFirst) {
+function fillSelect(select, values, keepFirst, labelOf) {
   const start = keepFirst ? 1 : 0;
   while (select.options.length > start) select.remove(start);
   for (const v of values) {
     const opt = document.createElement("option");
     opt.value = v;
-    opt.textContent = v;
+    opt.textContent = labelOf ? labelOf(v) : v;
     select.appendChild(opt);
   }
 }
@@ -200,7 +266,7 @@ function setSelectValue(select, value) {
 // radios themselves -- so what the operator sees always matches what is
 // actually running, not a pending, not-yet-saved intention (the exact
 // confusion this Configure/Run split replaced a plain "Enable" checkbox for).
-const LOCKABLE_FIELDSETS = ["startupFieldset", "identityFieldset", "audioFieldset", "catFieldset", "keyingFieldset"];
+const LOCKABLE_FIELDSETS = ["startupFieldset", "identityFieldset", "audioFieldset", "catFieldset", "keyingFieldset", "trxnetFieldset"];
 function setFormLocked(locked) {
   for (const id of LOCKABLE_FIELDSETS) el(id).disabled = locked;
 }
@@ -283,6 +349,14 @@ async function loadAll() {
   el("keyLine").value = config.keying.keyLine;
   el("pttLine").value = config.keying.pttLine;
   el("fskNetId").value = config.keying.fskNetId.toString(16).toUpperCase();
+  el("catBackend").value = config.cat.backend || "hamlib";
+  el("cwBackend").value = config.keying.cwBackend || "serial";
+  el("pttBackend").value = config.keying.pttBackend || "serial";
+  const tn = config.trxnet || {};
+  el("trxnetLocalPort").value = String(tn.localPort || 5684);
+  el("trxnetNetId").value = (tn.netId || 1).toString(16).toUpperCase().padStart(2, "0");
+  setSelectValue(el("trxnetPeer"), tn.peer || "");
+  updateBackendFields();
 
   if (config._loadError) {
     el("status").className = "err";
@@ -327,11 +401,16 @@ async function saveConfig() {
     wifiltUrl: el("wifiltUrl").value,
     listenIp: el("listenIp").value,
     audio: { inputDevice: el("audioInput").value, outputDevice: el("audioOutput").value },
-    cat: { port: el("catPort").value, baud: Number(el("catBaud").value), rigModel: Number(el("rigModel").value) },
+    cat: { backend: el("catBackend").value, port: el("catPort").value, baud: Number(el("catBaud").value), rigModel: Number(el("rigModel").value) },
     keying: {
+      cwBackend: el("cwBackend").value, pttBackend: el("pttBackend").value,
       port: el("keyPort").value, baud: Number(el("keyBaud").value),
       keyLine: el("keyLine").value, pttLine: el("pttLine").value,
       cwWpm: Number(el("cwWpm").value), fskNetId: parseInt(el("fskNetId").value, 16) || 0,
+    },
+    trxnet: {
+      peer: el("trxnetPeer").value, netId: trxnetNetId(),
+      localPort: Number(el("trxnetLocalPort").value), networkPort: 5683,
     },
     identity: { radioName: el("radioName").value, civAddress: el("civAddress").value },
   };
@@ -537,6 +616,121 @@ el("testCatBtn").addEventListener("click", async () => {
   }
 });
 
+// ---- Backend choice: show only the fields the chosen backends use ------------
+function updateBackendFields() {
+  const cat = el("catBackend").value === "trxnet";
+  const cw = el("cwBackend").value === "trxnet";
+  const ptt = el("pttBackend").value === "trxnet";
+  el("catHamlibFields").hidden = cat;
+  el("catTrxnetNote").hidden = !cat;
+  el("keySerialFields").hidden = cw && ptt;   // nothing left for the serial adapter
+  el("keyTrxnetNote").hidden = !(cw || ptt);
+  el("trxnetFieldset").hidden = !(cat || cw || ptt);
+  el("trxnetOwnName").textContent = "LTX." + trxnetNetId().toString(16).padStart(2, "0");
+}
+for (const id of ["catBackend", "cwBackend", "pttBackend"]) el(id).addEventListener("change", updateBackendFields);
+el("trxnetNetId").addEventListener("input", updateBackendFields);
+
+// ---- TrxNet device: scan + pick + PTT test ----------------------------------
+// Same "test the form, not the saved config" rule as the serial/audio tests:
+// the scan runs a TrxNet node of the wizard's own on the port/ID typed above.
+function trxnetNetId() {
+  const v = parseInt(el("trxnetNetId").value, 16);
+  return v >= 1 && v <= 255 ? v : 1;
+}
+const CIV_MODES = { 0: "LSB", 1: "USB", 2: "AM", 3: "CW", 4: "RTTY", 5: "FM", 6: "WFM", 7: "CW-R", 8: "RTTY-R", 0x17: "DV" };
+function peerLabel(p) {
+  let label = p.name + " -- " + p.ip;
+  if (p.port !== 5683) label += ":" + p.port;
+  if (p.hz !== undefined) label += " -- " + (p.hz / 1e6).toFixed(6) + " MHz";
+  if (p.mode !== undefined) label += " " + (CIV_MODES[p.mode] || ("0x" + p.mode.toString(16)));
+  return label;
+}
+function trxnetError(text) {
+  el("trxnetErr").hidden = !text;
+  el("trxnetErr").textContent = text || "";
+}
+async function refreshTrxnetPeers() {
+  const data = await fetch("/api/trxnet-peers").then(r => r.json());
+  const select = el("trxnetPeer");
+  const cur = select.value;
+  const byName = {};
+  for (const p of data.peers) byName[p.name] = p;
+  fillSelect(select, data.peers.map(p => p.name), true, name => peerLabel(byName[name]));
+  setSelectValue(select, cur);
+  return data;
+}
+let trxnetScanTimer = null;
+el("trxnetScanBtn").addEventListener("click", async () => {
+  trxnetError("");
+  const note = el("trxnetScanNote");
+  note.textContent = "scanning...";
+  try {
+    const resp = await fetch("/api/trxnet-scan", {
+      method: "POST",
+      body: JSON.stringify({ netId: trxnetNetId(), localPort: Number(el("trxnetLocalPort").value), networkPort: 5683 }),
+    });
+    const result = await resp.json();
+    if (!result.ok) { note.textContent = ""; trxnetError("scan: " + result.error); return; }
+  } catch (e) {
+    note.textContent = "";
+    trxnetError("scan failed: " + e);
+    return;
+  }
+  // Answers to the PROBE arrive within a round trip; /hz /mode greetings
+  // follow. A device on firmware before TrxNet 1.08 only shows up with its
+  // next periodic announce (up to 30 s) -- and on port 5684 never.
+  clearInterval(trxnetScanTimer);
+  let ticks = 0;
+  trxnetScanTimer = setInterval(async () => {
+    ticks++;
+    try {
+      const data = await refreshTrxnetPeers();
+      note.textContent = data.peers.length + " device(s)" + (ticks < 8 ? ", still listening..." : "");
+    } catch (e) { /* the next tick retries */ }
+    if (ticks >= 8) clearInterval(trxnetScanTimer);
+  }, 500);
+});
+
+let trxnetPttOn = false;
+let trxnetPttTimer = null;
+async function setTrxnetTestPtt(on) {
+  const resp = await fetch("/api/trxnet-test-ptt", {
+    method: "POST",
+    body: JSON.stringify({ on, peer: el("trxnetPeer").value }),
+  });
+  return resp.json();
+}
+el("trxnetTestPttBtn").addEventListener("click", async () => {
+  const next = !trxnetPttOn;
+  trxnetError("");
+  if (next && !el("trxnetPeer").value) { trxnetError("scan and pick a device first"); return; }
+  let result;
+  try { result = await setTrxnetTestPtt(next); } catch (e) { trxnetError("PTT test failed: " + e); return; }
+  if (!result.ok) { trxnetError("PTT test: " + result.error); return; }
+  trxnetPttOn = next;
+  el("trxnetTestPttBtn").textContent = "Test PTT: " + (next ? "ON" : "OFF");
+  el("trxnetTestPttBtn").classList.toggle("on", next);
+  clearInterval(trxnetPttTimer);
+  const note = el("trxnetPttNote");
+  if (!next) { note.textContent = ""; return; }
+  const started = Date.now();
+  note.className = "note";
+  note.textContent = "waiting for the device to confirm...";
+  trxnetPttTimer = setInterval(async () => {
+    try {
+      const data = await fetch("/api/trxnet-peers").then(r => r.json());
+      if (data.pttConfirmed) {
+        note.className = "note ok-inline";
+        note.textContent = "device confirmed: transmitting";
+      } else if (Date.now() - started > 1500) {
+        note.className = "note err";
+        note.textContent = "no confirmation -- firmware without /s-ptt, interlock, or not reachable";
+      }
+    } catch (e) { /* the next tick retries */ }
+  }, 300);
+});
+
 // Never leave the radio keyed, or an audio device held open, because a tab
 // got closed mid-test. sendBeacon (not fetch: it must survive the page
 // already unloading) only does POST, which is exactly what both endpoints
@@ -549,6 +743,9 @@ window.addEventListener("beforeunload", () => {
         navigator.sendBeacon("/api/test-line", JSON.stringify({ ...keyingForm, which, on: false }));
       }
     }
+  }
+  if (trxnetPttOn) {
+    navigator.sendBeacon("/api/trxnet-test-ptt", JSON.stringify({ on: false }));
   }
   const audio = currentAudioDevices();
   if (captureTestOn && audio.capture) {

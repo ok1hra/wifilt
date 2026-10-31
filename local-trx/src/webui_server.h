@@ -33,6 +33,8 @@ class SerialKeyLine;
 // (hamlib_bridge.h).
 class AudioCapture;
 class AudioPlayback;
+// And for TrxNet.h (trxnet_link.h).
+class TrxnetLink;
 
 class WebUiServer {
  public:
@@ -80,6 +82,9 @@ class WebUiServer {
   void handleTestCat();
   void handleTestAudio();
   void handleAudioLevel();
+  void handleTrxnetScan();
+  void handleTrxnetPeers();
+  void handleTrxnetTestPtt();
   void sendError(int code, const std::string &message);
 
   uint16_t port_;
@@ -115,6 +120,17 @@ class WebUiServer {
   std::string testCaptureDevice_;
   std::unique_ptr<AudioPlayback> testPlayback_;
   std::string testPlaybackDevice_;
+
+  // POST /api/trxnet-scan, GET /api/trxnet-peers, POST /api/trxnet-test-ptt:
+  // the TrxNet device fieldset's Scan button, device list and PTT test. A
+  // TrxnetLink of the wizard's own, built on the first Scan from the form's
+  // port/netId (rebuilt when those change), never connected to wifilt. It
+  // holds a UDP port, so it is dropped again kTrxnetIdleMs after the page
+  // last asked for it -- unless its test PTT is still keyed.
+  static constexpr uint32_t kTrxnetIdleMs = 30000;
+  std::unique_ptr<TrxnetLink> trxnetScanner_;
+  TrxnetConfig trxnetScannerConfig_;
+  uint32_t trxnetLastUseMs_ = 0;
 
   bool restartRequested_ = false;
 };
