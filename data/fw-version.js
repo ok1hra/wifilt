@@ -27,6 +27,18 @@
   // carries it already, so the panel names the device rather than making the
   // operator remember which transceiver this interface is driving.
   var radioName = '';
+  // Power of the LAN radio from /state (trx_power.h in the firmware). null =
+  // no Icom LAN radio (or local-trx): no icon. 'standby' = the radio is off but
+  // its LAN unit is still logged in, so it can be woken from here.
+  var radioPower = null;
+  var pwrCtl = false;          // model has the standby/shutdown menu
+  var powerOp = '';            // '', 'wake', 'standby', 'shutdown', 'failed:<why>'
+  var powerPanelOpen = false;
+  var powerError = '';         // refusal of the last request, shown in the panel
+  var powerDialog = null;
+  var powerFastTimer = null;
+  var powerFastUntil = 0;
+  var WAKE_ASKED_KEY = 'wifilt.standbyAsked';
   var failCount = 0;
   var OFFLINE_AFTER = 2;      // consecutive failed polls before warning
   var FETCH_TIMEOUT = 4000;   // ms; hung request counts as a failed poll
@@ -58,7 +70,39 @@
       '.topbar-esp-offline{color:#fff;background:#dc2626;font-weight:700;' +
         'padding:1px 7px;border-radius:4px;animation:espOfflineBlink 1s step-end infinite;}' +
       '@keyframes espOfflineBlink{50%{opacity:0.45;}}' +
-      '.topbar-fw-sep{color:inherit;margin:0 7px;}';
+      '.topbar-fw-sep{color:inherit;margin:0 7px;}' +
+      // Power: green on, amber pulsing in standby, grey when the LAN session is
+      // gone, blinking while an operation runs.
+      '.topbar-pwr-wrap{position:relative;display:inline-block;}' +
+      '.topbar-pwr{display:inline-flex;align-items:center;vertical-align:middle;cursor:pointer;' +
+        'padding:0 2px;border:0;background:none;color:#6b7280;}' +
+      '.topbar-pwr svg{width:15px;height:15px;display:block;}' +
+      '.topbar-pwr-on{color:#22c55e;}' +
+      '.topbar-pwr-standby{color:#e0a020;animation:pwrPulse 2s ease-in-out infinite;}' +
+      '.topbar-pwr-busy{animation:espOfflineBlink .6s step-end infinite;}' +
+      '@keyframes pwrPulse{50%{opacity:.35;}}' +
+      // The topbar is nowrap; the notes in the panel have to wrap. Anchored on
+      // the icon's left edge: the icon leads the segment, so RSSI and FW give
+      // the panel room to the right even on a phone, where right:0 ran it off
+      // the left of the screen.
+      '.topbar-pwr-panel{left:0;right:auto;width:250px;max-width:calc(100vw - 16px);white-space:normal;}' +
+      '.topbar-pwr-panel p{margin:6px 0;font-size:11px;line-height:1.5;color:#d9e6e1;}' +
+      '.topbar-pwr-panel .topbar-pwr-err{color:#e5484d;}' +
+      '.topbar-pwr-actions{display:flex;gap:8px;margin-top:8px;justify-content:flex-start!important;}' +
+      '.topbar-pwr-btn{padding:5px 10px;border:1px solid #e0a020;border-radius:4px;background:#352311;' +
+        'color:#ffd49a;font:inherit;font-size:11px;font-weight:800;cursor:pointer;}' +
+      '.topbar-pwr-btn:hover,.topbar-pwr-btn:focus-visible{background:#4a3016;color:#fff;}' +
+      '.topbar-pwr-btn-danger{border-color:#e5484d;background:#2a1213;color:#ffb4b4;}' +
+      '.topbar-pwr-btn-danger:hover,.topbar-pwr-btn-danger:focus-visible{background:#45191b;}' +
+      '.topbar-pwr-btn-quiet{border-color:#4b756c;background:transparent;color:#c9d8d3;}' +
+      '.topbar-pwr-dialog{max-width:420px;padding:20px 22px;border:1px solid #8a572b;border-radius:8px;' +
+        'background:#21170d;color:#d9c6ad;box-shadow:0 16px 48px #0009;' +
+        'font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:14px;}' +
+      '.topbar-pwr-dialog::backdrop{background:#000a;}' +
+      '.topbar-pwr-dialog h2{margin:0 0 10px;color:#fff;font-family:inherit;font-size:18px;font-weight:700;}' +
+      '.topbar-pwr-dialog p{margin:8px 0;line-height:1.5;}' +
+      '.topbar-pwr-dialog .topbar-pwr-actions{justify-content:flex-end!important;margin-top:16px;}' +
+      '.topbar-pwr-dialog .topbar-pwr-btn{font-size:13px;padding:8px 14px;}';
     s.textContent +=
       '.tab.tab-cat-muted{opacity:.55;}' +
       '.tab.tab-cat-muted:hover{opacity:.82;}';
@@ -191,8 +235,198 @@
       .catch(function () { gpsInfo = null; if (gpsPanelOpen) render(); });
   }
 
+  var POWER_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" ' +
+    'stroke-linecap="round" aria-hidden="true"><path d="M12 3v9"/><path d="M6.34 7.34A8 8 0 1 0 17.66 7.34"/></svg>';
+
+  var POWER_REFUSALS = {
+    transmitting: 'The radio is transmitting. Try again after the over.',
+    busy: 'Another power operation is still running.',
+    offline: 'There is no LAN session with the radio.',
+    unsupported: 'Not available for this radio.'
+  };
+  var POWER_FAILURES = {
+    timeout: 'The radio did not respond in time.',
+    menu: 'The radio did not accept the Power OFF Setting (for Remote Control) menu write.',
+    link: 'The LAN link to the radio dropped.'
+  };
+
+  function radioLabel() { return radioName || 'The radio'; }
+
+  function powerStatusText() {
+    if (powerOp === 'wake') return 'Waking up\u2026';
+    if (powerOp === 'standby') return 'Going to standby\u2026';
+    if (powerOp === 'shutdown') return 'Shutting down\u2026';
+    if (radioPower === 'on') return 'On';
+    if (radioPower === 'standby') return 'Standby (for remote control)';
+    return 'Off or unreachable over LAN';
+  }
+
+  function powerButton(text, cls, onClick) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'topbar-pwr-btn' + (cls ? ' ' + cls : '');
+    b.textContent = text;
+    b.addEventListener('click', onClick);
+    return b;
+  }
+
+  function powerPanel() {
+    var panel = document.createElement('div');
+    panel.className = 'topbar-gps-panel topbar-pwr-panel';
+    var head = document.createElement('h4');
+    head.textContent = 'POWER \u2014 ' + (radioName || 'radio');
+    panel.appendChild(head);
+    var line = document.createElement('div');
+    var label = document.createElement('span');
+    label.textContent = 'State';
+    var value = document.createElement('span');
+    value.textContent = powerStatusText();
+    line.appendChild(label);
+    line.appendChild(value);
+    panel.appendChild(line);
+
+    var failed = powerOp.indexOf('failed:') === 0
+      ? (POWER_FAILURES[powerOp.slice(7)] || 'Power operation failed.') : '';
+    [powerError, failed].forEach(function (text) {
+      if (!text) return;
+      var p = document.createElement('p');
+      p.className = 'topbar-pwr-err';
+      p.textContent = text;
+      panel.appendChild(p);
+    });
+
+    var busy = powerOp === 'wake' || powerOp === 'standby' || powerOp === 'shutdown';
+    if (radioPower === 'off' && !busy) {
+      var note = document.createElement('p');
+      note.textContent = 'Over LAN the radio can only be woken from standby. ' +
+        'After a full shutdown it has to be switched on at the radio.';
+      panel.appendChild(note);
+      return panel;
+    }
+    if (busy) return panel;
+    var actions = document.createElement('div');
+    actions.className = 'topbar-pwr-actions';
+    if (radioPower === 'standby')
+      actions.appendChild(powerButton('Wake up', '', function () { requestPower('on'); }));
+    if (radioPower === 'on' && pwrCtl)
+      actions.appendChild(powerButton('Standby', '', function () { confirmPower('standby'); }));
+    if (pwrCtl)
+      actions.appendChild(powerButton('Power off', 'topbar-pwr-btn-danger', function () { confirmPower('off'); }));
+    if (!pwrCtl && radioPower === 'on') {
+      var none = document.createElement('p');
+      none.textContent = 'Standby and power off are offered for the IC-705 and IC-7610.';
+      panel.appendChild(none);
+    }
+    if (actions.childNodes.length) panel.appendChild(actions);
+    return panel;
+  }
+
+  // One <dialog> for every question; it lives on <body> because the topbar
+  // is rebuilt on every poll.
+  function showPowerDialog(title, paragraphs, buttons) {
+    if (!powerDialog) {
+      powerDialog = document.createElement('dialog');
+      powerDialog.className = 'topbar-pwr-dialog';
+      document.body.appendChild(powerDialog);
+    }
+    if (powerDialog.open) powerDialog.close();
+    powerDialog.innerHTML = '';
+    var h = document.createElement('h2');
+    h.textContent = title;
+    powerDialog.appendChild(h);
+    paragraphs.forEach(function (text) {
+      var p = document.createElement('p');
+      p.textContent = text;
+      powerDialog.appendChild(p);
+    });
+    var actions = document.createElement('div');
+    actions.className = 'topbar-pwr-actions';
+    buttons.forEach(function (spec) {
+      actions.appendChild(powerButton(spec[0], spec[1], function () {
+        powerDialog.close();
+        if (spec[2]) spec[2]();
+      }));
+    });
+    powerDialog.appendChild(actions);
+    if (typeof powerDialog.showModal === 'function') powerDialog.showModal();
+    else powerDialog.setAttribute('open', '');
+    var focus = powerDialog.querySelector('.topbar-pwr-btn');
+    if (focus) focus.focus();
+  }
+
+  function confirmPower(state) {
+    powerPanelOpen = false;
+    render();
+    var stops = 'Anything the DATA pages are receiving or transmitting stops with it.';
+    if (state === 'standby') {
+      showPowerDialog('Put ' + radioLabel() + ' to standby?', [
+        'The transceiver switches off but stays logged in on the network, so it can be woken ' +
+        'up again from here (power icon in the top bar).',
+        stops
+      ], [['Cancel', 'topbar-pwr-btn-quiet'], ['Standby', '', function () { requestPower('standby'); }]]);
+    } else {
+      showPowerDialog('Power off ' + radioLabel() + '?', [
+        'The radio shuts down completely and the network link drops. ' +
+        'It CANNOT be switched on remotely afterwards \u2014 only at the radio itself.',
+        'To be able to wake it from here later, use Standby instead.',
+        stops
+      ], [['Cancel', 'topbar-pwr-btn-quiet'],
+          ['Standby instead', '', function () { requestPower('standby'); }],
+          ['Power off', 'topbar-pwr-btn-danger', function () { requestPower('off'); }]]);
+    }
+  }
+
+  // Once per tab: the answer to "wake it?" holds while the operator moves
+  // between the DATA sub-pages, which all reload the topbar.
+  function maybeAskWake() {
+    if (radioPower !== 'standby' || powerOp) return;
+    var asked = false;
+    try { asked = window.sessionStorage.getItem(WAKE_ASKED_KEY) === '1'; } catch (e) {}
+    if (asked) return;
+    try { window.sessionStorage.setItem(WAKE_ASKED_KEY, '1'); } catch (e) {}
+    showPowerDialog(radioLabel() + ' is in standby', [
+      'The transceiver is switched off for remote control: the network link is up, ' +
+      'but there is no receive, transmit or CAT until it is woken up.',
+      'Wake it up now?'
+    ], [['Not now', 'topbar-pwr-btn-quiet'], ['Wake up', '', function () { requestPower('on'); }]]);
+  }
+
+  function requestPower(state) {
+    powerError = '';
+    fetch('/cmd', {method: 'POST', cache: 'no-store', headers: {'Content-Type': 'application/json'},
+                   body: JSON.stringify({type: 'power', state: state})})
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (d) {
+          if (!r.ok) powerError = POWER_REFUSALS[d && d.error] || 'The interface refused the request.';
+        });
+      })
+      .catch(function () { powerError = 'The interface did not answer.'; })
+      .then(function () {
+        if (powerError) { powerPanelOpen = true; render(); }
+        // Follow the operation at 1 s rather than the usual 5 s.
+        powerFastUntil = Date.now() + 40000;
+        if (!powerFastTimer) powerFastTimer = window.setInterval(function () {
+          if (Date.now() > powerFastUntil) {
+            window.clearInterval(powerFastTimer);
+            powerFastTimer = null;
+            return;
+          }
+          fetchLocal();
+        }, 1000);
+        fetchLocal();
+      });
+  }
+
+  function onPowerClick() {
+    powerPanelOpen = !powerPanelOpen;
+    if (powerPanelOpen) gpsPanelOpen = false;
+    else powerError = '';
+    render();
+  }
+
   function onGpsClick() {
     gpsPanelOpen = !gpsPanelOpen;
+    if (gpsPanelOpen) powerPanelOpen = false;
     if (gpsPanelOpen) fetchGps();
     render();
   }
@@ -200,6 +434,29 @@
   function render() {
     if (!el || (localRev === null && !offline)) return;
     el.innerHTML = '';
+
+    if (offline || radioPower === null) powerPanelOpen = false;
+    if (!offline && radioPower !== null) {
+      var busy = powerOp === 'wake' || powerOp === 'standby' || powerOp === 'shutdown';
+      var pwrWrap = document.createElement('span');
+      pwrWrap.className = 'topbar-pwr-wrap';
+      var pwr = document.createElement('button');
+      pwr.type = 'button';
+      pwr.className = 'topbar-pwr' + (radioPower === 'on' ? ' topbar-pwr-on' : '') +
+        (radioPower === 'standby' ? ' topbar-pwr-standby' : '') + (busy ? ' topbar-pwr-busy' : '');
+      pwr.innerHTML = POWER_ICON;
+      pwr.title = 'Radio power: ' + powerStatusText() + ' \u2014 click for wake / standby / power off';
+      pwr.setAttribute('aria-label', pwr.title);
+      pwr.setAttribute('aria-expanded', powerPanelOpen ? 'true' : 'false');
+      pwr.addEventListener('click', onPowerClick);
+      pwrWrap.appendChild(pwr);
+      if (powerPanelOpen) pwrWrap.appendChild(powerPanel());
+      el.appendChild(pwrWrap);
+      var pwrSep = document.createElement('span');
+      pwrSep.className = 'topbar-fw-sep';
+      pwrSep.textContent = '|';
+      el.appendChild(pwrSep);
+    }
 
     var gps = offline ? null : gpsStatus();
     if (!gps) gpsPanelOpen = false;
@@ -303,6 +560,13 @@
           renderHardwareNavigation();
         }
         if (d && typeof d.radioName === 'string') radioName = d.radioName;
+        if (d && typeof d.radioPower === 'string') {
+          radioPower = d.radioPower;
+          pwrCtl = d.pwrCtl === true;
+          powerOp = typeof d.powerOp === 'string' ? d.powerOp : '';
+        } else {
+          radioPower = null; pwrCtl = false; powerOp = '';
+        }
         if (d && typeof d.gpsGrid === 'string') {
           gpsGrid = d.gpsGrid;
           gpsFixAgeMs = Number.isFinite(Number(d.gpsFixAgeMs)) ? Number(d.gpsFixAgeMs) : null;
@@ -314,6 +578,7 @@
         // course move while you watch, at the pace they actually update.
         if (gpsPanelOpen) fetchGps();
         render();
+        maybeAskWake();
       })
       .catch(function () {
         failCount++;
@@ -349,9 +614,11 @@
     // so by the time this bubbles up the clicked span is detached -- closest()
     // still walks its detached ancestors and recognises it as ours.
     document.addEventListener('click', function (event) {
-      if (!gpsPanelOpen) return;
-      if (event.target.closest && event.target.closest('.topbar-gps-wrap')) return;
+      if (!gpsPanelOpen && !powerPanelOpen) return;
+      if (event.target.closest && event.target.closest('.topbar-gps-wrap, .topbar-pwr-wrap')) return;
       gpsPanelOpen = false;
+      powerPanelOpen = false;
+      powerError = '';
       render();
     });
 

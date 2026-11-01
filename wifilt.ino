@@ -456,6 +456,7 @@ char CwMsg[37] = "";
 #include "jtty_stream.h"        // JTTY decodes/TX text to TrxNet subscribers
 #include "rkey_net.h"           // Paddle2IP remote CW key: UDP server task
 #include "web_pacer.h"          // file uploads yield to the radio link
+#include "trx_power.h"          // wake / standby / shutdown of the LAN radio from the web UI
 // See radio_transport.h's own comment on radioLanLocalControlPort(): 0 means
 // "use the real default (50001)", exactly today's behavior on the real
 // device and on native/ unless --lan-port-base overrides it.
@@ -605,6 +606,10 @@ struct LanRadioSnapshot {
   char     mode[8] = "";          // includes the -D suffix, unlike g_trxMode
 };
 LanRadioSnapshot lanRadioSnap;
+// The one power operation the web UI may have running, on the LAN radio's slot
+// (trxPowerSlot, 0xFF = none). See trx_power.h.
+TrxPowerOp trxPowerOp;
+uint8_t trxPowerSlot = 0xFF;
 WiFiUDP trxUdp;
 TrxNet  net(trxUdp);
 char    trxDeviceName[TRXNET_MAX_DEVICE_NAME];
@@ -1250,6 +1255,9 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void lanRadioAudioService(IcomLanClient *client);
   void lanRadioCivSnapshot(const uint8_t *frame, size_t len);
   void lanCivFrameRoute(uint8_t slot, const uint8_t *frame, size_t len);
+  uint8_t trxPowerControlSlot(void);
+  const char *trxPowerRequest(TrxPowerTarget target);
+  void trxPowerService(void);
   String jsonEscape(const String &value);
   String configJsonEscape(const String &s);
   bool rkeyParseKey(const String &text, uint8_t out[16]);
@@ -2902,6 +2910,21 @@ void buildStateJson(char *buf, size_t bufSize, bool lanView){
              ",\"gpsGrid\":\"%s\",\"gpsFixAgeMs\":%u,\"gpsSel\":%u",
              gpsGrid, (unsigned)gpsAge, (unsigned)gpsSel);
   }
+  // The LAN radio's power, whichever view this is: "off" = no LAN session,
+  // "standby" = logged in but the transceiver is off (radioPowered()). Absent
+  // without a LAN radio and for local-trx, which is how the topbar knows to
+  // draw no power icon. pwrCtl = the model has the standby/shutdown menu.
+  char pwrFrag[80] = "";
+  uint8_t pwrSlot = trxPowerControlSlot();
+  if (pwrSlot != 0xFF) {
+    IcomLanClient *pwrClient = radioLanClient(pwrSlot);
+    char opName[24];
+    const char *op = trxPowerSlot == pwrSlot ? trxPowerOpName(trxPowerOp, opName, sizeof(opName)) : "";
+    snprintf(pwrFrag, sizeof(pwrFrag),
+             ",\"radioPower\":\"%s\",\"pwrCtl\":%s,\"powerOp\":\"%s\"",
+             !pwrClient->connected() ? "off" : (pwrClient->radioPowered() ? "on" : "standby"),
+             trxPowerOffMenu(radioSlots[pwrSlot].civAddr) ? "true" : "false", op);
+  }
   // lanDrops/lanStalls/lanFilled are link health since boot, reported on every
   // view rather than only the LAN one: an operator watching an unattended beacon
   // should not have to know which slot carries LAN to see whether it has been
@@ -2924,7 +2947,7 @@ void buildStateJson(char *buf, size_t bufSize, bool lanView){
     "\"audioRxDropped\":%u,\"audioMaxSendUs\":%u,"
     "\"pingRttCtrlMs\":%u,\"pingRttCivMs\":%u,\"pingRttAudioMs\":%u,"
     "\"civRttLanMs\":%u,\"civRttSerialMs\":%u,\"txDefer\":%s,"
-    "\"dxcConnected\":%s%s}",
+    "\"dxcConnected\":%s%s%s}",
     radioLinked ? "true" : "false", lanCatHealthy ? "true" : "false",
     lanAudioReady ? "true" : "false", lanAudioTxReady ? "true" : "false",
     lanStatus, btStat, wifiStat,
@@ -2952,7 +2975,7 @@ void buildStateJson(char *buf, size_t bufSize, bool lanView){
     (unsigned)civRttMs,
     txRealtimeNow() ? "true" : "false",
     DxcTelnetStatus ? "true" : "false",
-    gpsFrag
+    gpsFrag, pwrFrag
   );
 }
 
@@ -3162,6 +3185,19 @@ void handlePostCmd(){
   String body = webServer.arg("plain");
   if (body.length() == 0) { webServer.send(400, "application/json", "{\"error\":\"empty body\"}"); return; }
   String type = extractJsonString(body, "type");
+
+  // Always the LAN radio, whatever TRX1 is -- standby only exists on Icom LAN.
+  // Accepted means started; /state "powerOp" and "radioPower" tell the outcome.
+  if (type == "power") {
+    String target = extractJsonString(body, "state");
+    const char *error = target == "on"      ? trxPowerRequest(TRX_POWER_ON)
+                      : target == "standby" ? trxPowerRequest(TRX_POWER_STANDBY)
+                      : target == "off"     ? trxPowerRequest(TRX_POWER_SHUTDOWN)
+                      : "invalid_state";
+    if (error) webServer.send(409, "application/json", String("{\"error\":\"") + error + "\"}");
+    else webServer.send(200, "application/json", "{\"ok\":true}");
+    return;
+  }
 
   // ?radio=lan addresses the radio JS8 drives, which is TRX1 only when the
   // operator put LAN there. Everything else still means the primary radio.
@@ -6903,6 +6939,7 @@ void lanClientLoop(){
   // that succeed) and the probe replies would go to the wrong one.
   if (icomScanSuspendLan) return;
   secondaryLanClientsLoop();
+  trxPowerService();
   if (radioSlots[0].transport != RADIO_LAN) return;
   if (lanReconnectRequested) {
     lanReconnectRequested = false;
@@ -8013,9 +8050,60 @@ void lanRadioCivSnapshot(const uint8_t *frame, size_t len) {
 // other slot feeds the thin per-slot state that the log/BD pages read, plus the
 // snapshot when it is the LAN radio driving JS8.
 void lanCivFrameRoute(uint8_t slot, const uint8_t *frame, size_t len) {
+  if (slot == trxPowerSlot) trxPowerOnFrame(trxPowerOp, frame, len);
   if (slot == 0) { lanCivFrameHandler(frame, len); return; }
   lanSecondaryCivFrameHandler(slot, frame, len);
   if (slot == lanRadioSnap.slot) lanRadioCivSnapshot(frame, len);
+}
+
+// Power control is offered for the LAN radio only, and not for local-trx: it is
+// no Icom, and an NG from a rig hamlib cannot read would look like standby.
+uint8_t trxPowerControlSlot(void) {
+  uint8_t slot = lanRadioSlotIndex();
+  if (slot == 0xFF || radioSlots[slot].localTrx || !radioLanClient(slot)) return 0xFF;
+  return slot;
+}
+
+bool trxPowerSlotTransmitting(uint8_t slot) {
+  return slot == 0 ? stateTx : (slot == lanRadioSnap.slot && lanRadioSnap.tx);
+}
+
+// Error for the web request, nullptr when accepted.
+const char *trxPowerRequest(TrxPowerTarget target) {
+  uint8_t slot = trxPowerControlSlot();
+  if (slot == 0xFF) return "unsupported";
+  IcomLanClient *client = radioLanClient(slot);
+  const char *error = trxPowerStart(trxPowerOp, target, radioSlots[slot].civAddr,
+                                    client->connected(), client->radioPowered(),
+                                    trxPowerSlotTransmitting(slot), millis());
+  if (error) return error;
+  trxPowerSlot = slot;
+  char name[24];
+  Serial.print(" PWR| op ");
+  Serial.println(trxPowerOp.busy() ? trxPowerOpName(trxPowerOp, name, sizeof(name)) : "wake: already on");
+  return nullptr;
+}
+
+// Runs from lanClientLoop() on every pass, for whichever slot holds LAN.
+void trxPowerService(void) {
+  if (trxPowerSlot == 0xFF || trxPowerOp.phase == TrxPowerOp::IDLE) return;
+  IcomLanClient *client = trxPowerSlot == trxPowerControlSlot() ? radioLanClient(trxPowerSlot) : nullptr;
+  if (!client) { trxPowerOp = TrxPowerOp(); trxPowerSlot = 0xFF; return; }   // SETUP moved the radio
+  TrxPowerOp::Phase before = trxPowerOp.phase;
+  uint8_t body[6];
+  size_t n = trxPowerTick(trxPowerOp, millis(), client->connected(), client->radioPowered(), body);
+  // sendCommand(), not catWriteFrameSlot(): the frame builder needs radio_address,
+  // which is still 0 when the interface booted with the radio already in
+  // standby (nothing but NG has come back).
+  if (n) client->sendCommand(body, n);
+  if (trxPowerOp.phase != before) {
+    char name[24];
+    Serial.print(" PWR| op ");
+    if (trxPowerOp.phase == TrxPowerOp::IDLE) Serial.println("done");
+    else if (trxPowerOp.phase == TrxPowerOp::FAILED) Serial.println(trxPowerOpName(trxPowerOp, name, sizeof(name)));
+    else if (trxPowerOp.phase == TrxPowerOp::MENU) Serial.println("radio menu Power OFF Setting");
+    else if (trxPowerOp.phase == TrxPowerOp::OFF_SENT) Serial.println("18 00");
+  }
 }
 
 //-------------------------------------------------------------------------------------------------------

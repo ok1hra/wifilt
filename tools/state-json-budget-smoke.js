@@ -92,6 +92,9 @@ const ARGUMENT_BOUNDS = [
   // ,"gpsGrid":"JO60WC28","gpsFixAgeMs":999999999,"gpsSel":255 -- or empty when
   // the radio has no GPS. Built by its own bounded snprintf in buildStateJson.
   [/^gpsFrag$/, 59, "GPS fields, present only when the radio answered 23 00"],
+  // ,"radioPower":"standby","pwrCtl":false,"powerOp":"failed:timeout" -- or
+  // empty without a LAN radio / for local-trx. Its own bounded snprintf.
+  [/^pwrFrag$/, 66, "LAN radio power, present only for an Icom LAN slot"],
 ];
 
 function splitArguments(text) {

@@ -31,6 +31,12 @@ USAGE
 
     Any username/password is accepted unless --user/--pass are given.
 
+    Power, as an IC-705 with network control (tools/trx-power-native-check.sh):
+    --standby-at drops into remote-control standby (NG to every read); 18 01
+    boots it again, data after a few seconds; 18 00 obeys the "Power OFF Setting
+    (for Remote Control)" menu (1A 05 00 73 on the IC-705, 1A 05 01 35 on the
+    IC-7610): standby, or a shutdown after which nothing answers at all.
+
 EXIT
     Runs until interrupted. Prints one line per protocol milestone so a test can
     grep for "CONNECTED".
@@ -298,6 +304,19 @@ class CivChannel(Channel):
         # "Power OFF (for Remote Control) = Standby": the LAN unit stays logged
         # in and answers NG (FA) to every read; only 18 01 wakes the radio.
         self.standby = False
+        # Menu "Power OFF Setting (for Remote Control)": 0 = Shutdown only,
+        # 1 = Standby/Shutdown. It decides what 18 00 does.
+        self.power_off_setting = 1
+        self.power_menu = POWER_OFF_MENU.get(civ_addr)
+        # 18 00 with Shutdown only: everything goes silent, the session dies.
+        self.shutdown = False
+        # 18 01 boots the radio; data replies start only after BOOT_SECONDS.
+        self.boot_at = 0.0
+
+    def tick(self, now):
+        if self.boot_at and now >= self.boot_at:
+            self.boot_at = 0.0
+            self.set_standby(False)
 
     def set_standby(self, on):
         if on != self.standby:
@@ -350,11 +369,31 @@ class CivChannel(Channel):
             self.send_civ(bytes([0xFE, 0xFE, sender, self.civ_addr]) + payload + b"\xFD")
             self.answered += 1
 
-        if cmd == 0x18 and body[:1] in (b"\x00", b"\x01"):   # power off/on
-            self.set_standby(body[0] == 0x00)
+        if cmd == 0x18 and body[:1] == b"\x01":              # power on
+            if self.standby and not self.boot_at:
+                self.boot_at = time.monotonic() + BOOT_SECONDS
+                self.log(f"-- 18 01: booting, data in {BOOT_SECONDS:g} s")
             reply(b"\xFB")
+        elif cmd == 0x18 and body[:1] == b"\x00":            # power off
+            if self.standby:
+                reply(b"\xFA")
+            else:
+                reply(b"\xFB")
+                if self.power_off_setting == 1:
+                    self.set_standby(True)
+                else:
+                    self.shutdown = True
+                    self.log("-- radio SHUTDOWN (Shutdown only): silent, session dies")
         elif self.standby:
             reply(b"\xFA")
+        elif (cmd == 0x1A and self.power_menu
+              and body[:3] == bytes([0x05]) + self.power_menu):
+            if len(body) >= 4:
+                self.power_off_setting = body[3]
+                self.log(f"-- Power OFF Setting = {'Standby/Shutdown' if body[3] else 'Shutdown only'}")
+                reply(b"\xFB")
+            else:
+                reply(bytes([0x1A, 0x05]) + self.power_menu + bytes([self.power_off_setting]))
         elif cmd == 0x03:                    # read operating frequency
             reply(bytes([0x03]) + bcd_from_hz(self.freq_hz))
             if self.answered == 1:
@@ -371,6 +410,11 @@ class CivChannel(Channel):
             # Everything else is acknowledged so the client's poll rotation keeps
             # turning instead of stalling on an unanswered command.
             reply(b"\xFB")
+
+
+# Subaddress of "Power OFF Setting (for Remote Control)" under 1A 05, per model.
+POWER_OFF_MENU = {0xA4: bytes([0x00, 0x73]), 0x98: bytes([0x01, 0x35])}
+BOOT_SECONDS = 3.0
 
 
 def ulaw_encode(sample):
@@ -500,16 +544,22 @@ def main():
           f"civ=0x{args.civ:02x}, freq={args.freq} Hz", flush=True)
 
     announced = False
+    standby_fired = wake_fired = False
     started = time.monotonic()
     while True:
         if args.seconds and time.monotonic() - started > args.seconds:
             print("time limit reached", flush=True)
             return 0
         elapsed = time.monotonic() - started
-        if args.standby_at and elapsed > args.standby_at and not (args.wake_at and elapsed > args.wake_at):
+        # Edges, not levels: a 18 01 from the client must be able to wake the
+        # radio after --standby-at has passed.
+        if args.standby_at and not standby_fired and elapsed > args.standby_at:
+            standby_fired = True
             civ.set_standby(True)
-        elif args.wake_at and elapsed > args.wake_at:
+        if args.wake_at and not wake_fired and elapsed > args.wake_at:
+            wake_fired = True
             civ.set_standby(False)
+        civ.tick(time.monotonic())
 
         # Short timeout: the audio stream has to be paced at 20 ms, so the loop
         # cannot sit in select() waiting for a packet that may not come.
@@ -520,9 +570,11 @@ def main():
                 data = channel.receive()
                 if data is None:
                     break
-                channel.handle(data)
+                if not civ.shutdown:
+                    channel.handle(data)
 
-        audio.tick(time.monotonic())
+        if not civ.shutdown:
+            audio.tick(time.monotonic())
 
         if not announced and control.streaming and civ.opened:
             announced = True
