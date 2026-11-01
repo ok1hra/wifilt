@@ -2657,7 +2657,26 @@
     dom.powerDbm.disabled = !levels.length;
   }
 
+  // WATCH (watch-publish.js): the spots this page lists, for browsers following
+  // it on /watch.html. `var` and made on first use: render() runs early.
+  var watchPublisher = null;
+  function watchDescribe() {
+    const station = rxStation();
+    return {myCall: station.call, grid: station.grid,
+      dialHz: state.rxLast ? Number(state.rxLast.dialHz) || 0 : 0,
+      lastCycleMs: state.rxLast ? Number(state.rxLast.cycleMs) || 0 : 0,
+      beacon: state.beacon, tx: Boolean(state.radio.tx || (session && session.ptt)),
+      // Bounded to stay under the binary's 60 kB snapshot limit (watch-publish.js).
+      spots: state.rxSpots.slice(0, 250).map(spot => ({t: spot.t, freqHz: spot.freqHz, audioHz: spot.audioHz,
+        snr: spot.snr, dt: spot.dt, drift: spot.drift, call: spot.call, grid: spot.grid, power: spot.power}))};
+  }
+
   function render() {
+    if (sessionHeld) {
+      if (!watchPublisher && globalThis.WatchPublish)
+        watchPublisher = WatchPublish.create({role: "wspr", token: () => sessionToken()});
+      if (watchPublisher) watchPublisher.publish(watchDescribe);
+    }
     // The red frame around the whole viewport while the radio is keyed. Same
     // rule, same class and same stylesheet as JS8Call (`body.radio-transmitting`
     // in data.css, which this page already loads) -- it belongs here more, not

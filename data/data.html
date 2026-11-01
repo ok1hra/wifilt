@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>JS8Call-ICOM — WIFILT</title>
-  <link rel="stylesheet" href="/data.css?v=80b3edd9">
+  <link rel="stylesheet" href="/data.css?v=3aad2ade">
 </head>
 <body class="startup-pending lan-gate-checking">
   <header class="site-topbar">
@@ -184,6 +184,7 @@
         <p id="sessionBusyWhere" class="session-busy-where"></p>
         <p>This page will unlock by itself as soon as the other one is closed.</p>
         <button id="sessionTakeover" class="gate-card-action" type="button">TAKE THE SESSION OVER HERE</button>
+        <a class="gate-card-action watch-link" href="/watch.html" data-watch-link hidden title="Follow what the operator sees on /watch.html: decoded traffic, map and waterfall. Nothing is taken over and nothing is transmitted from there.">WATCH WITHOUT TAKING OVER</a>
         <small id="sessionBusyDetail"></small>
       </div>
     </section>
@@ -567,8 +568,9 @@
   <script src="/ports.js"></script>
   <script src="/wake-lock.js?v=b487b3dc"></script>
   <script src="/lan-gate.js?v=75f2464b"></script>
+  <script src="/watch-link.js?v=19dc6845"></script>
   <script src="/mgrs.js?v=6a363b6c"></script>
-  <script src="/fw-version.js?v=c7a9b502"></script>
+  <script src="/fw-version.js?v=45bfdba6"></script>
   <script src="/js8-settings.js?v=b1e44675"></script>
   <script src="/station-identity.js?v=a1a20249"></script>
   <script src="/station-profile.js?v=e6441027"></script>
@@ -659,7 +661,8 @@
   <script src="/tx-pledge.js?v=5750feea"></script>
   <script src="/settings-fold.js?v=b75dee54"></script>
   <script src="/station-map.js?v=7bd5311c"></script>
-  <script src="/data.js?v=6ffa4f80"></script>
+  <script src="/watch-publish.js?v=036bd568"></script>
+  <script src="/data.js?v=47af0876"></script>
   <script src="/compression.js?v=768da432"></script>
 </body>
 </html>

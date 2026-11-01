@@ -8,7 +8,7 @@
      scope, pills, TX block, settings grid); jtty.css carries only what is
      JTTY's -- the line log, the function keys, live entry.
      docs/jtty-implementace.md §5. -->
-<link rel="stylesheet" href="/data.css?v=80b3edd9">
+<link rel="stylesheet" href="/data.css?v=3aad2ade">
 <link rel="stylesheet" href="/rtty.css?v=8a9de7c1">
 <link rel="stylesheet" href="/jtty.css?v=a689855f">
 <script>if (/(?:^|[?&])popup=1(?:&|$)/.test(location.search)) document.documentElement.classList.add("popup-mode");</script>
@@ -90,6 +90,7 @@
          through a single audio link, so only one page can run at a time.</p>
       <p id="sessionBusyWhere" class="session-busy-where"></p>
       <button id="sessionTakeover" class="gate-card-action" type="button">TAKE THE SESSION OVER HERE</button>
+      <a class="gate-card-action watch-link" href="/watch.html" data-watch-link hidden title="Follow what the operator sees on /watch.html: decoded traffic, map and waterfall. Nothing is taken over and nothing is transmitted from there.">WATCH WITHOUT TAKING OVER</a>
     </div>
   </section>
 
@@ -235,7 +236,8 @@
 
 <script src="/ports.js"></script>
 <script src="/lan-gate.js?v=75f2464b"></script>
-<script src="/fw-version.js?v=c7a9b502"></script>
+<script src="/watch-link.js?v=19dc6845"></script>
+<script src="/fw-version.js?v=45bfdba6"></script>
 <script src="/trxnet-peers.js?v=9a2bd921"></script>
 <script src="/station-profile.js?v=e6441027"></script>
 <script src="/station-identity.js?v=a1a20249"></script>

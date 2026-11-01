@@ -7,7 +7,7 @@
 <!-- Shares data.css with JS8Call-ICOM/WSPR (topbar, subnav, radio-bar, gate-card)
      so the three cannot drift apart; mercury.css carries only what is genuinely
      Mercury's, same split as wspr.css. -->
-<link rel="stylesheet" href="/data.css?v=80b3edd9">
+<link rel="stylesheet" href="/data.css?v=3aad2ade">
 <link rel="stylesheet" href="/mercury.css?v=33aa9ebc">
 </head>
 <!-- lan-gate.js clears the checking class once it knows whether ICOM-LAN is set
@@ -283,6 +283,7 @@
       <h1>Mercury transfer running elsewhere</h1>
       <p id="takeoverDetail">Transfer in progress, 43% done, ~24 min remaining.</p>
       <button id="takeoverButton" class="gate-card-action" type="button">TAKE OVER AND CANCEL</button>
+      <a class="gate-card-action watch-link" href="/watch.html" data-watch-link hidden title="Follow what the operator sees on /watch.html: decoded traffic, map and waterfall. Nothing is taken over and nothing is transmitted from there.">WATCH WITHOUT TAKING OVER</a>
     </div>
   </section>
 
@@ -294,7 +295,8 @@
 
 <script src="/ports.js"></script>
 <script src="/lan-gate.js?v=75f2464b"></script>
-<script src="/fw-version.js?v=c7a9b502"></script>
+<script src="/watch-link.js?v=19dc6845"></script>
+<script src="/fw-version.js?v=45bfdba6"></script>
 <script src="/station-identity.js?v=a1a20249"></script>
 <script src="/mercury-session.js?v=285d3936"></script>
 <script src="/mercury-presets.js?v=9f4074aa"></script>
@@ -323,9 +325,10 @@
      mercury-settings.js above -- see its own header for why. Both load
      before mercury.js, which references them at top level. -->
 <script src="/spectrum.js?v=7fafbbb5"></script>
+<script src="/watch-publish.js?v=036bd568"></script>
 <script src="/mercury-tuning.js?v=e5a811f0"></script>
 <script src="/audio-health.js?v=9efe092e"></script>
 <script src="/settings-fold.js?v=b75dee54"></script>
-<script src="/mercury.js?v=2b1bd192"></script>
+<script src="/mercury.js?v=d23553e4"></script>
 </body>
 </html>

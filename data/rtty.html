@@ -8,7 +8,7 @@
      gate-card) so the four cannot drift apart; rtty.css carries only what is
      genuinely RTTY's, same split as wspr.css/mercury.css.
      docs/rtty-implementace.md -- grilled 2026-08-27. -->
-<link rel="stylesheet" href="/data.css?v=80b3edd9">
+<link rel="stylesheet" href="/data.css?v=3aad2ade">
 <link rel="stylesheet" href="/rtty.css?v=8a9de7c1">
 <!-- ?popup=1 strips this page down to the modem itself, hiding both nav
      bars. QRPLOG's RTTY button opened it that way until 2026-09-07, when it
@@ -118,6 +118,7 @@
          through a single audio link, so only one page can run at a time.</p>
       <p id="sessionBusyWhere" class="session-busy-where"></p>
       <button id="sessionTakeover" class="gate-card-action" type="button">TAKE THE SESSION OVER HERE</button>
+      <a class="gate-card-action watch-link" href="/watch.html" data-watch-link hidden title="Follow what the operator sees on /watch.html: decoded traffic, map and waterfall. Nothing is taken over and nothing is transmitted from there.">WATCH WITHOUT TAKING OVER</a>
     </div>
   </section>
 
@@ -367,7 +368,8 @@
 
 <script src="/ports.js"></script>
 <script src="/lan-gate.js?v=75f2464b"></script>
-<script src="/fw-version.js?v=c7a9b502"></script>
+<script src="/watch-link.js?v=19dc6845"></script>
+<script src="/fw-version.js?v=45bfdba6"></script>
 <script src="/rtty-codec.js?v=f902ad99"></script>
 <script src="/rtty-afc.js?v=ec376292"></script>
 <script src="/trxnet-peers.js?v=9a2bd921"></script>

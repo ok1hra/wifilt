@@ -618,6 +618,19 @@
               Slow page loads down for the radio link
               <span class="help-tip" data-tip="While an ICOM-LAN radio is connected, page files are sent only as fast as the radio link stays healthy: slower whenever the radio asks for lost packets, its pings come back late, or RX audio to a browser falls behind. Stops a second browser opening a page from cutting the radio and audio off; a page may take longer to load meanwhile. On by default on the interface box, off on a PC. Turn off if pages load too slowly.">?</span>
             </label>
+            <div data-caps-requires="watch">
+              <label class="checkbox-row">
+                <input type="checkbox" name="watchon">
+                Let other browsers watch the data pages
+                <span class="help-tip" data-tip="Other computers and phones open WATCH (/watch.html) and follow what the browser holding the radio shows on JS8, WSPR, RTTY, JTTY and Mercury: decoded traffic, the map and transfer progress. Viewers cannot transmit, tune or take the radio. Anybody who can open this web interface can watch.">?</span>
+              </label>
+              <label class="checkbox-row">
+                <input type="checkbox" name="watchaudio">
+                Viewers may take RX audio (waterfall, listening)
+                <span class="help-tip" data-tip="Each viewer that turns its waterfall on gets a copy of the radio's RX audio, about 8 kB/s, and draws the waterfall itself. Keeps the radio's audio channel open while a viewer watches, even with nobody operating.">?</span>
+              </label>
+              <p class="setup-note"><a href="/watch.html" target="_blank" rel="noopener">Open WATCH</a></p>
+            </div>
           </div>
         </details>
 
@@ -861,6 +874,8 @@
 
         setValue('cwIpOnConnect', data.cwIpOnConnect);
         setValue('webpacing', data.webpacing);
+        setValue('watchon', data.watchon);
+        setValue('watchaudio', data.watchaudio);
         setValue('trx2enable', data.trx2enabled);
         setValue('trx3enable', data.trx3enabled);
 
@@ -2352,7 +2367,7 @@
     });
   </script>
   <script src="/mgrs.js?v=6a363b6c"></script>
-  <script src="/fw-version.js?v=c7a9b502"></script>
+  <script src="/fw-version.js?v=45bfdba6"></script>
   <script>
     (function () {
       var form = document.querySelector('form[action="/setup"]');

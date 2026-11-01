@@ -221,7 +221,9 @@ volatile bool cwIpSendPending = false;
   405-420 RKEY shared SipHash key (16 B; all 0xff = none)
   421 WEB pacing     (web_pacer.h; 0xff = never set = platform default:
                       on for the ESP32 box, off for native; 0 off, 1 on)
-  422-423 FREE
+  422 WATCH         (native only, watch_hub.h; 0xff = never set = off;
+                      bit0 on, bit1 viewers may take RX audio for a waterfall)
+  423 FREE
 
   !! Increment EEPROM_SIZE #define !!
 */
@@ -456,6 +458,9 @@ char CwMsg[37] = "";
 #include "jtty_stream.h"        // JTTY decodes/TX text to TrxNet subscribers
 #include "rkey_net.h"           // Paddle2IP remote CW key: UDP server task
 #include "web_pacer.h"          // file uploads yield to the radio link
+#if CAP_WATCH
+  #include "watch_hub.h"        // viewers follow the holder's data page (native only)
+#endif
 #include "trx_power.h"          // wake / standby / shutdown of the LAN radio from the web UI
 // See radio_transport.h's own comment on radioLanLocalControlPort(): 0 means
 // "use the real default (50001)", exactly today's behavior on the real
@@ -955,6 +960,15 @@ int incomingByte = 0;   // for incoming serial data
   #define WEB_PACING_EEPROM 421
   bool     webPacing   = CAP_WIFI;
   WebPacer webPacer;
+
+  #if CAP_WATCH
+    // Other browsers may follow the holder's data page (watch_hub.h). Off until
+    // the operator turns it on: what the holder decodes becomes visible to
+    // anybody who can open the web interface.
+    #define WATCH_EEPROM 422
+    bool watchOn = false;
+    bool watchAudioOn = false;
+  #endif
 
   static const char* LOG_CONFIG_PATH = "/log-config.json";
   static const size_t LOG_CONFIG_MAX_BYTES = 2048;
@@ -1492,6 +1506,18 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   bool AudioHandleWsUpgrade(WiFiClient& webClient, const String& request, const String& token);
   void AudioHandleWsClient(void);
   void audioHandleRawClient(void);
+  #if CAP_WATCH
+    bool watchWantsRxAudio(void);
+    void watchEvent(int role, const String &json);
+    void watchHubOnRxAudio(const uint8_t *data, size_t len, uint16_t radioSequence);
+    void watchLoop(void);
+    void watchHandleUpgrade(WiFiClient &client, const String &request, const String &query);
+    void handleWatchSnapshotPost(void);
+    String watchHealthJson(void);
+    #define watchWantsRxAudioNow() watchWantsRxAudio()
+  #else
+    #define watchWantsRxAudioNow() false
+  #endif
 #endif
 
 //-------------------------------------------------------------------------------------------------------
@@ -2179,6 +2205,7 @@ void handleSetupData(){
   j +=   ",\"gpio\":";       j += CAP_GPIO ? "true" : "false";
   j +=   ",\"bandDecoder\":";j += CAP_BAND_DECODER ? "true" : "false";
   j +=   ",\"cwKeying\":";   j += CAP_GPIO ? "true" : "false";
+  j +=   ",\"watch\":";      j += CAP_WATCH ? "true" : "false";
   j += "}";
   j += ",\"apMode\":"; j += APmode ? "true" : "false";
   // The first segment of SETUP's status line. One segment with several states
@@ -2277,6 +2304,10 @@ void handleSetupData(){
   j += ",\"rkeydelay\":\""; j += RkeyDelayMs; j += "\"";
   j += ",\"rkeykey\":\""; j += rkeyKeyHex(); j += "\"";
   j += ",\"webpacing\":"; j += webPacing ? "true" : "false";
+#if CAP_WATCH
+  j += ",\"watchon\":"; j += watchOn ? "true" : "false";
+  j += ",\"watchaudio\":"; j += watchAudioOn ? "true" : "false";
+#endif
   j += ",\"blockedDxcc\":\""; j += configJsonEscape(g_lcBlockedDxcc); j += "\"";
   // fskOutputMode/fskNetId used to be serialized here too (this is a SEPARATE
   // g_lc* serialization from /log-config's own, feeding setup.html's
@@ -3733,7 +3764,7 @@ void radioSlotSetModeState(uint8_t slot, const char *mode) {
 void lanRadioAudioService(IcomLanClient *client) {
   if (!client || !client->connected()) { lanLinkWasUp = false; return; }
   if (!lanLinkWasUp) { lanLinkWasUp = true; audioPttSafetyOnLink(); }
-  if (AudioWsClient.connected() && !client->rxAudioActive()) client->startRxAudio();
+  if ((AudioWsClient.connected() || watchWantsRxAudioNow()) && !client->rxAudioActive()) client->startRxAudio();
 }
 
 void secondaryLanClientsLoop(void) {
@@ -3927,6 +3958,10 @@ void handleConfigDownload() {
   j += ",\"rkeydelay\":";   j += RkeyDelayMs;
   j += ",\"rkeykey\":\"";    j += rkeyKeyHex(); j += "\"";
   j += ",\"webpacing\":";  j += webPacing ? "true" : "false";
+#if CAP_WATCH
+  j += ",\"watchon\":";   j += watchOn ? "true" : "false";
+  j += ",\"watchaudio\":"; j += watchAudioOn ? "true" : "false";
+#endif
   j += ",\"btname\":\"";     j += configJsonEscape(BT_NAME);     j += "\"";
   webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   webServer.sendHeader("Pragma", "no-cache");
@@ -4125,6 +4160,14 @@ void handleConfigUpload() {
     webPacing = extractJsonBool(body, "webpacing", webPacing);
     EEPROM.writeByte(WEB_PACING_EEPROM, webPacing ? 1 : 0);
   }
+
+#if CAP_WATCH
+  if (body.indexOf("\"watchon\"") >= 0) {
+    watchOn = extractJsonBool(body, "watchon", watchOn);
+    watchAudioOn = extractJsonBool(body, "watchaudio", watchAudioOn);
+    EEPROM.writeByte(WATCH_EEPROM, (watchOn ? 1 : 0) | (watchAudioOn ? 2 : 0));
+  }
+#endif
 
   if (body.indexOf("\"btname\"") >= 0) {
     String btname = extractJsonString(body, "btname");
@@ -5718,6 +5761,10 @@ void setupWebServer(void){
     }
     out += "],\"assets\":";
     out += PLATFORM_ASSET_REPORT_JSON();
+#if CAP_WATCH
+    out += ",\"watch\":";
+    out += watchHealthJson();
+#endif
     out += "}";
     webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     webServer.send(200, "application/json", out);
@@ -5743,6 +5790,9 @@ void setupWebServer(void){
   webServer.on("/mercury/session/release", HTTP_POST, handleJs8SessionRelease);
   webServer.on("/msgbox", HTTP_GET, handleMsgboxGet);
   webServer.on("/msgbox", HTTP_POST, handleMsgboxPost);
+#if CAP_WATCH
+  webServer.on("/watch/snapshot", HTTP_POST, handleWatchSnapshotPost);
+#endif
   webServer.on("/cmd", HTTP_POST, handlePostCmd);
   webServer.on("/lan/reconnect", HTTP_POST, [](){
     webServer.sendHeader("Connection", "close");
@@ -6229,6 +6279,14 @@ void setup(){
 
     // 421 web upload pacing
     if (EEPROM.read(WEB_PACING_EEPROM) != 0xff) webPacing = EEPROM.read(WEB_PACING_EEPROM) == 1;
+
+    #if CAP_WATCH
+      // 422 WATCH
+      if (EEPROM.read(WATCH_EEPROM) != 0xff) {
+        watchOn = EEPROM.read(WATCH_EEPROM) & 1;
+        watchAudioOn = EEPROM.read(WATCH_EEPROM) & 2;
+      }
+    #endif
 
   }
 //------------------------------------------
@@ -6968,7 +7026,7 @@ void lanClientLoop(){
     lanBackoff = 3000;   // healthy link resets the reconnect backoff
     // (re)start RX audio if the DATA page is open but the audio channel isn't up
     // yet — covers WS-connected-before-LAN and LAN-reconnect-while-page-open.
-    if (AudioWsClient.connected() && !lanClient.rxAudioActive()) lanClient.startRxAudio();
+    if ((AudioWsClient.connected() || watchWantsRxAudioNow()) && !lanClient.rxAudioActive()) lanClient.startRxAudio();
     // PWR follows the transceiver, not the session: in remote-control standby
     // the IC-705 LAN stays logged in while the radio itself is off.
     bool radioOn = lanClient.radioPowered();
@@ -10559,6 +10617,12 @@ void handleSet() {
     webPacing = requestHasArg("webpacing");
     EEPROM.writeByte(WEB_PACING_EEPROM, webPacing ? 1 : 0);
 
+    #if CAP_WATCH
+      watchOn = requestHasArg("watchon");
+      watchAudioOn = requestHasArg("watchaudio");
+      EEPROM.writeByte(WATCH_EEPROM, (watchOn ? 1 : 0) | (watchAudioOn ? 2 : 0));
+    #endif
+
     {
       String dxchost = requestArg("dxchost");
       if(dxchost.length() <= 64){ DxcHost = dxchost; eepromWriteStr(DxcHost, 137, 64); }
@@ -11691,13 +11755,17 @@ void AudioDisconnectWs(){
   if(AudioWsClient.connected()) AudioWsClient.stop();
   wsRingReset();
   aud1WsParser.reset();
-  if(IcomLanClient *client = lanRadioClient()) client->stopRxAudio();
+  if(!watchWantsRxAudioNow())
+    if(IcomLanClient *client = lanRadioClient()) client->stopRxAudio();
 }
 
 // Called by the LAN client for every RX audio datagram payload (~160 B / 20 ms).
 // Coalesce a few packets into one WS frame to cut the frame rate (~50/s -> ~10/s)
 // and keep the single-threaded loop responsive to the port-80 /state polls.
 void lanAudioHandler(const uint8_t *data, size_t len, uint16_t radioSequence){
+#if CAP_WATCH
+  watchHubOnRxAudio(data, len, radioSequence);   // the viewers' own stream, holder or not
+#endif
   if(len == 0 || !AudioWsClient.connected()) return;
   if(audioRadioSequenceValid){
     int16_t delta = int16_t(radioSequence - audioRadioExpectedSequence);
@@ -11770,6 +11838,9 @@ static void aud1HandleControl(const String& json){
     String r2 = extractJsonString(json, "r2");
     rttyStreamAppend(rttyStream, RTTY_STREAM_RX1, r1.c_str(), r1.length(), now);
     rttyStreamAppend(rttyStream, RTTY_STREAM_RX2, r2.c_str(), r2.length(), now);
+#if CAP_WATCH
+    if(r1.length() || r2.length()) watchEvent(WATCH_RTTY, json);
+#endif
     return;
   }
   // Decoded JTTY from whichever page holds this socket, for /jtty-rx
@@ -11779,6 +11850,9 @@ static void aud1HandleControl(const String& json){
     jttyStreamRx(jttyStream, (uint8_t)aud1JsonU64(json, "id"), aud1JsonU64(json, "eom") != 0,
                  (uint16_t)aud1JsonU64(json, "hz"), (int8_t)aud1JsonI32(json, "snr"),
                  text.c_str(), text.length(), millis());
+#if CAP_WATCH
+    watchEvent(WATCH_JTTY, json);
+#endif
     return;
   }
   // JTTY live entry (docs/jtty-implementace.md §6): the transmission in flight
@@ -11805,6 +11879,9 @@ static void aud1HandleControl(const String& json){
     aud1TxDeadlineMs += uint32_t(more / 48);
     String jttyText = extractJsonString(json, "jttyText");
     if(jttyText.length()){ aud1TxJtty = true; jttyStreamTx(jttyStream, jttyText.c_str(), jttyText.length(), millis()); }
+#if CAP_WATCH
+    if(jttyText.length()) watchEvent(WATCH_JTTY, "{\"type\":\"jtty.tx\",\"text\":\"" + configJsonEscape(jttyText) + "\"}");
+#endif
     return;
   }
   if(type != "tx.prepare") return;
@@ -11863,6 +11940,11 @@ static void aud1HandleControl(const String& json){
   String jttyText = extractJsonString(json, "jttyText");
   aud1TxJtty = jttyText.length() > 0;
   if(aud1TxJtty) jttyStreamTx(jttyStream, jttyText.c_str(), jttyText.length(), millis());
+#if CAP_WATCH
+  // What went on air, for the viewers' tape -- after the same acceptance.
+  if(aud1TxRtty) watchEvent(WATCH_RTTY, "{\"type\":\"rtty.tx\",\"text\":\"" + configJsonEscape(rttyText) + "\"}");
+  if(aud1TxJtty) watchEvent(WATCH_JTTY, "{\"type\":\"jtty.tx\",\"text\":\"" + configJsonEscape(jttyText) + "\"}");
+#endif
   aud1TxId = txId; aud1TxTotalSamples = totalSamples; aud1TxExpectedPackets = packets;
   aud1TxPrebufferSamples = prebuffer; aud1TxTargetMs = millis() + uint32_t(delayMs);
   aud1TxDeadlineMs = aud1TxTargetMs + uint32_t(totalSamples / 48) + 2500;
@@ -11971,10 +12053,14 @@ bool AudioHandleWsUpgrade(WiFiClient& webClient, const String& request, const St
 }
 
 void AudioHandleWsClient(){
+#if CAP_WATCH
+  watchLoop();
+#endif
   if(!AudioWsClient.connected()){
     if(aud1TxNeedsDisconnectAbort(aud1TxState, audioTxKeyed))
       aud1TxAbort("WebSocket disconnected", false);
-    if(IcomLanClient *client = lanRadioClient(); client && client->rxAudioActive()) client->stopRxAudio();
+    if(IcomLanClient *client = lanRadioClient(); client && client->rxAudioActive() && !watchWantsRxAudioNow())
+      client->stopRxAudio();
     audioTxLen = 0;
     aud1WsParser.reset();
     return;
@@ -12076,10 +12162,10 @@ void audioHandleRawClient(){
   String uri   = request.substring(uriStart, uriEnd);
   // The session token rides in the query string: a browser cannot set headers on
   // a WebSocket handshake.
-  String token;
+  String token, query;
   int queryAt = uri.indexOf('?');
   if(queryAt >= 0){
-    String query = uri.substring(queryAt + 1);
+    query = uri.substring(queryAt + 1);
     uri = uri.substring(0, queryAt);
     int keyAt = query.indexOf("token=");
     if(keyAt >= 0){
@@ -12110,6 +12196,9 @@ void audioHandleRawClient(){
     client.stop();
     return;
   }
+#if CAP_WATCH
+  if(uri == "/watchws"){ watchHandleUpgrade(client, request, query); return; }
+#endif
   if(uri != "/audiows"){
     client.println(F("HTTP/1.1 404 Not Found\r\nConnection: close\r\n"));
     client.stop();
@@ -12120,3 +12209,202 @@ void audioHandleRawClient(){
   }
   // on success, client is stored in AudioWsClient — do NOT stop it
 }
+
+#if CAP_WATCH
+// ── WATCH viewers (port 83, /watchws) ────────────────────────────────────────
+// Read-only followers of the holder's data page; watch_hub.h has the why. A
+// viewer never touches the session, the TX path or /cmd: its socket is read
+// only for the close frame, and nothing it sends reaches aud1HandleControl.
+struct WatchViewer {
+  WiFiClient client;
+  WatchOut out;
+  Aud1WsParser parser;
+  bool active = false;
+  bool audio = false;
+};
+static WatchViewer watchViewers[WATCH_MAX_VIEWERS];
+static WatchHub watchHub;
+static char watchHolderKey[JS8_SESSION_TOKEN_MAX + 10];   // token/role of the live holder, never sent
+static uint32_t watchStatusNextMs = 0;
+
+static uint8_t watchViewerCount(bool audioOnly){
+  uint8_t count = 0;
+  for(const WatchViewer &viewer : watchViewers)
+    if(viewer.active && (!audioOnly || viewer.audio)) count++;
+  return count;
+}
+
+bool watchWantsRxAudio(){
+  return watchOn && watchAudioOn && watchViewerCount(true) > 0;
+}
+
+static void watchDropViewer(WatchViewer &viewer){
+  if(viewer.client.connected()) viewer.client.stop();
+  viewer.active = viewer.audio = false;
+  watchOutReset(viewer.out);
+  viewer.parser.reset();
+}
+
+static void watchQueue(WatchViewer &viewer, const std::string &json, int8_t snapshotRole = -1){
+  if(!watchQueueText(viewer.out, json, snapshotRole)){
+    Serial.println("WATCH | viewer too far behind, dropped");
+    watchDropViewer(viewer);
+  }
+}
+
+static void watchBroadcast(const std::string &json, int8_t snapshotRole = -1){
+  for(WatchViewer &viewer : watchViewers)
+    if(viewer.active) watchQueue(viewer, json, snapshotRole);
+}
+
+static std::string watchHolderJson(uint32_t now){
+  bool live = js8SessionLive(js8Session, now);
+  String json = "{\"held\":";
+  json += live ? "true" : "false";
+  if(live){
+    json += ",\"role\":\""; json += js8Session.role; json += "\"";
+    json += ",\"owner\":\""; json += IPAddress(js8Session.ownerIpV4).toString(); json += "\"";
+    if(js8Session.mercuryName[0]){
+      json += ",\"mercuryName\":\""; json += configJsonEscape(String(js8Session.mercuryName)); json += "\"";
+      json += ",\"mercuryPercent\":"; json += js8Session.mercuryPercent;
+    }
+  }
+  json += "}";
+  return std::string(json.c_str());
+}
+
+static std::string watchStatusJson(uint32_t now){
+  return "{\"type\":\"status\",\"viewers\":" + std::to_string(watchViewerCount(false)) +
+         ",\"holder\":" + watchHolderJson(now) + "}";
+}
+
+// Holder text the page already sends over AUD1 (rtty.stream, jtty.stream, TX
+// text in tx.prepare/tx.extend). Kept while nobody watches, so the first viewer
+// starts with the recent tape.
+void watchEvent(int role, const String &json){
+  if(!watchOn) return;
+  watchBroadcast(watchAppendEvent(watchHub, role, std::string(json.c_str())));
+}
+
+void watchHubOnRxAudio(const uint8_t *data, size_t len, uint16_t radioSequence){
+  if(!watchWantsRxAudio()) return;
+  watchAudioIn(watchHub, data, len, radioSequence, millis(), [](const uint8_t *frame, size_t length){
+    for(WatchViewer &viewer : watchViewers)
+      if(viewer.active && viewer.audio) watchQueueAudio(viewer.out, frame, length);
+  });
+}
+
+void watchHandleUpgrade(WiFiClient &client, const String &request, const String &query){
+  String secKey     = ExtractHttpHeader(request, "Sec-WebSocket-Key");
+  String upgrade    = ExtractHttpHeader(request, "Upgrade");
+  upgrade.toLowerCase();
+  if(!watchOn){
+    client.println(F("HTTP/1.1 404 Not Found\r\nConnection: close\r\n"));
+    client.stop(); return;
+  }
+  if(secKey.length() == 0 || upgrade != "websocket"){
+    client.println(F("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n"));
+    client.stop(); return;
+  }
+  WatchViewer *slot = nullptr;
+  for(WatchViewer &viewer : watchViewers) if(!viewer.active){ slot = &viewer; break; }
+  if(!slot){
+    client.println(F("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n"));
+    client.stop(); return;
+  }
+  client.println(F("HTTP/1.1 101 Switching Protocols"));
+  client.println(F("Upgrade: websocket"));
+  client.println(F("Connection: Upgrade"));
+  client.print(F("Sec-WebSocket-Accept: "));
+  client.println(DxcComputeWebSocketAccept(secKey));
+  client.println();
+  bool firstAudio = !watchWantsRxAudio();
+  watchDropViewer(*slot);
+  slot->client = client;
+  slot->client.setNoDelay(true);
+  slot->active = true;
+  slot->audio = watchAudioOn && query.indexOf("audio=1") >= 0;
+  if(slot->audio && firstAudio) watchAudioReset(watchHub, esp_random());
+  uint32_t now = millis();
+  watchQueue(*slot, "{\"type\":\"hello\",\"protocol\":\"WATCH\",\"version\":1,\"audio\":" +
+                    std::string(slot->audio ? "true" : "false") +
+                    ",\"viewers\":" + std::to_string(watchViewerCount(false)) +
+                    ",\"holder\":" + watchHolderJson(now) + "}");
+  watchReplay(watchHub, now, [&](const std::string &json, int8_t role){ watchQueue(*slot, json, role); });
+  Serial.print("WATCH | viewer connected, "); Serial.print(watchViewerCount(false));
+  Serial.println(slot->audio ? " watching, with audio" : " watching");
+}
+
+// One tick, from AudioHandleWsClient() so it also runs while a page file
+// streams or a request handler pumps the background loops.
+void watchLoop(){
+  if(!watchOn){
+    for(WatchViewer &viewer : watchViewers) if(viewer.active) watchDropViewer(viewer);
+    return;
+  }
+  uint32_t now = millis();
+  bool live = js8SessionLive(js8Session, now);
+  char holderKey[sizeof(watchHolderKey)];
+  snprintf(holderKey, sizeof(holderKey), "%s/%s", live ? js8Session.token : "", live ? js8Session.role : "");
+  bool holderChanged = strcmp(holderKey, watchHolderKey) != 0;
+  if(holderChanged) strcpy(watchHolderKey, holderKey);
+  if(holderChanged || (int32_t)(now - watchStatusNextMs) >= 0){
+    watchStatusNextMs = now + 5000;   // doubles as the keepalive that finds dead peers
+    if(watchViewerCount(false)) watchBroadcast(watchStatusJson(now));
+  }
+  if(watchWantsRxAudio() && (uint32_t)(now - watchHub.audioLastFlushMs) >= WATCH_AUDIO_FLUSH_MS)
+    watchAudioFlush(watchHub, now, [](const uint8_t *frame, size_t length){
+      for(WatchViewer &viewer : watchViewers)
+        if(viewer.active && viewer.audio) watchQueueAudio(viewer.out, frame, length);
+    });
+  for(WatchViewer &viewer : watchViewers){
+    if(!viewer.active) continue;
+    if(!viewer.client.connected()){ watchDropViewer(viewer); continue; }
+    uint8_t chunk[256];
+    int available = viewer.client.available();
+    while(available > 0 && viewer.active){
+      int received = viewer.client.read(chunk, available > (int)sizeof(chunk) ? sizeof(chunk) : available);
+      if(received <= 0) break;
+      available -= received;
+      for(int index = 0; index < received; index++){
+        Aud1WsParser::Result result = viewer.parser.push(chunk[index]);
+        if(result == Aud1WsParser::Error || (result == Aud1WsParser::FrameReady && viewer.parser.opcode() == 0x8)){
+          watchDropViewer(viewer); break;
+        }
+        if(result == Aud1WsParser::FrameReady) viewer.parser.reset();
+      }
+    }
+    if(!viewer.active) continue;
+    int fd = viewer.client.fd();
+    if(fd < 0) continue;
+    if(!watchDrain(viewer.out, [fd](const char *data, size_t length){ return netSendNonBlocking(fd, data, length); }))
+      watchDropViewer(viewer);
+  }
+}
+
+// The holder's page publishes what it shows. Only the session owner may, so a
+// viewer -- or any other page -- cannot put words in the holder's mouth.
+void handleWatchSnapshotPost(){
+  webServer.sendHeader("Connection", "close");
+  if(!watchOn){ webServer.send(404, "application/json", "{\"ok\":false,\"error\":\"watch_off\"}"); return; }
+  if(!js8SessionOwns(js8Session, millis(), webServer.arg("token").c_str())){
+    webServer.send(409, "application/json", "{\"ok\":false,\"error\":\"not_holder\"}"); return;
+  }
+  int role = watchRoleIndex(webServer.arg("role").c_str());
+  String body = webServer.hasArg("plain") ? webServer.arg("plain") : String();
+  uint32_t now = millis();
+  if(!watchSetSnapshot(watchHub, role, std::string(body.c_str()), now)){
+    webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"bad_snapshot\"}"); return;
+  }
+  watchBroadcast(watchSnapshotMessage(watchHub, role, now), int8_t(role));
+  webServer.send(200, "application/json", "{\"ok\":true,\"viewers\":" + String(watchViewerCount(false)) + "}");
+}
+
+String watchHealthJson(){
+  String json = "{\"on\":"; json += watchOn ? "true" : "false";
+  json += ",\"audio\":"; json += watchAudioOn ? "true" : "false";
+  json += ",\"viewers\":"; json += watchViewerCount(false);
+  json += "}";
+  return json;
+}
+#endif

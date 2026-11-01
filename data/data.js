@@ -4014,6 +4014,52 @@ function renderActivity() {
   // of waiting for the next radio poll to repaint the composer. The order stays frozen
   // while the panel is open; only the numbers and the ages move.
   renderViaRoutes();
+  watchPublish(() => watchDescribe(recent, calls, responders));
+}
+
+// WATCH (watch-publish.js): what this feed and the stations table show, for
+// browsers following this one on /watch.html. Already filtered the way the
+// operator sees it -- blocked entities out, own TX merged in -- and with the
+// map position resolved here, so the viewer needs no DXCC table. The draft in
+// the composer is not part of it.
+// `var` and created on first use: renderActivity() can run before this point
+// of the file has executed.
+var watchPublisher = null;
+function watchPublish(describe) {
+  if (!watchPublisher && self.WatchPublish)
+    watchPublisher = WatchPublish.create({role: "js8", token: () => sessionToken()});
+  if (watchPublisher) watchPublisher.publish(describe);
+}
+function watchDescribe(recent, calls, responders) {
+  const own = currentJs8().myCall;
+  // Bounded to stay under the binary's 60 kB snapshot limit (watch-publish.js).
+  const traffic = recent.slice(0, 80).map(message => {
+    const snr = Number(message.snr);
+    const item = {t: Number(message.lastSlotUtcMs || message.firstSlotUtcMs || 0),
+      hz: Number.isFinite(message.offsetHz) ? Math.round(message.offsetHz) : null,
+      speed: MODE_TO_SPEED[message.submode] || "", snr: Number.isFinite(snr) ? snr : null,
+      text: String(message.text || "").slice(0, 300)};
+    if (message.outgoing) return {...item, out: true, status: message.status, to: message.to || ""};
+    return {...item, from: senderOf(message).call || "", forMe: messageAddressesMe(message, own),
+      partial: Boolean(message.partial), incomplete: Boolean(message.incomplete), restored: Boolean(message.restored)};
+  });
+  const placed = new Set();
+  const stations = calls.slice(0, 150).map(item => {
+    const direction = stationDirection(item);
+    const heard = item.heardDirectly !== false;
+    if (direction) placed.add(item.call);
+    return {call: item.call, country: stationCountry(item), grid: item.grid || "",
+      snr: heard ? item.snr : null, hz: heard && Number.isFinite(item.offsetHz) ? Math.round(item.offsetHz) : null,
+      speed: heard ? speedDetail(item.submode) : "", t: item.lastSlotUtcMs, heard,
+      reacted: stationReacted(responders, item.call),
+      km: direction ? direction.qrbKm : null, az: direction ? direction.azimuthDeg : null};
+  });
+  const links = hearingLinks(state.activity.messages, own, Date.now())
+    .filter(link => placed.has(link.from) && placed.has(link.to))
+    .slice(0, 100).map(link => ({from: link.from, to: link.to, detail: link.detail, atMs: link.atMs}));
+  return {myCall: own, grid: currentJs8().grid || "", activityHz: Number(state.activityFrequency) || 0,
+    radioHz: Number(state.radio.frequency) || 0, mode: MODE_TO_SPEED[selectedMode()] || "",
+    tx: radioTransmitting(), traffic, stations, links};
 }
 
 // Stations that have reacted to our transmissions: any received message whose callsigns

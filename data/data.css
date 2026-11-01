@@ -69,6 +69,11 @@ button { color: inherit; cursor: pointer; }
    page that cannot key the radio is worse than an explanation. */
 .session-busy-only .radio-bar,
 .session-busy-only .data-page > :not(.session-busy) { display:none; }
+/* WATCH beside TAKE OVER (watch-link.js); the gap sits on the right so a
+   wrapped button still lines up on a phone. .gate-card-action's inline-block
+   outranks the UA rule for [hidden], so the hidden state needs saying here. */
+.session-busy .gate-card-action { margin-right:4px; }
+.session-busy .watch-link[hidden] { display:none; }
 .js8-page-footer {
   display:flex; justify-content:center; gap:9px; padding:0 10px 24px; color:#52655f; font-size:11px;
 }

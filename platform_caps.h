@@ -45,6 +45,11 @@
 
   #define CAP_BAND_DECODER 0
 
+  // WATCH (watch_hub.h): other browsers follow the holder's data page. Needs
+  // per-viewer queues and a non-blocking socket per viewer, which a PC has and
+  // the box does not.
+  #define CAP_WATCH 1
+
   // Where the listeners the sketch names 80/82/83 really are. Ports below 1024
   // need a capability on a PC, so native/net/WiFi.cpp may have moved one to
   // +8000 (or the operator moved it with --port/--dxc-port/--audio-port).
@@ -73,6 +78,7 @@
   #define CAP_CIV           1
   #define CAP_GPIO          1
   #define CAP_BAND_DECODER  1
+  #define CAP_WATCH         0
 
   // The box owns its ports: a listener is always where the sketch put it.
   #define PLATFORM_PORT(requested)           ((uint16_t)(requested))

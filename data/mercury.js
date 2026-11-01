@@ -154,7 +154,32 @@
     startAmbientWorker();
   }
 
+  // WATCH (watch-publish.js): the status this page shows, read back off its own
+  // panels so a viewer on /watch.html sees the same lines. Text only, never the
+  // HTML -- a peer's filename came off the air.
+  let watchPublisher = null;
+  function watchLines(element) {
+    if (!element || element.hidden) return [];
+    const lines = [...element.querySelectorAll("p")].map(line => line.textContent.trim()).filter(Boolean);
+    return lines.length ? lines : [element.textContent.trim()].filter(Boolean);
+  }
+  function watchDescribe() {
+    return {aud1: dom.aud1State.textContent, peer: dom.peerCall.value.trim().toUpperCase(),
+      connection: watchLines(dom.connectionTest),
+      transfer: {text: dom.transferEstimate.textContent,
+        percent: dom.transferProgress.hidden ? null : Number(dom.transferProgress.value) || 0},
+      arq: dom.statusSection.hidden ? [] : watchLines(dom.arqStatus),
+      heard: dom.heardStations.textContent,
+      received: [...dom.receivedFiles.querySelectorAll(".received-file a")].slice(0, 20).map(link => link.textContent)};
+  }
+  function watchPublish() {
+    if (!ownSession || !globalThis.WatchPublish) return;
+    if (!watchPublisher) watchPublisher = WatchPublish.create({role: "mercury", token: () => MercurySession.token(), intervalMs: 1000});
+    watchPublisher.publish(watchDescribe);
+  }
+
   function handleWorkerMessage(msg) {
+    if (msg.type !== "rx-samples" && msg.type !== "log") setTimeout(watchPublish, 0);
     if (window.__mercuryDebug) window.__mercuryDebug.push({ t: Date.now(), msg });
     if (msg.type === "log") return; // debug only, not shown to the operator
     if (msg.type === "error") {

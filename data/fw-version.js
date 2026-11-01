@@ -58,8 +58,12 @@
       '.topbar-gps-wrap{position:relative;display:inline-block;}' +
       '.topbar-gps-btn{cursor:pointer;}' +
       // Same visual family as the About panel behind the logo: dark card, the
-      // border colour the brand panel uses, anchored under the right end of the bar.
-      '.topbar-gps-panel{position:absolute;z-index:80;top:calc(100% + 7px);right:0;' +
+      // border colour the brand panel uses. Fixed, outside the bar (overlayHost()), placed under its
+      // icon by placePanels(): inside the bar it was trapped in the bar's own
+      // stacking context (QRPlog, SETUP, LOGSYNC, BD: sticky, z-index 5), so the
+      // log and its palettes painted over it, and the DXC split's scrolling tab
+      // row clipped it.
+      '.topbar-gps-panel{position:fixed;z-index:1000;top:0;left:0;' +
         'min-width:235px;padding:10px 12px;border:1px solid #4b756c;border-radius:7px;' +
         'background:#0c1a18;box-shadow:0 16px 44px #000c;text-align:left;}' +
       '.topbar-gps-panel h4{margin:0 0 6px;font-size:11px;letter-spacing:.08em;color:#e8f3ee;}' +
@@ -85,7 +89,7 @@
       // the icon's left edge: the icon leads the segment, so RSSI and FW give
       // the panel room to the right even on a phone, where right:0 ran it off
       // the left of the screen.
-      '.topbar-pwr-panel{left:0;right:auto;width:250px;max-width:calc(100vw - 16px);white-space:normal;}' +
+      '.topbar-pwr-panel{width:250px;max-width:calc(100vw - 16px);white-space:normal;}' +
       '.topbar-pwr-panel p{margin:6px 0;font-size:11px;line-height:1.5;color:#d9e6e1;}' +
       '.topbar-pwr-panel .topbar-pwr-err{color:#e5484d;}' +
       '.topbar-pwr-actions{display:flex;gap:8px;margin-top:8px;justify-content:flex-start!important;}' +
@@ -95,7 +99,9 @@
       '.topbar-pwr-btn-danger{border-color:#e5484d;background:#2a1213;color:#ffb4b4;}' +
       '.topbar-pwr-btn-danger:hover,.topbar-pwr-btn-danger:focus-visible{background:#45191b;}' +
       '.topbar-pwr-btn-quiet{border-color:#4b756c;background:transparent;color:#c9d8d3;}' +
-      '.topbar-pwr-dialog{max-width:420px;padding:20px 22px;border:1px solid #8a572b;border-radius:8px;' +
+      // margin:auto spelled out: log.css resets every margin, which pinned the
+      // modal to the top of the QRPlog page instead of centring it.
+      '.topbar-pwr-dialog{margin:auto;max-width:420px;padding:20px 22px;border:1px solid #8a572b;border-radius:8px;' +
         'background:#21170d;color:#d9c6ad;box-shadow:0 16px 48px #0009;' +
         'font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:14px;}' +
       '.topbar-pwr-dialog::backdrop{background:#000a;}' +
@@ -321,13 +327,13 @@
     return panel;
   }
 
-  // One <dialog> for every question; it lives on <body> because the topbar
-  // is rebuilt on every poll.
+  // One <dialog> for every question; it lives outside the segment because
+  // that is rebuilt on every poll (overlayHost(), not the segment itself).
   function showPowerDialog(title, paragraphs, buttons) {
     if (!powerDialog) {
       powerDialog = document.createElement('dialog');
       powerDialog.className = 'topbar-pwr-dialog';
-      document.body.appendChild(powerDialog);
+      overlayHost().appendChild(powerDialog);
     }
     if (powerDialog.open) powerDialog.close();
     powerDialog.innerHTML = '';
@@ -431,8 +437,49 @@
     render();
   }
 
+  // Open panels of the current render: [panel, icon wrap, 'left'|'right'].
+  var floating = [];
+
+  // Under the icon, flush with its left (power) or right (GPS) edge, kept on
+  // screen. Runs after the whole segment is built: the bar is right-aligned,
+  // so every item appended after the icon moves it.
+  function placePanels() {
+    floating.forEach(function (item) {
+      var panel = item[0], rect = item[1].getBoundingClientRect();
+      var width = panel.offsetWidth, room = document.documentElement.clientWidth;
+      var left = item[2] === 'left' ? rect.left : rect.right - width;
+      panel.style.left = Math.max(8, Math.min(left, room - width - 8)) + 'px';
+      panel.style.top = (rect.bottom + 7) + 'px';
+    });
+  }
+
+  // Where panels and the dialog live. <body>, except on the DATA pages:
+  // lan-gate.js hides every child of <body> but .site-topbar and <main> while
+  // it checks the radio (and for good when there is none), which would hide
+  // them too. .site-topbar there carries no z-index, overflow or transform,
+  // so a fixed child still stacks against the whole page.
+  function overlayHost() {
+    return (el && el.closest && el.closest('.site-topbar')) || document.body;
+  }
+
+  function floatPanel(panel, wrap, align) {
+    var style = window.getComputedStyle(el);
+    panel.classList.add('topbar-float');
+    panel.style.fontFamily = style.fontFamily;
+    panel.style.letterSpacing = style.letterSpacing;
+    overlayHost().appendChild(panel);
+    floating.push([panel, wrap, align]);
+  }
+
   function render() {
     if (!el || (localRev === null && !offline)) return;
+    floating.forEach(function (item) { item[0].remove(); });
+    floating = [];
+    renderSegment();
+    placePanels();
+  }
+
+  function renderSegment() {
     el.innerHTML = '';
 
     if (offline || radioPower === null) powerPanelOpen = false;
@@ -450,7 +497,7 @@
       pwr.setAttribute('aria-expanded', powerPanelOpen ? 'true' : 'false');
       pwr.addEventListener('click', onPowerClick);
       pwrWrap.appendChild(pwr);
-      if (powerPanelOpen) pwrWrap.appendChild(powerPanel());
+      if (powerPanelOpen) floatPanel(powerPanel(), pwrWrap, 'left');
       el.appendChild(pwrWrap);
       var pwrSep = document.createElement('span');
       pwrSep.className = 'topbar-fw-sep';
@@ -470,7 +517,7 @@
       gpsSpan.setAttribute('role', 'button');
       gpsSpan.addEventListener('click', onGpsClick);
       gpsWrap.appendChild(gpsSpan);
-      if (gpsPanelOpen) gpsWrap.appendChild(gpsPanel());
+      if (gpsPanelOpen) floatPanel(gpsPanel(), gpsWrap, 'right');
       el.appendChild(gpsWrap);
       var gpsSep = document.createElement('span');
       gpsSep.className = 'topbar-fw-sep';
@@ -615,7 +662,8 @@
     // still walks its detached ancestors and recognises it as ours.
     document.addEventListener('click', function (event) {
       if (!gpsPanelOpen && !powerPanelOpen) return;
-      if (event.target.closest && event.target.closest('.topbar-gps-wrap, .topbar-pwr-wrap')) return;
+      if (event.target.closest &&
+          event.target.closest('.topbar-gps-wrap, .topbar-pwr-wrap, .topbar-float')) return;
       gpsPanelOpen = false;
       powerPanelOpen = false;
       powerError = '';
@@ -629,6 +677,9 @@
     } else {
       fetchLocal();
     }
+    // A fixed panel does not follow its icon by itself.
+    window.addEventListener('resize', placePanels);
+    window.addEventListener('scroll', placePanels, true);
     window.setInterval(fetchLocal, 5000);
     fetchRemote();
   }

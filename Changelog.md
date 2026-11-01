@@ -11,6 +11,25 @@ published.
 
 ## Working tree — not committed
 
+**WATCH: other browsers follow the data page of whoever holds the radio (PC build only).**
+
+* **What.** `/watch.html` shows what the operator's JS8, WSPR, RTTY, JTTY or Mercury page
+  shows: decoded traffic, stations and map, spots, the RTTY/JTTY text, transfer progress.
+  Optionally a waterfall (and listening) from a copy of the RX audio. No second decoder;
+  a viewer cannot transmit, tune or take the radio.
+* **How.** The holder's page POSTs a bounded snapshot of its screen (`watch-publish.js`,
+  `POST /watch/snapshot`, session token required); RTTY/JTTY text is taken from the
+  `rtty.stream`/`jtty.stream`/TX text already on AUD1. `watch_hub.h` fans it out to up to
+  8 viewers on `/watchws` (audio port) through non-blocking per-viewer queues.
+* **Way in.** The "radio is driven from somewhere else" card on JS8, WSPR, RTTY, JTTY and
+  Mercury offers WATCH WITHOUT TAKING OVER next to the takeover, shown only when WATCH is on
+  (`watch-link.js`). No automatic redirect: a second visitor often comes to take over.
+* **Setting.** SETUP → Web server, off by default (EEPROM 422). Not compiled for the box
+  (`CAP_WATCH`), and the viewer page is left out of its filesystem image.
+* **Found on the way.** The native web server cannot take a request body near 64 kB (the
+  vendored Arduino `String` has a 16-bit length) — snapshots stay under 60 kB.
+  `docs/watch-implementace.md`.
+
 **Web: page loads no longer cut the radio link off.**
 
 * **The failure.** A second browser opened the JS8 page while RX audio streamed to the first:

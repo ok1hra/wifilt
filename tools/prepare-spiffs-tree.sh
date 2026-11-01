@@ -34,6 +34,12 @@ find "$TARGET_DIR" -mindepth 1 -depth -delete
 
 while IFS= read -r -d '' file; do
   relative="${file#${SOURCE_DIR}/}"
+  # The WATCH viewer page (watch_hub.h) talks to /watchws, which only the PC
+  # build has; on the box it would only cost flash. native/Makefile asks for it.
+  case "$(basename "$file")" in
+    watch.html*|watch.js*|watch.css*)
+      [[ "${WIFILT_NATIVE_ASSETS:-0}" == 1 ]] || continue ;;
+  esac
   case "$file" in
     */.minified-js.sha256) continue ;;
     # The complete Brotli MIT text is embedded in THIRD-PARTY-NOTICES.txt.

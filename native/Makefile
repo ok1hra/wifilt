@@ -187,10 +187,11 @@ dist: dist-linux dist-windows dist-arm64
 # duplicates. A plain cp would ship HTML whose script tags still carry the
 # previous version -- a stale browser cache entry that outlives the install, and
 # a bug this project has already been bitten by. It also means the PC ships
-# byte-for-byte what the box flashes.
+# byte-for-byte what the box flashes, plus the WATCH viewer page, which only
+# the PC serves (WIFILT_NATIVE_ASSETS, watch_hub.h).
 dist-assets:
 	@rm -rf $(ASSETS)
-	$(SKETCH_DIR)/tools/prepare-spiffs-tree.sh $(SKETCH_DIR)/data $(abspath $(ASSETS))
+	WIFILT_NATIVE_ASSETS=1 $(SKETCH_DIR)/tools/prepare-spiffs-tree.sh $(SKETCH_DIR)/data $(abspath $(ASSETS))
 
 dist-linux: all dist-assets
 	@rm -rf $(DIST)/wifilt-linux-x86_64 && mkdir -p $(DIST)/wifilt-linux-x86_64

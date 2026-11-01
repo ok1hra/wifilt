@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WATCH — WIFILT</title>
+<!-- WATCH: follow the data page of whoever holds the radio (watch_hub.h,
+     docs/watch-implementace.md). Deliberately its own small page and not a
+     mode of the DATA pages: nothing here can transmit, tune or take the
+     session, because none of that code is loaded. -->
+<link rel="stylesheet" href="/watch.css?v=cfd54476">
+</head>
+<body>
+
+<header class="watch-top">
+  <a class="watch-brand" href="/" title="WIFILT">WIFILT</a>
+  <b class="watch-title">WATCH</b>
+  <span id="link" class="pill" title="Connection to the interface">connecting…</span>
+  <span id="holder" class="watch-holder"></span>
+  <span id="viewers" class="watch-viewers"></span>
+</header>
+
+<p id="notice" class="watch-notice" hidden></p>
+
+<nav id="tabs" class="watch-tabs" aria-label="Mode">
+  <button type="button" data-role="js8">JS8</button>
+  <button type="button" data-role="wspr">WSPR</button>
+  <button type="button" data-role="rtty">RTTY</button>
+  <button type="button" data-role="jtty">JTTY</button>
+  <button type="button" data-role="mercury">Mercury</button>
+</nav>
+
+<section class="watch-spectrum">
+  <div class="watch-spectrum-bar">
+    <label><input type="checkbox" id="waterfallToggle"> Waterfall</label>
+    <label><input type="checkbox" id="listenToggle"> Listen</label>
+    <span id="audioState" class="muted"></span>
+  </div>
+  <div id="waterfall" class="waterfall" hidden>
+    <canvas id="waterfallCanvas" width="1024" height="96"></canvas>
+    <canvas id="waterfallOverlay" width="1024" height="96"></canvas>
+    <div class="frequency-scale"><span id="scaleLow"></span><span id="scaleHigh"></span></div>
+  </div>
+</section>
+
+<main>
+  <p id="stamp" class="watch-stamp"></p>
+  <div id="view" class="watch-view"></div>
+</main>
+
+<script src="/ports.js"></script>
+<script src="/spectrum.js?v=7fafbbb5"></script>
+<script src="/station-map.js?v=7bd5311c"></script>
+<script src="/watch.js?v=0f6aa032"></script>
+</body>
+</html>
