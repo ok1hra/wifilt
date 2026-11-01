@@ -62,6 +62,10 @@ TEST_CASE("saveConfig then loadConfig round-trips every field") {
   out.listenIp = "192.168.1.50";
   out.audio.inputDevice = "USB Audio CODEC";
   out.audio.outputDevice = "USB Audio CODEC";
+  out.audio.mixerCard = "hw:CARD=CODEC";
+  out.audio.mixerElement = "PCM";
+  out.audio.modLevel = 37;
+  out.audio.modMixerDb = -17.25;
   out.cat.port = "/dev/ttyUSB3";
   out.cat.baud = 38400;
   out.cat.rigModel = 3021;
@@ -86,6 +90,10 @@ TEST_CASE("saveConfig then loadConfig round-trips every field") {
   CHECK(in.listenIp == out.listenIp);
   CHECK(in.audio.inputDevice == out.audio.inputDevice);
   CHECK(in.audio.outputDevice == out.audio.outputDevice);
+  CHECK(in.audio.mixerCard == "hw:CARD=CODEC");
+  CHECK(in.audio.mixerElement == "PCM");
+  CHECK(in.audio.modLevel == 37);
+  CHECK(in.audio.modMixerDb == doctest::Approx(-17.25));
   CHECK(in.cat.port == out.cat.port);
   CHECK(in.cat.baud == out.cat.baud);
   CHECK(in.cat.rigModel == out.cat.rigModel);
@@ -110,4 +118,21 @@ TEST_CASE("loadConfig on malformed JSON reports an error and still returns defau
   Config config = loadConfig(dir, &error);
   CHECK_FALSE(error.empty());
   CHECK(config.listenIp == "127.0.0.1");   // defaults, not a half-parsed struct
+}
+
+TEST_CASE("config: CAT PTT is off by default, defaults to the data input, round-trips through JSON") {
+  Config defaults;
+  CHECK_FALSE(defaults.pttOverCat());
+  CHECK(defaults.catPttData());
+
+  Config c;
+  c.keying.pttBackend = "cat";
+  c.keying.catPttInput = "mic";
+  std::string error;
+  Config back = parseConfigJson(configToJsonString(c), &error);
+  CHECK(error.empty());
+  CHECK(back.pttOverCat());
+  CHECK_FALSE(back.pttOverTrxnet());
+  CHECK_FALSE(back.catPttData());
+  CHECK_FALSE(back.usesTrxnet());
 }

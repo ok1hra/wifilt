@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "../src/cached_rig.h"
+#include "../src/cat_ptt.h"
 
 using namespace LocalTrx;
 
@@ -66,13 +67,19 @@ class ScriptedRig : public RigBackend {
     gainWrites++;
     return true;
   }
-  bool getMeter(MeterKind, uint8_t *raw) override {
+  bool getMeter(MeterKind kind, uint8_t *raw) override {
+    if (kind == MeterKind::Alc) alcReads++;
     if (!meterOk) return false;
     *raw = meter;
     return true;
   }
   bool getAttenuatorOn(bool *on) override { *on = false; return true; }
   bool getVoxOn(bool *on) override { *on = false; return true; }
+  bool setPtt(bool on, bool dataInput) override {
+    pttWrites.push_back(on ? (dataInput ? "data" : "mic") : "off");
+    if (!pttOk) { error = "set_ptt: Communication timed out"; return false; }
+    return true;
+  }
   bool reopen(std::string *err) override {
     reopens++;
     if (!reopenOk && err) *err = "port not found";
@@ -95,8 +102,11 @@ class ScriptedRig : public RigBackend {
   int gainWrites = 0;
   bool meterOk = true;
   uint8_t meter = 50;
+  int alcReads = 0;
   int reopens = 0;
   bool reopenOk = true;
+  std::vector<std::string> pttWrites;
+  bool pttOk = true;
   std::string error;
 };
 
@@ -285,6 +295,32 @@ TEST_CASE("CachedRig: a meter that stops answering goes silent rather than stale
   CHECK_FALSE(h.cache.getMeter(MeterKind::PowerMeter, &raw));
 }
 
+TEST_CASE("CachedRig: ALC is polled faster while wifilt asks for it twice a second") {
+  Harness h;
+  uint8_t raw = 0;
+  CHECK_FALSE(h.cache.getMeter(MeterKind::Alc, &raw));   // nothing read yet
+  // Asked once a second (wifilt's ordinary TX rotation): the plain meter pace.
+  for (int i = 0; i < 2; i++) {
+    h.cache.getMeter(MeterKind::Alc, &raw);
+    for (int t = 0; t < 1000; t += 10) { h.now += 10; h.cache.step(); }
+  }
+  const int slow = h.inner.alcReads;
+  for (int t = 0; t < 1000; t += 10) { h.now += 10; h.cache.step(); }
+  CHECK(h.inner.alcReads - slow <= (int)(1000 / CachedRigBackend::kMeterPollMs) + 1);
+
+  // Asked every 500 ms (the gain calibration): kAlcFastPollMs.
+  h.cache.getMeter(MeterKind::Alc, &raw);
+  for (int t = 0; t < 500; t += 10) { h.now += 10; h.cache.step(); }
+  h.cache.getMeter(MeterKind::Alc, &raw);
+  const int fast = h.inner.alcReads;
+  // The poll already scheduled at the slow pace runs first, then the fast pace.
+  for (int t = 0; t < 1000; t += 10) { h.now += 10; h.cache.step(); }
+  CHECK(h.inner.alcReads - fast >=
+        (int)((1000 - CachedRigBackend::kMeterPollMs) / CachedRigBackend::kAlcFastPollMs));
+  REQUIRE(h.cache.getMeter(MeterKind::Alc, &raw));
+  CHECK(raw == 50);
+}
+
 TEST_CASE("CachedRig: a rig that stops answering is reopened") {
   Harness h;
   h.poll();
@@ -333,4 +369,104 @@ TEST_CASE("CachedRig: real worker thread -- start(), queued write reaches the ri
   cache.stop();
   REQUIRE_FALSE(inner.freqWrites.empty());
   CHECK(inner.freqWrites.back() == 21074000);
+}
+
+TEST_CASE("CachedRig: PTT is queued, goes out first on the next step, and the newest request wins") {
+  Harness h;
+  h.poll();
+  int readsBefore = h.inner.freqReads;
+  h.inner.onFreqRead = [&h] { CHECK(h.inner.pttWrites.size() == 1); };   // PTT before any read
+  CHECK(h.cache.setPtt(true, true));
+  CHECK(h.inner.pttWrites.empty());          // the caller never waits on CAT
+  h.poll();
+  CHECK(h.inner.freqReads > readsBefore);
+  REQUIRE(h.inner.pttWrites.size() == 1);
+  CHECK(h.inner.pttWrites[0] == "data");
+  h.inner.onFreqRead = nullptr;
+
+  h.cache.setPtt(true, false);
+  h.cache.setPtt(false, false);
+  h.cache.step();
+  REQUIRE(h.inner.pttWrites.size() == 2);
+  CHECK(h.inner.pttWrites[1] == "off");
+}
+
+TEST_CASE("CachedRig: a refused PTT on is logged and never retried -- a late transmission is worse") {
+  Harness h;
+  h.inner.pttOk = false;
+  h.cache.setPtt(true, true);
+  h.cache.step();
+  CHECK(h.logged("CAT: PTT on failed: set_ptt: Communication timed out"));
+  for (int i = 0; i < 10; i++) h.poll();
+  CHECK(h.inner.pttWrites.size() == 1);
+}
+
+TEST_CASE("CachedRig: a refused PTT release is retried until the rig takes it") {
+  Harness h;
+  h.cache.setPtt(true, true);
+  h.cache.step();
+  h.inner.pttOk = false;
+  h.cache.setPtt(false, true);
+  h.cache.step();
+  CHECK(h.logged("PTT release failed"));
+  CHECK(h.inner.pttWrites.size() == 2);
+  h.now += CachedRigBackend::kPttOffRetryMs - 1;
+  h.cache.step();
+  CHECK(h.inner.pttWrites.size() == 2);      // not before kPttOffRetryMs
+  h.now += 1;
+  h.cache.step();
+  CHECK(h.inner.pttWrites.size() == 3);
+  h.inner.pttOk = true;
+  h.now += CachedRigBackend::kPttOffRetryMs;
+  h.cache.step();
+  REQUIRE(h.inner.pttWrites.size() == 4);
+  CHECK(h.inner.pttWrites.back() == "off");
+  CHECK(h.logged("CAT: PTT released"));
+  for (int i = 0; i < 5; i++) h.poll();
+  CHECK(h.inner.pttWrites.size() == 4);      // done once taken
+}
+
+TEST_CASE("CachedRig: a new PTT on cancels a release still being retried") {
+  Harness h;
+  h.inner.pttOk = false;
+  h.cache.setPtt(false, true);
+  h.cache.step();
+  h.inner.pttOk = true;
+  h.cache.setPtt(true, true);
+  h.cache.step();
+  for (int i = 0; i < 5; i++) h.poll();
+  REQUIRE(h.inner.pttWrites.size() == 2);
+  CHECK(h.inner.pttWrites.back() == "data");
+}
+
+TEST_CASE("CachedRig: a release queued right before stop() still reaches the rig") {
+  ScriptedRig inner;
+  CachedRigBackend cache(inner, true, CachedRigBackend::Clock(), [](const std::string &) {});
+  cache.start();
+  cache.setPtt(true, true);
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  cache.setPtt(false, true);
+  cache.stop();
+  REQUIRE_FALSE(inner.pttWrites.empty());
+  CHECK(inner.pttWrites.back() == "off");
+}
+
+TEST_CASE("CatPttKeyLine: PTT becomes a CAT command with the configured input, the key stays on its line") {
+  struct RecordingLine : KeyLine {
+    std::vector<std::string> events;
+    void setKey(bool down) override { events.push_back(down ? "key" : "unkey"); }
+    void setPtt(bool on) override { events.push_back(on ? "ptt" : "unptt"); }
+  } serial;
+  ScriptedRig rig;
+  CatPttKeyLine data(serial, rig, /*dataInput=*/true);
+  data.setPtt(true);
+  data.setKey(true);
+  data.setKey(false);
+  data.setPtt(false);
+  CHECK(serial.events == std::vector<std::string>{"key", "unkey"});   // the serial PTT line never moves
+  CHECK(rig.pttWrites == std::vector<std::string>{"data", "off"});
+
+  CatPttKeyLine mic(serial, rig, /*dataInput=*/false);
+  mic.setPtt(true);
+  CHECK(rig.pttWrites.back() == "mic");
 }

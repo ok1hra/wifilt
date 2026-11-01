@@ -424,16 +424,49 @@
   // has not confirmed, would be worse than none -- it would be applied without
   // anyone being asked.
   // SETUP's LOCAL-TRX checkbox on the LAN slot (lan-gate.js). local-trx answers
-  // neither the ALC meter (15 13) nor the MOD level (1A 05), whatever model name
-  // it is told to report -- a search would key a carrier for 20 s and then fail
-  // on "the radio never answered the ALC meter". Every ALC-driven tool (this
-  // one's panel, CAL PLAN, Mercury's) asks this first. "" when not local-trx.
-  const LOCAL_TRX_REASON = "local-trx cannot report the radio's ALC, so the TX level is set" +
-    " by hand: TUNE and the radio's own ALC meter — the ? guide on the JS8Call or WSPR page" +
-    " explains how";
-  function localTrxBlock() {
+  // the ALC meter (15 13) exactly when its CAT backend can read the radio's
+  // (hamlib RIG_LEVEL_ALC -- a TS-480 can, the TrxNet backend cannot), and the
+  // MOD level as its sound card mixer (tx-gain-mod-level.js). So whether a
+  // calibration can run behind it is a question for the radio, not for the
+  // checkbox: CAL PLAN asks before its first carrier (localTrxPreflight), and
+  // a single calibration finds out the way it does on any radio without ALC --
+  // 3 s of silence at the start level. Either answer "no" is remembered for
+  // LOCAL_TRX_NO_ALC_MS, so every ALC-driven tool (this one's panel, CAL PLAN,
+  // Mercury's) refuses up front instead of keying the next carrier to learn it
+  // again. "" when not local-trx or not known to lack ALC.
+  const LOCAL_TRX_REASON = "local-trx did not answer the ALC meter (CI-V 15 13): its CAT" +
+    " backend cannot read this radio's ALC (a TS-480 through hamlib can), so the TX level is" +
+    " set by hand: TUNE and the radio's own ALC meter — the ? guide on the JS8Call or WSPR" +
+    " page explains how";
+  const LOCAL_TRX_NO_ALC_MS = 30000;
+  let localTrxNoAlcAt = 0;
+  const nowMs = () => Date.now();
+
+  function localTrxActive() {
     const gate = typeof globalThis !== "undefined" ? globalThis.LanGate : null;
-    return gate && gate.localTrx && gate.localTrx() ? LOCAL_TRX_REASON : "";
+    return Boolean(gate && gate.localTrx && gate.localTrx());
+  }
+  function localTrxBlock(now = nowMs()) {
+    return localTrxActive() && localTrxNoAlcAt && now - localTrxNoAlcAt < LOCAL_TRX_NO_ALC_MS
+      ? LOCAL_TRX_REASON : "";
+  }
+  function noteLocalTrxAlc(answered, now = nowMs()) { localTrxNoAlcAt = answered ? 0 : now; }
+
+  // `read(command)` is TxGainModLevel.ModLevelClient's read: the /civread
+  // mailbox, a reply or null. "" = go ahead.
+  async function localTrxPreflight(read) {
+    if (!localTrxActive()) return "";
+    const answer = await read("1513");
+    noteLocalTrxAlc(Boolean(answer));
+    return answer ? "" : LOCAL_TRX_REASON;
+  }
+
+  // What a calibration that heard no ALC should say. Behind local-trx it is the
+  // CAT backend, not the radio or this interface's firmware.
+  function localTrxSilence(error) {
+    if (error !== "radio does not report ALC" || !localTrxActive()) return "";
+    noteLocalTrxAlc(false);
+    return LOCAL_TRX_REASON;
   }
 
   function identityFor({model, frequencyHz, percent, rfPowerSeen}) {
@@ -605,6 +638,7 @@
 
   return {TxGainCal, TxGainStore, DEFAULTS, ULAW_BYTES_PER_SECOND, CAL_SWR_LIMIT,
           bandOf, entryKey, identityFor, resolveGain, LOCAL_TRX_REASON, localTrxBlock,
+          localTrxActive, localTrxPreflight, localTrxSilence, noteLocalTrxAlc, LOCAL_TRX_NO_ALC_MS,
           compact, expand, STORE_URL, SCHEMA_VERSION, migrate,
           entryStatus, seedFrom, toDb, fromDb};
 });

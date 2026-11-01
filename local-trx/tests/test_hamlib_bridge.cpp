@@ -1,6 +1,7 @@
 // doctest unit tests for hamlib_bridge.cpp's mode-translation table (bod 11
 // "Mode translace"). Pure functions only -- no RIG* instance needed here;
-// the Dummy-backend round-trip is tools/local-trx-integration-test.sh's job.
+// the Dummy-backend round-trip is tools/local-trx-integration-test.sh's job,
+// except CAT PTT below, which opens hamlib's own Dummy (no port, no hardware).
 #include "doctest.h"
 
 #include <string>
@@ -59,4 +60,43 @@ TEST_CASE("civ_router's own mode table (civModeName) agrees with hamlib_bridge's
     CHECK(civModeToHamlib(m) != RIG_MODE_NONE);
   }
   CHECK(civModeName(0x09) == nullptr);
+}
+
+TEST_CASE("alcLevelToRaw: zero stays zero, any ALC reading is nonzero, TS-480 dots x 12") {
+  CHECK(alcLevelToRaw(0.0f) == 0);
+  CHECK(alcLevelToRaw(-0.1f) == 0);
+  CHECK(alcLevelToRaw(0.001f) == 1);       // never rounded into "clean"
+  CHECK(alcLevelToRaw(0.25f) == 12);       // TS-480: one RM3 dot (hamlib reports dots / 4)
+  CHECK(alcLevelToRaw(2.5f) == 120);       // ten dots = top of an ICOM's ALC zone
+  CHECK(alcLevelToRaw(5.0f) == 240);       // twenty dots
+  CHECK(alcLevelToRaw(100.0f) == 255);
+}
+
+TEST_CASE("CAT PTT: keys only models whose own caps say CAT PTT -- never hamlib's silent no-op") {
+  // RIG_PTT_NONE makes rig_set_ptt() return RIG_OK having sent nothing
+  // ("allowed for use with VOX"), so "OK" would be a lie there. hamlib's
+  // Dummy is RIG_PTT_NONE in 4.6 and RIG_PTT_RIG in 4.7 -- the expectation
+  // follows the linked library's caps.
+  rig_set_debug(RIG_DEBUG_NONE);
+  HamlibRigBackend closed(RIG_MODEL_DUMMY, "", 0);
+  CHECK_FALSE(closed.setPtt(true, true));
+  CHECK(closed.lastError() == "rig not open");
+
+  for (rig_model_t model : {RIG_MODEL_DUMMY, RIG_MODEL_DUMMY_NOVFO}) {
+    CAPTURE(model);
+    HamlibRigBackend rig(model, "", 0);
+    std::string error;
+    REQUIRE(rig.open(&error));
+    const ptt_type_t type = rig_get_caps(model)->ptt_type;
+    const bool hasCatPtt = type == RIG_PTT_RIG || type == RIG_PTT_RIG_MICDATA;
+    CHECK(rig.setPtt(true, true) == hasCatPtt);
+    CHECK(rig.setPtt(true, false) == hasCatPtt);
+    CHECK(rig.setPtt(false, true) == hasCatPtt);
+    if (!hasCatPtt) CHECK(rig.lastError().find("no CAT PTT") != std::string::npos);
+  }
+
+  // The radio this was built for: Kenwood TX0;/TX1;, hamlib RIG_PTT_RIG_MICDATA.
+  rig_load_all_backends();
+  REQUIRE(rig_get_caps(RIG_MODEL_TS480) != nullptr);
+  CHECK(rig_get_caps(RIG_MODEL_TS480)->ptt_type == RIG_PTT_RIG_MICDATA);
 }

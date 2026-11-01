@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>JS8Call-ICOM — WIFILT</title>
-  <link rel="stylesheet" href="/data.css?v=f2b6802b">
+  <link rel="stylesheet" href="/data.css?v=80b3edd9">
 </head>
 <body class="startup-pending lan-gate-checking">
   <header class="site-topbar">
@@ -217,7 +217,7 @@
         <div class="quick-controls">
           <label>TX speed <select id="txSpeed"><option>AUTO</option><option>A</option><option>B</option><option>C</option><option>E</option><option>I</option></select><small id="txSpeedResolved">A · 15 s</small></label>
           <label>TX offset <input id="txOffset" type="number" min="500" max="2700" step="1"><span>Hz</span></label>
-          <span class="inline-status">Audio <b id="audioLevel">-- dBFS</b></span>
+          <span class="inline-status audio-level">Audio <span id="audioMeter" class="audio-meter" aria-hidden="true"></span><b id="audioLevel">-- dBFS</b></span>
           <div class="tx-actions">
             <!-- Hidden until the radio answers CI-V 23 00 at all; locked until the fix is
                  live (the firmware's stamp-movement test) AND GPS Select is not Manual.
@@ -572,7 +572,7 @@
   <script src="/js8-settings.js?v=b1e44675"></script>
   <script src="/station-identity.js?v=a1a20249"></script>
   <script src="/station-profile.js?v=e6441027"></script>
-<script src="/setup-spine.js?v=c4f97877"></script>
+<script src="/setup-spine.js?v=ae1aa5e5"></script>
 <script>
   // The spine follows the operator here for one reason: the transmit check is
   // the only step of it that cannot be done on SETUP, because that page has no
@@ -622,7 +622,7 @@
   <script src="/audio-health.js?v=9efe092e"></script>
   <script src="/js8-aud1.js?v=378855b1"></script>
   <!-- The station's calibration table and the ALC limiter, shared with WSPR. -->
-  <script src="/tx-gain-cal.js?v=4fdb24e3"></script>
+  <script src="/tx-gain-cal.js?v=8664a2ed"></script>
   <script src="/tx-alc-guard.js?v=b024d0ae"></script>
 
   <script src="/js8-audio.js?v=5e84ab41"></script>
@@ -632,23 +632,24 @@
   <!-- Only for RADIO_FULL_POWER_W / fullPowerWatts: the header turns the CI-V
        level into watts and must never disagree with the WSPR page about how. -->
   <!-- One table of Icom models: watts for WSPR, menu paths for the setup guides. -->
-  <script src="/icom-models.js?v=98e0e049"></script>
+  <script src="/icom-models.js?v=543117c2"></script>
   <script src="/trx-supply.js?v=121671a1"></script>
-  <script src="/trx-help.js?v=f5681ddd"></script>
+  <script src="/audio-level.js?v=a63db21d"></script>
+  <script src="/trx-help.js?v=7a88e974"></script>
   <script>TrxHelp.mount(document, {kind: "js8"});</script>
   <script src="/wspr-core.js?v=981ff9bf"></script>
   <!-- WsprTx joins WsprCore because the calibration carrier is a STREAMED single
        tone -- the only kind whose level can move while it plays, which is what
        the search needs eight or nine times inside one keying. Must follow both. -->
   <script src="/wspr-tx.js?v=20c527f9"></script>
-  <script src="/tx-gain-cal-ui.js?v=1d9dc3bb"></script>
+  <script src="/tx-gain-cal-ui.js?v=cc5fb2b6"></script>
   <!-- The batch plan, identical to the WSPR page's: the sequencer decides the order
        and the panel executes its intents. Both must follow tx-gain-cal-ui.js. -->
-  <script src="/tx-gain-mod-level.js?v=276cf934"></script>
+  <script src="/tx-gain-mod-level.js?v=97525416"></script>
   <script src="/tx-gain-plan.js?v=6df74d9e"></script>
   <script src="/tx-gain-plan-store.js?v=6d5a572b"></script>
   <script src="/tx-mode-powers.js?v=840b843a"></script>
-  <script src="/tx-gain-plan-ui.js?v=71990c73"></script>
+  <script src="/tx-gain-plan-ui.js?v=70907036"></script>
   <script src="/dxcc.js?v=c56ee081"></script>
   <script src="/log-db.js?v=4325395d"></script>
   <!-- RF-power auto-apply/knob-detection engine, shared with RTTY-ICOM
@@ -658,7 +659,7 @@
   <script src="/tx-pledge.js?v=5750feea"></script>
   <script src="/settings-fold.js?v=b75dee54"></script>
   <script src="/station-map.js?v=7bd5311c"></script>
-  <script src="/data.js?v=868fe8ff"></script>
+  <script src="/data.js?v=6ffa4f80"></script>
   <script src="/compression.js?v=768da432"></script>
 </body>
 </html>

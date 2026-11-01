@@ -5,8 +5,9 @@
 // category (a): freq/mode/RIT/AF+RF gain (+ RF power, wire-identical, fáze 7)
 // -- plus category (b)'s SWR/power-meter/supply-voltage/ATT/VOX (fáze 7,
 // gated on rig_has_get_level()/rig_has_get_func() so an unsupported backend
-// gets no reply, never a fabricated number). CW/FSK/PTT never come through
-// here at all (bod 7/8) -- those are keyer.h/serial_key.h/trxnet_peer.h.
+// gets no reply, never a fabricated number). CW/FSK never come through here
+// at all (bod 7/8) -- those are keyer.h/serial_key.h/trxnet_peer.h -- and
+// PTT only when the operator picks keying.pttBackend "cat" (cat_ptt.h).
 #pragma once
 
 #include <string>
@@ -40,6 +41,7 @@ class HamlibRigBackend : public RigBackend {
   bool getMeter(MeterKind kind, uint8_t *rawOut) override;
   bool getAttenuatorOn(bool *onOut) override;
   bool getVoxOn(bool *onOut) override;
+  bool setPtt(bool on, bool dataInput) override;
   bool reopen(std::string *error) override;
   std::string lastError() const override { return lastError_; }
 
@@ -62,5 +64,12 @@ class HamlibRigBackend : public RigBackend {
 // side, matching civ_router's "no guess" policy elsewhere.
 rmode_t civModeToHamlib(uint8_t civMode, bool data = false);
 bool hamlibModeToCiv(rmode_t mode, uint8_t *civModeOut, bool *dataOut);
+
+// hamlib RIG_LEVEL_ALC (a float whose scale differs per rig backend) -> the
+// 0-255 CI-V 15 13 raw. Only zero has to survive exactly: any reading above
+// zero maps to at least 1, so a single ALC dot can never be rounded into
+// "clean". x48 makes a TS-480 (hamlib reports its RM3 meter dots / 4) read
+// dots x 12, so ten dots land on 120 -- the top of an ICOM's ALC zone.
+uint8_t alcLevelToRaw(float level);
 
 }  // namespace LocalTrx

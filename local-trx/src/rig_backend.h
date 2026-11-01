@@ -18,13 +18,16 @@ namespace LocalTrx {
 enum class GainKind { Af, Rf, RfPower };
 
 // Read-only meters, bod 11 category (b), fáze 7. Deliberately a SMALL subset
-// of what real ICOM CI-V 0x15 exposes -- see getMeter()'s own comment for why
-// S-meter and ALC are not here despite hamlib nominally having a level for
-// each: this project's rule (bod 3, category c) is "no reply beats a guessed
-// number", and those two have no verified raw-scale reference anywhere in
-// this repo to invert (unlike SWR/supply-voltage, whose CI-V raw<->physical
-// formulas are wifilt's OWN already-shipped decode -- see civ_router.cpp).
-enum class MeterKind { PowerMeter, Swr, SupplyVoltage };
+// of what real ICOM CI-V 0x15 exposes. This project's rule (bod 3, category c)
+// is "no reply beats a guessed number": SWR/supply-voltage are here because
+// their CI-V raw<->physical formulas are wifilt's OWN already-shipped decode
+// (see civ_router.cpp). The S-meter has no such reference and stays out.
+//
+// ALC needs no absolute scale at all: wifilt's only reader, the TX gain
+// calibration (data/tx-gain-cal.js observe()), asks "zero or not" -- the knee
+// is the first level at which ALC > 0 -- so an honest zero and a nonzero that
+// grows with the drive are the whole contract. See alcLevelToRaw().
+enum class MeterKind { PowerMeter, Swr, SupplyVoltage, Alc };
 
 class RigBackend {
  public:
@@ -65,6 +68,19 @@ class RigBackend {
   // unsupported, same no-reply convention as getMeter().
   virtual bool getAttenuatorOn(bool *onOut) = 0;
   virtual bool getVoxOn(bool *onOut) = 0;
+
+  // PTT as a CAT command -- keying.pttBackend "cat" only (cat_ptt.h), never
+  // the default path: unlike a DTR/RTS line, which drops with the port when
+  // local-trx dies, a CAT "transmit" stays on until something says RX.
+  // dataInput picks the rig's rear DATA/ACC audio input (hamlib
+  // RIG_PTT_ON_DATA, Kenwood TX1;) over the microphone (RIG_PTT_ON_MIC,
+  // TX0;); rigs without that split key the same either way. Backends with
+  // no CAT PTT keep the default.
+  virtual bool setPtt(bool on, bool dataInput) {
+    (void)on;
+    (void)dataInput;
+    return false;
+  }
 
   // Drop and re-establish the CAT link (radio power-cycled, USB serial port
   // re-enumerated). Backends with nothing to reopen keep the default.

@@ -115,6 +115,13 @@
     shows real captured audio level while the mic/RX test is on -- speak, or key up the radio's
     RX, to see it move.</p>
   <p class="note err" id="audioTestNote" hidden></p>
+  <label>TX level mixer (the radio's MOD level for wifilt's CAL PLAN)</label>
+  <select id="audioMixer"><option value="">(none -- set the TX level by hand)</option></select>
+  <p class="note">wifilt's CAL PLAN sets this sound card volume the way it sets an ICOM's network
+    MOD level: 255 = the mixer's maximum. Choose the playback control of the sound card above, and
+    turn the radio's own data input level up far enough that this mixer at maximum drives the
+    radio's ALC -- CAL PLAN only ever turns it down from there. It also needs CAT (Step 2) that
+    reads the radio's ALC meter (a TS-480 through hamlib does).</p>
 </fieldset>
 
 <fieldset id="catFieldset">
@@ -162,8 +169,29 @@
       <select id="pttBackend">
         <option value="serial">the serial PTT line</option>
         <option value="trxnet">the TrxNet device (/s-ptt lease)</option>
+        <option value="cat">CAT -- a hamlib command on the Step 2 port</option>
       </select>
     </div>
+  </div>
+  <div id="pttCatFields" hidden>
+  <div class="row">
+    <div>
+      <label>Transmit audio from</label>
+      <select id="catPttInput">
+        <option value="data">the DATA / rear input (Kenwood TX1;)</option>
+        <option value="mic">the microphone input (Kenwood TX0;)</option>
+      </select>
+      <button id="testCatPttBtn" type="button" class="test-btn">Test PTT: OFF</button>
+      <span class="note" id="catPttNote"></span>
+    </div>
+  </div>
+  <p class="note">PTT is a CAT command on the Step 2 serial port (hamlib's own command for the rig
+    model; TS-480: TX1; or TX0; to transmit, RX; to receive) -- no DTR/RTS line needed. DATA when
+    the sound card feeds the radio's rear DATA/ACC socket, the microphone input when it feeds the
+    mic jack; rigs without that split transmit the same either way. A CAT transmit stays on until
+    the radio hears RX: local-trx sends it on every exit and keeps resending a release the radio
+    did not take, but a killed process or a pulled cable cannot -- set the radio's own time-out
+    timer as a backstop (TS-480: menu 22).</p>
   </div>
   <p class="note" id="keyTrxnetNote" hidden>Over TrxNet the device keys CW/FSK at its own speed
     (the WPM below is not sent). PTT over TrxNet is a lease: local-trx renews it every 300 ms and
@@ -190,7 +218,7 @@
       <select id="keyLine"><option value="dtr">DTR</option><option value="rts">RTS</option></select>
       <button id="testKeyBtn" type="button" class="test-btn">Test KEY: OFF</button>
     </div>
-    <div>
+    <div id="pttLineField">
       <label>PTT line</label>
       <select id="pttLine"><option value="rts">RTS</option><option value="dtr">DTR</option></select>
       <button id="testPttBtn" type="button" class="test-btn">Test PTT: OFF</button>
@@ -302,6 +330,54 @@ function applyAudioDevices(devices) {
   setSelectValue(el("audioInput"), inCur);
   setSelectValue(el("audioOutput"), outCur);
 }
+// Step 1's TX level mixer. One <option> per control, value "card\telement".
+// With nothing saved yet, the control of the card whose name the playback
+// device carries is picked -- PCM before Speaker before Master, the order
+// that keeps it on this one output rather than the whole card.
+const MIXER_PREFERENCE = ["PCM", "Speaker", "Master", "Headphone"];
+async function loadMixers(savedCard, savedElement) {
+  const select = el("audioMixer");
+  const output = el("audioOutput").value;
+  let mixers = [];
+  try {
+    const data = await fetch("/api/mixers?output=" + encodeURIComponent(output)).then(r => r.json());
+    mixers = data.mixers || [];
+  } catch (e) {
+    // older backend: no mixer list, the select stays at (none)
+  }
+  const cur = savedCard === undefined ? select.value : (savedCard ? savedCard + "\t" + savedElement : "");
+  fillSelect(select, mixers.map(m => m.card + "\t" + m.element), true, v => {
+    const m = mixers.find(x => x.card + "\t" + x.element === v);
+    const name = m.element ? m.cardName + " \u2014 " + m.element : m.cardName;
+    return name + " (now " + m.nowDb.toFixed(1) + " dB of " + m.minDb.toFixed(0) + ".." +
+           m.maxDb.toFixed(0) + ")";
+  });
+  if (cur) {
+    if (![...select.options].some(o => o.value === cur)) {
+      const opt = document.createElement("option");
+      opt.value = cur;
+      opt.textContent = cur.replace("\t", " \u2014 ") + " (not currently listed)";
+      select.appendChild(opt);
+    }
+    select.value = cur;
+    return;
+  }
+  const lower = output.toLowerCase();
+  const onCard = mixers.filter(m => m.card === "endpoint" ||
+                                    (output && output !== "default" && lower.includes(m.cardName.toLowerCase())));
+  onCard.sort((a, b) => rank(a.element) - rank(b.element));
+  select.value = onCard.length ? onCard[0].card + "\t" + onCard[0].element : "";
+  function rank(element) {
+    const at = MIXER_PREFERENCE.indexOf(element);
+    return at < 0 ? MIXER_PREFERENCE.length : at;
+  }
+}
+function mixerChoice() {
+  const [card, element] = (el("audioMixer").value || "\t").split("\t");
+  return { mixerCard: card || "", mixerElement: element || "" };
+}
+el("audioOutput").addEventListener("change", () => loadMixers(""));
+
 function applySerialPorts(select, devices) {
   const cur = select.value;
   // udev aliases (/dev/ttyUSB.cat) come first and show the kernel port they
@@ -354,6 +430,7 @@ async function loadAll() {
   el("listenIp").value = config.listenIp;
   setSelectValue(el("audioInput"), config.audio.inputDevice);
   setSelectValue(el("audioOutput"), config.audio.outputDevice);
+  await loadMixers(config.audio.mixerCard || "", config.audio.mixerElement || "");
   setSelectValue(el("catPort"), config.cat.port);
   el("catBaud").value = config.cat.baud;
   setSelectValue(el("rigModel"), String(config.cat.rigModel));
@@ -366,6 +443,7 @@ async function loadAll() {
   el("catBackend").value = config.cat.backend || "hamlib";
   el("cwBackend").value = config.keying.cwBackend || "serial";
   el("pttBackend").value = config.keying.pttBackend || "serial";
+  el("catPttInput").value = config.keying.catPttInput === "mic" ? "mic" : "data";
   const tn = config.trxnet || {};
   el("trxnetLocalPort").value = String(tn.localPort || 5684);
   el("trxnetNetId").value = (tn.netId || 1).toString(16).toUpperCase().padStart(2, "0");
@@ -418,10 +496,11 @@ async function saveConfig() {
     openBrowserOnStart: el("openBrowserOnStart").checked,
     wifiltUrl: el("wifiltUrl").value,
     listenIp: el("listenIp").value,
-    audio: { inputDevice: el("audioInput").value, outputDevice: el("audioOutput").value },
+    audio: { inputDevice: el("audioInput").value, outputDevice: el("audioOutput").value, ...mixerChoice() },
     cat: { backend: el("catBackend").value, port: el("catPort").value, baud: Number(el("catBaud").value), rigModel: Number(el("rigModel").value) },
     keying: {
       cwBackend: el("cwBackend").value, pttBackend: el("pttBackend").value,
+      catPttInput: el("catPttInput").value,
       port: el("keyPort").value, baud: Number(el("keyBaud").value),
       keyLine: el("keyLine").value, pttLine: el("pttLine").value,
       cwWpm: Number(el("cwWpm").value), fskNetId: parseInt(el("fskNetId").value, 16) || 0,
@@ -474,7 +553,7 @@ function wireRefreshButton(btn, apply) {
     }
   });
 }
-wireRefreshButton(el("refreshAudioBtn"), applyAudioDevices);
+wireRefreshButton(el("refreshAudioBtn"), devices => { applyAudioDevices(devices); loadMixers(); });
 wireRefreshButton(el("refreshCatBtn"), devices => applySerialPorts(el("catPort"), devices));
 wireRefreshButton(el("refreshKeyBtn"), devices => applySerialPorts(el("keyPort"), devices));
 
@@ -641,14 +720,58 @@ el("testCatBtn").addEventListener("click", async () => {
   }
 });
 
+// ---- Step 3: CAT PTT test ---------------------------------------------------
+// Against Step 2's form fields, like Test read freq. The server releases it
+// by itself after maxMs, so the button follows.
+let catPttTestOn = false;
+let catPttTestTimer = null;
+function showCatPttTest(on, text, isError) {
+  catPttTestOn = on;
+  const btn = el("testCatPttBtn");
+  btn.textContent = `Test PTT: ${on ? "ON" : "OFF"}`;
+  btn.classList.toggle("on", on);
+  const note = el("catPttNote");
+  note.className = isError ? "note err" : "note";
+  note.textContent = text || "";
+  clearTimeout(catPttTestTimer);
+}
+el("testCatPttBtn").addEventListener("click", async () => {
+  const next = !catPttTestOn;
+  const port = el("catPort").value;
+  if (next && !port) { showCatPttTest(false, "pick the CAT serial port in Step 2 first", true); return; }
+  if (next) showCatPttTest(false, "keying...");
+  try {
+    const resp = await fetch("/api/test-cat-ptt", {
+      method: "POST",
+      body: JSON.stringify({
+        port, baud: Number(el("catBaud").value), rigModel: Number(el("rigModel").value),
+        input: el("catPttInput").value, on: next,
+      }),
+    });
+    const result = await resp.json();
+    if (!result.ok) { showCatPttTest(false, "CAT PTT: " + result.error, true); return; }
+    if (!next) { showCatPttTest(false, ""); return; }
+    const seconds = Math.round(result.maxMs / 1000);
+    showCatPttTest(true, `transmitting -- released by itself after ${seconds} s`);
+    catPttTestTimer = setTimeout(() => showCatPttTest(false, `released after ${seconds} s`), result.maxMs + 500);
+  } catch (e) {
+    showCatPttTest(catPttTestOn, "CAT PTT failed: " + e, true);
+  }
+});
+
 // ---- Backend choice: show only the fields the chosen backends use ------------
 function updateBackendFields() {
   const cat = el("catBackend").value === "trxnet";
   const cw = el("cwBackend").value === "trxnet";
   const ptt = el("pttBackend").value === "trxnet";
+  const pttCat = el("pttBackend").value === "cat";
+  // CAT PTT is a hamlib command -- there is none with CAT over TrxNet.
+  el("pttBackend").querySelector('option[value="cat"]').disabled = cat;
   el("catHamlibFields").hidden = cat;
   el("catTrxnetNote").hidden = !cat;
-  el("keySerialFields").hidden = cw && ptt;   // nothing left for the serial adapter
+  el("pttCatFields").hidden = !pttCat;
+  el("pttLineField").hidden = ptt || pttCat;
+  el("keySerialFields").hidden = cw && (ptt || pttCat);   // nothing left for the serial adapter
   el("keyTrxnetNote").hidden = !(cw || ptt);
   el("trxnetFieldset").hidden = !(cat || cw || ptt);
   el("trxnetOwnName").textContent = "LTX." + trxnetNetId().toString(16).padStart(2, "0");
@@ -771,6 +894,9 @@ window.addEventListener("beforeunload", () => {
   }
   if (trxnetPttOn) {
     navigator.sendBeacon("/api/trxnet-test-ptt", JSON.stringify({ on: false }));
+  }
+  if (catPttTestOn) {
+    navigator.sendBeacon("/api/test-cat-ptt", JSON.stringify({ on: false }));
   }
   const audio = currentAudioDevices();
   if (captureTestOn && audio.capture) {

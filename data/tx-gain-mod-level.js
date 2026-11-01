@@ -60,8 +60,22 @@
     return out;
   }
 
+  // Behind local-trx (SETUP's LOCAL-TRX checkbox, lan-gate.js) the MOD level is
+  // local-trx's sound card mixer, whatever model name it reports. No input or
+  // power-supply commands: those belong to an Icom's own menu.
+  const LOCAL_TRX_ROW = Object.freeze({label: "LOCAL-TRX", net: "local-trx", localTrx: true});
+  const LOCAL_TRX_MENU = "local-trx setup (port 8765) → Step 1 → TX level mixer";
+  function localTrxActive() {
+    const gate = typeof globalThis !== "undefined" ? globalThis.LanGate : null;
+    return Boolean(gate && gate.localTrx && gate.localTrx());
+  }
+
   // What this model lets us do, said in one place so the panel and the plan agree.
   function capability(model) {
+    if (localTrxActive())
+      return {model: LOCAL_TRX_ROW, readable: true, writable: true, reason: "",
+              menu: LOCAL_TRX_MENU, command: IcomModels.LOCAL_TRX_MOD_CMD,
+              inputCommand: "", inputNet: undefined};
     const row = model && typeof model === "object" ? model
       : IcomModels.findModel(IcomModels.modelNumber(model));
     if (!row) return {model: null, readable: false, writable: false,
@@ -102,7 +116,9 @@
     // may therefore be a getter; the answer is cached until it changes.
     get capability() {
       const raw = typeof this.modelSource === "function" ? this.modelSource() : this.modelSource;
-      const key = raw && typeof raw === "object" ? (raw.number || raw.label || "?") : raw;
+      // LOCAL-TRX arrives with /setup-data.json, possibly after the model did.
+      const key = (localTrxActive() ? "local-trx|" : "") +
+        (raw && typeof raw === "object" ? (raw.number || raw.label || "?") : raw);
       if (key !== this.modelKey || !this.cached) {
         this.modelKey = key;
         this.cached = capability(raw);
@@ -312,5 +328,5 @@
   const spaced = command => String(command).replace(/(..)(?=.)/g, "$1 ");
 
   return {ModLevelClient, PowerCeilingWatch, capability, bcdPayload, decodeBcd, spaced,
-          READ_URL, READ_TIMEOUT_MS, READ_POLL_MS};
+          READ_URL, READ_TIMEOUT_MS, READ_POLL_MS, LOCAL_TRX_ROW, LOCAL_TRX_MENU};
 });

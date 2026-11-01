@@ -35,6 +35,8 @@ class AudioCapture;
 class AudioPlayback;
 // And for TrxNet.h (trxnet_link.h).
 class TrxnetLink;
+// And for hamlib's rig.h (hamlib_bridge.h).
+class HamlibRigBackend;
 
 // Why a listenIp was refused, worded for the operator (wizard status line
 // and main.cpp's stderr alike) -- see UdpSocket::isValidBindIp().
@@ -84,10 +86,12 @@ class WebUiServer {
  private:
   void setupRoutes();
   void handleDevices();
+  void handleMixers();
   void handleGetConfig();
   void handlePostConfig();
   void handleTestLine();
   void handleTestCat();
+  void handleTestCatPtt();
   void handleTestAudio();
   void handleAudioLevel();
   void handleTrxnetScan();
@@ -114,6 +118,18 @@ class WebUiServer {
   // the old one first, never leaves two open at once.
   std::unique_ptr<SerialKeyLine> testLine_;
   std::string testLinePort_;
+
+  // POST /api/test-cat-ptt: Step 3's Test PTT for keying.pttBackend "cat".
+  // Unlike Test read freq (one-shot), the rig stays open while keyed, so the
+  // release goes out on the same handle. A CAT transmit does not end by
+  // itself, so poll() releases it after kCatTestPttMaxMs even if the page
+  // never asks.
+  static constexpr uint32_t kCatTestPttMaxMs = 30000;
+  std::unique_ptr<HamlibRigBackend> testCatRig_;
+  std::string testCatRigKey_;
+  bool testCatPttData_ = true;
+  uint32_t testCatPttSinceMs_ = 0;
+  void releaseTestCatPtt(const char *why);
 
   // POST /api/test-audio + GET /api/audio-level's own state, same "against
   // the current form, not saved config, opened lazily, torn down on

@@ -272,9 +272,9 @@
       network: {done: data.apMode !== true, ssid: (data.ssid || "").trim()},
       identity: {done: call !== "" && GRID_RE.test(grid), call: call, grid: grid,
                  compound: call.indexOf("/") >= 0},
-      // local-trx answers no ALC meter, so there is nothing for the check to
-      // measure -- the level is set by hand (TUNE), not "never measured".
-      transmit: {done: !!cal, cal: cal, possible: !!lanSlot && !lanSlot.localTrx,
+      // Behind local-trx the check runs when its CAT reads the radio's ALC and
+      // a TX level mixer is chosen; the step says so, the pages find out.
+      transmit: {done: !!cal, cal: cal, possible: !!lanSlot,
                  localTrx: !!lanSlot && lanSlot.localTrx},
       audio: state.audio,
       browser: state.browser
@@ -418,7 +418,7 @@
       var ready = model.network.done && model.identity.done && !!model.radio && audioOk;
       whatNext.hidden = !ready;
       if (!ready) return;
-      var calibrated = model.transmit.done || model.transmit.localTrx;
+      var calibrated = model.transmit.done;
       var pledge = pledgeInThisBrowser();
       whatNext.innerHTML = "";
       whatNext.appendChild(el("h3", null, "What next — a first QSO"));
@@ -426,8 +426,9 @@
         "the station can hear: open JS8 or WSPR and watch the waterfall fill. Nothing transmits.",
         [["JS8", "/data.html"], ["WSPR", "/wspr.html"], ["RTTY", "/rtty.html"], ["JTTY", "/jtty.html"]]));
       whatNext.appendChild(path(calibrated && pledge, "Transmit",
-        (model.transmit.localTrx ? "set the TX level by hand with TUNE (? on the JS8 page)"
-          : calibrated ? "calibrated" : "calibrate first (CAL PLAN, step 5)") + ", then "
+        (calibrated ? "calibrated" : model.transmit.localTrx
+          ? "calibrate first (CAL PLAN, step 5), or set the TX level by hand with TUNE (? on the JS8 page)"
+          : "calibrate first (CAL PLAN, step 5)") + ", then "
         + (pledge ? "radio TX is enabled in this browser" : "tick <b>Enable radio TX</b> in SETTINGS")
         + " — and send a heartbeat (HB) or a CQ on JS8.",
         [["JS8 SETTINGS", "/data.html#settings"], ["WSPR SETTINGS", "/wspr.html#settings"]]));
@@ -1083,17 +1084,6 @@
     function fillTransmit(step, model) {
       var d = model.transmit;
       step.body.innerHTML = "";
-      if (d.localTrx) {
-        setState(step, "na", "—");
-        step.detail.textContent = "local-trx — TX level set by hand";
-        step.body.appendChild(paragraph(
-          "local-trx cannot report the radio's ALC meter, so the automatic check has nothing to "
-          + "measure. Set the level by hand instead: <b>TUNE</b> on the JS8 page keys a carrier, "
-          + "and the TX audio gain goes up until the radio's own ALC just starts to move. The "
-          + "<b>?</b> guide on the JS8 page walks through it."));
-        step.body.appendChild(link("OPEN THE JS8 PAGE ↗", "/data.html#settings"));
-        return;
-      }
       if (!d.possible) {
         setState(step, "na", "—");
         step.detail.textContent = "needs a radio on ICOM-LAN";
@@ -1128,6 +1118,12 @@
         "<b>One calibration serves JS8, WSPR and RTTY.</b> It depends on the band and the power "
         + "setting, not on the mode — but each mode sets its own power, so CAL PLAN offers all of "
         + "them and the overview shows which mode is covered where."));
+      if (d.localTrx) step.body.appendChild(paragraph(
+        "<b>Behind local-trx</b> this needs two things from local-trx's own setup: CAT that reads "
+        + "the radio's ALC meter (a TS-480 through hamlib does) and, in Step 1, the sound card's "
+        + "<b>TX level mixer</b>, which CAL PLAN sets the way it sets an Icom's MOD level. "
+        + "Without them the check says so and the level is set by hand with <b>TUNE</b> — the "
+        + "<b>?</b> guide on the JS8 page walks through it."));
       step.body.appendChild(link("RUN THE TRANSMIT CHECK ↗", "/wspr.html#autogain"));
       var overview = action("SHOW ALL CALIBRATIONS", function () { openSection("txGainSection"); });
       overview.className = "spine-act spine-act-quiet";

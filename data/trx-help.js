@@ -198,9 +198,10 @@
   // A pseudo-model, picked by SETUP's LOCAL-TRX checkbox on the LAN slot rather
   // than by the name the radio reports: local-trx can be told to call itself
   // "IC-7300", and the IC-7300 guide would then send the operator into network
-  // menus a USB-only radio does not have. Nothing behind local-trx answers the
-  // ALC meter or the MOD level, so the TX level is set by hand with TUNE --
-  // tx-gain-cal.js's localTrxBlock() points here for exactly that.
+  // menus a USB-only radio does not have. CAL PLAN works behind local-trx when
+  // its CAT reads the radio's ALC and a TX level mixer is chosen; where it
+  // cannot, the TX level is set by hand with TUNE -- tx-gain-cal.js's
+  // LOCAL_TRX_REASON points here for exactly that.
   const LOCAL_TRX = Object.freeze({label: "LOCAL-TRX", localTrx: true, tested: true});
 
   function localTrxActive() {
@@ -224,8 +225,16 @@
         + "MOD Input → DATA MOD")} set to ${code("USB")}.`),
       // Built by hand, not with step(): a list inside step()'s <p> is invalid
       // markup and the browser would split the paragraph around it.
-      "<li><strong>Set the TX audio level by hand with TUNE</strong>"
-        + "<p>Automatic TX gain needs the radio's ALC meter, which local-trx cannot report, so "
+      step("Let CAL PLAN set the TX level",
+        "CAL PLAN (the TX gain calibration in SETTINGS) works behind local-trx when two things "
+        + "are in place: CAT that reads the radio's ALC meter (a TS-480 through hamlib does; the "
+        + "TrxNet CAT backend does not), and in local-trx's Step 1 a <b>TX level mixer</b> — the "
+        + "sound card volume CAL PLAN sets the way it sets an Icom's MOD level. Turn the radio's "
+        + "own data input level up far enough that this mixer at maximum drives the ALC; CAL PLAN "
+        + "only ever turns it down. If CAL PLAN says local-trx did not answer the ALC meter, use "
+        + "the next step instead."),
+      "<li><strong>Or set the TX audio level by hand with TUNE</strong>"
+        + "<p>Without the radio's ALC meter there is nothing for automatic TX gain to read, so "
         + "the level is set by watching the radio instead:</p>"
         + '<ol class="trx-help-tune">'
         + "<li>Choose the band and the RF power you will really use, into a dummy load or a "

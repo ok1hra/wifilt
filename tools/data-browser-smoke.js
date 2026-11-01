@@ -2140,8 +2140,14 @@ f.onload=()=>{
       checks.trxPowerMinSegment=pwrLit()===1&&pwrText()==='118 mW';
       f.contentWindow.__dataTest.setRadioPower(128,true,'');
       // Percent belongs to the level alone, so the bar survives a model we
-      // cannot convert; only the watts go unknown.
-      checks.trxPowerUnknownModel=pwrLit()===5&&pwrText()==='--';
+      // cannot convert (local-trx's LOCAL-TRX); the percent stands in for the
+      // unknown watts rather than an empty "--".
+      checks.trxPowerUnknownModel=pwrLit()===5&&pwrText()==='50%';
+      // A radio that reports no supply voltage gets no supply block. Checked on
+      // the computed style, not the attribute: .trx-supply's display:flex used to
+      // outrank [hidden] and leave "DC --" beside every such radio.
+      checks.trxSupplyHiddenUnknownModel=d.querySelector('#trxSupply').hidden&&
+        getComputedStyle(d.querySelector('#trxSupply')).display==='none';
       f.contentWindow.__dataTest.setRadioPower(205,false,'IC-705');
       // 205 is the firmware's fabricated default. Drawing it as a reading would
       // put an invented 8 W in the header of a radio that has never answered.

@@ -65,6 +65,10 @@ class FakeRig : public RigBackend {
         if (!supplyVoltageSupported) return false;
         *rawOut = supplyVoltage_;
         return true;
+      case MeterKind::Alc:
+        if (!alcSupported) return false;
+        *rawOut = alc_;
+        return true;
     }
     return false;
   }
@@ -91,11 +95,13 @@ class FakeRig : public RigBackend {
   bool powerMeterSupported = true;
   bool swrSupported = true;
   bool supplyVoltageSupported = true;
+  bool alcSupported = true;
   bool attSupported = true;
   bool voxSupported = true;
   uint8_t powerMeter_ = 90;
   uint8_t swr_ = 40;
   uint8_t supplyVoltage_ = 200;
+  uint8_t alc_ = 0;
   bool attOn_ = false;
   bool voxOn_ = false;
 };
@@ -287,7 +293,7 @@ TEST_CASE("dispatchCiv 0x14 0x0A RF power read and write (fáze 7, wire-identica
   CHECK(rig.rfPower_ == 100);
 }
 
-TEST_CASE("dispatchCiv 0x15 meters (fáze 7): power/SWR/supply answered, S-meter/ALC are not") {
+TEST_CASE("dispatchCiv 0x15 meters (fáze 7): power/SWR/supply/ALC answered, S-meter is not") {
   FakeRig rig;
   rig.powerMeter_ = 128;
   rig.swr_ = 40;
@@ -307,10 +313,19 @@ TEST_CASE("dispatchCiv 0x15 meters (fáze 7): power/SWR/supply answered, S-meter
   REQUIRE(supply.answered);
   CHECK(decodeCivLevel(supply.payload.data() + 2) == 200);
 
-  // No verified raw-scale reference to invert these two against (rig_backend.h) --
-  // deliberately no reply, not a guessed number, same rule as category (c).
-  CHECK_FALSE(dispatchCiv({0x15, 0x02}, rig).answered);   // S-meter
-  CHECK_FALSE(dispatchCiv({0x15, 0x13}, rig).answered);   // ALC
+  // ALC: an honest zero, then whatever the backend reads (rig_backend.h MeterKind).
+  CivResult alc = dispatchCiv({0x15, 0x13}, rig);
+  REQUIRE(alc.answered);
+  CHECK(alc.payload[1] == 0x13);
+  CHECK(decodeCivLevel(alc.payload.data() + 2) == 0);
+  rig.alc_ = 120;
+  CHECK(decodeCivLevel(dispatchCiv({0x15, 0x13}, rig).payload.data() + 2) == 120);
+  rig.alcSupported = false;   // e.g. the TrxNet CAT backend
+  CHECK_FALSE(dispatchCiv({0x15, 0x13}, rig).answered);
+
+  // No verified raw-scale reference to invert the S-meter against (rig_backend.h)
+  // -- deliberately no reply, not a guessed number, same rule as category (c).
+  CHECK_FALSE(dispatchCiv({0x15, 0x02}, rig).answered);
 }
 
 TEST_CASE("dispatchCiv 0x15 meters: no reply when the backend doesn't support one (bod 11b)") {

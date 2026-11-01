@@ -354,7 +354,7 @@ void CivChannel::onCivFrame(const std::vector<uint8_t> &frame) {
 
   // civ_router.h's convention: cmd byte + body, no FE FE/addr, no trailing FD.
   std::vector<uint8_t> cmdAndBody(frame.begin() + 4, frame.end() - 1);
-  CivResult result = dispatchCiv(cmdAndBody, rig_, keying_);
+  CivResult result = dispatchCiv(cmdAndBody, rig_, keying_, modLevel_);
   if (!result.answered) return;   // category (c): no reply, not a blanket ack
 
   std::vector<uint8_t> replyFrame;

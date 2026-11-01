@@ -6,9 +6,14 @@ WHY THIS EXISTS
     Same "talk straight to local-trx's CI-V port" pattern as
     tools/local-trx-ptt-check.py, extended to fáze 7's additions:
       - 0x14 0x0A  RF power setting (read+write, wire-identical to AF/RF gain)
-      - 0x15       meters: power/SWR/supply-voltage answered, S-meter/ALC never
+      - 0x15       meters: power/SWR/supply-voltage/ALC answered, S-meter never
                    (no verified raw-scale reference to invert -- see
-                   src/rig_backend.h's MeterKind comment)
+                   src/rig_backend.h's MeterKind comment; ALC needs none,
+                   wifilt's calibration only asks zero or not)
+      - 0x1A       only 05 99 99, local-trx's own MOD level (the sound card
+                   mixer, src/tx_level.h): no reply without a mixer, or a
+                   BCD write/read-back with --mod-level; every real ICOM
+                   1A 05 setting stays unanswered
       - 0x11       attenuator engaged (bare read only)
       - 0x16 0x47  VOX engaged (0x16 0x02 preamp is deliberately never
                    answered -- dB<->index has no rig-independent rule)
@@ -19,17 +24,22 @@ WHY THIS EXISTS
     RFPOWER_METER/VD_METER/SWR (verified live 2026-09-01, reproduced across 8
     separate process runs -- see src/hamlib_bridge.cpp's own comment on
     getMeter()) -- so all three meters below are asserted as answered, with a
-    live simulated value each time. S-meter/ALC stay asserted UNANSWERED
-    regardless of backend: that is civ_router.cpp's own switch never routing
-    to rig.getMeter() for them at all (no verified raw-scale reference to
-    invert -- see src/rig_backend.h's MeterKind comment), independent of
-    anything hamlib/Dummy grants. Real-hardware verification of the actual
+    live simulated value each time. Dummy grants RIG_LEVEL_ALC too, so ALC is
+    asserted answered. The S-meter stays asserted UNANSWERED regardless of
+    backend: that is civ_router.cpp's own switch never routing to
+    rig.getMeter() for it at all (no verified raw-scale reference to invert
+    -- see src/rig_backend.h's MeterKind comment), independent of anything
+    hamlib/Dummy grants. Real-hardware verification of the actual
     numbers these represent stays open, same as every other
     hamlib-backend-quality item in docs/local-trx-implementace.md's
     "Zbývá ověřit".
 
 USAGE
-    python3 tools/local-trx-civ-extras-check.py [--ip 127.0.0.3] [--civaddr A6]
+    python3 tools/local-trx-civ-extras-check.py [--ip 127.0.0.3] [--civaddr A6] [--mod-level]
+
+    --mod-level: local-trx was started with audio.mixerCard set (Step 1's TX
+    level mixer), so 1A 05 99 99 must answer. WRITES THAT MIXER (128, then
+    back to what it read).
 
 Exit codes:
   0  every exchange (answered and deliberately-unanswered alike) matched
@@ -71,6 +81,8 @@ def main():
     parser.add_argument("--port", type=int, default=50002)
     parser.add_argument("--civaddr", default="A6", help="local-trx's identity.civAddress, hex")
     parser.add_argument("--timeout", type=float, default=3.0)
+    parser.add_argument("--mod-level", action="store_true",
+                        help="a TX level mixer is configured: exercise 1A 05 99 99 (writes it)")
     args = parser.parse_args()
     civ_addr = int(args.civaddr, 16)
 
@@ -171,15 +183,31 @@ def main():
     all_ok &= expect_exact("RF power write -> 100", [0x14, 0x0A, 0x01, 0x00], [0xFB])
     all_ok &= expect_answered_prefix("RF power read-back after write", [0x14, 0x0A], 0x14, 0x0A)
 
-    # --- 0x15 meters: power/SWR/supply all reliably answered against Dummy
-    # (see module docstring). S-meter/ALC are asserted unanswered regardless
-    # of backend: civ_router.cpp's own switch never routes to rig.getMeter()
-    # for them at all.
+    # --- 0x15 meters: power/SWR/supply/ALC all reliably answered against
+    # Dummy (see module docstring). The S-meter is asserted unanswered
+    # regardless of backend: civ_router.cpp's own switch never routes to
+    # rig.getMeter() for it at all.
     all_ok &= expect_answered_prefix("power meter (0x15 0x11)", [0x15, 0x11], 0x15, 0x11)
     all_ok &= expect_answered_prefix("SWR meter (0x15 0x12)", [0x15, 0x12], 0x15, 0x12)
     all_ok &= expect_answered_prefix("supply voltage (0x15 0x15)", [0x15, 0x15], 0x15, 0x15)
+    all_ok &= expect_answered_prefix("ALC meter (0x15 0x13)", [0x15, 0x13], 0x15, 0x13)
     all_ok &= expect_no_reply("S-meter (0x15 0x02) -- no verified raw scale, never guessed", [0x15, 0x02])
-    all_ok &= expect_no_reply("ALC (0x15 0x13) -- no verified raw scale, never guessed", [0x15, 0x13])
+
+    # --- 0x1A: only 05 99 99, the sound card mixer as the MOD level ---
+    all_ok &= expect_no_reply("IC-705 WLAN MOD level (1A 05 01 17) -- not local-trx's", [0x1A, 0x05, 0x01, 0x17])
+    if args.mod_level:
+        before = send_and_wait_retrying([0x1A, 0x05, 0x99, 0x99])
+        ok = before is not None and len(before) >= 11 and list(before[4:8]) == [0x1A, 0x05, 0x99, 0x99]
+        print(f"  {'ok' if ok else 'FAIL'}  MOD level read (1A 05 99 99): {before.hex() if before else None}")
+        all_ok &= ok
+        all_ok &= expect_exact("MOD level write -> 128", [0x1A, 0x05, 0x99, 0x99, 0x01, 0x28], [0xFB])
+        all_ok &= expect_exact("MOD level read-back is exact", [0x1A, 0x05, 0x99, 0x99],
+                               [0x1A, 0x05, 0x99, 0x99, 0x01, 0x28])
+        if ok:
+            all_ok &= expect_exact("MOD level put back", [0x1A, 0x05, 0x99, 0x99] + list(before[8:10]), [0xFB])
+    else:
+        all_ok &= expect_no_reply("MOD level (1A 05 99 99) -- no TX level mixer configured",
+                                  [0x1A, 0x05, 0x99, 0x99])
 
     # --- 0x11 attenuator: bare read, Dummy reports off ---
     all_ok &= expect_exact("attenuator read (off on Dummy)", [0x11], [0x11, 0x00])

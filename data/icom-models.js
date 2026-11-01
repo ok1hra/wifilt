@@ -155,6 +155,13 @@
     return !FORBIDDEN_WRITE_SUBADDRESSES.includes(hex.slice(4));
   }
 
+  // local-trx's own MOD level: the OS mixer of the sound card it plays TX audio
+  // through (local-trx/src/tx_level.h, answered in civ_router.cpp). A
+  // subaddress no Icom has, so a real radio reached with LOCAL-TRX ticked by
+  // mistake answers NG -- unreadable, and therefore never written. Same BCD
+  // 0000..0255 as every MOD level above.
+  const LOCAL_TRX_MOD_CMD = "1A059999";
+
   // Radios that speak CI-V but have no network control of their own. They can
   // still turn up over LAN behind a wfview or RS-BA1 server, which reports the
   // radio's real model while the network settings live on the PC -- so their
@@ -209,5 +216,5 @@
   }
 
   return {MODELS, BRIDGED_ONLY_WATTS, modelNumber, findModel, fullPowerWatts, models,
-          FORBIDDEN_WRITE_SUBADDRESSES, writableSubaddress, liveRadioModel};
+          FORBIDDEN_WRITE_SUBADDRESSES, writableSubaddress, liveRadioModel, LOCAL_TRX_MOD_CMD};
 });

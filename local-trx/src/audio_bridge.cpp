@@ -3,6 +3,8 @@
 // only uses miniaudio's public API, declarations only.
 #include "audio_bridge.h"
 
+#include <cmath>
+
 namespace LocalTrx {
 
 uint8_t ulawEncode(int16_t sample) {
@@ -195,8 +197,10 @@ void AudioPlayback::dataCallback(ma_device *device, void *output, const void *, 
 void AudioPlayback::onPlayback(int16_t *output, ma_uint32 frameCount) {
   std::lock_guard<std::mutex> lock(mutex_);
   ma_uint32 take = (ma_uint32)(count_ < frameCount ? count_ : frameCount);
+  const float trim = trim_;
   for (ma_uint32 i = 0; i < take; i++) {
-    output[i] = ring_[(head_ + i) % ring_.size()];
+    const int16_t sample = ring_[(head_ + i) % ring_.size()];
+    output[i] = trim >= 1.0f ? sample : (int16_t)std::lrintf((float)sample * trim);
   }
   // Anything beyond what the ring had left plays as silence -- miniaudio
   // pre-silences the output buffer by default (ma_device_config's

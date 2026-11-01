@@ -22,6 +22,7 @@
 #include "audio_bridge.h"
 #include "keying_backend.h"
 #include "rig_backend.h"
+#include "tx_level.h"
 #include "udp_socket.h"
 
 namespace LocalTrx {
@@ -109,6 +110,7 @@ class CivChannel : public Channel {
              KeyingBackend *keying);
 
   bool opened() const { return opened_; }
+  void setModLevel(ModLevelBackend *modLevel) { modLevel_ = modLevel; }
 
   // bod 11 category (d), fáze 7: poll the rig every kBroadcastPollMs and push
   // an unsolicited CI-V transceive frame (cmd 0x00/0x01, addressed to the
@@ -126,6 +128,7 @@ class CivChannel : public Channel {
   uint8_t civAddr_;
   RigBackend &rig_;
   KeyingBackend *keying_;
+  ModLevelBackend *modLevel_ = nullptr;
   uint16_t seqB_ = 0;
   bool opened_ = false;
 
@@ -191,6 +194,8 @@ class IcomLanServer {
   bool begin(std::string *error);
   void poll();
   bool connected() const { return control_.streaming() && civ_.opened(); }
+  // The sound card mixer as the radio's MOD level (tx_level.h); nullable.
+  void setModLevel(ModLevelBackend *modLevel) { civ_.setModLevel(modLevel); }
 
  private:
   ControlChannel control_;

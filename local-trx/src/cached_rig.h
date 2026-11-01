@@ -18,7 +18,10 @@
 //     read twice before it is published -- a single garbled CAT reply can
 //     no longer move wifilt's VFO to a nonsense frequency,
 //   - a rig that stops answering (radio power-cycled, USB serial port
-//     re-enumerated) or that was absent at startup is reopened periodically.
+//     re-enumerated) or that was absent at startup is reopened periodically,
+//   - PTT (keying.pttBackend "cat") jumps the queue, and a failed release is
+//     retried until the rig takes it -- through a reopen if need be -- since
+//     a CAT transmit, unlike a DTR/RTS line, does not end by itself.
 //
 // Only the worker thread ever touches `inner` after start().
 #pragma once
@@ -44,10 +47,17 @@ class CachedRigBackend : public RigBackend {
   static constexpr uint32_t kSettingPollMs = 1000;    // AF/RF/power setting, RIT, ATT, VOX
   static constexpr uint32_t kMeterPollMs = 300;       // power meter, SWR, supply voltage
   static constexpr uint32_t kMeterStaleMs = 1500;     // older meter readings are not reported
+  // ALC while wifilt asks for it at least this often -- its gain calibration
+  // asks twice a second and judges each answer against the audio level the
+  // radio has played for the last 100-500 ms, so a 300 ms old cached reading
+  // could describe the level before the step it is being counted for.
+  static constexpr uint32_t kAlcFastAskMs = 750;
+  static constexpr uint32_t kAlcFastPollMs = 120;
   static constexpr uint32_t kWantedForMs = 5000;      // slow items: polled only while asked for
   static constexpr double   kFreqJumpHz = 50000.0;    // larger moves need a second matching read
   static constexpr int      kReopenAfterFailures = 10;
   static constexpr uint32_t kReopenRetryMs = 5000;
+  static constexpr uint32_t kPttOffRetryMs = 200;
 
   // innerOpen: whether `inner` is usable right now. false (rig absent at
   // startup) makes the worker keep calling inner.reopen() every
@@ -78,15 +88,19 @@ class CachedRigBackend : public RigBackend {
   bool getMeter(MeterKind kind, uint8_t *rawOut) override;
   bool getAttenuatorOn(bool *onOut) override;
   bool getVoxOn(bool *onOut) override;
+  // Queued like every write, but flushed first. true = queued, not keyed:
+  // a refusal shows up in the log, as with any other write.
+  bool setPtt(bool on, bool dataInput) override;
 
  private:
-  enum Slow { kAf, kRf, kRfPower, kRit, kPowerMeter, kSwr, kSupply, kAtt, kVox, kSlowCount };
+  enum Slow { kAf, kRf, kRfPower, kRit, kPowerMeter, kSwr, kSupply, kAlc, kAtt, kVox, kSlowCount };
 
   struct SlowItem {
     bool valid = false;
     int32_t value = 0;
     uint32_t readAtMs = 0;       // last good read (meters go stale)
     uint32_t wantedAtMs = 0;
+    uint32_t askGapMs = UINT32_MAX;   // between the last two asks
     bool everWanted = false;
     uint32_t nextPollMs = 0;
     uint32_t gen = 0;            // bumped by a queued write (gains/RIT only)
@@ -94,7 +108,10 @@ class CachedRigBackend : public RigBackend {
     int32_t pendingValue = 0;
   };
 
-  static bool isMeter(int item) { return item == kPowerMeter || item == kSwr || item == kSupply; }
+  static bool isMeter(int item) {
+    return item == kPowerMeter || item == kSwr || item == kSupply || item == kAlc;
+  }
+  static uint32_t pollPeriodMs(int item, const SlowItem &s);
   static int gainItem(GainKind kind);
   static int meterItem(MeterKind kind);
 
@@ -102,6 +119,7 @@ class CachedRigBackend : public RigBackend {
   bool pollSlowFromInner(int item, int32_t *valueOut);
   void pollFast(uint32_t now);
   void pollSlow(uint32_t now);
+  void flushPtt(uint32_t now);
   void flushWrites();
   void maybeReopen(uint32_t now);
   bool acceptFreqRead(double hz, double *discardedOut);
@@ -133,6 +151,10 @@ class CachedRigBackend : public RigBackend {
   bool pendingData_ = false;
 
   SlowItem slow_[kSlowCount];
+
+  bool pendingPtt_ = false;
+  bool pendingPttOn_ = false;
+  bool pendingPttData_ = false;
   // ---- end guarded ----
 
   // Worker-thread-only state.
@@ -140,6 +162,8 @@ class CachedRigBackend : public RigBackend {
   int slowCursor_ = 0;
   int consecutiveFastFailures_ = 0;
   uint32_t nextReopenMs_ = 0;
+  bool pttOffRetry_ = false;       // a release the rig has not taken yet
+  uint32_t pttOffRetryMs_ = 0;
   struct LogSlot { std::string key; uint32_t lastMs = 0; int suppressed = 0; bool used = false; };
   LogSlot logSlots_[8];
 

@@ -116,7 +116,7 @@ const dom = {
   overlay:$("waterfallOverlay"), recipient:$("recipient"), txSpeed:$("txSpeed"),
   slotMeter:$("slotMeter"), slotLabel:$("slotLabel"), slotFill:$("slotFill"),
   txSpeedResolved:$("txSpeedResolved"), recipientClear:$("recipientClear"),
-  txOffset:$("txOffset"), audioLevel:$("audioLevel"), txSummary:$("txSummary"),
+  txOffset:$("txOffset"), audioLevel:$("audioLevel"), audioMeter:$("audioMeter"), txSummary:$("txSummary"),
   heartbeat:$("heartbeatButton"), heartbeatOffset:$("heartbeatOffset"),
   gpsBeacon:$("gpsBeaconButton"), gpsBeaconGrid:$("gpsBeaconGrid"),
   tune:$("tuneButton"), tuneLabel:$("tuneLabel"), tuneOffset:$("tuneOffset"),
@@ -2050,7 +2050,7 @@ function onSamples(samples, rate, metadata) {
   ingestSpectrum(samples, metadata);
   const rms = Math.sqrt(sum / Math.max(1, samples.length));
   state.audioDb=20*Math.log10(rms + 1e-9);
-  dom.audioLevel.textContent = `${Math.round(state.audioDb)} dBFS`;
+  AudioLevel.render(dom.audioMeter, dom.audioLevel, state.audioDb);
   if (activeDecoder) {
     activeDecoder.pushSamples(samples, metadata);
     if(TEST_MODE)testDecoderPushes++;
@@ -2385,7 +2385,10 @@ function renderTrxPower(connected,mismatch=false) {
   dom.trxPowerSegments.forEach((segment,index)=>segment.classList.toggle("on",index<lit));
   const scale=fullPowerScale();
   const watts=seen && scale.watts ? scale.watts*level/255 : null;
-  dom.trxPowerWatts.textContent=watts===null ? "--" : formatWatts(watts);
+  // A radio whose model gives no full scale (local-trx's LOCAL-TRX) still reads
+  // back its own percent, so that goes beside the bar instead of an empty "--",
+  // as rtty.js and jtty.js already do.
+  dom.trxPowerWatts.textContent=!seen ? "--" : watts===null ? `${Math.round(percent)}%` : formatWatts(watts);
   dom.trxPower.title=!seen ? "TRX power — the radio has not reported its power level yet"
     : watts===null ? `TRX power ${Math.round(percent)} % · watts unknown: the radio model is not recognised`
     : `TRX power ${Math.round(percent)} % · ${formatWatts(watts)} of ${scale.watts} W (${scale.source})`;

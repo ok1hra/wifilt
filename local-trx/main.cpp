@@ -51,15 +51,18 @@
 
 #include "src/audio_bridge.h"
 #include "src/cached_rig.h"
+#include "src/cat_ptt.h"
 #include "src/config.h"
 #include "src/hamlib_bridge.h"
 #include "src/icom_lan_server.h"
 #include "src/key_runner.h"
+#include "src/mixer_control.h"
 #include "src/serial_key.h"
 #include "src/trxnet_keying.h"
 #include "src/trxnet_link.h"
 #include "src/trxnet_peer.h"
 #include "src/trxnet_rig.h"
+#include "src/tx_level.h"
 #include "src/udp_socket.h"
 #include "src/webui_server.h"
 
@@ -515,20 +518,30 @@ int main(int argc, char **argv) {
   // from the main loop -- CAT/keying-text still all work meanwhile, just
   // without a physical line moving.
   //
-  // With both CW and PTT over TrxNet nothing is left for the serial adapter,
-  // so it is not opened at all.
+  // With CW over TrxNet and PTT over TrxNet or CAT nothing is left for the
+  // serial adapter, so it is not opened at all.
   LocalTrx::KeyingConfig keyingConfig = config.keying;
-  if (config.cwOverTrxnet() && config.pttOverTrxnet()) keyingConfig.port.clear();
+  if (config.cwOverTrxnet() && (config.pttOverTrxnet() || config.pttOverCat())) keyingConfig.port.clear();
   LoggingKeyLine loggingKeyLine;
   LocalTrx::SerialKeyLine serialKeyLine(keyingConfig.port, keyingConfig.baud,
                                         keyingConfig.keyLine, keyingConfig.pttLine);
   KeyLineKeeper keyLineKeeper(serialKeyLine, loggingKeyLine, keyingConfig);
   keyLineKeeper.keep();
   std::unique_ptr<LocalTrx::TrxnetPttKeyLine> trxnetPttLine;
+  std::unique_ptr<LocalTrx::CatPttKeyLine> catPttLine;
   LocalTrx::KeyLine *keyLine = &keyLineKeeper;
   if (config.pttOverTrxnet()) {
     trxnetPttLine = std::make_unique<LocalTrx::TrxnetPttKeyLine>(keyLineKeeper, *trxnetLink);
     keyLine = trxnetPttLine.get();
+  } else if (config.pttOverCat()) {
+    // The wizard refuses CAT PTT with CAT over TrxNet; a hand-edited
+    // config.json gets TrxnetRigBackend's "no PTT" on every keying, logged.
+    if (config.catOverTrxnet()) {
+      std::fprintf(stderr, "warning: keying.pttBackend \"cat\" needs cat.backend \"hamlib\" -- "
+                           "PTT will not key\n");
+    }
+    catPttLine = std::make_unique<LocalTrx::CatPttKeyLine>(keyLineKeeper, *rig, config.catPttData());
+    keyLine = catPttLine.get();
   }
   LocalTrx::KeyRunner keyer(*keyLine, config.keying.cwWpm);
   std::unique_ptr<LocalTrx::TrxnetCwKeying> trxnetCw;
@@ -566,8 +579,42 @@ int main(int argc, char **argv) {
   AudioDeviceKeeper playbackKeeper("TX audio", "TX audio playing to", config.audio.outputDevice);
   if (audioPlaybackPtr) playbackKeeper.keep(audioPlayback);
 
+  // The sound card's mixer as the radio's MOD level (CI-V 1A 05 99 99), so
+  // wifilt's CAL PLAN can set the level going into the radio the way it sets
+  // an ICOM's network MOD level. Optional like everything else here: without
+  // it the command just gets no reply and wifilt says to pick a mixer in
+  // Step 1.
+  std::unique_ptr<LocalTrx::MixerControl> txMixer;
+  std::unique_ptr<LocalTrx::TxLevel> txLevel;
+  if (audioPlaybackPtr && !config.audio.mixerCard.empty()) {
+    std::string mixerError;
+    txMixer = LocalTrx::openMixerControl(config.audio, &mixerError);
+    if (txMixer) {
+      txLevel.reset(new LocalTrx::TxLevel(
+          *txMixer, [&audioPlayback](float trim) { audioPlayback.setTrim(trim); },
+          [configDir](int level, double mixerDb) {
+            // Read-modify-write: the wizard may have saved a newer config
+            // (restart pending) that this process's copy does not have.
+            std::string saveError;
+            LocalTrx::Config onDisk = LocalTrx::loadConfig(configDir, &saveError);
+            onDisk.audio.modLevel = level;
+            onDisk.audio.modMixerDb = mixerDb;
+            if (!saveError.empty() || !LocalTrx::saveConfig(configDir, onDisk, &saveError))
+              std::fprintf(stderr, "warning: MOD level not saved: %s\n", saveError.c_str());
+          }));
+      if (txLevel->open(&mixerError)) {
+        txLevel->restore(config.audio.modLevel, config.audio.modMixerDb);
+        std::printf("local-trx: MOD level = %s\n", txMixer->describe().c_str());
+      } else {
+        txLevel.reset();
+      }
+    }
+    if (!txLevel) std::fprintf(stderr, "warning: no MOD level for wifilt's CAL PLAN: %s\n", mixerError.c_str());
+  }
+
   LocalTrx::IcomLanServer server(config.listenIp, config.identity.radioName, civAddr, *rig,
                                   keying, audioCapturePtr, audioPlaybackPtr, verbose);
+  server.setModLevel(txLevel.get());
   if (!server.begin(&error)) {
     std::fprintf(stderr, "%s\nhint: ports 50001-50003 may already be in use\n", error.c_str());
     return 1;
@@ -615,15 +662,27 @@ int main(int argc, char **argv) {
                 config.identity.radioName.c_str(), civAddr, config.cat.rigModel,
                 config.cat.port.c_str(), config.listenIp.c_str());
   }
-  if (config.usesTrxnet()) {
+  if (config.usesTrxnet() || config.pttOverCat()) {
     std::printf("local-trx: CW/FSK text %s, PTT %s\n",
                 config.cwOverTrxnet() ? "via TrxNet" : "on the serial key line",
-                config.pttOverTrxnet() ? "via TrxNet /s-ptt lease" : "on the serial PTT line");
+                config.pttOverTrxnet() ? "via TrxNet /s-ptt lease"
+                : config.pttOverCat()  ? (config.catPttData() ? "via CAT (data input)" : "via CAT (mic input)")
+                                       : "on the serial PTT line");
   }
   std::fflush(stdout);
 
   std::signal(SIGINT, onSignal);
   std::signal(SIGTERM, onSignal);
+
+  // A CAT transmit does not end when this process does (a DTR/RTS line drops
+  // with the port, a TrxNet lease runs out): every way out of the loop below
+  // sends RX first. stop() lets the worker flush that release before joining.
+  auto releaseCatPtt = [&]() {
+    if (!catPttLine) return;
+    keyer.abort();
+    catPttLine->setPtt(false);
+    if (cachedRig) cachedRig->stop();
+  };
 
   bool announced = false;
   while (!g_stop) {
@@ -634,7 +693,10 @@ int main(int argc, char **argv) {
     if (audioCapturePtr) captureKeeper.keep(audioCapture);
     if (audioPlaybackPtr) playbackKeeper.keep(audioPlayback);
     if (webUi) webUi->poll();
-    if (webUi && webUi->restartRequested()) restartSelfAfterSave();
+    if (webUi && webUi->restartRequested()) {
+      releaseCatPtt();
+      restartSelfAfterSave();
+    }
     if (!announced && server.connected()) {
       announced = true;
       std::printf("CONNECTED\n");
@@ -644,5 +706,6 @@ int main(int argc, char **argv) {
   }
 
   std::printf("local-trx: shutting down\n");
+  releaseCatPtt();
   return 0;
 }

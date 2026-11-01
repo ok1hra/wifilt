@@ -84,7 +84,8 @@ CivResult noReply() { return CivResult{}; }
 
 }  // namespace
 
-CivResult dispatchCiv(const std::vector<uint8_t> &frame, RigBackend &rig, KeyingBackend *keying) {
+CivResult dispatchCiv(const std::vector<uint8_t> &frame, RigBackend &rig, KeyingBackend *keying,
+                      ModLevelBackend *modLevel) {
   if (frame.empty()) return noReply();
   const uint8_t cmd = frame[0];
   const uint8_t *body = frame.data() + 1;
@@ -215,9 +216,9 @@ CivResult dispatchCiv(const std::vector<uint8_t> &frame, RigBackend &rig, Keying
         case 0x11: kind = MeterKind::PowerMeter; break;
         case 0x12: kind = MeterKind::Swr; break;
         case 0x15: kind = MeterKind::SupplyVoltage; break;
-        // 0x02 S-meter and 0x13 ALC: no reply -- see rig_backend.h's MeterKind
-        // comment for why (no verified raw-scale reference to invert, unlike
-        // the three above).
+        case 0x13: kind = MeterKind::Alc; break;   // zero/nonzero is the contract, see MeterKind
+        // 0x02 S-meter: no reply -- no verified raw-scale reference to invert
+        // (rig_backend.h's MeterKind comment).
         default: return noReply();
       }
       uint8_t raw;
@@ -272,9 +273,30 @@ CivResult dispatchCiv(const std::vector<uint8_t> &frame, RigBackend &rig, Keying
       r.payload.push_back(keying->getAudioPtt() ? 0x01 : 0x00);
       return r;
     }
+    case 0x1A: {   // settings: ONLY 05 99 99, local-trx's own MOD level (tx_level.h)
+      // A subaddress no ICOM has -- data/icom-models.js LOCAL_TRX_MOD_CMD is
+      // the other end. Every real 1A 05 setting stays unanswered (category c).
+      if (!modLevel || bodyLen < 3 || body[0] != 0x05 || body[1] != 0x99 || body[2] != 0x99)
+        return noReply();
+      if (bodyLen >= 5) {   // write: 2-byte BCD 0000-0255, the 14 0A encoding
+        const uint16_t level = decodeCivLevel(body + 3);
+        if (level > 255 || !modLevel->setModLevel((uint8_t)level)) return noReply();
+        return ack();
+      }
+      uint8_t level;
+      if (!modLevel->getModLevel(&level)) return noReply();
+      CivResult r;
+      r.answered = true;
+      r.payload = {0x1A, 0x05, 0x99, 0x99};
+      uint8_t lv[2];
+      encodeCivLevel(level, lv);
+      r.payload.push_back(lv[0]);
+      r.payload.push_back(lv[1]);
+      return r;
+    }
     default:
-      // Category (c): GPS/waterfall/MOD-level and anything else unmapped --
-      // deliberately no reply, not a blanket ack (bod 11).
+      // Category (c): GPS/waterfall and anything else unmapped -- deliberately
+      // no reply, not a blanket ack (bod 11).
       return noReply();
   }
 }

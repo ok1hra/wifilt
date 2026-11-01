@@ -34,6 +34,7 @@
 
 #include "keying_backend.h"
 #include "rig_backend.h"
+#include "tx_level.h"
 
 namespace LocalTrx {
 
@@ -48,8 +49,11 @@ struct CivResult {
 // to "no reply" when it is null, the same degradation civ_router already
 // applies to any other unmapped command -- a keying subsystem that has not
 // been wired up yet is not a guess-worthy default.
+//
+// `modLevel` is nullable the same way: 1A 05 99 99 (the sound card mixer as
+// the radio's MOD level, tx_level.h) gets no reply without one.
 CivResult dispatchCiv(const std::vector<uint8_t> &frame, RigBackend &rig,
-                      KeyingBackend *keying = nullptr);
+                      KeyingBackend *keying = nullptr, ModLevelBackend *modLevel = nullptr);
 
 // ---- wire-format helpers, exposed for doctest --------------------------
 

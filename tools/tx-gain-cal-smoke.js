@@ -639,5 +639,42 @@ function runCalibration(radio, options = {}, {maxFrames = 400, seed = 0} = {}) {
   check("and sends no wildcard abort", aborts.length, before);
 }
 
-console.log(`${checks - failures}/${checks} checks passed`);
-if (failures) process.exitCode = 1;
+// ---- behind local-trx: ask the radio, not the checkbox ----------------------
+//
+// local-trx answers 15 13 exactly when its CAT reads the radio's ALC. CAL PLAN
+// asks before its first carrier; a single calibration learns it from 3 s of
+// silence. Either "no" blocks every ALC tool for LOCAL_TRX_NO_ALC_MS.
+async function localTrxChecks() {
+  const T = require("../data/tx-gain-cal.js");
+  let asked = 0;
+  globalThis.LanGate = {localTrx: () => false};
+  check("not local-trx: the preflight asks nothing",
+        await T.localTrxPreflight(async () => { asked++; return null; }), "");
+  check("not local-trx: no CI-V read", asked, 0);
+  check("not local-trx: a silent radio keeps its own message",
+        T.localTrxSilence("radio does not report ALC"), "");
+
+  globalThis.LanGate = {localTrx: () => true};
+  T.noteLocalTrxAlc(true);
+  check("local-trx: nothing blocks before anyone asked", T.localTrxBlock(), "");
+  const reason = await T.localTrxPreflight(async command => { asked++; return command === "1513" ? null : {}; });
+  check("local-trx without ALC: the preflight says why", reason, T.LOCAL_TRX_REASON);
+  check("local-trx without ALC: it asked 15 13", asked, 1);
+  const now = Date.now();
+  check("and every ALC tool is blocked for a while", T.localTrxBlock(now), T.LOCAL_TRX_REASON);
+  check("but not forever", T.localTrxBlock(now + T.LOCAL_TRX_NO_ALC_MS + 1), "");
+  check("local-trx with ALC: the preflight clears it",
+        await T.localTrxPreflight(async () => ({value: "0000"})), "");
+  check("and nothing is blocked", T.localTrxBlock(), "");
+  check("local-trx: 3 s of silence names local-trx's CAT",
+        T.localTrxSilence("radio does not report ALC"), T.LOCAL_TRX_REASON);
+  check("and blocks the next carrier", T.localTrxBlock(), T.LOCAL_TRX_REASON);
+  check("other failures stay what they are", T.localTrxSilence("SWR reached 3.1"), "");
+  T.noteLocalTrxAlc(true);
+  delete globalThis.LanGate;
+}
+
+localTrxChecks().then(() => {
+  console.log(`${checks - failures}/${checks} checks passed`);
+  if (failures) process.exitCode = 1;
+});

@@ -171,6 +171,10 @@ button { color: inherit; cursor: pointer; }
 .trx-supply.low .bat::after { background:var(--red); }
 .trx-supply.low .bat i.on { background:var(--red); }
 .trx-supply.low b { color:var(--red); }
+/* display:flex above outranks the UA rule for [hidden], same gotcha as
+   .msgbox-alert: without this the supply showed "DC --" beside every radio that
+   reports no voltage, and the power bar stayed up with the radio offline. */
+.trx-power[hidden], .trx-supply[hidden] { display:none; }
 .trx-reconnect {
   padding:6px 10px; border:1px solid var(--amber); border-radius:4px;
   background:#2b1d0d; color:var(--amber); font-size:11px; font-weight:850;
@@ -403,6 +407,25 @@ button { color: inherit; cursor: pointer; }
 .tx-actions { display: flex; gap: 8px; min-width: 0; }
 .tx-actions .heartbeat, .tx-actions .tune, .tx-actions .gps-beacon { flex: 1 1 auto; }
 .inline-status b { color: var(--amber); }
+/* RX audio level (audio-level.js): the number in the colour of its zone and,
+   in front of it, an upright bar drawn like .trx-power's -- each segment keeps
+   its own colour, the unlit ones stay dark as on an LED strip. 30 px rather
+   than the power bar's 42: the height of the fields beside it, so the bar does
+   not make the quick-controls row taller. */
+.inline-status.audio-level { grid-template-columns: auto auto minmax(0, 1fr); }
+.audio-level b { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.audio-level b[data-zone="none"] { color: var(--muted); }
+.audio-level b[data-zone="low"], .audio-level b[data-zone="hot"] { color: var(--amber); }
+.audio-level b[data-zone="ok"] { color: var(--green); }
+.audio-level b[data-zone="clip"] { color: var(--red); }
+.audio-meter { display:flex; flex-direction:column-reverse; gap:1px; width:8px; height:30px; }
+.audio-meter i { flex:1; border-radius:1px; }
+.audio-meter i[data-zone="low"], .audio-meter i[data-zone="hot"] { background:#33270f; }
+.audio-meter i[data-zone="ok"] { background:#13291b; }
+.audio-meter i[data-zone="clip"] { background:#361416; }
+.audio-meter i.on[data-zone="low"], .audio-meter i.on[data-zone="hot"] { background:var(--amber); }
+.audio-meter i.on[data-zone="ok"] { background:var(--green); }
+.audio-meter i.on[data-zone="clip"] { background:var(--red); }
 .heartbeat {
   min-width: 86px; padding: 5px 12px; border: 1px solid var(--cyan); border-radius: 5px;
   color: var(--cyan); background: #0a201c; font-weight: 900; letter-spacing: .08em;

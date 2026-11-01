@@ -58,6 +58,10 @@ Config parseConfigJson(const std::string &jsonText, std::string *error) {
       auto &a = root["audio"];
       if (a.contains("inputDevice"))  config.audio.inputDevice  = a["inputDevice"].get<std::string>();
       if (a.contains("outputDevice")) config.audio.outputDevice = a["outputDevice"].get<std::string>();
+      if (a.contains("mixerCard"))    config.audio.mixerCard    = a["mixerCard"].get<std::string>();
+      if (a.contains("mixerElement")) config.audio.mixerElement = a["mixerElement"].get<std::string>();
+      if (a.contains("modLevel"))     config.audio.modLevel     = a["modLevel"].get<int>();
+      if (a.contains("modMixerDb"))   config.audio.modMixerDb   = a["modMixerDb"].get<double>();
     }
 
     if (root.contains("cat")) {
@@ -72,6 +76,7 @@ Config parseConfigJson(const std::string &jsonText, std::string *error) {
       auto &k = root["keying"];
       if (k.contains("cwBackend"))  config.keying.cwBackend  = k["cwBackend"].get<std::string>();
       if (k.contains("pttBackend")) config.keying.pttBackend = k["pttBackend"].get<std::string>();
+      if (k.contains("catPttInput")) config.keying.catPttInput = k["catPttInput"].get<std::string>();
       if (k.contains("port"))     config.keying.port     = k["port"].get<std::string>();
       if (k.contains("baud"))     config.keying.baud     = k["baud"].get<int>();
       if (k.contains("keyLine"))  config.keying.keyLine  = k["keyLine"].get<std::string>();
@@ -124,6 +129,10 @@ std::string configToJsonString(const Config &config) {
   root["audio"] = {
     {"inputDevice",  config.audio.inputDevice},
     {"outputDevice", config.audio.outputDevice},
+    {"mixerCard",    config.audio.mixerCard},
+    {"mixerElement", config.audio.mixerElement},
+    {"modLevel",     config.audio.modLevel},
+    {"modMixerDb",   config.audio.modMixerDb},
   };
   root["cat"] = {
     {"backend", config.cat.backend},
@@ -134,6 +143,7 @@ std::string configToJsonString(const Config &config) {
   root["keying"] = {
     {"cwBackend", config.keying.cwBackend},
     {"pttBackend", config.keying.pttBackend},
+    {"catPttInput", config.keying.catPttInput},
     {"port", config.keying.port},
     {"baud", config.keying.baud},
     {"keyLine", config.keying.keyLine},

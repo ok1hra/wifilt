@@ -348,6 +348,35 @@ check("every level round-trips",
       watch.percent() === 50 && changes === 1, `${watch.percent()} ${changes}`);
   }
 
+  // Behind local-trx (SETUP's LOCAL-TRX checkbox) the MOD level is local-trx's
+  // sound card mixer on 1A 05 99 99, whatever model name it reports -- and only
+  // that address is ever read or written.
+  {
+    globalThis.LanGate = {localTrx: () => true};
+    const cap = Mod.capability(null);
+    check("local-trx: readable and writable without a model row",
+      cap.readable && cap.writable && cap.command === "1A059999", JSON.stringify(cap));
+    check("local-trx: the menu points at local-trx's own setup", /local-trx setup/.test(cap.menu));
+    const iface = makeInterface({answers: {"1A059999": "0255", "1A050117": "0096"}});
+    let reported = 705;
+    const client = new Mod.ModLevelClient({send: iface.send, fetchImpl: iface.fetchImpl,
+                                          model: () => reported});
+    check("local-trx wins over a model name it was told to report", client.command, "1A059999");
+    const level = await client.writeLevel(128);
+    check("local-trx: a write reads back", level === 128, `${level} ${client.error}`);
+    check("local-trx: only its own address was written",
+      JSON.stringify(iface.state.writes) === '["1A0599990128"]', JSON.stringify(iface.state.writes));
+    const input = await client.readInput();
+    check("local-trx: no MOD input question is asked", input.known === false &&
+      !iface.state.reads.includes("1A050119"));
+    const ceiling = await client.readPowerCeiling({supplyVolts: 8});
+    check("local-trx: no power-supply question either", ceiling.limited === false &&
+      !iface.state.reads.includes("1A0B"));
+    globalThis.LanGate = {localTrx: () => false};
+    check("unticking LOCAL-TRX goes back to the radio's own address", client.command, "1A050117");
+    delete globalThis.LanGate;
+  }
+
   console.log(`${checks - failures}/${checks} checks passed`);
   if (failures) process.exitCode = 1;
 })();

@@ -13,6 +13,7 @@
 #include "audio_bridge.h"
 #include "device_enum.h"
 #include "hamlib_bridge.h"
+#include "mixer_control.h"
 #include "serial_key.h"
 #include "trxnet_link.h"
 #include "udp_socket.h"
@@ -39,7 +40,7 @@ WebUiServer::WebUiServer(uint16_t port, std::string webRoot, std::string configD
 // Needed even though it is empty: WebServer is only forward-declared in the
 // header, so std::unique_ptr's default destructor (generated at the call
 // site if this were left implicit) would not see a complete type there.
-WebUiServer::~WebUiServer() = default;
+WebUiServer::~WebUiServer() { releaseTestCatPtt("wizard closing"); }
 
 bool WebUiServer::begin(std::string *error) {
   LittleFS.nativeSetRoot(webRoot_);
@@ -54,6 +55,9 @@ bool WebUiServer::begin(std::string *error) {
 
 void WebUiServer::poll() {
   server_->handleClient();
+  if (testCatRig_ && millis() - testCatPttSinceMs_ > kCatTestPttMaxMs) {
+    releaseTestCatPtt("held for 30 s");
+  }
   if (trxnetScanner_) {
     trxnetScanner_->poll();
     if (!trxnetScanner_->pttWanted() && millis() - trxnetLastUseMs_ > kTrxnetIdleMs) {
@@ -74,6 +78,7 @@ void WebUiServer::setupRoutes() {
   });
 
   server_->on("/api/devices", [this]() { handleDevices(); });
+  server_->on("/api/mixers", HTTP_GET, [this]() { handleMixers(); });
 
   server_->on("/api/version", HTTP_GET, [this]() {
     json root;
@@ -85,6 +90,7 @@ void WebUiServer::setupRoutes() {
 
   server_->on("/api/test-line", HTTP_POST, [this]() { handleTestLine(); });
   server_->on("/api/test-cat", HTTP_POST, [this]() { handleTestCat(); });
+  server_->on("/api/test-cat-ptt", HTTP_POST, [this]() { handleTestCatPtt(); });
   server_->on("/api/test-audio", HTTP_POST, [this]() { handleTestAudio(); });
   server_->on("/api/audio-level", HTTP_GET, [this]() { handleAudioLevel(); });
   server_->on("/api/trxnet-scan", HTTP_POST, [this]() { handleTrxnetScan(); });
@@ -92,6 +98,26 @@ void WebUiServer::setupRoutes() {
   server_->on("/api/trxnet-test-ptt", HTTP_POST, [this]() { handleTrxnetTestPtt(); });
 
   server_->onNotFound([this]() { server_->send(404, "text/plain", "not found"); });
+}
+
+// Step 1's "TX level mixer": the controls wifilt's CAL PLAN may set as the
+// radio's MOD level (tx_level.h). Read-only, so allowed in Run mode too --
+// the Run page shows where the mixer stands. ?output= is the playback device
+// the page has selected (Windows: its endpoint is the only choice).
+void WebUiServer::handleMixers() {
+  json list = json::array();
+  for (const MixerChoice &m : listMixerControls(server_->arg("output").c_str())) {
+    list.push_back({{"card", m.card}, {"cardName", m.cardName}, {"element", m.element},
+                    {"minDb", m.minDb}, {"maxDb", m.maxDb}, {"nowDb", m.nowDb}});
+  }
+  json root;
+  root["mixers"] = std::move(list);
+#if defined(_WIN32)
+  root["platform"] = "windows";
+#else
+  root["platform"] = "alsa";
+#endif
+  server_->send(200, "application/json", root.dump().c_str());
 }
 
 void WebUiServer::handleDevices() {
@@ -154,6 +180,22 @@ void WebUiServer::handlePostConfig() {
     sendError(400, listenIpError(config.listenIp));
     return;
   }
+  if (config.pttOverCat() && config.catOverTrxnet()) {
+    sendError(400, "PTT through CAT needs CAT through hamlib (Step 2) -- over TrxNet, pick the "
+                   "TrxNet device or the serial PTT line for PTT instead");
+    return;
+  }
+  // The MOD level is written by wifilt through TxLevel, not by this form: a
+  // page opened before a CAL PLAN run would otherwise put back the old one.
+  // Kept while it still describes the same mixer, dropped when the mixer did.
+  {
+    const Config onDisk = loadConfig(configDir_);
+    const bool sameMixer = onDisk.audio.mixerCard == config.audio.mixerCard &&
+                           onDisk.audio.mixerElement == config.audio.mixerElement &&
+                           onDisk.audio.outputDevice == config.audio.outputDevice;
+    config.audio.modLevel = sameMixer ? onDisk.audio.modLevel : -1;
+    config.audio.modMixerDb = sameMixer ? onDisk.audio.modMixerDb : 0.0;
+  }
   if (!saveConfig(configDir_, config, &error)) {
     json err;
     err["ok"] = false;
@@ -168,6 +210,9 @@ void WebUiServer::handlePostConfig() {
   // POST /restart, main.cpp does the actual restart itself (see
   // restartRequested()'s own comment for exactly when), so the operator
   // never has to do it by hand.
+  // The restart is an execv(), no destructors -- a keyed CAT test would
+  // outlive it.
+  releaseTestCatPtt("config saved");
   restartRequested_ = true;
   json ok;
   ok["ok"] = true;
@@ -289,6 +334,10 @@ void WebUiServer::handleTestCat() {
   }
   int baud = req.value("baud", 19200);
   int rigModel = req.value("rigModel", 1);
+  if (testCatRig_) {
+    fail(409, "Test PTT (Step 3) still holds the CAT port -- turn it off first");
+    return;
+  }
 
   HamlibRigBackend rig((rig_model_t)rigModel, port, baud);
   std::string openError;
@@ -309,6 +358,79 @@ void WebUiServer::handleTestCat() {
   // rig destructs here (rig_close()+rig_cleanup()) -- never left open between
   // clicks, unlike the keying/audio test state below, since there is nothing
   // to poll for on a CAT link between one query and the next.
+}
+
+void WebUiServer::releaseTestCatPtt(const char *why) {
+  if (!testCatRig_) return;
+  if (!testCatRig_->setPtt(false, testCatPttData_)) {
+    std::fprintf(stderr, "warning: wizard Test PTT: CAT release failed (%s) -- check the radio\n",
+                 testCatRig_->lastError().c_str());
+  }
+  std::printf("[ptt] off (wizard CAT test, %s)\n", why);
+  std::fflush(stdout);
+  testCatRig_.reset();
+  testCatRigKey_.clear();
+}
+
+// Same blocking trade-off as handleTestCat() above: a human click, bounded
+// by hamlib's own timeout.
+void WebUiServer::handleTestCatPtt() {
+  if (hardwareLive_) {
+    sendError(409, "local-trx is enabled and running live -- disable it and restart before "
+                    "using the test buttons, so the wizard is not opening a second handle onto "
+                    "hardware the live session already holds open.");
+    return;
+  }
+  json req;
+  auto fail = [this](int code, const std::string &message) { sendError(code, message); };
+  if (!parseJsonBody(*server_, &req, fail)) return;
+
+  bool on = req.value("on", false);
+  if (!on) {
+    // Also what the page's beforeunload beacon sends -- no form fields needed.
+    releaseTestCatPtt("released");
+    json ok;
+    ok["ok"] = true;
+    server_->send(200, "application/json", ok.dump().c_str());
+    return;
+  }
+  std::string port = req.value("port", "");
+  if (port.empty()) {
+    fail(400, "no CAT port selected yet (Step 2)");
+    return;
+  }
+  int baud = req.value("baud", 19200);
+  int rigModel = req.value("rigModel", 1);
+  bool data = req.value("input", "data") != "mic";
+  std::string key = port + "|" + std::to_string(baud) + "|" + std::to_string(rigModel);
+  if (testCatRig_ && testCatRigKey_ != key) releaseTestCatPtt("CAT settings changed");
+
+  if (!testCatRig_) {
+    auto rig = std::make_unique<HamlibRigBackend>((rig_model_t)rigModel, port, baud);
+    std::string openError;
+    if (!rig->open(&openError)) {
+      fail(400, openError);
+      return;
+    }
+    testCatRig_ = std::move(rig);
+    testCatRigKey_ = key;
+  }
+  if (!testCatRig_->setPtt(true, data)) {
+    std::string error = testCatRig_->lastError();
+    testCatRig_->setPtt(false, data);   // a half-taken command must not leave it keyed
+    testCatRig_.reset();
+    testCatRigKey_.clear();
+    fail(400, error);
+    return;
+  }
+  testCatPttData_ = data;
+  testCatPttSinceMs_ = millis();
+  std::printf("[ptt] ON (wizard CAT test, %s input)\n", data ? "data" : "mic");
+  std::fflush(stdout);
+  json ok;
+  ok["ok"] = true;
+  ok["maxMs"] = kCatTestPttMaxMs;
+  server_->send(200, "application/json", ok.dump().c_str());
 }
 
 void WebUiServer::handleTestAudio() {

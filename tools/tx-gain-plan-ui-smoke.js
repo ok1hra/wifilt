@@ -68,7 +68,7 @@ check("an old unmarked MOD mismatch infers a verification owner",
 
 // An IC-705 on its battery accepts 100 % and stops at 5 W. The run must leave the
 // columns above the ceiling out -- and keep them in the stored plan for later.
-async function ceilingRun(ceiling, powers) {
+async function ceilingRun(ceiling, powers, alcAnswer) {
   globalThis.TxGainPlan = require("../data/tx-gain-plan.js");
   globalThis.TxGainCal = {entryKey: (model, band, percent) => `${model}|${band}|${percent}`};
   const panel = Ui.create({mount: null,
@@ -80,7 +80,11 @@ async function ceilingRun(ceiling, powers) {
     model: () => "IC-705", send: async () => {}, modelNumber: () => 705,
     radio: () => ({supplyVolts: 7.9}), onPlanChange: () => {},
     wsprPresets: [], js8Presets: []});
-  panel.mod = {capability: {readable: true}, readLevel: async () => 40,
+  panel.alcAsked = [];
+  panel.modReads = 0;
+  panel.mod = {capability: {readable: true},
+    readLevel: async () => { panel.modReads++; return 40; },
+    read: async command => { panel.alcAsked.push(command); return alcAnswer || null; },
     readInput: async () => ({known: false}), readPowerCeiling: async () => ceiling};
   panel.blockingReason = () => "";
   panel.resumeTransitionFor = async () => null;
@@ -108,6 +112,22 @@ async function ceilingRun(ceiling, powers) {
   const dc = await ceilingRun({limited: false, percent: 100}, [10, 50, 100]);
   const dcPowers = dc.run ? dc.run.orderedCells().map(cell => cell.percent) : [];
   check("on external power every column runs", dcPowers.join() === "10,50,100", dcPowers.join());
+  check("an Icom is not asked the local-trx question", dc.alcAsked.length === 0, dc.alcAsked.join());
+
+  // Behind local-trx the ALC meter depends on its CAT backend: asked before
+  // anything else, and a silence stops the plan with the hand-set instructions.
+  globalThis.LanGate = {localTrx: () => true};
+  const Cal = require("../data/tx-gain-cal.js");
+  Cal.noteLocalTrxAlc(true);
+  const deaf = await ceilingRun({limited: false, percent: 100}, [10, 50]);
+  check("local-trx without ALC: 15 13 is asked first", deaf.alcAsked.join() === "1513", deaf.alcAsked.join());
+  check("and the plan stops before the MOD level or a carrier",
+    !deaf.run && deaf.modReads === 0 && deaf.message === Cal.LOCAL_TRX_REASON, deaf.message);
+  Cal.noteLocalTrxAlc(true);
+  const hearing = await ceilingRun({limited: false, percent: 100}, [10, 50], {value: "0000"});
+  check("local-trx with ALC: the plan runs", Boolean(hearing.run) && hearing.modReads === 1,
+    hearing.message);
+  delete globalThis.LanGate;
   report();
 })();
 

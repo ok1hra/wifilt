@@ -81,6 +81,7 @@
     "activityBands",
     // shell shared with the JS8Call page
     "waterfall", "waterfallCanvas", "waterfallOverlay", "spectrumSummary", "audioLevel",
+    "audioMeter",
     "aud1State", "lanHealth", "trxReconnect", "trxHelpButton", "trxHelpDialog",
     "trxHelpModeWarning", "timingState", "trxFrequency", "frequencyMenu",
     "trxSlotLabel", "slotTimer",
@@ -2832,7 +2833,7 @@
     // this is what keeps the strip's "would transmit" head honest when the beacon
     // starts or a blocker clears while the panel is open.
     renderPreview();
-    dom.audioLevel.textContent = `${Math.round(state.audioDb)} dBFS`;
+    AudioLevel.render(dom.audioMeter, dom.audioLevel, state.audioDb);
     dom.spectrumSummary.textContent =
       `RX ${Math.round(waterfall.lowHz)}–${Math.round(waterfall.highHz)} Hz · WSPR window ${WINDOW_LOW_HZ}–${WINDOW_HIGH_HZ} Hz · TX ${state.lastOffsetHz} Hz`;
 

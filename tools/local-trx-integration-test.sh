@@ -285,6 +285,19 @@ for _ in $(seq 1 15); do
   [[ $(grep -c '^\[ptt\] off$' "$WORK/local-trx.log") -gt $CW_PTT_COUNT ]] && break
 done
 
+# wifilt's CAL PLAN asks local-trx for the ALC meter before its first carrier
+# (data/tx-gain-cal.js localTrxPreflight), through the firmware's civ.read
+# mailbox -- the same path end to end, here against hamlib Dummy, which grants
+# RIG_LEVEL_ALC. A real radio's answer depends on its CAT backend.
+echo "== CAL PLAN preflight: civ.read 15 13 =="
+ALC_OK=0
+for _ in $(seq 1 10); do
+  curl -s -m 3 -X POST "http://127.0.0.1:$HTTP_PORT/cmd" -H "Content-Type: application/json" \
+    -d '{"type":"civ.read","data":"1513"}' >/dev/null
+  sleep 1
+  curl -s -m 2 "http://127.0.0.1:$HTTP_PORT/civread" 2>/dev/null | grep -q '"reply":"1513' && { ALC_OK=1; break; }
+done
+
 echo
 echo "== results =="
 check "HTTP answers /state"          "$(curl -s -m 3 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$HTTP_PORT/state" | grep -q 200 && echo 1 || echo 0)"
@@ -302,6 +315,7 @@ check "FSK-over-TrxNet reached the /s-cw subscription" "$(grep -q '\[oi3\] <- /s
 check "FSK keyed and released PTT"                     "$([[ $(grep -c '^\[ptt\] off$' "$WORK/local-trx.log") -gt $CW_PTT_COUNT ]] && echo 1 || echo 0)"
 check "PTT (CI-V 0x1C) matches audioPttOn/Off's own bytes"    "$([[ $PTT_STATUS -eq 0 ]] && echo 1 || echo 0)"
 check "CI-V extras: RF power/meters/ATT/VOX + transceive broadcast (fáze 7)" "$([[ $CIV_EXTRAS_STATUS -eq 0 ]] && echo 1 || echo 0)"
+check "CAL PLAN preflight: ALC (15 13) answered through wifilt's civ.read" "$ALC_OK"
 check "Setup wizard HTTP server: page + devices + config round-trip (fáze 6)" "$([[ $WIZARD_STATUS -eq 0 ]] && echo 1 || echo 0)"
 if [[ $AUDIO_STATUS -eq 2 ]]; then
   echo "  SKIP RX+TX audio -- no capture/playback device in this environment"

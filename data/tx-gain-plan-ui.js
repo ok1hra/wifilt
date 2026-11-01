@@ -577,6 +577,16 @@
         // It takes up to 2.5 s of polling, and a button that goes quiet for two and a
         // half seconds and then possibly still refuses reads as a button that does
         // nothing. So say what is happening while it happens.
+        // Behind local-trx, whether the radio's ALC can be read at all depends on
+        // its CAT backend. Asked here, before a single carrier, rather than learnt
+        // from the first cell's 3 s of silence.
+        if (TxGainCal.localTrxActive()) {
+          this.busyNote = "asking local-trx for the radio's ALC meter…";
+          this.render();
+          const noAlc = await TxGainCal.localTrxPreflight(command => this.mod.read(command));
+          if (noAlc) { this.message = noAlc; return; }
+        }
+
         this.busyNote = "reading the radio's MOD level…";
         this.render();
         let modLevel = 0;
@@ -727,6 +737,9 @@
     // table unfalsifiable.
     modInstruction(why) {
       const menu = this.mod.capability.menu;
+      if (this.mod.capability.model && this.mod.capability.model.localTrx)
+        return `${why}. Choose the sound card's TX level mixer in ${menu} (local-trx must be` +
+          " restarted with it), then start the plan again — it cannot continue without a MOD level.";
       const net = this.mod.capability.model ? this.mod.capability.model.net + " " : "";
       return `${why}. Set the ${net}MOD level in the radio's own menu` +
         (menu ? ` (${menu})` : "") +

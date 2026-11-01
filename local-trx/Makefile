@@ -60,7 +60,7 @@ CXX_SOURCES := \
   main.cpp \
   src/config.cpp src/civ_router.cpp src/hamlib_bridge.cpp src/cached_rig.cpp \
   src/icom_lan_server.cpp src/udp_socket.cpp src/keyer.cpp src/keying_backend.cpp src/key_runner.cpp \
-  src/serial_key.cpp src/audio_bridge.cpp \
+  src/serial_key.cpp src/audio_bridge.cpp src/tx_level.cpp src/mixer_control.cpp \
   src/trxnet_udp.cpp src/trxnet_peer.cpp src/trxnet_rig.cpp src/trxnet_ptt.cpp src/trxnet_link.cpp \
   src/device_enum.cpp src/webui_server.cpp \
   $(NATIVE_DIR)/arduino/Arduino.cpp $(NATIVE_DIR)/arduino/WString.cpp \
@@ -127,6 +127,8 @@ CROSS_DIR := third_party/cross
 # -lsetupapi (libserialport's own Windows requirement, see its .pc's
 # Libs.private) and ws2_32/iphlpapi (WiFi.cpp's own Windows requirement,
 # same as native/Makefile's win: target already needs for wifilt itself).
+# -lole32: mixer_control.cpp's endpoint volume (CoCreateInstance,
+# PropVariantClear) -- a system DLL, so the .exe still ships alone.
 win:
 	$(MAKE) \
 	  CXX=x86_64-w64-mingw32-g++-posix \
@@ -135,7 +137,7 @@ win:
 	  TARGET=local-trx.exe \
 	  HAMLIB_SERIALPORT_CFLAGS="-I$(CROSS_DIR)/hamlib-win/include -I$(CROSS_DIR)/libserialport-win/include" \
 	  LDFLAGS="-static -static-libstdc++ -static-libgcc" \
-	  LDLIBS="-L$(CROSS_DIR)/hamlib-win/lib -L$(CROSS_DIR)/libserialport-win/lib -lhamlib -lserialport -lsetupapi -lm -lws2_32 -liphlpapi -lshell32"
+	  LDLIBS="-L$(CROSS_DIR)/hamlib-win/lib -L$(CROSS_DIR)/libserialport-win/lib -lhamlib -lserialport -lsetupapi -lm -lws2_32 -liphlpapi -lshell32 -lole32"
 
 # Raspberry Pi (64-bit ARM Linux), cross-compiled from an x86_64 host -- same
 # shape as native/Makefile's own arm64: target, same aarch64-linux-gnu-g++
@@ -160,8 +162,8 @@ TEST_BIN       := $(TEST_BUILD_DIR)/local-trx-tests
 TEST_SOURCES   := tests/test_civ_router.cpp tests/test_config.cpp tests/test_hamlib_bridge.cpp \
                   tests/test_keyer.cpp tests/test_keying_backend.cpp tests/test_key_runner.cpp \
                   tests/test_serial_key.cpp tests/test_audio_bridge.cpp tests/test_device_enum.cpp \
-                  tests/test_cached_rig.cpp tests/test_trxnet.cpp \
-                  src/trxnet_rig.cpp src/trxnet_ptt.cpp \
+                  tests/test_cached_rig.cpp tests/test_trxnet.cpp tests/test_tx_level.cpp \
+                  src/trxnet_rig.cpp src/trxnet_ptt.cpp src/tx_level.cpp src/mixer_control.cpp \
                   src/config.cpp src/civ_router.cpp src/hamlib_bridge.cpp src/cached_rig.cpp src/keyer.cpp \
                   src/keying_backend.cpp src/key_runner.cpp src/serial_key.cpp src/audio_bridge.cpp \
                   src/device_enum.cpp $(NATIVE_DIR)/platform/paths.cpp

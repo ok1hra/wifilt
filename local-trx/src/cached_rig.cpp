@@ -68,18 +68,21 @@ void CachedRigBackend::workerMain() {
     step();
     std::unique_lock<std::mutex> lock(mutex_);
     wake_.wait_for(lock, std::chrono::milliseconds(10), [this] {
-      if (stopRequested_ || pendingFreq_ || pendingMode_) return true;
+      if (stopRequested_ || pendingPtt_ || pendingFreq_ || pendingMode_) return true;
       for (const SlowItem &s : slow_) {
         if (s.pendingWrite) return true;
       }
       return false;
     });
   }
+  // A release queued by the very shutdown that stopped us still goes out.
+  flushPtt(clock_());
 }
 
 void CachedRigBackend::step() {
   const uint32_t now = clock_();
   maybeReopen(now);
+  flushPtt(now);
   flushWrites();
   if (!innerOpen_) return;
   pollFast(now);
@@ -108,6 +111,41 @@ void CachedRigBackend::maybeReopen(uint32_t now) {
                              std::to_string(kReopenRetryMs / 1000) + " s",
                now);
   }
+}
+
+void CachedRigBackend::flushPtt(uint32_t now) {
+  bool doPtt = false, on = false, data = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    doPtt = pendingPtt_;
+    on = pendingPttOn_;
+    data = pendingPttData_;
+    pendingPtt_ = false;
+  }
+  if (doPtt) {
+    pttOffRetry_ = false;          // the newest request replaces any retry
+  } else if (pttOffRetry_ && due(now, pttOffRetryMs_)) {
+    doPtt = true;
+    on = false;
+  }
+  if (!doPtt) return;
+  if (inner_.setPtt(on, data)) {
+    if (pttOffRetry_) logger_("CAT: PTT released");
+    pttOffRetry_ = false;
+    return;
+  }
+  if (on) {
+    // Never retried: a transmission starting late, after wifilt has moved
+    // on, is worse than none. Not rate-limited -- PTT is rare, and each
+    // refused transmission is worth its own line.
+    logger_("CAT: PTT on failed: " + inner_.lastError());
+    return;
+  }
+  if (!pttOffRetry_) {
+    logger_("CAT: PTT release failed (" + inner_.lastError() + ") -- retrying until the rig takes it");
+  }
+  pttOffRetry_ = true;
+  pttOffRetryMs_ = now + kPttOffRetryMs;
 }
 
 void CachedRigBackend::flushWrites() {
@@ -236,6 +274,7 @@ bool CachedRigBackend::pollSlowFromInner(int item, int32_t *valueOut) {
     case kPowerMeter: ok = inner_.getMeter(MeterKind::PowerMeter, &b); *valueOut = b; break;
     case kSwr:        ok = inner_.getMeter(MeterKind::Swr, &b); *valueOut = b; break;
     case kSupply:     ok = inner_.getMeter(MeterKind::SupplyVoltage, &b); *valueOut = b; break;
+    case kAlc:        ok = inner_.getMeter(MeterKind::Alc, &b); *valueOut = b; break;
     case kAtt:        ok = inner_.getAttenuatorOn(&on); *valueOut = on ? 1 : 0; break;
     case kVox:        ok = inner_.getVoxOn(&on); *valueOut = on ? 1 : 0; break;
     default:          break;
@@ -253,7 +292,7 @@ void CachedRigBackend::pollSlow(uint32_t now) {
       std::lock_guard<std::mutex> lock(mutex_);
       SlowItem &s = slow_[item];
       if (!s.everWanted || now - s.wantedAtMs >= kWantedForMs || !due(now, s.nextPollMs)) continue;
-      s.nextPollMs = now + (isMeter(item) ? kMeterPollMs : kSettingPollMs);
+      s.nextPollMs = now + pollPeriodMs(item, s);
       gen = s.gen;
     }
     slowCursor_ = (item + 1) % kSlowCount;
@@ -313,15 +352,26 @@ int CachedRigBackend::meterItem(MeterKind kind) {
     case MeterKind::PowerMeter:    return kPowerMeter;
     case MeterKind::Swr:           return kSwr;
     case MeterKind::SupplyVoltage: return kSupply;
+    case MeterKind::Alc:           return kAlc;
   }
   return kPowerMeter;
+}
+
+uint32_t CachedRigBackend::pollPeriodMs(int item, const SlowItem &s) {
+  if (item == kAlc && s.askGapMs <= kAlcFastAskMs) return kAlcFastPollMs;
+  return isMeter(item) ? kMeterPollMs : kSettingPollMs;
 }
 
 bool CachedRigBackend::readSlow(int item, int32_t *valueOut) {
   const uint32_t now = clock_();
   std::lock_guard<std::mutex> lock(mutex_);
   SlowItem &s = slow_[item];
-  if (!s.everWanted || now - s.wantedAtMs >= kWantedForMs) s.nextPollMs = now;   // poll it right away
+  if (!s.everWanted || now - s.wantedAtMs >= kWantedForMs) {
+    s.nextPollMs = now;   // poll it right away
+    s.askGapMs = UINT32_MAX;
+  } else {
+    s.askGapMs = now - s.wantedAtMs;   // pollPeriodMs() reads it at the next poll
+  }
   s.everWanted = true;
   s.wantedAtMs = now;
   if (!s.valid) return false;
@@ -414,6 +464,17 @@ bool CachedRigBackend::getMeter(MeterKind kind, uint8_t *rawOut) {
   int32_t v;
   if (!readSlow(meterItem(kind), &v)) return false;
   *rawOut = (uint8_t)v;
+  return true;
+}
+
+bool CachedRigBackend::setPtt(bool on, bool dataInput) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    pendingPtt_ = true;
+    pendingPttOn_ = on;
+    pendingPttData_ = dataInput;
+  }
+  wake_.notify_one();
   return true;
 }
 

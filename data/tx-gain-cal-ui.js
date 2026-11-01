@@ -370,6 +370,8 @@
     // The module reports what it observed; naming the likely cause needs to know
     // whether the field was even present, which only the page's link can say.
     failureText(error) {
+      const localTrx = TxGainCal.localTrxSilence(error);
+      if (localTrx) return localTrx;
       if (error !== "radio does not report ALC") return error;
       return this.run.sawAlcField
         ? "the radio never answered the ALC meter (CI-V 15 13) — this interface asked" +

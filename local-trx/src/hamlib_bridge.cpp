@@ -215,6 +215,13 @@ uint8_t clampToByte(float raw) {
 }
 }  // namespace
 
+uint8_t alcLevelToRaw(float level) {
+  if (!(level > 0.0f)) return 0;
+  const float raw = level * 48.0f + 0.5f;
+  if (raw < 1.0f) return 1;
+  return raw > 255.0f ? 255 : (uint8_t)raw;
+}
+
 bool HamlibRigBackend::getGain(GainKind kind, uint8_t *valueOut) {
   if (!rig_) { lastError_ = "rig not open"; return false; }
   if (!rig_has_get_level(rig_, gainLevel(kind))) return false;
@@ -238,6 +245,7 @@ bool HamlibRigBackend::getMeter(MeterKind kind, uint8_t *rawOut) {
     case MeterKind::PowerMeter:    level = RIG_LEVEL_RFPOWER_METER; break;
     case MeterKind::Swr:           level = RIG_LEVEL_SWR; break;
     case MeterKind::SupplyVoltage: level = RIG_LEVEL_VD_METER; break;
+    case MeterKind::Alc:           level = RIG_LEVEL_ALC; break;
     default: return false;
   }
   // The capability bitmask, not just the return code: `rig_get_level()` alone
@@ -273,6 +281,9 @@ bool HamlibRigBackend::getMeter(MeterKind kind, uint8_t *rawOut) {
       // Inverse of wifilt.ino:6698: stateSupplyVolts = raw*16.0/241.0
       *rawOut = clampToByte(val.f * 241.0f / 16.0f);
       break;
+    case MeterKind::Alc:
+      *rawOut = alcLevelToRaw(val.f);
+      break;
     default:
       return false;
   }
@@ -296,6 +307,22 @@ bool HamlibRigBackend::getVoxOn(bool *onOut) {
   if (rig_get_func(rig_, RIG_VFO_CURR, RIG_FUNC_VOX, &v) != RIG_OK) return false;
   *onOut = v != 0;
   return true;
+}
+
+// The model's own PTT type, not an override: hamlib's "ptt_type" conf token
+// writes into the model's shared static caps, and a model whose caps say
+// DTR/RTS/none would key some other line, not send a CAT command. Such
+// models simply have no CAT PTT here. RIG_PTT_RIG models (most) key the
+// same for mic and data -- hamlib folds both into RIG_PTT_ON.
+bool HamlibRigBackend::setPtt(bool on, bool dataInput) {
+  if (!rig_) { lastError_ = "rig not open"; return false; }
+  const ptt_type_t type = rig_->caps->ptt_type;
+  if (!rig_->caps->set_ptt || (type != RIG_PTT_RIG && type != RIG_PTT_RIG_MICDATA)) {
+    lastError_ = std::string("hamlib has no CAT PTT for ") + rig_->caps->model_name;
+    return false;
+  }
+  const ptt_t ptt = !on ? RIG_PTT_OFF : dataInput ? RIG_PTT_ON_DATA : RIG_PTT_ON_MIC;
+  return check(rig_set_ptt(rig_, RIG_VFO_CURR, ptt), on ? "set_ptt on" : "set_ptt off");
 }
 
 }  // namespace LocalTrx

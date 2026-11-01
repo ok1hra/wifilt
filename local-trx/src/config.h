@@ -14,6 +14,20 @@ namespace LocalTrx {
 struct AudioConfig {
   std::string inputDevice;   // miniaudio device name, not index (phase 2/3, unused for now)
   std::string outputDevice;
+  // The OS mixer control local-trx reports to wifilt as the radio's MOD level
+  // (CI-V 1A 05 99 99, tx_level.h), so wifilt's TX gain calibration can set the
+  // level going into the radio the way it does an ICOM's network MOD level.
+  // Linux: ALSA ctl name ("hw:CARD=Device") + simple element ("PCM", "Speaker",
+  // "Name,1" for index 1). Windows ignores both: the volume is the output
+  // device's own endpoint volume. Empty card = no MOD level (no reply).
+  std::string mixerCard;
+  std::string mixerElement;
+  // Written by TxLevel, not by the wizard: the last MOD level wifilt set
+  // (-1 = never) and the mixer dB it left the hardware at, so a restart can
+  // put back the software trim below one mixer step -- only while the mixer
+  // still sits where it was left.
+  int modLevel = -1;
+  double modMixerDb = 0.0;
 };
 
 struct CatConfig {
@@ -29,9 +43,14 @@ struct KeyingConfig {
   // Each "serial" (DTR/RTS on `port` below) or "trxnet" (TrxnetConfig's
   // device). cwBackend covers CW and FSK text -- over TrxNet the device keys
   // it with its own keyer, at its own speed. pttBackend covers every PTT,
-  // audio and the one KeyRunner raises around serial CW/FSK.
+  // audio and the one KeyRunner raises around serial CW/FSK; it can also be
+  // "cat": a hamlib CAT command on cat.port (cat_ptt.h), cat.backend
+  // "hamlib" only.
   std::string cwBackend = "serial";
   std::string pttBackend = "serial";
+  // pttBackend "cat": "data" transmits the rear DATA/ACC audio input
+  // (Kenwood TX1;), "mic" the microphone (TX0;).
+  std::string catPttInput = "data";
   std::string port = "/dev/ttyUSB1";   // second, independent serial adapter (bod 6/7)
   int         baud = 1200;
   std::string keyLine = "dtr";         // "dtr" | "rts" -- the other line is always PTT
@@ -99,6 +118,8 @@ struct Config {
   bool catOverTrxnet() const { return cat.backend == "trxnet"; }
   bool cwOverTrxnet() const { return keying.cwBackend == "trxnet"; }
   bool pttOverTrxnet() const { return keying.pttBackend == "trxnet"; }
+  bool pttOverCat() const { return keying.pttBackend == "cat"; }
+  bool catPttData() const { return keying.catPttInput != "mic"; }
   bool usesTrxnet() const { return catOverTrxnet() || cwOverTrxnet() || pttOverTrxnet(); }
 };
 

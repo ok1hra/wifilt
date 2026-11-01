@@ -313,7 +313,7 @@
   function startWorker(role, peerCall, myCall) {
     stopWorker();
     // The worker passes this ?v= on to every script and blob it loads.
-    const MERCURY_WORKER_REV = "2425e08c"; // stamped from /mercury-worker.js
+    const MERCURY_WORKER_REV = "9b76afc2"; // stamped from /mercury-worker.js
     worker = new Worker(`/mercury-worker.js?v=${MERCURY_WORKER_REV}`);
     workerRole = role;
     worker.onmessage = (e) => handleWorkerMessage(e.data);
@@ -538,7 +538,8 @@
     dom.trxPowerSegments.forEach((segment, index) => segment.classList.toggle("on", index < lit));
     const scale = fullPowerScale();
     const watts = seen && scale.watts ? scale.watts * level / 255 : null;
-    dom.trxPowerWatts.textContent = watts === null ? "--" : formatWatts(watts);
+    // Percent when the model gives no full scale -- see data.js's renderTrxPower().
+    dom.trxPowerWatts.textContent = !seen ? "--" : watts === null ? `${Math.round(percent)}%` : formatWatts(watts);
     dom.trxPower.title = !seen ? "TRX power — the radio has not reported its power level yet"
       : watts === null ? `TRX power ${Math.round(percent)} % · watts unknown: the radio model is not recognised`
       : `TRX power ${Math.round(percent)} % · ${formatWatts(watts)} of ${scale.watts} W (${scale.source})`;

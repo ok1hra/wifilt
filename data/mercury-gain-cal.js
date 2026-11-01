@@ -199,7 +199,7 @@
         WATCHDOG_MS);
 
       // The worker passes this ?v= on to every script and blob it loads.
-      const MERCURY_CAL_WORKER_REV = "1c265e22"; // stamped from /mercury-cal-worker.js
+      const MERCURY_CAL_WORKER_REV = "e01709cf"; // stamped from /mercury-cal-worker.js
       this.worker = new Worker(`/mercury-cal-worker.js?v=${MERCURY_CAL_WORKER_REV}`);
       this.worker.onmessage = event => {
         const msg = event.data || {};
@@ -240,6 +240,8 @@
     finish(outcome) {
       if (!this._running) return;
       this._running = false;
+      const localTrx = TxGainCal.localTrxSilence(outcome && outcome.reason);
+      if (localTrx) outcome = {...outcome, reason: localTrx};
       const swrMax = Number(this.swrPeak.toFixed(1));
       this.cal = null;
       if (this.watchdog) { clearTimeout(this.watchdog); this.watchdog = null; }

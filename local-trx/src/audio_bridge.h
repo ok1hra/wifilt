@@ -106,11 +106,17 @@ class AudioPlayback {
   // AudioCapture's ring on the other side.
   void push(const int16_t *samples, size_t count);
 
+  // The software part of local-trx's MOD level (tx_level.h): what is left
+  // below one step of the sound card's mixer. 0..1 -- attenuation only.
+  void setTrim(float trim) { trim_ = trim < 0.0f ? 0.0f : trim > 1.0f ? 1.0f : trim; }
+
  private:
   static void dataCallback(ma_device *device, void *output, const void *input,
                             ma_uint32 frameCount);
   static void notificationCallback(const ma_device_notification *notification);
   void onPlayback(int16_t *output, ma_uint32 frameCount);
+
+  std::atomic<float> trim_{1.0f};
 
   std::string deviceName_;
   ma_context context_{};
