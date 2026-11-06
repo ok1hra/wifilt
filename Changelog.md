@@ -11,6 +11,27 @@ published.
 
 ## Working tree — not committed
 
+**Fix: about 18 kB of heap the XARA work took from every ESP32, used or not.**
+
+* **Symptom.** On an ESP32 that never ran XARA, the JS8 page kept going OFFLINE:
+  `LAN | audio task allocation failed`, `ping_sock: send error`, WiFi reconnects and
+  `LOOP| slow: webServer 10001ms uri=/state` stalls, the RX ring overflowing behind them.
+  The heap was too short for the WiFi stack and the audio task's 6 kB stack.
+* **Cause.** `vara_host_bridge.h` (phase 4) allocated its buffers at boot: two 4 kB output
+  queues, a 4 kB scratch and a 1 kB frame, 13.4 kB for TCP 8300/8301 whether a Winlink
+  client ever came or not. And the TX replay history (phase 6) was sized for the 16 kHz
+  link at every rate: 32 × 344 B instead of 32 × 184 B, another 5 kB.
+* **Fix.** The bridge allocates its buffers when a client attaches and frees them when the
+  host session closes (a client that finds no memory is refused, with a log line). The
+  replay history lives on the heap at the link's packet size, next to the TX queue, so an
+  8 kHz link costs what it did before phase 6.
+* **Seen on the device.** The `AUD | health` line now ends with `heap=<free>/<largest
+  block>`, and `audio task allocation failed` says both.
+* **Checks.** `tools/vara-page-native-check.sh` (the Winlink client on 8300/8301 through
+  the lazily allocated bridge), `tools/aud1-16k-native-check.sh` (TX at 16 kHz through the
+  resized history), `build-icom-lan-audio-tx-smoke.sh`, `jtty-stream-smoke`; the ESP32
+  build's static RAM is unchanged at 107 496 B. Not yet seen on a real ESP32.
+
 **XARA: RX level, band menu, CAL PLAN; XARA before Mercury.**
 
 * **RX level.** The XARA page shows the RX audio level in dBFS under the waterfall, the

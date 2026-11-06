@@ -70,7 +70,7 @@ class IcomLanAudioTx {
   };
 
   IcomLanAudioTx() { setPacketBytes(160); reset(); }
-  ~IcomLanAudioTx() { delete[] queue_; }
+  ~IcomLanAudioTx() { delete[] queue_; delete[] history_; }
   IcomLanAudioTx(const IcomLanAudioTx&) = delete;
   IcomLanAudioTx& operator=(const IcomLanAudioTx&) = delete;
 
@@ -80,23 +80,30 @@ class IcomLanAudioTx {
     myId_ = remoteId_ = 0;
     trackedSequence_ = 1;
     audioSequence_ = 0;
-    history_.clear();
+    clearHistory();
     replayRequests_ = replayedPackets_ = replayMisses_ = sendFailures_ = 0;
     clearTx();
   }
 
-  // Bytes per 20 ms packet: 160 at 8 kHz uLaw, 320 at 16 kHz; the queue is
-  // resized to match. Only between transmissions (it clears the queue).
-  // False when the queue could not be allocated -- every enqueue then fails.
+  // Bytes per 20 ms packet: 160 at 8 kHz uLaw, 320 at 16 kHz; the queue and
+  // the replay history are sized to match, on the heap, so an 8 kHz link
+  // costs what it did before the 16 kHz one existed (12288 + 5888 B).
+  // Only between transmissions (it clears both). False when either could not
+  // be allocated -- every enqueue then fails.
   bool setPacketBytes(size_t bytes) {
     bytes = bytes == 0 || bytes > MAX_PAYLOAD ? 160 : bytes;
     size_t capacity = bytes * QUEUE_MS / PACKET_MS;
     packetBytes_ = bytes;
-    if (queue_ && capacity == capacity_) { clearTx(); return true; }
+    if (queue_ && history_ && capacity == capacity_) { clearTx(); clearHistory(); return true; }
     delete[] queue_;
+    delete[] history_;
     queue_ = new (std::nothrow) uint8_t[capacity];
+    history_ = new (std::nothrow) uint8_t[HISTORY_PACKETS * (HEADER_SIZE + bytes)];
+    if (!queue_ || !history_) { delete[] queue_; delete[] history_; queue_ = nullptr; history_ = nullptr; }
     capacity_ = queue_ ? capacity : 0;
+    historySlot_ = history_ ? HEADER_SIZE + bytes : 0;
     clearTx();
+    clearHistory();
     return queue_ != nullptr;
   }
   size_t packetBytes() const { return packetBytes_; }
@@ -252,15 +259,33 @@ class IcomLanAudioTx {
 
   uint16_t nextTrackedSequence() { return trackedSequence_++; }
 
+  // The replay history (icom_lan_tx_history.h's ring, with its slots on the
+  // heap at the link's packet size): the radio asks for a lost tracked
+  // sequence and gets the byte-identical original back.
+  void clearHistory() {
+    historyNext_ = 0;
+    for (size_t i = 0; i < HISTORY_PACKETS; ++i) historyLen_[i] = 0;
+  }
   bool rememberTracked(uint16_t sequence, const uint8_t* packet, size_t length) {
-    return history_.remember(sequence, packet, length);
+    if (!history_ || !packet || length == 0 || length > historySlot_) return false;
+    historySeq_[historyNext_] = sequence;
+    historyLen_[historyNext_] = uint16_t(length);
+    memcpy(history_ + historyNext_ * historySlot_, packet, length);
+    historyNext_ = (historyNext_ + 1) % HISTORY_PACKETS;
+    return true;
   }
 
   const uint8_t* replay(uint16_t sequence, size_t& length) {
     replayRequests_++;
-    const uint8_t* packet = history_.find(sequence, length);
-    if (!packet) replayMisses_++;
-    return packet;
+    for (size_t i = 0; history_ && i < HISTORY_PACKETS; ++i) {
+      if (historyLen_[i] && historySeq_[i] == sequence) {
+        length = historyLen_[i];
+        return history_ + i * historySlot_;
+      }
+    }
+    length = 0;
+    replayMisses_++;
+    return nullptr;
   }
 
   void noteReplaySent(bool success) {
@@ -338,5 +363,8 @@ class IcomLanAudioTx {
   uint8_t pendingPacket_[MAX_PACKET];
   size_t pendingLength_ = 0, pendingPayloadLength_ = 0;
   uint16_t pendingTrackedSequence_ = 0;
-  IcomLanTxHistory<MAX_PACKET, HISTORY_PACKETS> history_;
+  uint8_t* history_ = nullptr;
+  size_t historySlot_ = 0, historyNext_ = 0;
+  uint16_t historySeq_[HISTORY_PACKETS] = {};
+  uint16_t historyLen_[HISTORY_PACKETS] = {};
 };

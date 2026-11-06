@@ -29,6 +29,7 @@
 
 #include <stdint.h>
 #include <string.h>
+#include <new>
 
 static const uint16_t VARA_CMD_PORT = 8300, VARA_DATA_PORT = 8301;
 
@@ -123,8 +124,9 @@ public:
   void fromPage(const char *ch, const char *b64, size_t b64Len, bool closeReq) {
     if (closeReq) { closeAll(false, "closed by the modem"); return; }
     Port *p = ch && !strcmp(ch, "cmd") ? &ports[0] : ch && !strcmp(ch, "data") ? &ports[1] : nullptr;
-    if (!p || !p->attached || !b64Len) return;
-    int n = varaB64Decode(b64, b64Len, scratch, sizeof(scratch));
+    if (!p || !p->attached || !b64Len || !buf) return;
+    uint8_t *scratch = buf->scratch;
+    int n = varaB64Decode(b64, b64Len, scratch, OUT_CAP);
     if (n <= 0) return;
     if (size_t(n) > OUT_CAP - p->outLen) { p->failed = true; return; }   // a client that stopped reading
     for (int i = 0; i < n; i++) { p->out[(p->outHead + p->outLen) % OUT_CAP] = scratch[i]; p->outLen++; }
@@ -138,9 +140,27 @@ private:
   struct Port {
     WiFiClient client;
     bool attached = false, failed = false;
-    uint8_t out[OUT_CAP];
+    uint8_t *out = nullptr;              // into buf while a client is attached
     size_t outHead = 0, outLen = 0;
   };
+  // About 13 kB, so it exists only while a Winlink client is attached: an
+  // ESP32 that never sees one (most of them) must not pay for it -- the heap
+  // it took from boot was enough to starve the WiFi stack and the audio task.
+  struct Buffers {
+    uint8_t out[2][OUT_CAP];
+    uint8_t scratch[OUT_CAP];
+    char frameOut[48 + (READ_CHUNK + 2) / 3 * 4 + 4];
+  };
+  bool ensureBuffers() {
+    if (!buf) buf = new (std::nothrow) Buffers;
+    if (!buf) return false;
+    ports[0].out = buf->out[0]; ports[1].out = buf->out[1];
+    return true;
+  }
+  void freeBuffers() {
+    delete buf; buf = nullptr;
+    ports[0].out = ports[1].out = nullptr;
+  }
 
   void say(const char *what, const char *ch) {
     char line[96];
@@ -153,6 +173,7 @@ private:
     if (!c) return;
     if (!modem) { c.stop(); say("client refused: no XARA page holds the radio", ch); return; }
     if (p.attached && p.client.connected()) { c.stop(); say("second client refused", ch); return; }
+    if (!ensureBuffers()) { c.stop(); say("client refused: out of memory", ch); return; }
     c.setNoDelay(true);
     p.client = c; p.attached = true; p.failed = false; p.outHead = p.outLen = 0;
     IPAddress ip = c.remoteIP();
@@ -169,6 +190,7 @@ private:
       p.attached = false; p.failed = false; p.outHead = p.outLen = 0;
     }
     hold = false;
+    freeBuffers();
     if (tellPage) { static const char msg[] = "{\"type\":\"vara.host\",\"ev\":\"close\"}"; h.sendText(msg, sizeof(msg) - 1); }
     h.log((String("VARA| host closed: ") + why).c_str());
   }
@@ -181,18 +203,19 @@ private:
     size_t want = size_t(avail) < READ_CHUNK ? size_t(avail) : READ_CHUNK;
     size_t frame = 48 + (want + 2) / 3 * 4;
     if (h.sendRoom() < frame + 4096) return;     // keep room for the RX audio
-    int got = p.client.read(scratch, want);
+    if (!buf) return;
+    int got = p.client.read(buf->scratch, want);
     if (got <= 0) return;
-    char *json = frameOut;
-    int n = snprintf(json, sizeof(frameOut), "{\"type\":\"vara.host\",\"ch\":\"%s\",\"b64\":\"", ch);
-    n += int(varaB64Encode(scratch, size_t(got), json + n));
+    char *json = buf->frameOut;
+    int n = snprintf(json, sizeof(buf->frameOut), "{\"type\":\"vara.host\",\"ch\":\"%s\",\"b64\":\"", ch);
+    n += int(varaB64Encode(buf->scratch, size_t(got), json + n));
     json[n++] = '"'; json[n++] = '}'; json[n] = 0;
     h.sendText(json, size_t(n));
   }
 
   // Page -> socket, never blocking: what the kernel will not take now waits.
   void drain(Port &p) {
-    while (p.outLen) {
+    while (p.outLen && p.out) {
       size_t run = OUT_CAP - p.outHead;
       if (run > p.outLen) run = p.outLen;
       int fd = p.client.fd();
@@ -209,7 +232,5 @@ private:
   WiFiServer cmdServer, dataServer;
   Port ports[2];
   bool started = false, hold = false;
-  // Off the stack: the ESP32 loop task has 8 kB of it.
-  uint8_t scratch[OUT_CAP];
-  char frameOut[48 + (READ_CHUNK + 2) / 3 * 4 + 4];
+  Buffers *buf = nullptr;   // off the stack (the loop task has 8 kB) and off the heap when idle
 };

@@ -1407,7 +1407,12 @@ private:
       audioLock();
       audioRuntime->tx.fail(IcomLanAudioTx::FAULT_NOT_READY);
       audioUnlock();
+#if defined(WIFILT_NATIVE)
       Serial.println("LAN | audio task allocation failed");
+#else
+      Serial.printf("LAN | audio task allocation failed (heap %u, largest %u)\n",
+                    (unsigned)ESP.getFreeHeap(), (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+#endif
       return;
     }
 #else

@@ -12401,7 +12401,14 @@ void AudioHandleWsClient(){
       Serial.print(" wsDrop="); Serial.print(audioWsDropFrames);
       Serial.print(" rtx asked="); Serial.print(healthClient ? healthClient->audioRtxRequested() : 0);
       Serial.print(" got="); Serial.print(healthClient ? healthClient->audioRtxRecovered() : 0);
-      Serial.print(" gaveup="); Serial.println(healthClient ? healthClient->audioRtxAbandoned() : 0);
+      Serial.print(" gaveup="); Serial.print(healthClient ? healthClient->audioRtxAbandoned() : 0);
+#if !defined(WIFILT_NATIVE)
+      // Free heap / largest block: what the WiFi stack and the audio task need
+      // a contiguous few kB of. Below ~10 kB largest, expect WiFi send errors.
+      Serial.print(" heap="); Serial.print(ESP.getFreeHeap());
+      Serial.print("/"); Serial.print(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+#endif
+      Serial.println();
     }
   }
 }
