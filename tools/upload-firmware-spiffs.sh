@@ -5,6 +5,12 @@ set -euo pipefail
 # Builds LittleFS in the partition named "spiffs" and writes APP + filesystem in one
 # esptool write session. Bootloader and partition table are deliberately
 # untouched; the device partition table is verified before any write.
+#
+# One exception: a device on an older layout that still has a cfg partition
+# (REV 20260808 .. 20261101: cfg between app0 and spiffs) is MIGRATED. Its cfg
+# is read back first and saved under build/release-upload/, then the new
+# partition table, firmware, assets and that same cfg image at its new offset
+# go out in one write session (tools/flash-layout.py decides which case it is).
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT=""
@@ -80,14 +86,15 @@ fi
 }
 
 ESP32_HW_ROOT="$(find "$ARDUINO15_DIR/packages/esp32/hardware/esp32" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
-# Sketch-local custom layout (app0 1.375 MB / spiffs 2.56 MB, no coredump).
+# Sketch-local custom layout (app0 / spiffs / cfg at the end, no coredump).
 # The ESP32 core prebuild hook flashes this same file, so app/spiffs offsets and
 # sizes below are read straight from it and stay in sync with the on-device table.
 PARTITION_CSV="$ROOT_DIR/partitions.csv"
 MKLITTLEFS_BIN="$(find "$ARDUINO15_DIR/packages/esp32/tools/mklittlefs" -type f -name mklittlefs -perm -u+x | sort -V | tail -1)"
 ESPTOOL_PY="$(find "$ARDUINO15_DIR/packages/esp32/tools/esptool_py" -type f -name esptool.py | sort -V | tail -1)"
 GEN_PARTITIONS="$ESP32_HW_ROOT/tools/gen_esp32part.py"
-for required in "$PARTITION_CSV" "$MKLITTLEFS_BIN" "$ESPTOOL_PY" "$GEN_PARTITIONS"; do
+FLASH_LAYOUT="$ROOT_DIR/tools/flash-layout.py"
+for required in "$PARTITION_CSV" "$MKLITTLEFS_BIN" "$ESPTOOL_PY" "$GEN_PARTITIONS" "$FLASH_LAYOUT"; do
   [[ -f "$required" ]] || { echo "ERROR: required tool/file missing: $required" >&2; exit 1; }
 done
 
@@ -205,8 +212,9 @@ echo "==> APP write     : $APP_OFFSET"
 echo "==> LittleFS image: $SPIFFS_IMAGE ($SPIFFS_IMAGE_SIZE bytes)"
 echo "==> Runtime reserve gate: $runtime_reserve_bytes bytes (payload $staging_bytes / $max_payload_bytes)"
 echo "==> Filesystem write: $SPIFFS_OFFSET (partition label: spiffs)"
-echo "==> Preserved     : bootloader, partition table, NVS and coredump"
-echo "==> Safety check  : device partition table must exactly match $(basename "$PARTITION_CSV")"
+echo "==> Preserved     : bootloader, partition table, NVS and cfg"
+echo "==> Safety check  : device partition table must match $(basename "$PARTITION_CSV"),"
+echo "                    or be the previous layout, whose cfg is then carried over"
 
 print_memory_report
 
@@ -225,22 +233,84 @@ echo "==> Verifying the device partition table before writing"
 python3 "$ESPTOOL_PY" --chip esp32 --port "$PORT" --baud "$BAUD" \
   --before default_reset --after no_reset read_flash \
   "$PARTITION_TABLE_OFFSET" "$PARTITION_TABLE_SIZE" "$DEVICE_PARTITIONS"
-if ! cmp -s "$EXPECTED_PARTITIONS" "$DEVICE_PARTITIONS"; then
-  echo "ERROR: device partition table does not match $PARTITION_CSV" >&2
-  echo "       Nothing was written. The device still has an older layout." >&2
-  echo "       Do ONE full flash that rewrites the partition table first" >&2
-  echo "       (Arduino IDE Upload, or tools/gh-pages.sh bundle) — both use the" >&2
-  echo "       sketch-local partitions.csv. That first flash erases the filesystem," >&2
-  echo "       so back up config via /config/download beforehand. After that this" >&2
-  echo "       fast app+LittleFS script will match and work normally." >&2
-  exit 1
-fi
-
-echo "==> Writing firmware + LittleFS on $PORT"
-python3 "$ESPTOOL_PY" --chip esp32 --port "$PORT" --baud "$BAUD" \
-  --before default_reset --after hard_reset write_flash \
-  "$APP_OFFSET" "$FIRMWARE" \
-  "$SPIFFS_OFFSET" "$SPIFFS_IMAGE"
+layout_plan="$(python3 "$FLASH_LAYOUT" plan "$DEVICE_PARTITIONS" "$EXPECTED_PARTITIONS")"
+case "$layout_plan" in
+  match)
+    echo "==> Writing firmware + LittleFS on $PORT"
+    python3 "$ESPTOOL_PY" --chip esp32 --port "$PORT" --baud "$BAUD" \
+      --before default_reset --after hard_reset write_flash \
+      "$APP_OFFSET" "$FIRMWARE" \
+      "$SPIFFS_OFFSET" "$SPIFFS_IMAGE"
+    ;;
+  migrate\ *)
+    read -r _ CFG_OLD_OFFSET CFG_SIZE CFG_NEW_OFFSET <<<"$layout_plan"
+    # Kept, not a temp file: if the write below is interrupted this is the
+    # operator's whole configuration, and the restore command is printed.
+    CFG_SAVED="${BUILD_DIR}/cfg-backup-$(date +%Y%m%d-%H%M%S).bin"
+    echo "==> Device has the previous layout; moving cfg $CFG_OLD_OFFSET -> $CFG_NEW_OFFSET"
+    echo "==> Reading the configuration partition into $CFG_SAVED"
+    python3 "$ESPTOOL_PY" --chip esp32 --port "$PORT" --baud "$BAUD" \
+      --before default_reset --after no_reset read_flash \
+      "$CFG_OLD_OFFSET" "$CFG_SIZE" "$CFG_SAVED"
+    cfg_kind="$(python3 "$FLASH_LAYOUT" cfg "$CFG_SAVED")"
+    # Step 1 puts cfg at its new offset, which the old layout spends on the tail
+    # of the asset filesystem -- nothing of value is lost if the run stops here.
+    # Step 2 then writes the new table, firmware and assets (the assets cover
+    # the old cfg). Interrupted inside step 2, a re-run finds either the new
+    # table ("match", cfg already in place) or the old one with its cfg already
+    # overwritten -- the branch below then finds the carried copy and goes on.
+    case "$cfg_kind" in
+      littlefs)
+        echo "==> Step 1/2: configuration -> $CFG_NEW_OFFSET"
+        python3 "$ESPTOOL_PY" --chip esp32 --port "$PORT" --baud "$BAUD" \
+          --before default_reset --after no_reset write_flash \
+          "$CFG_NEW_OFFSET" "$CFG_SAVED" ;;
+      empty)
+        # Never configured: nothing to carry, the firmware formats cfg on its
+        # first boot. Erased rather than left alone, so leftover asset blocks of
+        # the old layout are never offered to LittleFS as a filesystem.
+        echo "==> Step 1/2: no configuration yet; erasing $CFG_NEW_OFFSET"
+        python3 "$ESPTOOL_PY" --chip esp32 --port "$PORT" --baud "$BAUD" \
+          --before default_reset --after no_reset erase_region \
+          "$CFG_NEW_OFFSET" "$CFG_SIZE" ;;
+      *)
+        CFG_CARRIED="${BUILD_DIR}/cfg-at-new-offset.bin"
+        python3 "$ESPTOOL_PY" --chip esp32 --port "$PORT" --baud "$BAUD" \
+          --before default_reset --after no_reset read_flash \
+          "$CFG_NEW_OFFSET" "$CFG_SIZE" "$CFG_CARRIED"
+        if [[ "$(python3 "$FLASH_LAYOUT" cfg "$CFG_CARRIED")" != littlefs ]]; then
+          echo "ERROR: $CFG_OLD_OFFSET holds neither LittleFS nor erased flash," >&2
+          echo "       and no configuration was carried to $CFG_NEW_OFFSET before." >&2
+          echo "       Nothing was written. Saved copy: $CFG_SAVED" >&2
+          exit 1
+        fi
+        CFG_SAVED="$CFG_CARRIED"
+        cfg_kind="carried earlier"
+        echo "==> Step 1/2: configuration already at $CFG_NEW_OFFSET (an earlier run was interrupted)" ;;
+    esac
+    echo "==> Step 2/2: partition table + firmware + LittleFS on $PORT"
+    if ! python3 "$ESPTOOL_PY" --chip esp32 --port "$PORT" --baud "$BAUD" \
+      --before default_reset --after hard_reset write_flash \
+      "$PARTITION_TABLE_OFFSET" "$EXPECTED_PARTITIONS" \
+      "$APP_OFFSET" "$FIRMWARE" \
+      "$SPIFFS_OFFSET" "$SPIFFS_IMAGE"; then
+      echo "ERROR: the migration write did not complete. Re-run this script:" >&2
+      echo "       the configuration is already at $CFG_NEW_OFFSET, and a copy is" >&2
+      echo "       kept in $CFG_SAVED." >&2
+      exit 1
+    fi
+    echo "==> Layout migrated (cfg: $cfg_kind); copy kept at $CFG_SAVED"
+    ;;
+  *)
+    echo "ERROR: device partition table does not match $PARTITION_CSV" >&2
+    echo "       and cannot be migrated: ${layout_plan#refuse }." >&2
+    echo "       Nothing was written. Do ONE full flash that rewrites the partition" >&2
+    echo "       table first (Arduino IDE Upload, or the web installer) -- both use" >&2
+    echo "       the sketch-local partitions.csv. That flash loses the configuration," >&2
+    echo "       so back it up via /config/download beforehand and restore it with" >&2
+    echo "       Upload config afterwards. After that this script works normally." >&2
+    exit 1 ;;
+esac
 
 # Repeat the report after the long esptool output so it cannot be missed.
 echo "==> Upload complete"

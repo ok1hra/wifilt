@@ -40,6 +40,10 @@ if (!fs.existsSync(PAGE)) {
 const html = fs.readFileSync(PAGE, "utf8");
 const sketch = fs.readFileSync(path.join(ROOT, "wifilt.ino"), "utf8");
 const rev = (sketch.match(/#define REV\s+(\d+)/) || [])[1];
+// app0 as gh-pages.sh prints it: decimal MB, two places, rounded half up.
+const app0Row = fs.readFileSync(path.join(ROOT, "partitions.csv"), "utf8")
+  .split("\n").find(line => /^app0\s*,/.test(line));
+const appSizeMb = (Math.floor((parseInt(app0Row.split(",")[4], 16) + 5000) / 10000) / 100).toFixed(2);
 
 // ---- source-level contract -------------------------------------------------
 // Things that must be on the page, and things that must never come back.
@@ -58,11 +62,15 @@ const mustHave = [
   ["names the calibrations among what is kept", /TX audio gain calibration/i.test(html)],
   ["says the QSO log is untouched", /QSO log/i.test(html) && /stored in your browser/i.test(html)],
   ["warns the pre-cfg releases lose config either way", /older than 20260808/.test(html)],
+  // The cfg partition moved to the end of the flash after REV 20261101; the
+  // installer writes the assets over its old place and cannot read it first.
+  ["warns an upgrade across the cfg move needs a backup", /REV 20261101 or older/.test(html)
+    && /upload-firmware-spiffs\.sh/.test(html)],
   ["says an update needs no AP-mode hunt", /rejoins your network on its own/i.test(html)],
   ["explains why the page cannot fetch the backup", /HTTPS/.test(html) && /HTTP/.test(html)],
   ["offers restoring the backup after flashing", /Upload config/i.test(html)],
   ["shows the road map", /road-now/.test(html) && /Transmit check/.test(html)],
-  ["true flash layout", html.includes("1.375 MB application")],
+  ["true flash layout", html.includes(appSizeMb + " MB application")],
   // The three folds. The ESP32 one is the page's whole reason to exist, so it
   // is required unconditionally; Linux and Windows are asserted further down
   // only when the build that produced this page actually carried their archive.
