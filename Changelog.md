@@ -11,6 +11,20 @@ published.
 
 ## Working tree — not committed
 
+**XARA: the manual and the licences (docs/vara-implementace.md, phase 7).**
+
+* **SOFTWARE.md.** New chapter 8b "DATA — XARA (VARA-compatible)": the page, LISTEN,
+  CONNECT/CQ/terminal, STATUS and HOST LOG, Winlink clients on TCP 8300/8301 (the page must
+  stay open), FM Wide and the 16 kHz link, SETTINGS, and the latency limit (calling out works,
+  answering a Winlink-timing caller does not). xara is credited in §1.2, listed in the
+  navigation table, in §12 Transmit safety (XARA is not governed by *Enable radio TX*; LISTEN
+  off and closing the page are what stop it) and in the §13 licence table (MIT, x0rro), with
+  a VARA trademark note.
+* **data/THIRD-PARTY-NOTICES.txt.** xara section (MIT, copyright x0rro, commit pin in
+  `third_party/xara/README.md`) and the VARA trademark note.
+* **tools/ui-inventory.js.** `vara.html` registered, so its controls are checked against the
+  manual: 444/444 covered.
+
 **XARA: VARA FM Wide and the 16 kHz radio link (docs/vara-implementace.md, phase 6).**
 
 * **What.** DATA → XARA → Mode: FM Wide, for a 9600-capable FM radio. It needs SETTINGS →

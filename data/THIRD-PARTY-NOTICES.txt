@@ -12,6 +12,9 @@ Trademarks
 Icom is a registered trademark of Icom Incorporated. WIFILT is an independent
 software project and is not affiliated with, endorsed by, or sponsored by Icom
 Incorporated.
+VARA is a trademark of its author, Jose Alberto Nieto Ros (EA5HVK). The XARA
+DATA mode is an independent, compatible implementation (see the xara section
+below) and is not affiliated with or endorsed by the author of VARA.
 
 IC705-BT-CIV (OK1CDJ)
 ---------------------
@@ -229,6 +232,18 @@ data/wake-lock.js. The surrounding keeper code is original.
 Copyright (c) 2017 Rich Tibbett.
 License: MIT, under the same terms printed in the Brotli section above.
 Source: https://github.com/richtr/NoSleep.js
+
+xara (XARA DATA mode)
+---------------------
+data/vara-modem.js and data/vara-host.js, the modem and host protocol of the
+XARA page and of the Winlink client bridge on TCP 8300/8301, are a JavaScript
+port of xara, a VARA-compatible HF/FM modem written in Rust. No Rust code is
+compiled or distributed; the port is checked against xara's own test vectors.
+Copyright (c) 2026 x0rro.
+License: MIT, under the same terms printed in the Brotli section above.
+Port Copyright (C) 2026 RemoteQTH.com, same MIT terms.
+Upstream commit pin: third_party/xara/README.md
+Upstream: https://github.com/x0rro/xara
 
 qrcode.min.js (QR code generator)
 ----------------------------------

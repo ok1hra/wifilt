@@ -113,6 +113,16 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
  · [8.7 A transfer running elsewhere](#87-a-transfer-running-elsewhere)
  · [8.8 SETTINGS](#88-settings)
 
+**[8b. DATA — XARA (VARA-compatible)](#8b-data--xara-vara-compatible)**
+ · [8b.1 What XARA is](#8b1-what-xara-is)
+ · [8b.2 Header and LISTEN](#8b2-header-and-listen)
+ · [8b.3 CONNECT, CQ and the terminal](#8b3-connect-cq-and-the-terminal)
+ · [8b.4 STATUS and HOST LOG](#8b4-status-and-host-log)
+ · [8b.5 Winlink clients on TCP 8300/8301](#8b5-winlink-clients-on-tcp-83008301)
+ · [8b.6 FM Wide and the 16 kHz radio link](#8b6-fm-wide-and-the-16-khz-radio-link)
+ · [8b.7 SETTINGS](#8b7-settings)
+ · [8b.8 Latency, and what is not there](#8b8-latency-and-what-is-not-there)
+
 **[9. SETUP](#9-setup)**
  · [9.1 WiFi](#91-wifi)
  · [9.2 Identity](#92-identity)
@@ -239,6 +249,11 @@ built around — real HF, real noise, no assumption of a clean link — and the 
 DATA page ([section 8](#8-data--mercury-file-transfer)) runs its actual ARQ engine, compiled
 to WebAssembly, over the FreeDV data modem (David Rowe and the Codec 2 project) it carries.
 
+**[xara](https://github.com/x0rro/xara)** — x0rro. An open, MIT-licensed modem that talks
+to VARA HF and VARA FM. The XARA tab ([section 8b](#8b-data--xara-vara-compatible)) is a
+JavaScript port of it, checked against xara's own test vectors, so a phone browser can
+reach the Winlink gateways that run VARA.
+
 RTTY-ICOM's own FSK demodulator (`data/rtty-codec.js`) is original code, but credits
 **[horusdemodlib](https://github.com/projecthorus/horus-gui)** (Project Horus) for the
 Goertzel/bit-sync/continuous-phase technique it follows — no code or protocol is shared;
@@ -279,7 +294,7 @@ Every page carries the same bar:
 | *(logo)* | — | opens a small About panel with links to the project and to RemoteQTH |
 | **QRPLog** | `/log` | the logbook |
 | **DXC** | `/dxc.html` | the DX cluster client — splits the QRPLog page in two; its own 600×750 window from anywhere else |
-| **DATA** | `/data` | four modes over the radio's LAN audio, chosen in the page's own sub-navigation: **JS8Call-ICOM**, **RTTY-ICOM**, **WSPR** and **Mercury**. Only one of them can run at a time — see [section 12](#12-transmit-safety). |
+| **DATA** | `/data` | the modes over the radio's LAN audio, chosen in the page's own sub-navigation: **JS8Call-ICOM**, **RTTY-ICOM**, **JTTY**, **WSPR**, **Mercury** and **XARA**. Only one of them can run at a time — see [section 12](#12-transmit-safety). |
 | **SETUP** | `/setup` | configuration |
 | **LOGSYNC** | `/datasync` | log synchronisation, backup, import |
 | **BD** | `/bd` | band decoder — hidden unless the hardware has it |
@@ -3807,6 +3822,132 @@ into the fields but does not save them until SAVE is pressed.
 
 ---
 
+## 8b. DATA — XARA (VARA-compatible)
+
+**`/vara.html`** — the **XARA** tab of the DATA page.
+
+### 8b.1 What XARA is
+
+XARA is an ARQ modem that interoperates with **VARA HF** (500, 2300 and 2750 Hz) and
+**VARA FM** (Narrow and Wide): connect to a station or a Winlink gateway, exchange text or
+mail, disconnect. It is a JavaScript port of the open xara modem
+([section 1.2](#12-standing-on-other-peoples-work), [section 13](#13-component-licences)),
+running in a background Worker on the same ICOM-LAN audio path (AUD1) as the other DATA tabs.
+Like them, it needs a radio on ICOM-LAN and refuses to open without one.
+
+The name is deliberate. VARA is a trademark of its author, EA5HVK, and XARA is an independent
+implementation that talks to it, not VARA itself.
+
+Two ways in:
+
+- **On the page itself**: CONNECT, type in the terminal, DISCONNECT. This is a P2P keyboard
+  chat with another VARA or XARA station.
+- **From a Winlink client** (Pat, Winlink Express) on TCP ports 8300/8301 of the interface,
+  exactly as it would talk to VARA on a PC ([section 8b.5](#8b5-winlink-clients-on-tcp-83008301)).
+
+Both drive the modem with the same VARA host commands. The page's own buttons send them too,
+and the HOST LOG shows them.
+
+XARA holds the radio through its own lease under `/vara/session`, the same single record as
+every other DATA page. Only one of them, on one device, can transmit at a time. A second
+attempt gets **TAKE THE RADIO OVER HERE**.
+
+### 8b.2 Header and LISTEN
+
+The frequency, mode, radio model, **AUD1** and link indicator read the same as on the other
+DATA pages. XARA does not tune the radio. Set the frequency on the radio or on another DATA
+page, and for FM set the radio to **FM-D**.
+
+**LISTEN**, at the right, decides whether this station answers a station that connects to it.
+With it on, the station may transmit at any moment, unattended. With it off, XARA transmits
+only when you connect, call CQ or TUNE. It is off by default, and it stays off until a callsign
+is set in SETUP → Identity.
+
+### 8b.3 CONNECT, CQ and the terminal
+
+| Control | What it does |
+|---|---|
+| **My callsign** | from SETUP → Identity; the page cannot connect without it |
+| **Station** | the other station's callsign; Enter connects |
+| **Mode** | 500 / 2300 / 2750 Hz (VARA HF), **FM Narrow**, **FM Wide**. Switching between HF and FM restarts the modem; within HF it only changes the bandwidth. FM Wide needs the 16 kHz radio link ([section 8b.6](#8b6-fm-wide-and-the-16-khz-radio-link)). |
+| **Session** | **P2P / chat** waits longer for the other station's reply; **Winlink** uses the timing an RMS gateway expects |
+| **CONNECT** / **DISCONNECT** | open the link, close it with the closing handshake |
+| **ABORT** | drop the link at once, without the closing handshake |
+| **CQ** | a short unconnected frame with this callsign (HF only; FM answers `WRONG`, see [section 8b.8](#8b8-latency-and-what-is-not-there)) |
+
+The **TERMINAL** shows what was sent and received, plus lines like `— connected OK2XYZ —` and
+`— no answer —`. Once connected, Enter sends the line with a carriage return. While a Winlink
+client owns the link, the input is locked: the link's data belongs to the client.
+
+### 8b.4 STATUS and HOST LOG
+
+| Field | Meaning |
+|---|---|
+| **STATE** | the modem's state as xara names it (`Idle`, `Listen`, `Calling`, `Answering`, `Closing`…), `· TX` while keyed, `TUNE` |
+| **STATION** | the linked station |
+| **SPEED** | the current speed level (`level 7`, `level 3 FM`) |
+| **S/N** | the frequency offset the receiver is correcting (`AFC +12 Hz`) |
+| **CHANNEL** | `BUSY` when the busy detector hears other traffic on the channel |
+| **TX QUEUE** | bytes waiting to be sent |
+| **HOST** | the Winlink client attached on TCP 8300/8301, if any |
+| **MODEM LOAD** | share of real time the modem needs; above about 80 % it falls behind the radio, which matters on a slow phone |
+
+The **HOST LOG** (folded by default) shows the VARA host conversation: commands with `>`,
+replies with `<`, refusals in red. It is what a VARA host application would see, and the first
+place to look when a link does not come up.
+
+### 8b.5 Winlink clients on TCP 8300/8301
+
+The interface listens on the two VARA host ports, **8300** (commands) and **8301** (data), and
+relays them to the XARA page. Point the client at the interface's IP address as if it were
+VARA on a PC, for example `pat connect varahf:///OK0XXX`. One client per port. If either
+socket closes, both close.
+
+**The XARA page has to be open.** The modem runs in the browser, not on the ESP32. With no XARA
+page holding the radio, the interface refuses the client. Leave the page open, with the
+screen on, for as long as the client needs the modem. The terminal reports `Winlink client …
+attached` and `Winlink client left`.
+
+### 8b.6 FM Wide and the 16 kHz radio link
+
+VARA FM Wide reaches 5.7 kHz of audio, more than the radio's usual 8 kHz LAN audio can carry.
+**SETTINGS › ADVANCED › 16 kHz radio link** switches the LAN audio to 16 kHz in both
+directions. Saving it reconnects the radio. It doubles the Wi-Fi audio traffic, and every
+other mode and page still gets 8 kHz, so leave it off unless you use FM Wide. Without it, FM
+Wide says so in the terminal and does not transmit. On the 16 kHz stream the waterfall shows
+0.3–6 kHz instead of 0.3–3 kHz.
+
+### 8b.7 SETTINGS
+
+Stored on the interface, not in the browser.
+
+| Setting | Meaning |
+|---|---|
+| **Drive** | transmit level in dB below full scale, −30 to 0, default −5 |
+| **TUNE** | a steady two-tone carrier for up to 20 s, to set the radio's ALC and power; press again to stop |
+| **Audio round trip** *(ADVANCED)* | ms from this modem's output back to its own input (radio, network and TX slot together), default 350. The modem times its replies on it. |
+| **TX slot** *(ADVANCED)* | ms between keying and the first audio sample, default 200 |
+| **TX prebuffer** *(ADVANCED)* | ms of audio queued before the radio keys, default 120, below the slot |
+| **16 kHz radio link** *(ADVANCED)* | see [section 8b.6](#8b6-fm-wide-and-the-16-khz-radio-link) |
+
+**SAVE** writes them. Mode and Session are saved as soon as they change.
+
+### 8b.8 Latency, and what is not there
+
+VARA forgives a slow station of its own but not a slow *peer*. A caller with Winlink timing
+waits about 200 ms of round trip for the answer, one with P2P / chat timing about 500 ms. The
+AUD1 path cannot get under 200 ms: the TX slot alone is 100 ms at the shortest. In practice:
+
+- **Calling out** works with either timing, including a Winlink gateway.
+- **Answering** a P2P / chat call works.
+- **Answering** a caller that uses Winlink timing does not, so XARA does not suit an RMS
+  gateway role.
+
+Not there: the FM digipeater, CQ and KISS/AX.25 broadcast frames on FM, and VARA's
+registered (paid) speed levels. Only what the open modem does by default is here.
+
+---
+
 ## 9. SETUP
 
 **`/setup`**
@@ -4325,12 +4466,13 @@ at that moment. They are gathered here so nothing is a surprise.
 | **JS8 SEND LATER** | may transmit a deferred message at any time, without you present |
 | **TUNE** on either DATA page | keys a modulated carrier until its watchdog stops it |
 | **Mercury** | keys for as long as a transfer or a CQ round takes |
+| **XARA** | keys for each ARQ frame of a link, a CQ frame or TUNE; with LISTEN on it answers a connecting station by itself, and it keys for a Winlink client on TCP 8300/8301 ([section 8b](#8b-data--xara-vara-compatible)). *Enable radio TX* does not govern it; LISTEN off and closing the page do. |
 | **RTTY-ICOM** | keys when you press Enter in its composer — as FSK, or as AFSK audio, depending on the radio's mode ([section 6.1](#61-what-the-page-is)) |
 | **QRPLog macros** | key CW or RTTY when you press Enter — including through the RTTY palette in a data mode ([section 3.5](#35-cw-and-rtty-macros)) |
 | **PA — TUNE** | starts the amplifier's own tuning cycle ([section 3.14](#314-pa--the-linear-amplifier)) |
 
 **One radio, one operator.** The interface has exactly one audio link to the transceiver, so
-**JS8Call-ICOM, RTTY-ICOM, WSPR and Mercury cannot run at the same time** — and neither
+**JS8Call-ICOM, RTTY-ICOM, JTTY, WSPR, Mercury and XARA cannot run at the same time** — and neither
 can the RTTY palette in QRPLog, which is a full holder of that same session. Opening a second
 one shows *The radio is driven from somewhere else*, says where, and offers **TAKE THE SESSION
 OVER HERE**. Nothing ever takes the session on its own, not even a page restoring itself after
@@ -4368,7 +4510,7 @@ distributes, including the firmware and filesystem images served by the web inst
 
 The parts that came from elsewhere, with their own copyright and licence, are listed in
 [data/THIRD-PARTY-NOTICES.txt](data/THIRD-PARTY-NOTICES.txt) — the same notice the device
-serves from its own web UI, linked in the footer of the SETUP, JS8, RTTY, JTTY, WSPR and Mercury pages.
+serves from its own web UI, linked in the footer of the SETUP, JS8, RTTY, JTTY, WSPR, Mercury and XARA pages.
 
 | Component | Origin | Licence |
 |---|---|---|
@@ -4378,6 +4520,7 @@ serves from its own web UI, linked in the footer of the SETUP, JS8, RTTY, JTTY, 
 | WSPR protocol constants in `data/wspr-core.js` | WSJT-X — K1JT and the WSJT-X team | GPL-3.0 |
 | JTTY modem (`data/jtty-codec.js`, `data/jtty-modem.js`) — port of WSJT-X `lib/jtty` | WSJT-X — K1JT, K9AN and the WSJT-X team | GPL-3.0 |
 | Mercury ARQ engine, linked into `data/mercury-host.wasm`/`data/mercury-worker.js` | [Rhizomatica/mercury](https://github.com/Rhizomatica/mercury) — Rafael Diniz | GPL-3.0-or-later |
+| XARA modem and host protocol (`data/vara-modem.js`, `data/vara-host.js`) — port of xara | [x0rro/xara](https://github.com/x0rro/xara) — x0rro; pinned in `third_party/xara/` | MIT |
 | FreeDV data modem, linked into the same Mercury WASM modules | [Codec 2 / FreeDV](https://github.com/drowe67/codec2) — David Rowe and contributors | LGPL-2.1 |
 | FFTW 3.3.10, linked into `js8-decoder.wasm` | [fftw.org](https://fftw.org/); source vendored in `third_party/fftw/` | GPL-2.0-or-later |
 | Eigen 3.4 | [libeigen/eigen](https://gitlab.com/libeigen/eigen) | MPL-2.0, plus BSD-3 and Apache-2.0 files |
@@ -4390,6 +4533,8 @@ serves from its own web UI, linked in the footer of the SETUP, JS8, RTTY, JTTY, 
 
 Icom is a registered trademark of Icom Incorporated. WIFILT is an independent software
 project and is not affiliated with, endorsed by, or sponsored by Icom Incorporated.
+VARA is a trademark of its author, EA5HVK; XARA is an independent, compatible
+implementation, not affiliated with or endorsed by its author.
 
 ---
 
