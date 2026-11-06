@@ -39,6 +39,11 @@ while IFS= read -r -d '' file; do
   case "$(basename "$file")" in
     watch.html*|watch.js*|watch.css*)
       [[ "${WIFILT_NATIVE_ASSETS:-0}" == 1 ]] || continue ;;
+    # XARA (VARA-compatible) modem: ~50 kB gz that the current filesystem
+    # partition has no room for and no page uses yet. Staged on request until
+    # the partition grows (docs/vara-implementace.md, phase 0).
+    vara-*)
+      [[ "${WIFILT_VARA_ASSETS:-0}" == 1 || "${WIFILT_NATIVE_ASSETS:-0}" == 1 ]] || continue ;;
   esac
   case "$file" in
     */.minified-js.sha256) continue ;;
