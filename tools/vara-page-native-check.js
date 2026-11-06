@@ -80,6 +80,19 @@ async function main() {
     const sessionInfo = await (await fetch(`http://127.0.0.1:${port}/vara/session`)).json().catch(() => ({}));
     check("the lease is held under /vara/session as role vara", sessionInfo.role === "vara", JSON.stringify(sessionInfo).slice(0, 160));
 
+    // ---- Enable radio TX: off in a fresh browser, and then nothing keys ------
+    check("Enable radio TX is off in a fresh browser", (await evaluate(`document.getElementById("txSafety").checked`)) === false);
+    const before = count(/AUD1 \| TX ready/g);
+    await evaluate(`document.getElementById("tuneButton").click()`);
+    const toast = await waitFor(`(() => { const t = document.querySelector(".tx-pledge-toast"); return t && !t.hidden; })()`, 2000);
+    await sleep(1500);
+    check("TUNE without it: the pledge toast, nothing keyed", toast && (await text("stState")) !== "TUNE" && count(/AUD1 \| TX ready/g) === before,
+      await text("stState"));
+    await evaluate(`document.querySelector(".tx-pledge-toast button").click()`);
+    await evaluate(`document.getElementById("txSafety").click()`);
+    check("ticking it is stored where the JS8 and WSPR pages read it",
+      await evaluate(`JSON.parse(localStorage.getItem("wifilt.data.js8-settings")).modems.js8call.txSafetyAccepted === true`));
+
     // ---- TUNE: one keyed stretch, one transmission ---------------------------
     let drained = count(/AUD1 \| TX drained/g);
     await evaluate(`document.getElementById("tuneButton").click()`);

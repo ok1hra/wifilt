@@ -12,7 +12,7 @@
 // waterfall runs off it, and LISTEN decides only whether this station answers.
 (function () {
   "use strict";
-  const VARA_WORKER_REV = "c40d1221"; // stamped from /vara-worker.js
+  const VARA_WORKER_REV = "93ff9b79"; // stamped from /vara-worker.js
   const audioWsPort = () => Number((window.WIFILT_PORTS || {}).audio) || 83;
   const SETTINGS_URL = "/vara-settings.json";
   const DEFAULTS = {bw: 2300, p2p: true, driveDb: -5, latencyMs: 350, slotMs: 200, prebufferMs: 120};
@@ -36,6 +36,49 @@
     s.prebufferMs = num(s.prebufferMs, 20, Math.max(20, s.slotMs - 40), DEFAULTS.prebufferMs);
     return s;
   }
+  // "Enable radio TX": the pledge the JS8 and WSPR pages share, in this
+  // browser's Js8Settings blob. Read fresh every time, so ticking it on either
+  // of the other pages counts here at once (the storage event re-renders).
+  function txEnabled() {
+    try {
+      const js8 = Js8Settings.load(localStorage).settings.modems.js8call;
+      return Boolean(js8 && js8.txSafetyAccepted);
+    } catch (_e) { return false; }
+  }
+  function setTxEnabled(on) {
+    try {
+      const all = Js8Settings.load(localStorage).settings;
+      all.modems.js8call.txSafetyAccepted = on;
+      Js8Settings.save(localStorage, all);
+    } catch (_e) { /* private mode: the page still follows the box for this load */ }
+  }
+  let txOn = false;
+  function applyTxEnabled() {
+    const on = txEnabled();
+    dom.txSafety.checked = on;
+    if (on === txOn) return;
+    txOn = on;
+    post({type: "configure", settings: {txEnabled: on}});
+    renderStatus();
+  }
+  // Where the TxPledge toast's GO TO SETTING lands.
+  function revealTxSafety() {
+    const section = dom.txSafety.closest("details[data-section]");
+    if (section) section.open = true;
+    const row = dom.txSafety.closest("label") || dom.txSafety;
+    row.scrollIntoView({behavior: "smooth", block: "center"});
+    row.classList.add("setting-reveal");
+    setTimeout(() => row.classList.remove("setting-reveal"), 2000);
+  }
+  const PLEDGE = window.TxPledge ? TxPledge.PLEDGE : "confirm Enable radio TX";
+  // A control that keys: blocked by `reasons`, or -- when TX is all that is
+  // missing -- left clickable for the pledge toast to explain (tx-pledge.js).
+  function gateTx(el, blocked) {
+    const reasons = blocked ? ["blocked"] : txOn ? [] : [PLEDGE];
+    if (window.TxPledge) TxPledge.gate(el, reasons);
+    else el.disabled = reasons.length > 0;
+  }
+
   async function loadSettings() {
     try {
       const r = await fetch(SETTINGS_URL, {cache: "no-store"});
@@ -75,7 +118,7 @@
     worker.onmessage = event => onWorker(event.data || {});
     worker.onerror = event => { setAud1("error", "error"); hostLog(`worker error: ${event.message || event}`, "vara-log-error"); };
     worker.postMessage({type: "start", wsPort: audioWsPort(), token: lease.token(),
-      settings: {...settings, mycall: myCall, listen: Boolean(myCall) && lease.isArmed()}});
+      settings: {...settings, mycall: myCall, listen: Boolean(myCall) && lease.isArmed(), txEnabled: txOn}});
   }
   function stopWorker() {
     if (!worker) return;
@@ -111,6 +154,10 @@
       case "event":
         if (m.kind === "unableToConnect") chatSystem("no answer");
         else if (m.kind === "timedOut") chatSystem("link timed out");
+        else if (m.kind === "txDisabled") {
+          chatSystem("nothing sent: Enable radio TX is off (SETTINGS)");
+          hostLog("refused: radio TX not enabled", "vara-log-error");
+        }
         else if (m.kind === "needs16k") {
           chatSystem("FM Wide needs the 16 kHz radio link — switch it on in SETTINGS › ADVANCED");
           hostLog("FM Wide: the firmware offers no 16 kHz stream (16 kHz radio link is off)", "vara-log-error");
@@ -158,20 +205,23 @@
       dom.listenState.textContent = s.listen ? "LISTENING" : "LISTEN OFF";
     }
     dom.stLoad.classList.toggle("warn", Boolean(s && s.load > 0.8));
-    dom.connectButton.disabled = !worker || !haveCall || !idle || !dom.peerCall.value.trim();
+    gateTx(dom.connectButton, !worker || !haveCall || !idle || !dom.peerCall.value.trim());
     dom.disconnectButton.disabled = !worker || idle;
     dom.abortButton.disabled = !worker || idle;
     // CQ frames are VARA HF's; FM's go over AX.25 in record 16, not ported.
-    dom.cqButton.disabled = !worker || !haveCall || !idle || Boolean(s && s.ptt) || Boolean(s && s.mode === "fm");
+    gateTx(dom.cqButton, !worker || !haveCall || !idle || Boolean(s && s.ptt) || Boolean(s && s.mode === "fm"));
     dom.bwSelect.disabled = !worker || !idle;
     dom.sessionSelect.disabled = !worker || !idle;
-    dom.listenToggle.disabled = !worker || !haveCall;
+    // Switching LISTEN off is always allowed; on needs the pledge.
+    if (dom.listenToggle.checked) { if (window.TxPledge) TxPledge.gate(dom.listenToggle, []); dom.listenToggle.disabled = !worker || !haveCall; }
+    else gateTx(dom.listenToggle, !worker || !haveCall);
     // With a client on the data port the link's byte stream is the client's.
     const ownStream = !(s && s.host);
     dom.chatInput.disabled = !worker || !linked || !ownStream;
     dom.chatSend.disabled = !worker || !linked || !ownStream;
     dom.chatInput.placeholder = ownStream ? "Type, Enter sends once connected" : "The link's data belongs to the Winlink client";
-    dom.tuneButton.disabled = !worker || (!idle && !(s && s.tuning));
+    if (s && s.tuning) { if (window.TxPledge) TxPledge.gate(dom.tuneButton, []); dom.tuneButton.disabled = !worker; }
+    else gateTx(dom.tuneButton, !worker || !idle);
     dom.tuneButton.classList.toggle("active", Boolean(s && s.tuning));
     dom.tuneButton.textContent = s && s.tuning ? "STOP TUNE" : "TUNE";
     dom.connectSummary.textContent = s ? (linked ? `linked with ${s.peer}` : s.state === "Calling" ? `calling ${dom.peerCall.value.trim().toUpperCase()}` : "") : "";
@@ -283,7 +333,7 @@
       "connectButton", "disconnectButton", "abortButton", "cqButton", "connectSummary",
       "stState", "stPeer", "stSpeed", "stSn", "stBusy", "stBuffer", "stLoad", "stHost",
       "chatLog", "chatForm", "chatInput", "chatSend", "hostLog",
-      "setDrive", "setLatency", "setSlot", "setPrebuffer", "setLink16k", "tuneButton", "settingsSave", "settingsSaveStatus",
+      "txSafety", "setDrive", "setLatency", "setSlot", "setPrebuffer", "setLink16k", "tuneButton", "settingsSave", "settingsSaveStatus",
       "settingsSummary", "takeoverNotice", "takeoverDetail", "takeoverButton"].forEach(id => { dom[id] = byId(id); });
 
     if (typeof Spectrum !== "undefined") {
@@ -330,6 +380,10 @@
     dom.chatForm.addEventListener("submit", onChatSend);
     dom.tuneButton.addEventListener("click", () => post({type: "tune", on: !(status && status.tuning)}));
     dom.settingsSave.addEventListener("click", () => saveSettings());
+    txOn = txEnabled(); dom.txSafety.checked = txOn;
+    if (window.TxPledge) TxPledge.install(revealTxSafety);
+    dom.txSafety.addEventListener("change", () => { setTxEnabled(dom.txSafety.checked); applyTxEnabled(); });
+    window.addEventListener("storage", event => { if (!event.key || event.key.indexOf("js8") !== -1) applyTxEnabled(); });
 
     lease.onBusy(onBusy);
     lease.onLost(() => { stopWorker(); ownLease = false; setAud1("—"); status = null; renderStatus(); });

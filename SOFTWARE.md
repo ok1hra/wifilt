@@ -3861,7 +3861,7 @@ page, and for FM set the radio to **FM-D**.
 **LISTEN**, at the right, decides whether this station answers a station that connects to it.
 With it on, the station may transmit at any moment, unattended. With it off, XARA transmits
 only when you connect, call CQ or TUNE. It is off by default, and it stays off until a callsign
-is set in SETUP → Identity.
+is set in SETUP → Identity and **Enable radio TX** is ticked ([section 8b.7](#8b7-settings)).
 
 ### 8b.3 CONNECT, CQ and the terminal
 
@@ -3904,7 +3904,8 @@ VARA on a PC, for example `pat connect varahf:///OK0XXX`. One client per port. I
 socket closes, both close.
 
 **The XARA page has to be open.** The modem runs in the browser, not on the ESP32. With no XARA
-page holding the radio, the interface refuses the client. Leave the page open, with the
+page holding the radio, the interface refuses the client. With **Enable radio TX** off in that
+browser, the client can talk to the modem but every connection is aborted before it keys. Leave the page open, with the
 screen on, for as long as the client needs the modem. The terminal reports `Winlink client …
 attached` and `Winlink client left`.
 
@@ -3919,10 +3920,11 @@ Wide says so in the terminal and does not transmit. On the 16 kHz stream the wat
 
 ### 8b.7 SETTINGS
 
-Stored on the interface, not in the browser.
+Stored on the interface, not in the browser, except Enable radio TX.
 
 | Setting | Meaning |
 |---|---|
+| **Enable radio TX** | the same pledge as on the JS8Call-ICOM and WSPR pages, *"I will use safe RF power and a suitable load/antenna"*, kept in this browser and shared with them. Off (the default), XARA transmits nothing: CONNECT, CQ, TUNE and LISTEN show a notice with **GO TO SETTING**, and a Winlink client's CONNECT is aborted before a single sample reaches the radio. Unticking it stops TUNE and LISTEN at once; a link still up is aborted the next time it would key. |
 | **Drive** | transmit level in dB below full scale, −30 to 0, default −5 |
 | **TUNE** | a steady two-tone carrier for up to 20 s, to set the radio's ALC and power; press again to stop |
 | **Audio round trip** *(ADVANCED)* | ms from this modem's output back to its own input (radio, network and TX slot together), default 350. The modem times its replies on it. |
@@ -3930,7 +3932,8 @@ Stored on the interface, not in the browser.
 | **TX prebuffer** *(ADVANCED)* | ms of audio queued before the radio keys, default 120, below the slot |
 | **16 kHz radio link** *(ADVANCED)* | see [section 8b.6](#8b6-fm-wide-and-the-16-khz-radio-link) |
 
-**SAVE** writes them. Mode and Session are saved as soon as they change.
+**SAVE** writes them. Mode and Session are saved as soon as they change. Enable radio TX is
+not saved on the interface but in this browser, as on the other pages, and applies at once.
 
 ### 8b.8 Latency, and what is not there
 
@@ -4466,7 +4469,7 @@ at that moment. They are gathered here so nothing is a surprise.
 | **JS8 SEND LATER** | may transmit a deferred message at any time, without you present |
 | **TUNE** on either DATA page | keys a modulated carrier until its watchdog stops it |
 | **Mercury** | keys for as long as a transfer or a CQ round takes |
-| **XARA** | keys for each ARQ frame of a link, a CQ frame or TUNE; with LISTEN on it answers a connecting station by itself, and it keys for a Winlink client on TCP 8300/8301 ([section 8b](#8b-data--xara-vara-compatible)). *Enable radio TX* does not govern it; LISTEN off and closing the page do. |
+| **XARA** | keys for each ARQ frame of a link, a CQ frame or TUNE; with LISTEN on it answers a connecting station by itself, and it keys for a Winlink client on TCP 8300/8301 ([section 8b](#8b-data--xara-vara-compatible)). Governed by *Enable radio TX* like JS8 and WSPR, including the Winlink client's traffic. |
 | **RTTY-ICOM** | keys when you press Enter in its composer — as FSK, or as AFSK audio, depending on the radio's mode ([section 6.1](#61-what-the-page-is)) |
 | **QRPLog macros** | key CW or RTTY when you press Enter — including through the RTTY palette in a data mode ([section 3.5](#35-cw-and-rtty-macros)) |
 | **PA — TUNE** | starts the amplifier's own tuning cycle ([section 3.14](#314-pa--the-linear-amplifier)) |
@@ -4480,8 +4483,8 @@ a reload: a running beacon is never silently stolen by a browser refresh.
 
 Three things govern all of it:
 
-1. **Enable radio TX** is the master switch, shared by the JS8 and WSPR pages and settable
-   from either. With it off, none of the above can transmit and their indicators go grey. The
+1. **Enable radio TX** is the master switch, shared by the JS8, WSPR and XARA pages and
+   settable from any of them. With it off, none of the above can transmit and their indicators go grey. The
    tickbox carries the pledge *"I will use safe RF power and a suitable load/antenna."*
 2. **Unattended operation needs a live browser.** There is no hard air-time cap — an
    automatic station has to be able to send a long message without being cut off — so instead

@@ -153,7 +153,7 @@ function run(name, o) {
         else if (msg.type === "event") inbox.events.push(msg.kind);
       }},
       {mycall: call, bw: o.bw || 2300, latencyMs, slotMs: p.slotMs, prebufferMs: p.prebufferMs,
-        p2p: o.p2p !== false, listen: i === 1});
+        p2p: o.p2p !== false, listen: i === 1, txEnabled: true});
     core.onHello(aud1.hello);
     return {n, aud1, core, inbox, air: new Float32Array(R * (o.seconds + 5)), rxQueue: [], held: 0, t8: 1000 + i * 37,
       rxDelay8: Math.round(p.rxDelayMs * kHz), txDelay8: Math.round(p.radioTxDelayMs * kHz), epoch: null};
@@ -264,6 +264,47 @@ if (!only || "fm wide without".includes(only) || "fm wide without the 16 kHz lin
   check("fm wide without the 16 kHz link: ignores 8 kHz audio", core.rx8 === 0);
 }
 for (const [name, o, expectFail] of cases) if (!only || name.includes(only)) chat(name, o, expectFail);
+
+// "Enable radio TX" off (the default): nothing the page asks for keys, and
+// whatever keys anyway -- a Winlink client's CONNECT -- is dropped before a
+// single packet and the link aborted. Switched on, TUNE goes out.
+if (!only || "tx not enabled".includes(only)) {
+  const sim = {nowMs: 0}, events = [], lines = [];
+  const aud1 = new FakeAud1("A", sim, 8000);
+  const core = new VaraCore({M, H, aud1, wallNow: () => sim.nowMs, monoNow: () => sim.nowMs,
+    post: m => { if (m.type === "event") events.push(m.kind); else if (m.type === "line") lines.push(m.line); }},
+    {mycall: "N0CALL", bw: 2300, listen: true});
+  core.onHello(aud1.hello);
+  let t8 = 0;
+  const feed = ms => {
+    for (let end = sim.nowMs + ms; sim.nowMs < end; sim.nowMs += 20, t8 += 160)
+      core.onRx(new Float32Array(160), {firstSample: BigInt(t8), sampleRate: 8000, flags: t8 === 0 ? 1 : 0});
+  };
+  feed(500);
+  check("tx not enabled: LISTEN stays off", core.station.listenOn === false);
+  core.command("CONNECT N0CALL N1CALL");
+  check("tx not enabled: the page's CONNECT is refused", lines[lines.length - 1] === "WRONG" && events.includes("txDisabled"),
+    lines.slice(-2).join(" | "));
+  core.tune(true);
+  feed(1000);
+  check("tx not enabled: TUNE does not key", !core.station.tuning() && aud1.transmissions === 0);
+  events.length = 0;
+  core.onHost({type: "vara.host", ev: "open", ch: "cmd", peer: "10.0.0.9"});
+  core.onHost({type: "vara.host", ch: "cmd", b64: Buffer.from("CONNECT N0CALL N1CALL\r").toString("base64")});
+  feed(4000);
+  check("tx not enabled: a Winlink client's CONNECT never reaches the radio", aud1.transmissions === 0,
+    `${aud1.transmissions} transmissions`);
+  check("tx not enabled: and is aborted, with txDisabled", events.includes("txDisabled") && core.station.link().state !== "Calling",
+    `${core.station.link().state} ${events.join(",")}`);
+  for (let i = 0; i < 60 && core.station.link().state === "Closing"; i++) feed(500);
+  check("tx not enabled: the aborted link settles", core.station.link().state !== "Closing", core.station.link().state);
+  core.configure({txEnabled: true});
+  core.tune(true);
+  feed(1500);
+  check("tx enabled: TUNE keys", core.station.tuning() && aud1.transmissions === 1, `${aud1.transmissions} transmissions`);
+  core.configure({txEnabled: false});
+  check("tx switched off: TUNE stops", !core.station.tuning());
+}
 
 // A Winlink client on A's TCP ports: commands and data in through the relay,
 // replies and the far end's data back out on the right socket -- and none of

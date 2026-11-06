@@ -134,6 +134,11 @@
     <div class="settings vara-settings">
       <p class="settings-group-title">Transmit</p>
       <label>Drive <input id="setDrive" type="number" min="-30" max="0" step="1"><small>dB below full scale, default −5 — set the radio's ALC with TUNE</small></label>
+      <label class="safety-setting">Enable radio TX <input id="txSafety" type="checkbox">
+        <small>I will use safe RF power and a suitable load/antenna. The same confirmation as on the
+               JS8Call-ICOM and WSPR pages, kept in this browser. Off: XARA does not transmit at all,
+               not even for a Winlink client.</small>
+      </label>
       <div class="vara-actions">
         <button id="tuneButton" type="button" disabled title="A steady two-tone carrier for up to 20 s, to set ALC and power">TUNE</button>
         <span id="tuneState" class="muted"></span>
@@ -176,9 +181,11 @@
 <script src="/lan-gate.js?v=75f2464b"></script>
 <script src="/fw-version.js?v=45bfdba6"></script>
 <script src="/station-identity.js?v=a1a20249"></script>
+<script src="/js8-settings.js?v=b1e44675"></script>
+<script src="/tx-pledge.js?v=5750feea"></script>
 <script src="/mercury-session.js?v=bd9d947d"></script>
 <script src="/spectrum.js?v=7fafbbb5"></script>
 <script src="/audio-health.js?v=9efe092e"></script>
-<script src="/vara.js?v=e967e14d"></script>
+<script src="/vara.js?v=ecc092d5"></script>
 </body>
 </html>

@@ -180,7 +180,7 @@
 
   // ---- the core -------------------------------------------------------------
   const DEFAULTS = {mycall: "", bw: 2300, latencyMs: 350, slotMs: 200, prebufferMs: 120, driveDb: -5, gain: 1,
-    listen: false, p2p: true};
+    listen: false, p2p: true, txEnabled: false};
   const STALL_MS = 250, STALL_KEEP_MS = 150, STALL_MAX_MS = 3000, GAP_MAX_S = 5;
   class VaraCore {
     // deps: {M: vara-modem, H: vara-host, aud1, post(msg, transfer), wallNow(), monoNow()}
@@ -233,9 +233,9 @@
       this.expect = null; this.lastAdvance = 0; this.stalled = 0; this.ready = false;
       this.cpuMs = 0; this.audioMs = 0; this.lastStatus = 0; this.lastStatusKey = "";
       this.rx8 = 0; this.filled = 0; this.trimmed = 0;
-      this.fromPage = false;
+      this.fromPage = false; this.lastBlock = -Infinity;
       if (this.s.mycall) this.command("MYCALL " + this.s.mycall);
-      this.command("LISTEN " + (this.s.listen ? "ON" : "OFF"));
+      this.command("LISTEN " + (this.s.listen && this.s.txEnabled ? "ON" : "OFF"));
       this.command(this.s.p2p ? "P2P SESSION" : "WINLINK SESSION");
     }
     post(msg, transfer) { this.d.post(msg, transfer); }
@@ -341,7 +341,8 @@
       const rx = this.up.run(x8), out = new Float64Array(rx.length);
       this.tnc.process(rx, out);
       if (this.tcp.held || this.tcp.pending.length) this.feedHostData();
-      this.tx.feed(out, this.station.keyed);
+      if (this.s.txEnabled) this.tx.feed(out, this.station.keyed);
+      else if (this.station.keyed.indexOf(1) !== -1 || this.tx.active) this.blockTx();
       this.cpuMs += this.d.monoNow() - t0; this.audioMs += x8.length * 1000 / this.rate;
       this.status(false);
     }
@@ -355,7 +356,7 @@
         tuning: st.tuning(), mycall: (st.config().host.mycalls || [])[0] || "", listen: st.listenOn,
         p2p: Boolean(st.config().p2p), version: st.constructor.VERSION, load: this.audioMs ? this.cpuMs / this.audioMs : 0,
         filledMs: this.filled * 1000 / this.rate, trimmedMs: this.trimmed * 1000 / this.rate, txFaults: this.tx.faults,
-        rate: this.rate, rateOk: this.rateOk,
+        rate: this.rate, rateOk: this.rateOk, txEnabled: Boolean(this.s.txEnabled),
         host: this.tcp.cmd || this.tcp.data ? this.tcp.peer || "connected" : ""};
       const key = JSON.stringify(s);
       if (!force && key === this.lastStatusKey && now - this.lastStatus < 1000) return;
@@ -363,23 +364,48 @@
       this.cpuMs = 0; this.audioMs = 0;
       this.post(s);
     }
+    // "Enable radio TX" (the pledge the JS8 and WSPR pages share) is off: the
+    // backstop for whatever keys anyway -- a Winlink client's CONNECT, a call
+    // answered with LISTEN switched on from the TCP port. Not one sample goes
+    // to the radio: the transmission is dropped and the link aborted.
+    blockTx() {
+      this.tx.abort("radio TX not enabled");
+      this.tnc.uiAbort();
+      const now = this.d.monoNow();
+      if (now - this.lastBlock > 2000) this.post({type: "event", kind: "txDisabled"});
+      this.lastBlock = now;
+    }
+    // What the page itself would key with, refused up front while TX is off.
+    keys(line) { return /^\s*(CONNECT|CQFRAME|LISTEN\s+ON)\b/i.test(line); }
     // page -> modem
     command(line) {
       const c = this.H.parse(line);
       this.tnc.echo("> " + line);
       this.fromPage = true;
-      try { if (c) this.tnc.command(c); else this.tnc.say(this.H.R.wrong()); this.tnc.flush(); }
+      try {
+        if (!this.s.txEnabled && this.keys(line)) {
+          this.tnc.say(this.H.R.wrong());
+          this.post({type: "event", kind: "txDisabled"});
+        } else if (c) this.tnc.command(c); else this.tnc.say(this.H.R.wrong());
+        this.tnc.flush();
+      }
       finally { this.fromPage = false; }
       this.status(true);
     }
     send(bytes) { this.tnc.dataBytes(bytes); this.tnc.service(); this.status(true); }
-    tune(on) { this.tnc.uiTune(on); this.status(true); }
+    tune(on) {
+      if (on && !this.s.txEnabled) { this.post({type: "event", kind: "txDisabled"}); return; }
+      this.tnc.uiTune(on); this.status(true);
+    }
     drive(db) { this.s.driveDb = this.tnc.uiDrive(db); this.status(true); }
     abort() { this.tnc.uiAbort(); this.tx.abort("operator abort"); this.status(true); }
     configure(next) {
       Object.assign(this.s, next);
       if ("latencyMs" in next) { const lat = Math.round(this.s.latencyMs * FS / 1000); this.station.setTxLatency(lat, lat); }
       if ("driveDb" in next) this.drive(next.driveDb);
+      // Switched off: stop answering and stop any carrier now; a link still up
+      // is aborted by blockTx the moment it next keys.
+      if ("txEnabled" in next && !next.txEnabled) { this.tnc.uiTune(false); this.command("LISTEN OFF"); }
       this.status(true);
     }
     stop() { this.tx.abort("worker stop"); }

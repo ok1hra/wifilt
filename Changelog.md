@@ -11,6 +11,22 @@ published.
 
 ## Working tree — not committed
 
+**XARA obeys Enable radio TX.**
+
+* **What.** The XARA page has the *Enable radio TX* pledge in SETTINGS, the same browser-side
+  switch the JS8 and WSPR pages share (`Js8Settings` `txSafetyAccepted`). Off (the default in
+  a fresh browser), CONNECT, CQ, TUNE and LISTEN on show the `tx-pledge.js` notice with GO TO
+  SETTING instead of keying. Before this, XARA keyed regardless of it.
+* **Backstop in the worker.** With TX off the worker refuses the page's CONNECT/CQFRAME/LISTEN
+  ON (`WRONG`) and TUNE, starts with LISTEN off, and whatever keys anyway, such as a Winlink
+  client's CONNECT on TCP 8300 or a call answered after the client switched LISTEN on, is
+  dropped before the first AUD1 packet and the link aborted (`txDisabled` event). Unticking
+  the box stops TUNE and LISTEN at once.
+* **Checks.** `tools/vara-worker-test.js` "tx not enabled" (page commands refused, a client's
+  CONNECT never reaches the radio, TUNE keys once enabled and stops when disabled);
+  `tools/vara-page-native-check.sh` (TUNE in a fresh browser shows the notice and keys
+  nothing; ticking the box stores the shared pledge).
+
 **XARA: the manual and the licences (docs/vara-implementace.md, phase 7).**
 
 * **SOFTWARE.md.** New chapter 8b "DATA — XARA (VARA-compatible)": the page, LISTEN,
