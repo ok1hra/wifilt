@@ -11,6 +11,27 @@ published.
 
 ## Working tree — not committed
 
+**XARA (VARA-compatible) page: the modem on the radio (docs/vara-implementace.md, phase 3).**
+
+* **What.** DATA → XARA (`/vara.html`): waterfall, CONNECT/DISCONNECT/ABORT, CQ, LISTEN,
+  500/2300/2750 Hz, P2P/chat or Winlink timing, a text terminal, the host log, TUNE and drive.
+  The page sends the same VARA host commands a Winlink client would, so the TCP bridge of
+  phase 4 reuses the path.
+* **How.** `data/vara-worker.js` runs `HfStation` + `Tnc` on AUD1. The radio's RX sample clock
+  (`firstSample`) is the modem's clock, gaps are filled with silence; each keyed stretch of
+  output is one AUD1 transmission, kept a few packets ahead with `tx.extend` and ended with an
+  exact LAST. The station is told the whole audio round trip (default 350 ms).
+* **Limit.** VARA waits only so long for the *other* station: ~200 ms round trip with Winlink
+  timing, ~500 ms with P2P/chat. Calling out (Pat to an RMS) works; answering a Winlink-timing
+  caller does not with WIFILT's audio path. P2P/chat answer fine.
+* **Firmware.** `/vara/session` aliases of the one lease (`WifiltLease` in
+  `mercury-session.js`, which Mercury's own lease is now an instance of), `/vara-settings.json`
+  on `cfg`, carried by the config backup. XARA tab on every DATA page.
+* **Checks.** `tools/vara-worker-test.js` (two workers through a simulated firmware: prepare,
+  extend, FIRST/LAST, prebuffer and ring rules; µ-law, delays, Wi-Fi jitter and loss),
+  `tools/vara-page-native-check.sh` (the page against the native firmware: TUNE, CQ, repeated
+  calls, ABORT, settings, lease).
+
 **Flash layout: `cfg` moved to the end of the flash, +192 kB for the web assets.**
 
 * **What.** `app0` 0x160000 → 0x130000 (firmware ~1.06 MB, ~150 kB headroom), `spiffs`

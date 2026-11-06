@@ -4211,14 +4211,19 @@
       return true;
     }
     // Key the TX bursts into `output` and return the input with keyed samples zeroed (scheduler.rs key_block).
+    // `keyed` (WIFILT): 1 for every output sample the transmitter is keyed for, so a caller that
+    // streams bursts as separate transmissions (AUD1 tx.prepare) finds their exact ends.
     keyBlock(t0, input, output) {
       const fed = Float64Array.from(input);
+      if (!this.keyed || this.keyed.length !== output.length) this.keyed = new Uint8Array(output.length);
+      const keyed = this.keyed;
       for (let i = 0; i < output.length; i++) {
         const r = this.tx.next(t0 + i, this.reports);
-        if (r === null) { output[i] = 0; continue; }
+        if (r === null) { output[i] = 0; keyed[i] = this.tx.ptt ? 1 : 0; continue; }
         if (r.last) this.burstDone(r.kind, r.start, r.end);
         output[i] = r.v;
         fed[i] = 0;
+        keyed[i] = 1;
       }
       return fed;
     }

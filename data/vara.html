@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XARA — WIFILT</title>
+<!-- XARA is a VARA-compatible modem (x0rro/xara, MIT, ported to JavaScript in
+     data/vara-modem.js). The page never calls itself VARA: that name is
+     EA5HVK's trademark, and this is an independent implementation that talks
+     to it. Shares data.css with the other DATA pages; vara.css carries only
+     what is its own. -->
+<link rel="stylesheet" href="/data.css?v=3aad2ade">
+<link rel="stylesheet" href="/vara.css?v=7752c7d7">
+</head>
+<body class="lan-gate-checking">
+
+<header class="site-topbar">
+  <nav class="tabs" aria-label="Primary">
+    <details class="tab brand-about" style="padding:0;position:relative">
+      <summary title="WIFILT - Web interface for Icom LAN transceivers" aria-label="About WIFILT" style="display:flex;align-items:center;list-style:none;cursor:pointer"><svg viewBox="0 -.01 14.79 16.93" fill="currentColor" aria-hidden="true" style="height:26px;width:auto;display:block"><path d="m6.77 .08c-.23-.06-.44-.09-.66-.08c-.96 .04-1.84 .7-2.1 1.67l-2.14 8.03l1.03-1.19a.68 .68 0 0 1 .13-.11l1.75-6.52c.16-.59 .65-1 1.21-1.07c.19-.03 .38-.02 .57 .03l6.36 1.71c.78 .21 1.23 .99 1.02 1.78l-2.86 10.72c-.21 .79-.99 1.24-1.78 1.03l-3.63-.97a.68 .68 0 0 1-.43 .09l-.05 .13a.68 .68 0 0 1-.39 .37l4.29 1.14c1.19 .32 2.43-.39 2.75-1.58l2.87-10.72c.32-1.2-.38-2.43-1.58-2.76l-6.36-1.7zm5.41 3.74l-5.62-1.49c-.08-.02-.17-.03-.25-.02c-.24 .03-.45 .2-.51 .45l-1.55 5.79l.13 .07a.68 .68 0 0 1 .25 1.03l-.32 .44l.31 .15a.68 .68 0 0 1 .35 .49l.19 .1l.35 .17a.68 .68 0 0 1 .37 .48l.02 .02a.68 .68 0 0 1 .03 .02l.19 .09a.68 .68 0 0 1 .34 .51a.68 .68 0 0 1 .12 .11l3.12 .85c.33 .09 .68-.12 .77-.45l2.15-8.04c.09-.33-.11-.68-.44-.76zm-8.71 5.13v.01l-.04 .01l0-.01l-1.13 1.29l-1.13 1.32l-.18-.11l-.19-.1l.28-.28l.26-.3l-.2-.11l-.19-.1l.09-.1l.1-.09l-.37-.19l-.37-.21l-.2 .19l-.2 .18l.19 .1l.19 .11l-.1 .09l-.09 .09l.19 .1l.19 .11l-.18 .19l-.19 .21l.2 .1l.19 .12l-.17 .19l-.18 .19l.2 .12l.21 .11l-.18 .22l-.17 .2l.21 .12l.2 .12l-.16 .22l-.16 .21l1.76 1.03l1.78 1.03l.11-.25l.13-.25l.2 .11l.2 .11l.17-.38l.17-.37l.21 .11l.22 .11l.36-.92l.36-.94l-.19-.09l-.18-.1l.06-.13l.05-.12l-.18-.1l-.18-.09l-.17 .39l-.17 .38l-.19-.11l-.2-.09l.25-.51l.25-.48l-.35-.18l-.36-.18l-.2 .35l-.19 .35l-.18-.1l-.19-.09l.28-.46l.28-.46l-.33-.18l-.35-.17l-.32 .43l-.3 .45l-.18-.1l-.2-.1l.74-.97l.73-.97l-.3-.14l-.32-.14zm3.08 4.28l-.23 .6l-.15 .42l.46 .12c.18 .04 .37-.06 .42-.24l.1-.37c.04-.19-.07-.38-.25-.43l-.35-.1zm2.43 .65c-.05-.01-.1-.01-.14 0c-.14 .02-.25 .1-.29 .24l-.09 .38c-.05 .19 .06 .37 .24 .42l.52 .15c.18 .05 .37-.07 .42-.25l.1-.38c.05-.18-.05-.37-.24-.42l-.52-.14z"/></svg></summary>
+      <div style="position:absolute;z-index:80;top:calc(100% + 5px);left:0;width:min(300px,calc(100vw - 16px));padding:12px 14px;border:1px solid #4b756c;border-radius:7px;background:#0c1a18;box-shadow:0 16px 44px #000c;text-align:center">
+        <a href="https://github.com/ok1hra/wifilt" target="_blank" rel="noopener" style="display:block;color:#e8f3ee;text-decoration:none"><b style="display:block;font-size:19px;font-weight:800;letter-spacing:.14em">WIFILT</b><span style="display:block;margin-top:5px;font-size:11px;color:#8ba59d">Web interface for Icom LAN transceivers</span></a>
+        <a href="https://remoteqth.com" target="_blank" rel="noopener" style="display:inline-block;margin-top:8px;font-size:11px;color:#8ba59d;text-decoration:none">by RemoteQTH.com</a>
+      </div>
+    </details>
+    <script>document.addEventListener("click",function(e){var b=document.querySelector(".brand-about");if(b.open&&!b.contains(e.target))b.open=false;});</script>
+    <a class="tab" href="/log" target="_blank" rel="noopener">QRPLog</a><a class="tab" href="/dxc.html" onclick="window.open(this.href,'DXC','width=600,height=750,left=0,top=0,menubar=no,location=no,status=no'); return false;">DXC</a>
+    <a class="tab tab-active" href="/data" title="JS8Call-ICOM, WSPR, Mercury and XARA over ICOM-LAN">DATA</a><a class="tab" href="/setup" target="_blank" rel="noopener">SETUP</a>
+    <a class="tab" href="/datasync" target="_blank" rel="noopener">LOGSYNC</a><a class="tab bd-nav" href="/bd" target="_blank" rel="noopener" hidden>BD</a>
+    <span id="topbarFw" class="topbar-fw"></span>
+  </nav>
+  <!-- Its own lease under /vara/session, like Mercury's under /mercury/session:
+       the same single firmware record, so XARA and any other DATA page never
+       transmit over each other. -->
+  <nav class="subtabs" aria-label="DATA mode">
+    <a class="subtab" href="/data">JS8Call-ICOM</a><a class="subtab" href="/rtty.html">RTTY-ICOM</a><a class="subtab" href="/jtty.html">JTTY</a><a class="subtab" href="/wspr.html">WSPR</a><a class="subtab" href="/mercury.html">Mercury</a><a class="subtab subtab-active" href="/vara.html" title="XARA, a VARA-compatible modem">XARA</a>
+  </nav>
+</header>
+
+<header class="radio-bar">
+  <div class="trx-control">
+    <span class="trx-frequency" id="trxFrequency" title="Tune the radio from its own controls or another DATA page">
+      <span><small id="trxSlotLabel">TRX</small><b id="trxFrequencyValue">--.---.---</b></span><span class="unit">MHz</span>
+    </span>
+  </div>
+  <span id="trxMode" class="trx-mode">---</span>
+  <span id="radioModel" class="radio-model" title="Model reported by the radio itself">--</span>
+  <span id="aud1State" class="pill aud1-state" title="The audio channel to the radio.">AUD1 —</span>
+  <span id="linkState" class="live">● OFFLINE</span>
+  <span class="spacer"></span>
+  <!-- LISTEN: may this station answer a CONNECT addressed to it -- and so key
+       the transmitter at any moment, unattended. Off by default. -->
+  <label class="listen-toggle" title="LISTEN on: this station answers a station that connects to it, and may transmit at any moment. LISTEN off: it only transmits when you connect or call CQ.">
+    <input id="listenToggle" type="checkbox" disabled>
+    <span id="listenState" class="muted">LISTEN OFF</span>
+  </label>
+</header>
+
+<main class="data-page vara-page">
+
+  <details class="compact-section spectrum-section" data-section="spectrum" open>
+    <summary><span>Waterfall</span><span id="spectrumSummary" class="summary-status">RX 300–3000 Hz</span></summary>
+    <div id="waterfall" class="waterfall" title="Receiver audio. Blank while this station transmits.">
+      <canvas id="waterfallCanvas" width="1024" height="64"></canvas>
+      <canvas id="waterfallOverlay" width="1024" height="64"></canvas>
+    </div>
+  </details>
+
+  <details class="compact-section" data-section="connect" open>
+    <summary><span>CONNECT</span><span id="connectSummary" class="summary-status"></span></summary>
+    <div class="vara-connect">
+      <label class="call-field">My callsign
+        <b id="myCall" class="vara-mycall" title="Set in SETUP → Identity">—</b>
+      </label>
+      <label class="call-field">Station
+        <input id="peerCall" type="text" placeholder="OK2XYZ" maxlength="10" disabled autocapitalize="characters" spellcheck="false">
+      </label>
+      <label class="call-field">Bandwidth
+        <select id="bwSelect" disabled>
+          <option value="500">500 Hz</option>
+          <option value="2300" selected>2300 Hz</option>
+          <option value="2750">2750 Hz</option>
+        </select>
+      </label>
+      <label class="call-field">Session
+        <select id="sessionSelect" disabled title="P2P / chat timing waits longer for the other station's reply. Winlink timing is what an RMS gateway expects.">
+          <option value="p2p" selected>P2P / chat</option>
+          <option value="winlink">Winlink</option>
+        </select>
+      </label>
+      <div class="vara-actions">
+        <button id="connectButton" class="primary" type="button" disabled>CONNECT</button>
+        <button id="disconnectButton" type="button" disabled>DISCONNECT</button>
+        <button id="abortButton" class="secondary" type="button" disabled title="Drop the link at once, without the closing handshake">ABORT</button>
+        <button id="cqButton" type="button" disabled title="Call CQ: a short unconnected frame with this callsign">CQ</button>
+      </div>
+    </div>
+  </details>
+
+  <details class="compact-section" data-section="status" open>
+    <summary><span>STATUS</span></summary>
+    <div id="varaStatus" class="vara-status">
+      <div><small>STATE</small><b id="stState">—</b></div>
+      <div><small>STATION</small><b id="stPeer">—</b></div>
+      <div><small>SPEED</small><b id="stSpeed">—</b></div>
+      <div><small>S/N</small><b id="stSn">—</b></div>
+      <div><small>CHANNEL</small><b id="stBusy">—</b></div>
+      <div><small>TX QUEUE</small><b id="stBuffer">—</b></div>
+      <div><small>MODEM LOAD</small><b id="stLoad" title="Share of real time the modem needs. Above about 80 % it starts to fall behind the radio.">—</b></div>
+    </div>
+  </details>
+
+  <details class="compact-section" data-section="chat" open>
+    <summary><span>TERMINAL</span><span id="chatSummary" class="summary-status"></span></summary>
+    <div class="vara-chat">
+      <pre id="chatLog" class="vara-chat-log" aria-live="polite"></pre>
+      <form id="chatForm" class="vara-chat-input">
+        <input id="chatInput" type="text" autocomplete="off" spellcheck="false" placeholder="Type, Enter sends once connected" disabled>
+        <button id="chatSend" class="primary" type="submit" disabled>SEND</button>
+      </form>
+    </div>
+  </details>
+
+  <details class="compact-section" data-section="hostlog">
+    <summary><span>HOST LOG</span><span class="summary-status">what a VARA host application would see</span></summary>
+    <pre id="hostLog" class="vara-host-log"></pre>
+  </details>
+
+  <details class="compact-section" data-section="settings">
+    <summary><span>SETTINGS</span><span id="settingsSummary" class="summary-status"></span></summary>
+    <div class="settings vara-settings">
+      <p class="settings-group-title">Transmit</p>
+      <label>Drive <input id="setDrive" type="number" min="-30" max="0" step="1"><small>dB below full scale, default −5 — set the radio's ALC with TUNE</small></label>
+      <div class="vara-actions">
+        <button id="tuneButton" type="button" disabled title="A steady two-tone carrier for up to 20 s, to set ALC and power">TUNE</button>
+        <span id="tuneState" class="muted"></span>
+      </div>
+      <details class="settings-advanced">
+        <summary>ADVANCED <span class="settings-advanced-what">audio path timing</span></summary>
+        <div class="settings settings-advanced-body">
+          <label>Audio round trip <input id="setLatency" type="number" min="50" max="2000" step="10"><small>ms from this modem's output to its own input — radio, network and the TX slot together; default 350</small></label>
+          <label>TX slot <input id="setSlot" type="number" min="100" max="1000" step="10"><small>ms between keying and the first audio sample; default 200</small></label>
+          <label>TX prebuffer <input id="setPrebuffer" type="number" min="20" max="800" step="20"><small>ms of audio queued before the radio keys; default 120, below the slot</small></label>
+          <p class="identity-note">The other station waits only so long for this one's reply: about 200 ms of round trip with Winlink timing, about 500 ms with P2P / chat. Keep slot and prebuffer short.</p>
+        </div>
+      </details>
+      <div class="tuning-actions">
+        <button id="settingsSave" class="primary" type="button">SAVE</button>
+        <span id="settingsSaveStatus" class="muted"></span>
+      </div>
+      <p class="identity-note">Stored on this radio, not this browser.</p>
+    </div>
+  </details>
+
+  <section id="takeoverNotice" class="gate-card session-busy" hidden role="alert">
+    <div class="gate-card-icon" aria-hidden="true">!</div>
+    <div>
+      <h1>The radio is in use elsewhere</h1>
+      <p id="takeoverDetail">Another page or device holds the transmitter.</p>
+      <button id="takeoverButton" class="gate-card-action" type="button">TAKE THE RADIO OVER HERE</button>
+    </div>
+  </section>
+
+</main>
+
+<footer class="js8-page-footer">
+  <a href="https://github.com/ok1hra/wifilt" target="_blank" rel="noopener">GitHub</a><span aria-hidden="true">|</span><a href="/THIRD-PARTY-NOTICES.txt" target="_blank" rel="noopener">Licenses</a>
+</footer>
+
+<script src="/ports.js"></script>
+<script src="/lan-gate.js?v=75f2464b"></script>
+<script src="/fw-version.js?v=45bfdba6"></script>
+<script src="/station-identity.js?v=a1a20249"></script>
+<script src="/mercury-session.js?v=bd9d947d"></script>
+<script src="/spectrum.js?v=7fafbbb5"></script>
+<script src="/audio-health.js?v=9efe092e"></script>
+<script src="/vara.js?v=46149454"></script>
+</body>
+</html>

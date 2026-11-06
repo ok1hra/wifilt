@@ -27,6 +27,8 @@ node tools/vara-phy-test.js frames tx # just the named groups
 node tools/vara-arq-test.js           # ARQ (LOSSY_SEEDS=3000 for upstream's full lossy sweep)
 node tools/vara-host-test.js          # host protocol, two stations on an audio wire
 node tools/vara-loopback-test.js      # mu-law 8 kHz audio path (no checkout needed)
+node tools/vara-worker-test.js        # the page's worker against a simulated firmware (no checkout needed)
+tools/vara-page-native-check.sh       # /vara.html in headless Chrome against the native firmware
 ```
 
 ## What is ported (phase 1: HF physical layer)
@@ -75,4 +77,23 @@ The tests are ports of upstream's own:
   and `crates/xara/tests/host_protocol.rs` (two stations on an audio wire,
   in-memory host clients instead of TCP).
 - `tools/vara-loopback-test.js` (no upstream counterpart): the WIFILT audio
-  path, 48 kHz TX -> 8 kHz G.711 mu-law + noise -> 48 kHz RX.
+  path, 48 kHz TX -> 8 kHz G.711 mu-law + noise -> 48 kHz RX, optionally with
+  a path delay (`... 2300 30 4000 ulaw 500 p2p`).
+
+## Phase 3: the page
+
+`data/vara-worker.js` runs one `HfStation` + `Tnc` on the AUD1 socket: the RX
+sample clock (AUD1 `firstSample`) is the modem's clock, and every keyed
+stretch of the station's output is one AUD1 transmission (`tx.prepare`,
+`tx.extend`, FIRST/LAST). The one addition to the port for it is
+`HfStation.keyed`, a per-sample keying mask filled in `keyBlock`.
+`data/vara.html`/`vara.js`/`vara.css` are the page; it drives the modem with
+the same host commands a Winlink client sends.
+
+Latency is the limit to know about. The station is told its whole audio round
+trip (upstream's `tx_latency`); what VARA does not forgive is a slow *peer*.
+A Winlink-timing caller waits about 200 ms of round trip for the answerer, a
+P2P/chat one about 500 ms (`tools/vara-loopback-test.js` with a delay). WIFILT
+calling out works with any latency it has; answering a Winlink-timing call
+needs a round trip under ~200 ms, which the AUD1 path (TX slot alone is
+100 ms minimum) does not reach. P2P and chat answer fine.

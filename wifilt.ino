@@ -1011,6 +1011,11 @@ int incomingByte = 0;   // for incoming serial data
   // Small flat blob, same generous headroom style as MERCURY_TXGAIN_MAX_BYTES.
   static const char* MERCURY_TUNING_CONFIG_PATH = "/mercury-tuning.json";
   static const size_t MERCURY_TUNING_MAX_BYTES = 2048;
+  // The XARA (VARA-compatible) page's station settings: MYCALL, bandwidth,
+  // audio round trip, drive (data/vara.js owns the schema). Same verbatim-blob
+  // contract as the Mercury tuning above.
+  static const char* VARA_SETTINGS_CONFIG_PATH = "/vara-settings.json";
+  static const size_t VARA_SETTINGS_MAX_BYTES = 2048;
   // The station's operating profile (data/station-profile.js): JS8 -- speed, TX
   // offset, heartbeat interval, groups, the 24 h band schedule, the RF power
   // percent -- plus WSPR, RTTY and the Mercury band schedule beside it. It used
@@ -1340,6 +1345,8 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void handlePostMercuryTxGain(void);
   void handleGetMercuryTuning(void);
   void handlePostMercuryTuning(void);
+  void handleGetVaraSettings(void);
+  void handlePostVaraSettings(void);
   void handleGetCivRead(void);
   uint16_t aprsisPasscode(const String &call);
   bool aprsisFieldSafe(const String &value);
@@ -4004,6 +4011,7 @@ void handleConfigDownload() {
   // holds a token that can write to the operator's repo (git-backup.json).
   configDownloadBlob("logMacros", LOG_MACROS_PATH);
   configDownloadBlob("mercuryTuning", MERCURY_TUNING_CONFIG_PATH);
+  configDownloadBlob("varaSettings", VARA_SETTINGS_CONFIG_PATH);
   if (bdEnabled) {
     String b = ",\"bd\":{\"source\":"; b += bdSource;
     b += ",\"rows\":[";
@@ -4301,6 +4309,24 @@ void handleConfigUpload() {
         if (f) f.close();
         webServer.send(500, "application/json",
           "{\"ok\":false,\"error\":\"storage\",\"section\":\"mercuryTuning\"}");
+        return;
+      }
+      f.close();
+    }
+  }
+
+  {
+    String varaCfg = extractJsonObject(body, "varaSettings");
+    if (varaCfg.length() > VARA_SETTINGS_MAX_BYTES) {
+      rejectOversize("varaSettings", varaCfg.length(), VARA_SETTINGS_MAX_BYTES);
+      return;
+    }
+    if (varaCfg.length() > 0) {
+      File f = cfgFS.open(VARA_SETTINGS_CONFIG_PATH, "w");
+      if (!f || f.print(varaCfg) != varaCfg.length()) {
+        if (f) f.close();
+        webServer.send(500, "application/json",
+          "{\"ok\":false,\"error\":\"storage\",\"section\":\"varaSettings\"}");
         return;
       }
       f.close();
@@ -5015,6 +5041,38 @@ void handlePostMercuryTuning() {
   if (!mf) { webServer.send(500, "application/json", "{\"error\":\"write\"}"); return; }
   mf.print(body);
   mf.close();
+  webServer.send(200, "application/json", "{\"ok\":true}");
+}
+
+// XARA settings: the same verbatim-blob pair as the Mercury tuning above.
+void handleGetVaraSettings() {
+  webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  webServer.sendHeader("Connection", "close");
+  String json;
+  if (cfgFS.exists(VARA_SETTINGS_CONFIG_PATH)) {
+    File vf = cfgFS.open(VARA_SETTINGS_CONFIG_PATH, "r");
+    if (vf) { json = vf.readString(); vf.close(); json.trim(); }
+  }
+  if (json.length() < 2 || json[0] != '{') json = "{}";
+  webServer.send(200, "application/json", json);
+}
+
+void handlePostVaraSettings() {
+  webServer.sendHeader("Connection", "close");
+  String body = webServer.arg("plain");
+  body.trim();
+  if (body.length() < 2 || body.length() > VARA_SETTINGS_MAX_BYTES ||
+      body[0] != '{' || body[body.length()-1] != '}') {
+    webServer.send(400, "application/json", "{\"error\":\"bad_request\"}");
+    return;
+  }
+  File vf = cfgFS.open(VARA_SETTINGS_CONFIG_PATH, "w");
+  if (!vf || vf.print(body) != body.length()) {
+    if (vf) vf.close();
+    webServer.send(500, "application/json", "{\"error\":\"write\"}");
+    return;
+  }
+  vf.close();
   webServer.send(200, "application/json", "{\"ok\":true}");
 }
 
@@ -5788,6 +5846,12 @@ void setupWebServer(void){
   webServer.on("/mercury/session/claim",   HTTP_POST, handleJs8SessionClaim);
   webServer.on("/mercury/session/ping",    HTTP_POST, handleJs8SessionPing);
   webServer.on("/mercury/session/release", HTTP_POST, handleJs8SessionRelease);
+  // XARA (VARA-compatible): the same single lease under its own URL, exactly
+  // like Mercury's -- one transmitter, one AUD1 owner.
+  webServer.on("/vara/session",         HTTP_GET,  handleJs8SessionGet);
+  webServer.on("/vara/session/claim",   HTTP_POST, handleJs8SessionClaim);
+  webServer.on("/vara/session/ping",    HTTP_POST, handleJs8SessionPing);
+  webServer.on("/vara/session/release", HTTP_POST, handleJs8SessionRelease);
   webServer.on("/msgbox", HTTP_GET, handleMsgboxGet);
   webServer.on("/msgbox", HTTP_POST, handleMsgboxPost);
 #if CAP_WATCH
@@ -5833,6 +5897,8 @@ void setupWebServer(void){
   webServer.on("/mercury-txgain.json", HTTP_POST, handlePostMercuryTxGain);
   webServer.on("/mercury-tuning.json", HTTP_GET,  handleGetMercuryTuning);
   webServer.on("/mercury-tuning.json", HTTP_POST, handlePostMercuryTuning);
+  webServer.on("/vara-settings.json", HTTP_GET,  handleGetVaraSettings);
+  webServer.on("/vara-settings.json", HTTP_POST, handlePostVaraSettings);
   webServer.on("/aprsis/spot",   HTTP_POST, handleAprsisSpot);
   webServer.on("/aprsis/status", HTTP_GET,  handleAprsisStatus);
   webServer.on("/civread",     HTTP_GET,  handleGetCivRead);

@@ -24,7 +24,8 @@ function check(name, ok) { if (!ok) failures.push(name); }
 // Every path constant that names a file of the operator's, not of the build's.
 const CONFIG_PATHS = ["RADIO_CONFIG_PATH", "LOG_CONFIG_PATH", "TXGAIN_CONFIG_PATH",
   "BD_CONFIG_PATH", "MEMORY_CONFIG_PATH", "MSGBOX_PATH", "MSGBOX_LEGACY_PATH",
-  "UNATTENDED_LOG_PATH"];
+  "UNATTENDED_LOG_PATH", "MERCURY_TXGAIN_CONFIG_PATH", "MERCURY_TUNING_CONFIG_PATH",
+  "VARA_SETTINGS_CONFIG_PATH"];
 
 // ---- the partition table ---------------------------------------------------
 function partition(name) {

@@ -1,0 +1,72 @@
+/* XARA (VARA-compatible) page. Shares .compact-section/.gate-card/.radio-bar/
+   .pill/.trx-*/.settings with data.css like every DATA page; the LISTEN pill
+   and the button looks follow mercury.css, the rest is XARA's own. */
+
+.listen-toggle {
+  display: flex; align-items: center; gap: 6px; cursor: pointer;
+  padding: 5px 10px; border: 1px solid var(--line); border-radius: 999px;
+}
+.listen-toggle input:disabled { cursor: not-allowed; }
+.listen-toggle #listenState { font-size: 11px; font-weight: 800; letter-spacing: .08em; color: var(--muted); }
+/* Checked = may answer and transmit unattended: the "hot" red, not a green "on". */
+.listen-toggle input:checked ~ #listenState { color: var(--red); }
+.listen-toggle:has(input:checked) { border-color: var(--red); background: #6b1720; box-shadow: 0 0 8px #ff183866; }
+
+.vara-page button {
+  padding: 7px 14px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel2); color: var(--text); font: inherit; cursor: pointer;
+}
+.vara-page button.primary { background: var(--green); border-color: var(--green); color: #04170a; font-weight: 700; }
+.vara-page button.secondary { background: #16211f; }
+.vara-page button.active { border-color: var(--red); background: #6b1720; color: var(--text); }
+.vara-page button:disabled { opacity: .45; cursor: not-allowed; }
+
+.vara-connect { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; padding: 10px 12px; }
+.call-field {
+  display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted);
+  flex: 1 1 140px; min-width: 0;
+}
+.call-field input, .call-field select {
+  padding: 7px 9px; border: 1px solid var(--line); border-radius: 4px;
+  background: var(--panel2); color: var(--text); font: inherit;
+}
+.call-field input:disabled, .call-field select:disabled { opacity: .55; cursor: not-allowed; }
+.vara-mycall { padding: 7px 0; color: var(--text); font-size: 15px; letter-spacing: .04em; }
+.vara-mycall.warn { color: var(--amber); font-size: 12px; font-weight: 600; }
+.vara-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex-basis: 100%; }
+
+.vara-status {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; padding: 10px 12px;
+}
+.vara-status div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.vara-status small { font-size: 10px; letter-spacing: .08em; color: var(--muted); }
+.vara-status b { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vara-status b.warn { color: var(--amber); }
+
+.vara-chat { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; }
+.vara-chat-log, .vara-host-log {
+  margin: 0; padding: 8px 10px; min-height: 160px; max-height: 340px; overflow-y: auto;
+  border: 1px solid var(--line); border-radius: 4px; background: #050c0b;
+  font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.vara-host-log { margin: 10px 12px; font-size: 12px; }
+.vara-chat-rx { color: var(--cyan); }
+.vara-chat-tx { color: var(--amber); }
+.vara-chat-system { color: var(--muted); font-size: 11px; }
+.vara-log-cmd { color: var(--amber); }
+.vara-log-reply { color: var(--text); }
+.vara-log-trace { color: var(--muted); }
+.vara-log-error { color: var(--red); }
+.vara-chat-input { display: flex; gap: 8px; }
+.vara-chat-input input {
+  flex: 1 1 auto; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 4px;
+  background: var(--panel2); color: var(--text); font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.vara-chat-input input:disabled { opacity: .55; }
+
+.tuning-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; margin-top: 2px; }
+#settingsSaveStatus, #tuneState { font-size: 11px; color: var(--muted); }
+
+body.radio-transmitting .waterfall::after {
+  content: ""; position: absolute; inset: 0; background: rgba(255, 24, 56, .125); pointer-events: none;
+}

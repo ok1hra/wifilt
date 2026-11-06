@@ -8,6 +8,9 @@
 //
 //   node tools/vara-loopback-test.js                    the default matrix
 //   node tools/vara-loopback-test.js 2300 20 8000 ulaw  bw snr_db bytes path(wire|ulaw)
+//   node tools/vara-loopback-test.js 2300 20 8000 ulaw 600 [p2p]
+//        ... plus a one-way audio path delay in ms (AUD1 prebuffer + LAN + WiFi),
+//        which each station is told about as its txLatency; "p2p" for P2P timing
 
 const M = require("../data/vara-modem.js");
 
@@ -70,13 +73,19 @@ class Channel {
   upPush(v) { this.up.p = this.up.p || 0; this.up[this.up.p] = v; this.up.p = (this.up.p + 1) % H.length; }
 }
 
-function run(bwHz, snr, bytes, path) {
+function run(bwHz, snr, bytes, path, delayMs = 0, p2p = false) {
   const bw = M.bandwidth(bwHz);
   const ca = M.hfConfig(bw, "N0CALL"), cb = M.hfConfig(bw, "N1CALL");
   ca.host.registered = true; ca.host.compression = M.COMP.OFF;
-  const st = [new M.HfStation(ca, {driveDb: -5}), new M.HfStation(cb, {driveDb: -5})];
+  if (p2p) { ca.p2p = true; cb.p2p = true; }
+  // The delay is what a station hears of its own transmission: TX path + RX
+  // path. The simulated wire puts all of it on one hop, which the far station
+  // sees exactly as it would (its reply timing only depends on the sum).
+  const lat = Math.round(delayMs * 48), blocks = 2 + Math.round(lat / 480);
+  const opts = {driveDb: -5, txLatency: lat, rxLag: lat};
+  const st = [new M.HfStation(ca, opts), new M.HfStation(cb, opts)];
   const ch = [new Channel(path, snr, 7), new Channel(path, snr, 11)];
-  const wire = [[new Float64Array(480), new Float64Array(480)], [new Float64Array(480), new Float64Array(480)]];
+  const wire = [0, 1].map(() => Array.from({length: blocks}, () => new Float64Array(480)));
   const log = [[], []], got = [];
   let levels = [], t0 = null, t1 = null;
   const data = Uint8Array.from({length: bytes}, (_, i) => (i * 7919 + 13) & 255);
@@ -107,17 +116,17 @@ function run(bwHz, snr, bytes, path) {
   }
   const ok = got.length === bytes && got.every((b, i) => b === data[i]);
   const secs = t1 !== null ? (t1 - t0) / 48000 : NaN;
-  return {bw: bwHz, snr, bytes, path, ok, connected: t0 !== null, secs: +secs.toFixed(1), bps: Math.round(bytes * 8 / secs),
+  return {bw: bwHz, snr, bytes, path, delayMs, p2p, ok, connected: t0 !== null, secs: +secs.toFixed(1), bps: Math.round(bytes * 8 / secs),
     top: levels.length ? Math.max(...levels) : 0, disc: log[0].includes("disconnected") && log[1].includes("disconnected"),
     cpu: +((Date.now() - started) / 1000 / (now / 48000)).toFixed(2)};
 }
 
 const args = process.argv.slice(2);
-const matrix = args.length ? [[+args[0], +args[1], +args[2], args[3] || "ulaw"]]
+const matrix = args.length ? [[+args[0], +args[1], +args[2], args[3] || "ulaw", +(args[4] || 0), args[5] === "p2p"]]
   : [[2300, 40, 8000, "wire"], [2300, 40, 8000, "ulaw"], [2300, 20, 8000, "ulaw"], [2750, 40, 8000, "ulaw"], [500, 30, 2000, "ulaw"]];
 let fail = 0;
-for (const [bw, snr, bytes, path] of matrix) {
-  const r = run(bw, snr, bytes, path);
+for (const [bw, snr, bytes, path, delayMs, p2p] of matrix) {
+  const r = run(bw, snr, bytes, path, delayMs, p2p);
   console.log((r.ok && r.disc ? "ok   " : "FAIL ") + JSON.stringify(r));
   if (!r.ok || !r.disc) fail++;
 }
