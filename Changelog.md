@@ -11,6 +11,20 @@ published.
 
 ## Working tree — not committed
 
+**XARA: VARA FM Narrow (docs/vara-implementace.md, phase 5).**
+
+* **What.** DATA → XARA → Mode: FM Narrow, for an FM voice channel (radio in FM-D). Same
+  terminal, LISTEN, TCP host ports and Winlink client support as VARA HF; the host sees
+  `VERSION VARA FM v4.4.0` and `CONNECTED … NARROW`. FM Wide follows with a 16 kHz AUD1 stream.
+* **How.** VARA FM ported from x0rro/xara into `data/vara-modem.js`: FM physical layer (TX audio
+  bit-exact against all 210 upstream vectors), receiver, ARQ session, adaptation and timing, and
+  `FmStation` behind the same `Tnc`. The worker builds an `FmStation` for FM and an `HfStation`
+  otherwise; switching between them restarts it.
+* **Not ported.** The FM digipeater and FM broadcast frames (CQ/KISS over AX.25): `CQFRAME` is
+  `WRONG` on FM and the page's CQ button is off there.
+* **Checks.** `tools/vara-fm-test.js` (upstream's FM phy, receiver, ARQ vector, session and host
+  tests); `tools/vara-worker-test.js` gains an FM Narrow link through the simulated firmware.
+
 **XARA: Winlink clients (Pat, Winlink Express) on TCP 8300/8301 (docs/vara-implementace.md, phase 4).**
 
 * **What.** Point the client's VARA HF modem at the interface's address, ports 8300/8301, with

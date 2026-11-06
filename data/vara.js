@@ -12,7 +12,7 @@
 // waterfall runs off it, and LISTEN decides only whether this station answers.
 (function () {
   "use strict";
-  const VARA_WORKER_REV = "47df5d16"; // stamped from /vara-worker.js
+  const VARA_WORKER_REV = "972b2fcc"; // stamped from /vara-worker.js
   const audioWsPort = () => Number((window.WIFILT_PORTS || {}).audio) || 83;
   const SETTINGS_URL = "/vara-settings.json";
   const DEFAULTS = {bw: 2300, p2p: true, driveDb: -5, latencyMs: 350, slotMs: 200, prebufferMs: 120};
@@ -27,7 +27,7 @@
   function normalise(raw) {
     const s = {...DEFAULTS, ...(raw && typeof raw === "object" ? raw : {})};
     const num = (v, lo, hi, d) => { v = Number(v); return Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : d; };
-    s.bw = [500, 2300, 2750].includes(Number(s.bw)) ? Number(s.bw) : DEFAULTS.bw;
+    s.bw = s.bw === "fmn" ? "fmn" : [500, 2300, 2750].includes(Number(s.bw)) ? Number(s.bw) : DEFAULTS.bw;
     s.p2p = s.p2p !== false;
     s.driveDb = num(s.driveDb, -30, 0, DEFAULTS.driveDb);
     s.latencyMs = num(s.latencyMs, 50, 2000, DEFAULTS.latencyMs);
@@ -135,7 +135,7 @@
     const haveCall = Boolean(myCall);
     dom.stState.textContent = s ? (s.tuning ? "TUNE" : s.ptt ? `${s.state} · TX` : s.state) : "—";
     dom.stPeer.textContent = s && s.peer ? s.peer : "—";
-    dom.stSpeed.textContent = s && linked && s.level ? `level ${s.level}` : "—";
+    dom.stSpeed.textContent = s && linked && s.level ? `level ${s.level}${s.mode === "fm" ? " FM" : ""}` : "—";
     dom.stSn.textContent = s && Number.isFinite(s.afcHz) && linked ? `AFC ${s.afcHz > 0 ? "+" : ""}${Math.round(s.afcHz)} Hz` : "—";
     dom.stBusy.textContent = s ? (s.busy ? "BUSY" : "clear") : "—";
     dom.stBusy.classList.toggle("warn", Boolean(s && s.busy));
@@ -152,7 +152,8 @@
     dom.connectButton.disabled = !worker || !haveCall || !idle || !dom.peerCall.value.trim();
     dom.disconnectButton.disabled = !worker || idle;
     dom.abortButton.disabled = !worker || idle;
-    dom.cqButton.disabled = !worker || !haveCall || !idle || Boolean(s && s.ptt);
+    // CQ frames are VARA HF's; FM's go over AX.25 in record 16, not ported.
+    dom.cqButton.disabled = !worker || !haveCall || !idle || Boolean(s && s.ptt) || Boolean(s && s.mode === "fm");
     dom.bwSelect.disabled = !worker || !idle;
     dom.sessionSelect.disabled = !worker || !idle;
     dom.listenToggle.disabled = !worker || !haveCall;
@@ -176,9 +177,10 @@
     const connected = radio.connected && radio.transceiverType === "ICOM-LAN";
     dom.trxFrequencyValue.textContent = formatFrequency(radio.frequency);
     dom.trxMode.textContent = radio.mode || "---";
-    const usb = ["USB", "USB-D"].includes(radio.mode);
+    const fm = settings.bw === "fmn", want = fm ? ["FM", "FM-D"] : ["USB", "USB-D"];
+    const usb = want.includes(radio.mode);
     dom.trxMode.classList.toggle("incompatible", connected && !usb);
-    dom.trxMode.title = connected && !usb ? "XARA needs USB or USB-D" : "TRX mode";
+    dom.trxMode.title = connected && !usb ? (fm ? "VARA FM needs FM or FM-D" : "VARA HF needs USB or USB-D") : "TRX mode";
     dom.radioModel.textContent = radio.radioName || "--";
     dom.linkState.textContent = connected ? (radio.tx ? "● TX" : "● RX") : "● OFFLINE";
     dom.linkState.classList.toggle("error", !connected);
@@ -223,7 +225,7 @@
     dom.setPrebuffer.value = settings.prebufferMs;
     dom.bwSelect.value = String(settings.bw);
     dom.sessionSelect.value = settings.p2p ? "p2p" : "winlink";
-    dom.settingsSummary.textContent = `${settings.bw} Hz · ${settings.p2p ? "P2P" : "Winlink"} · ${settings.latencyMs} ms`;
+    dom.settingsSummary.textContent = `${settings.bw === "fmn" ? "FM Narrow" : settings.bw + " Hz"} · ${settings.p2p ? "P2P" : "Winlink"} · ${settings.latencyMs} ms`;
   }
   async function saveSettings(extra) {
     const next = normalise({...settings, ...(extra || {}),
@@ -280,7 +282,14 @@
     dom.disconnectButton.addEventListener("click", () => command("DISCONNECT"));
     dom.abortButton.addEventListener("click", () => { hostLog("> (abort)", "vara-log-cmd"); post({type: "abort"}); });
     dom.cqButton.addEventListener("click", () => command(`CQFRAME ${myCall} ${settings.bw}`));
-    dom.bwSelect.addEventListener("change", () => { command(`BW${dom.bwSelect.value}`); saveSettings({bw: Number(dom.bwSelect.value)}); });
+    dom.bwSelect.addEventListener("change", () => {
+      const v = dom.bwSelect.value, wasFm = settings.bw === "fmn", fm = v === "fmn";
+      saveSettings({bw: fm ? "fmn" : Number(v)});
+      // HF and FM are different modems: switching between them starts the
+      // worker again with the other one; within HF it is the BW command.
+      if (fm !== wasFm) { hostLog(`(switching to ${fm ? "VARA FM" : "VARA HF"})`, "vara-log-cmd"); stopWorker(); setTimeout(startWorker, 600); }
+      else command(`BW${v}`);
+    });
     dom.sessionSelect.addEventListener("change", () => {
       const p2p = dom.sessionSelect.value === "p2p";
       command(p2p ? "P2P SESSION" : "WINLINK SESSION");

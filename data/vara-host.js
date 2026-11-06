@@ -150,7 +150,8 @@
     switch (h.kind) {
       case "pending": return R.pending();
       case "cancelPending": return R.cancelPending();
-      case "connected": return R.connected(h.caller, h.answerer, h.vias, String(h.bw.hz));
+      // HF reports its width in Hz, FM as NARROW/WIDE (response.rs LinkWidth).
+      case "connected": return R.connected(h.caller, h.answerer, h.vias, h.bw.hz !== undefined ? String(h.bw.hz) : h.bw.wide ? "WIDE" : "NARROW");
       case "disconnected": return R.disconnected();
       case "registered": return R.linkRegistered(h.registered);
       case "buffer": return R.buffer(h.n);

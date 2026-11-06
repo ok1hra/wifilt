@@ -181,13 +181,20 @@
     constructor(deps, settings) {
       this.d = deps; this.M = deps.M; this.H = deps.H;
       this.s = Object.assign({}, DEFAULTS, settings || {});
-      const M = this.M, bw = M.bandwidth(this.s.bw) || M.BW2300, cfg = M.hfConfig(bw, this.s.mycall || "N0CALL");
-      cfg.p2p = Boolean(this.s.p2p);
-      const lat = Math.round(this.s.latencyMs * FS / 1000);
+      const M = this.M, lat = Math.round(this.s.latencyMs * FS / 1000);
       // rxLag = txLatency: PTT "off" lands on the burst's last sample, which is
       // where the AUD1 transmission has to end -- the firmware itself holds the
       // radio keyed until that audio has actually left.
-      this.station = new M.HfStation(cfg, {driveDb: this.s.driveDb, txLatency: lat, rxLag: lat});
+      const opts = {driveDb: this.s.driveDb, txLatency: lat, rxLag: lat};
+      // bw "fmn": VARA FM Narrow, the one FM width the 8 kHz AUD1 stream carries
+      // (FM Wide reaches 5.7 kHz and waits for a 16 kHz stream).
+      this.fm = this.s.bw === "fmn";
+      if (this.fm) this.station = new M.FmStation(M.fmConfig(M.FM_NARROW, this.s.mycall || "N0CALL"), opts);
+      else {
+        const cfg = M.hfConfig(M.bandwidth(this.s.bw) || M.BW2300, this.s.mycall || "N0CALL");
+        cfg.p2p = Boolean(this.s.p2p);
+        this.station = new M.HfStation(cfg, opts);
+      }
       // Host clients: the page always (it shows every line), plus a Winlink
       // client on the TCP ports when one is attached (vara_host_bridge.h).
       // Received data goes to the TCP data client if there is one, otherwise
@@ -316,10 +323,11 @@
       const now = this.d.monoNow();
       if (!force && now - this.lastStatus < 250) return;
       const st = this.station, link = st.link();
-      const s = {type: "status", state: link.state, level: link.level, peer: link.peer, bw: Number(link.bw),
+      const s = {type: "status", mode: this.fm ? "fm" : "hf", state: link.state, level: link.level, peer: link.peer,
+        bw: this.fm ? link.bw : Number(link.bw),
         afcHz: link.afcHz, ptt: st.ptt(), txActive: this.tx.active, busy: st.busy(), buffered: st.buffered(),
         tuning: st.tuning(), mycall: (st.config().host.mycalls || [])[0] || "", listen: st.listenOn,
-        p2p: Boolean(st.config().p2p), load: this.audioMs ? this.cpuMs / this.audioMs : 0,
+        p2p: Boolean(st.config().p2p), version: st.constructor.VERSION, load: this.audioMs ? this.cpuMs / this.audioMs : 0,
         filledMs: this.filled / 8, trimmedMs: this.trimmed / 8, txFaults: this.tx.faults,
         host: this.tcp.cmd || this.tcp.data ? this.tcp.peer || "connected" : ""};
       const key = JSON.stringify(s);

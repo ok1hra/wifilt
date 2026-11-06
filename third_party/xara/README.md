@@ -27,6 +27,7 @@ node tools/vara-phy-test.js frames tx # just the named groups
 node tools/vara-arq-test.js           # ARQ (LOSSY_SEEDS=3000 for upstream's full lossy sweep)
 node tools/vara-host-test.js          # host protocol, two stations on an audio wire
 node tools/vara-loopback-test.js      # mu-law 8 kHz audio path (no checkout needed)
+node tools/vara-fm-test.js            # VARA FM: phy, receiver, ARQ, host (rx groups take minutes)
 node tools/vara-worker-test.js        # the page's worker against a simulated firmware (no checkout needed)
 tools/vara-page-native-check.sh       # /vara.html in headless Chrome against the native firmware
 ```
@@ -79,6 +80,27 @@ The tests are ports of upstream's own:
 - `tools/vara-loopback-test.js` (no upstream counterpart): the WIFILT audio
   path, 48 kHz TX -> 8 kHz G.711 mu-law + noise -> 48 kHz RX, optionally with
   a path delay (`... 2300 30 4000 ulaw 500 p2p`).
+
+## Phase 5: VARA FM
+
+| upstream file | in `data/vara-modem.js` |
+|---|---|
+| `xara-phy/src/fm/{level,constellation,code,frame,ctrl,ctrl/code,tx}.rs`, `dat.rs` (FM tables) | FM physical layer, TX audio bit-exact |
+| `xara-phy/src/fm/rx/{frontend,ctrl,ofdm,receiver}.rs` | FM receiver (the STFT in f32, as upstream) |
+| `xara-arq/src/fm/{session,adapt,timing}.rs` | FM ARQ |
+| `xara/src/station/fm.rs` | `FmStation`, same interface as `HfStation` |
+
+Not ported: the FM digipeater (`fm/digi.rs`) and the broadcast frames
+(`fm/broadcast.rs`, CQ and KISS over AX.25 in record 16), so `CQFRAME` answers
+`WRONG` on FM. The page offers FM Narrow; FM Wide reaches 5.7 kHz and needs a
+16 kHz AUD1 stream (phase 6).
+
+`tools/vara-fm-test.js` ports `crates/xara-phy/tests/fm_{tx,frames,rx}.rs`,
+`crates/xara-arq/tests/fm_{vectors,session}.rs` and `crates/xara/tests/fm_host.rs`.
+All 210 TX audio vectors are bit-exact. `fm_captures.rs` needs the lab
+recordings; `fm_link.rs`, `fm_audio_link.rs`, `fm_broadcast.rs` and
+`fm_digi*.rs` are not ported (the link is covered by `fm_host` and by
+`tools/vara-worker-test.js` "fm narrow").
 
 ## Phase 4: Winlink clients on TCP 8300/8301
 

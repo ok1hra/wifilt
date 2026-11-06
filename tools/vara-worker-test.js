@@ -230,6 +230,7 @@ const cases = [
   ["winlink timing, both through WIFILT", {p2p: false, seconds: 60}, true],
   ["p2p, wifi jitter 120 ms + 1% loss", {p2p: true, jitter: 120, loss: 0.01, seed: 9}],
   ["p2p, bw 500", {p2p: true, bw: 500, repeat: 1}],
+  ["fm narrow", {bw: "fmn"}],
 ];
 for (const [name, o, expectFail] of cases) if (!only || name.includes(only)) chat(name, o, expectFail);
 

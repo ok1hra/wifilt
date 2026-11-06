@@ -4293,10 +4293,1663 @@
   }
   HfStation.VERSION = "VERSION VARA HF v4.9.0"; HfStation.VIAS = false; HfStation.CWID_GATEWAY = true;
 
+  // ═════════════════════════════ FM (VARA FM 4.4.0; xara-phy/src/fm) ═════════════════════════════
+  // Records are ints: 0 connect, 1..13 data levels, 14 short, 15 start, 16 broadcast.
+  const FM_REC = {CONNECT: 0, SHORT: 14, START: 15, BROADCAST: 16};
+  const fmKeyed = r => r !== FM_REC.CONNECT && r !== FM_REC.BROADCAST;
+  const fmRecLevel = r => r >= 1 && r <= 13 ? r : r === FM_REC.SHORT || r === FM_REC.START ? 1 : null;
+  const FM_PP = 9;
+  const fmQamPilot = (bin, s) => s % FM_PP === 2 + bin % 2;
+
+  // ───────────────────────────── FM levels (fm/level.rs)
+  const fmLay = (base, bps, spf, markers, k) => ({...base, bps, spf, markers, k});
+  const NC14 = {nc: 14, first: 10, step: 4}, NC29 = {nc: 29, first: 10, step: 2}, NC58 = {nc: 58, first: 10, step: 1};
+  const NC98 = {nc: 98, first: 6, step: 1}, NC116 = {nc: 116, first: 6, step: 1};
+  const FM_NARROW_LAY = [
+    fmLay(NC14, 2, 29, 4, 316), fmLay(NC14, 2, 200, 4, 2710), fmLay(NC29, 2, 200, 2, 5678), fmLay(NC58, 2, 200, 1, 11420),
+    fmLay(NC58, 2, 200, 1, 15226), fmLay(NC58, 3, 201, 1, 20408), fmLay(NC58, 4, 201, 1, 27212), fmLay(NC58, 5, 201, 1, 34018),
+    fmLay(NC58, 6, 201, 1, 40824), fmLay(NC58, 6, 201, 1, 45927), fmLay(NC58, 7, 201, 1, 53583), fmLay(NC58, 8, 192, 1, 58455),
+    fmLay(NC58, 2, 50, 1, 2720), fmLay(NC58, 2, 50, 1, 2720), fmLay(NC14, 2, 83, 4, 1072), fmLay(NC14, 2, 18, 6, 134),
+    fmLay(NC14, 2, 69, 4, 876)];
+  const FM_WIDE_LAY = [
+    fmLay(NC14, 2, 29, 4, 316), fmLay(NC14, 2, 200, 4, 2710), fmLay(NC29, 2, 200, 2, 5678), fmLay(NC58, 2, 200, 1, 11420),
+    fmLay(NC98, 2, 200, 1, 19300), fmLay(NC98, 2, 200, 1, 25732), fmLay(NC98, 3, 201, 1, 34488), fmLay(NC98, 4, 201, 1, 45986),
+    fmLay(NC116, 4, 201, 1, 54434), fmLay(NC116, 5, 165, 1, 55672), fmLay(NC116, 6, 138, 1, 55672), fmLay(NC116, 6, 120, 1, 54279),
+    fmLay(NC116, 7, 102, 1, 53583), fmLay(NC116, 8, 93, 1, 55671), fmLay(NC14, 2, 83, 4, 1072), fmLay(NC14, 2, 18, 6, 134),
+    fmLay(NC14, 2, 69, 4, 876)];
+  const fmLayN = f => f.bps === 2 ? f.nc * 2 * (f.spf - 2 - f.markers)
+    : f.nc * f.bps * (f.spf - 1 - f.markers - (Math.floor((f.spf - 3) / FM_PP) + 1));
+  const fmX = (rate, papr, ampNorm, thr, decodeAllow) => ({rate, papr, ampNorm, thr, decodeAllow});
+  const C14X = fmX(3, 8.6, 5.29, -0.4, 176);
+  const FM_NARROW_X = [C14X, C14X, fmX(3, 9.3, 7.62, 2.8, 198), fmX(3, 10.0, 10.77, 5.6, 224), fmX(4, 10.0, 10.77, 7.6, 245),
+    fmX(4, 9.9, 9.4844, 9.8, 300), fmX(4, 9.9, 9.05, 11.8, 335), fmX(4, 9.9, 10.28, 15.2, 393), fmX(4, 9.9, 11.2, 17.4, 430),
+    fmX(5, 9.9, 11.2, 19.0, 465), fmX(5, 9.9, 11.24, 21.8, 540), fmX(5, 9.9, 11.18, 24.0, 550), fmX(3, 10.0, 10.77, 5.6, 0),
+    fmX(3, 10.0, 10.77, 5.6, 0), C14X, C14X, fmX(3, 8.6, 5.29, -0.4, 0)];
+  const FM_WIDE_X = [C14X, C14X, fmX(3, 9.3, 7.62, 2.8, 198), fmX(3, 10.0, 10.77, 5.6, 236), fmX(3, 10.3, 14.0, 7.4, 289),
+    fmX(4, 10.3, 14.0, 9.4, 335), fmX(4, 10.3, 12.32448, 12.0, 415), fmX(4, 10.2, 11.76, 14.2, 463), fmX(4, 10.4, 12.79, 15.0, 526),
+    fmX(4, 10.3, 14.53, 18.2, 551), fmX(4, 10.3, 15.83, 20.4, 526), fmX(5, 10.3, 15.83, 22.0, 500), fmX(5, 10.3, 15.9, 24.8, 528),
+    fmX(5, 10.3, 15.9, 27.2, 520), C14X, C14X, fmX(3, 8.6, 5.29, -0.4, 0)];
+  const fmGain = (paprDb, driveDb) => dbAmp(-(paprDb + 2 + (10 - paprDb) / 1000 - driveDb));
+  class FmLevel {
+    constructor(bw, record) {
+      const f = bw.layouts[record], x = bw.extras[record];
+      this.bw = bw; this.record = record;
+      Object.assign(this, f);
+      this.layout = f; this.rate = x.rate; this.papr = F(x.papr); this.ampNorm = F(x.ampNorm); this.thr = F(x.thr);
+      this.decodeAllow = x.decodeAllow; this.widePenalty = bw.wide && f.nc === NC116.nc ? F(1.7) : 0;
+      this.n = fmLayN(f); this.otherLen = f.nc * (f.markers + f.spf - 1);
+      this.frameBytes = Math.floor(f.k / 8); this.nsym = f.spf - 1; this.isQam = f.bps > 2;
+      this.puncturePeriod = puncturePeriod(this.rate); this.frameTicks = (f.spf - 1) * 9;
+    }
+    bin(c) { return this.first + this.step * c; }
+    bins() { const out = []; for (let c = 0; c < this.nc; c++) out.push(this.bin(c)); return out; }
+    get netBps() {
+      if (!(this.record >= 1 && this.record <= 13)) return this.bw.level(1).netBps;
+      return rint(this.frameBytes * BIN_HZ * 8) / (SYM_RATIO * this.nsym);
+    }
+    gain(driveDb) { return fmGain(this.papr, driveDb); }
+  }
+  class FmBandwidth {
+    constructor(id, wide, layouts, extras, numLevels) {
+      this.id = id; this.wide = wide; this.layouts = layouts; this.extras = extras; this.numLevels = numLevels;
+      this.levels = [];
+    }
+    level(record) { return this.levels[record] || (this.levels[record] = new FmLevel(this, record)); }
+    get topLevel() { return this.numLevels; }
+  }
+  const FM_NARROW = new FmBandwidth("Narrow", false, FM_NARROW_LAY, FM_NARROW_X, 11);
+  const FM_WIDE = new FmBandwidth("Wide", true, FM_WIDE_LAY, FM_WIDE_X, 13);
+  const FM_MAX_SPF = Math.max(...FM_NARROW_LAY.map(f => f.spf), ...FM_WIDE_LAY.map(f => f.spf));
+
+  // ───────────────────────────── FM constellations (fm/constellation.rs)
+  function ginv(n) { for (let s = 1; s < 8; s <<= 1) n ^= n >> s; return n; }
+  const fmAmp = (p, l, x) => F(p * x / (l * Math.SQRT2));
+  function fmSquare(bps, p, l) {
+    const h = bps / 2, m = (1 << h) - 1, c = g => 2 * ginv(g) - m, out = [];
+    for (let v = 0; v < 1 << bps; v++) out.push([fmAmp(p, l, c(v >> h)), fmAmp(p, l, c(v & m))]);
+    return out;
+  }
+  function fmSigned(v, si, sq, x, y, p, l) { return [fmAmp(p, l, v & si ? -x : x), fmAmp(p, l, v & sq ? -y : y)]; }
+  const fmBit = (v, b) => (v >> b) & 1;
+  let FM_CST = null;
+  function fmConstellation(bps) {
+    if (!FM_CST) {
+      const a = F(Math.SQRT1_2);
+      const q8 = [[-1, -1], [-1, 0], [0, -1], [-1, 1], [1, 0], [1, 1], [1, -1], [0, 1]];
+      const q32 = [[1, 1], [3, 1], [3, 5], [5, 1], [1, 3], [3, 3], [1, 5], [5, 3]];
+      const p128 = v => {
+        let x = 2 * ginv(fmBit(v, 3) << 2 | fmBit(v, 2) << 1 | fmBit(v, 0)) + 1;
+        let y = 2 * ginv(fmBit(v, 4) << 1 | fmBit(v, 1)) + 1;
+        if (x >= 13) { if (y <= 3) { x -= 8; y += 8; } else { x = 16 - x; y = 16 - y; } }
+        return fmSigned(v, 64, 32, x, y, 1.8, 11);
+      };
+      const p256 = v => {
+        const x = 2 * ginv(fmBit(v, 4) << 2 | fmBit(v, 2) << 1 | fmBit(v, 0)) + 1;
+        const y = 2 * ginv(fmBit(v, 5) << 2 | fmBit(v, 3) << 1 | fmBit(v, 1)) + 1;
+        return fmSigned(v, 128, 64, x, y, 1.7, 15);
+      };
+      const range = n => Array.from({length: n}, (_, i) => i);
+      FM_CST = [[], [[1, 0], [-1, 0]], [[1, 0], [0, 1], [0, -1], [-1, 0]], q8.map(([i, q]) => [a * i, a * q]),
+        fmSquare(4, 1.1, 3), range(32).map(v => fmSigned(v, 16, 8, q32[v & 7][0], q32[v & 7][1], 1.5, 5)),
+        fmSquare(6, 1.6, 7), range(128).map(p128), range(256).map(p256)];
+    }
+    return FM_CST[bps] || [];
+  }
+
+  // ───────────────────────────── FM tables and codec (dat.rs fm_tables, fm/code.rs)
+  function fmOther(r, f) {
+    const gap = f.spf < 50 ? 0 : 2;
+    const rows = markerRows(f.nc, f.markers, c => f.bps > 2
+      ? 3 + (f.first + f.step * c) % 2 + FM_PP * r.draw(Math.floor((f.spf - 3) / FM_PP))
+      : 3 + r.draw(f.spf - 2), gap);
+    return carrierOther(rows, f.spf);
+  }
+  function fmTablesGen(bw) {
+    let r = VbRnd.stream(TABLE_SEED);
+    return bw.layouts.map((f, i) => {
+      if (i === FM_REC.BROADCAST) r = VbRnd.stream(FM_RECORD16_SEED);
+      const chan = perm(r, fmLayN(f)), turbo = perm(r, f.k), other = fmOther(r, f);
+      return {chan, turbo, other};
+    });
+  }
+  const fmDat = bw => serializeTables(fmTablesGen(bw));
+  const FM_CACHE = {tables: {}, white: null, phasors: []};
+  const fmTables = bw => FM_CACHE.tables[bw.id] || (FM_CACHE.tables[bw.id] = fmTablesGen(bw));
+  const fmWhitening = () => FM_CACHE.white || (FM_CACHE.white = whitening(FM_SEED));
+  function fmWarm() { fmTables(FM_NARROW); fmTables(FM_WIDE); fmWhitening(); }
+  const FM_PHASOR_ROWS = 201, FM_BINS = 128;
+  function fmPhaseIndices(key) {
+    let r;
+    if (key === null || key === undefined) r = VbRnd.stream(FM_SEED);
+    else { r = new VbRnd(); r.seedRnd(key); }
+    const out = [];
+    for (let b = 0; b < FM_BINS; b++) { const row = new Uint8Array(FM_PHASOR_ROWS); for (let i = 0; i < FM_PHASOR_ROWS; i++) row[i] = r.randInt(32); out.push(row); }
+    return out;
+  }
+  function fmPhasors(key) {
+    const k = key === undefined ? null : key, c = FM_CACHE.phasors;
+    const hit = c.find(e => e.key === k);
+    if (hit) return hit.p;
+    const p = fmPhaseIndices(k).map(row => Array.from(row, d => polar(1, PI * d / 15)));
+    if (c.length >= 8) c.shift();
+    c.push({key: k, p});
+    return p;
+  }
+  const fmRecordKey = (record, key) => fmKeyed(record) ? key : null;
+  function fmEncode(bw, record, frame) {
+    const l = bw.level(record), t = fmTables(bw)[record];
+    const info = frameBits(frame, l.k);
+    whiten(info, fmWhitening());
+    return interleave(turboEncode(info, t.turbo, l.puncturePeriod, l.n), t.chan);
+  }
+  class FmCodec {
+    constructor(bw) { this.bw = bw; this.early = true; }
+    level(record) { return this.bw.level(record); }
+    encode(record, frame) { return fmEncode(this.bw, record, frame); }
+    decode(record, llrTx) {
+      const l = this.level(record);
+      return decodeFrame(fmTables(this.bw)[record], l.k, l.n, l.puncturePeriod, fmWhitening(), this.early, llrTx);
+    }
+  }
+
+  // ───────────────────────────── FM frames (fm/frame.rs)
+  const RECORD0_LEN = 39;
+  function fmOverhead(record, vias) {
+    if (record === FM_REC.CONNECT) return 4;
+    if (record === FM_REC.BROADCAST) return 3;
+    if (record === FM_REC.START) return 5 + (vias ? 1 : 0);
+    return 4 + (vias ? 1 : 0);
+  }
+  function fmPayloadLen(record, frameLen, vias) { const p = frameLen - fmOverhead(record, vias); return p >= 0 ? p : null; }
+  const fmCtrlByte = c => ((c.compressed ? 1 : 0) << 5) | ((c.hint & 7) << 2) | ((c.last ? 1 : 0) << 1) | (c.full ? 1 : 0);
+  const fmCtrlFromByte = b => ({compressed: (b & 0x20) !== 0, hint: (b >> 2) & 7, last: (b & 2) !== 0, full: (b & 1) !== 0});
+  function fmSeal(out) { const c = crc16(out); out.push(c >> 8, c & 255); return Uint8Array.from(out); }
+  function trailerFromBytes(record, t) {
+    if (record === FM_REC.BROADCAST) return {leadReport: 0, level: 0, chainSnr: null};
+    if (record === FM_REC.START) return {leadReport: t[0], level: t[1], chainSnr: t.length > 2 ? t[2] : null};
+    return {leadReport: t[0], level: 0, chainSnr: t.length > 1 ? t[1] : null};
+  }
+  function trailerWrite(tr, record, out) {
+    if (record === FM_REC.BROADCAST) return;
+    out.push(tr.leadReport);
+    if (record === FM_REC.START) out.push(tr.level);
+    if (tr.chainSnr !== null && tr.chainSnr !== undefined) out.push(tr.chainSnr);
+  }
+  function trailerRead(record, frame, vias) {
+    const p = fmPayloadLen(record, frame.length, vias);
+    if (p === null || record === FM_REC.CONNECT) return null;
+    return trailerFromBytes(record, frame.subarray(p + 1, frame.length - 2));
+  }
+  function trailerRestamp(tr, record, frame) {
+    const vias = tr.chainSnr !== null && tr.chainSnr !== undefined && record !== FM_REC.BROADCAST;
+    const p = fmPayloadLen(record, frame.length, vias);
+    if (p === null) return null;
+    const out = Array.from(frame.subarray(0, p + 1));
+    trailerWrite(tr, record, out);
+    return fmSeal(out);
+  }
+  function fmBuildData(record, frameLen, data, compressed, hint, last, trailer) {
+    if (record === FM_REC.CONNECT) throw new Error("record 0 has its own layout");
+    const vias = trailer.chainSnr !== null && trailer.chainSnr !== undefined && record !== FM_REC.BROADCAST;
+    const room = fmPayloadLen(record, frameLen, vias);
+    if (room === null) throw new Error("frame too short");
+    const n = Math.min(data.length, room), full = n === room, out = Array.from(data.subarray(0, n));
+    if (!full) { out.push(TERMINATOR); while (out.length < room) out.push(0); }
+    out.push(fmCtrlByte({compressed, hint, last, full}));
+    trailerWrite(trailer, record, out);
+    return fmSeal(out);
+  }
+  function fmParseData(record, frame, vias) {
+    if (record === FM_REC.CONNECT) return null;
+    const p = fmPayloadLen(record, frame.length, vias);
+    if (p === null || !crcOk(frame)) return null;
+    const control = fmCtrlFromByte(frame[p]);
+    let n = p;
+    if (!control.full) { n = frame.subarray(0, p).lastIndexOf(TERMINATOR); if (n < 0) return null; }
+    return {data: frame.slice(0, n), control, trailer: trailerFromBytes(record, frame.subarray(p + 1, frame.length - 2))};
+  }
+  const R0_KIND = {CONNECT: 0, AUTOTUNE: 1, PING: 2, REPLY: 3};
+  function r0CallField(call) {
+    const dash = call.indexOf("-"), base = (dash < 0 ? call : call.slice(0, dash)).toUpperCase();
+    if (base.length > 7 || /[^\x00-\x7f]/.test(base)) return null;
+    const f = new Array(8).fill(0x20);
+    for (let i = 0; i < base.length; i++) f[i] = base.charCodeAt(i);
+    const s = dash < 0 ? 0 : ssidCode(call.slice(dash + 1));
+    if (s === null) return null;
+    f[7] = s;
+    return f;
+  }
+  function r0ParseCall(f) {
+    if (f[0] === 0) return "";
+    return withSsid(String.fromCharCode(...f.subarray(0, 7)).replace(/\s+$/, ""), f[7]);
+  }
+  const fmSnrByte = snrDb => Math.max(1, rint(Math.min(35, Math.max(0, snrDb)) * 7));
+  class Record0 {
+    constructor(o) {
+      Object.assign(this, {kind: 0, hop: 0, registered: false, wide: false, source: "", via1: "", via2: "", target: "",
+        aes: false, compression: 0, control: 0, chainSnr: 0}, o || {});
+    }
+    static connect(source, target, via1, via2, registered, wide) {
+      return new Record0({source, target, via1, via2, registered, wide, control: 0x07});
+    }
+    vias() { return (this.via1 ? 1 : 0) + (this.via2 ? 1 : 0); }
+    head() { return ((this.kind << 5) | ((this.hop & 3) << 3) | ((this.registered ? 1 : 0) << 2) | ((this.wide ? 1 : 0) << 1)) & 255; }
+    flags(comp) { return ((this.aes ? 1 : 0) << 6) | 0x08 | ((comp & 3) << 1); }
+    toBytes() {
+      const comp = this.registered ? this.compression : 0, f = [this.head()];
+      for (const c of [this.source, this.via1, this.via2, this.target]) { const x = r0CallField(c); if (!x) return null; f.push(...x); }
+      f.push(0, this.flags(comp), this.control, this.chainSnr);
+      return fmSeal(f);
+    }
+    restamp(raw) {
+      const f = Array.from(raw.subarray(0, RECORD0_LEN - 2));
+      f[0] = this.head(); f[34] = this.flags(this.compression) | (raw[34] & 0x80); f[36] = this.chainSnr;
+      return fmSeal(f);
+    }
+    static parse(f) {
+      if (f.length !== RECORD0_LEN || !crcOk(f)) return null;
+      const call = i => r0ParseCall(f.subarray(1 + 8 * i, 9 + 8 * i));
+      return new Record0({kind: (f[0] >> 5) & 3, hop: (f[0] >> 3) & 3, registered: (f[0] & 4) !== 0, wide: (f[0] & 2) !== 0,
+        source: call(0), via1: call(1), via2: call(2), target: call(3), aes: (f[34] & 0x40) !== 0,
+        compression: (f[34] >> 1) & 3, control: f[35], chainSnr: f[36]});
+    }
+  }
+
+  // ───────────────────────────── FM control frames (fm/ctrl.rs)
+  const FM_SYMBOL = 1024, FM_CODE_ROWS = 10, FM_LEAD_ROWS = 28, NO_LEAD_ROW = FM_LEAD_ROWS + 1, TONE_AMP = 1 / 2.45;
+  const FM_CTRL_PAPR_DB = 7.45, FM_BLOCK = 7, CODE_BLOCK0 = 13, LEAD_BLOCK0 = 27, TAMPER_KEY = 0x599;
+  function fmToneRows(r, count, nblock, block0) {
+    const out = [];
+    for (let k = 0; k < count; k++) {
+      const bases = [], tones = [0, 0, 0];
+      for (let i = 0; i < 3; i++) {
+        let b;
+        do { b = r.randInt(nblock - 1) * FM_BLOCK + block0; } while (bases.includes(b));
+        bases.push(b);
+        tones[i] = b + r.randInt(6);
+      }
+      out.push(tones);
+    }
+    return out;
+  }
+  function fmCodes(key) {
+    const r = new VbRnd();
+    r.seedRnd(key + 10);
+    return Array.from({length: 22}, () => fmToneRows(r, FM_CODE_ROWS, 7, CODE_BLOCK0));
+  }
+  function fmConnectCodes(key) {
+    const r = new VbRnd();
+    r.seedRnd(key + 199);
+    return [fmToneRows(r, FM_CODE_ROWS, 7, CODE_BLOCK0), fmToneRows(r, FM_CODE_ROWS, 7, CODE_BLOCK0)];
+  }
+  let FM_LEAD_IN = null;
+  function fmLeadIn() {
+    if (!FM_LEAD_IN) {
+      const r = VbRnd.stream(FM_SEED);
+      for (let i = 0; i < WHITENING_LEN; i++) r.nextF32();
+      FM_LEAD_IN = fmToneRows(r, FM_LEAD_ROWS, 3, LEAD_BLOCK0);
+    }
+    return FM_LEAD_IN;
+  }
+  const SIDE = {SOURCE: 0, TARGET: 1};
+  class FmCodebook {
+    constructor(keyD, keyU) { this.keyD = keyD >>> 0; this.keyU = keyU >>> 0; this.codes = fmCodes(this.keyD).concat(fmConnectCodes(this.keyU)); }
+    static forLink(upstream, downstream) { return new FmCodebook(callHash(downstream), callHash(upstream)); }
+    equals(o) { return !!o && o.keyD === this.keyD && o.keyU === this.keyU; }
+    code(c) { return this.codes[c - 1]; }
+    frameRows(c, lead) {
+      if (lead > FM_LEAD_ROWS) throw new Error("lead-in too long");
+      return fmLeadIn().slice(FM_LEAD_ROWS - lead).concat(this.code(c));
+    }
+  }
+  const fmCtrlGain = driveDb => fmGain(FM_CTRL_PAPR_DB, driveDb);
+  let FM_SIN = null;
+  function fmCtrlSynth(rows, driveDb) {
+    if (!FM_SIN) { FM_SIN = new Float64Array(FM_SYMBOL); for (let n = 0; n < FM_SYMBOL; n++) FM_SIN[n] = Math.sin(2 * PI * n / FM_SYMBOL); }
+    const g = 2 * TONE_AMP * fmCtrlGain(driveDb), out = new Float64Array(rows.length * FM_SYMBOL);
+    let o = 0;
+    for (const t of rows)
+      for (let n = 0; n < FM_SYMBOL; n++) {
+        const v = (FM_SIN[(t[0] * n) % FM_SYMBOL] + FM_SIN[(t[1] * n) % FM_SYMBOL] + FM_SIN[(t[2] * n) % FM_SYMBOL]) * g;
+        out[o++] = Math.min(1, Math.max(-1, v));
+      }
+    return out;
+  }
+  const fmFrameAudio = (cb, code, lead, driveDb) => fmCtrlSynth(cb.frameRows(code, lead), driveDb);
+  const dataLeadIn = c => Math.ceil(8 * c / 9);
+  class LeadIn {
+    constructor() { this.len = FM_LEAD_ROWS; this.maxMissed = -1; this.reports = 0; }
+    clone() { const l = new LeadIn(); Object.assign(l, this); return l; }
+    newSession() { this.reports = 0; }
+    report(row) {
+      const missed = Math.min(FM_LEAD_ROWS, Math.max(0, this.len + row - NO_LEAD_ROW));
+      this.maxMissed = Math.max(this.maxMissed, missed);
+      this.reports++;
+      if (this.reports > 4) return this.len;
+      const m = this.maxMissed, inc = this.reports === 1 ? Math.max(1, rint(m * 0.5)) : 1;
+      this.len = Math.min(m + inc, FM_LEAD_ROWS);
+      return this.len;
+    }
+    dataSymbols() { return dataLeadIn(this.len); }
+  }
+
+  // ───────────────────────────── FM modulator (fm/tx.rs)
+  const PRE_SIGNAL_SYMBOLS = 42, PRE_SIGNAL_BIN = 32, FM_TUNE_BIN = 32, FM_TUNE_BACKOFF_DB = 5.007;
+  const CONNECT_LEAD_IN = dataLeadIn(23), IDLE_BEACON_LEAD_IN = 9;
+  const fmEmptyRow = () => Array.from({length: FM_BINS}, () => [0, 0]);
+  const fmSymbolMap = (l, other) => markerMap(other, l.nc, l.markers, l.nsym);
+  function fmFrameRows(l, other, p, tx) {
+    const lay = {spf: l.spf, bps: l.bps, n: l.n, qam: l.isQam, cst: fmConstellation(l.bps), map: fmSymbolMap(l, other)};
+    const rows = Array.from({length: l.nsym}, fmEmptyRow);
+    layoutCells(lay, l.bins(), fmQamPilot, tx, (bi, b, r, cell) => { rows[r][b] = cmul(cell, cconj(p[b][r])); });
+    return rows;
+  }
+  function fmLeadRows(l, n, rand) {
+    const cst = fmConstellation(l.bps), rows = Array.from({length: n}, fmEmptyRow);
+    for (const b of l.bins()) for (const row of rows) row[b] = cst[rand(cst.length)];
+    return rows;
+  }
+  function preSignalRows() {
+    return Array.from({length: PRE_SIGNAL_SYMBOLS}, () => { const r = fmEmptyRow(); r[PRE_SIGNAL_BIN] = [0, -7.2]; return r; });
+  }
+  const fmSynth = (rows, scale) => ofdmSynth(0, rows, scale);
+  function fmTuneBlock(driveDb) {
+    const a = Math.SQRT2 * dbAmp(driveDb - FM_TUNE_BACKOFF_DB), out = new Float64Array(NFFT);
+    for (let n = 0; n < NFFT; n++) out[n] = a * Math.cos(2 * PI * (FM_TUNE_BIN * n) / NFFT);
+    return out;
+  }
+  class FmModulator {
+    constructor(bw) { this.bw = bw; this.codec = new FmCodec(bw); }
+    level(record) { return this.bw.level(record); }
+    encode(record, frame) { return this.codec.encode(record, frame); }
+    rows(record, key, frames) {
+      const l = this.level(record), p = fmPhasors(fmRecordKey(record, key)), other = fmTables(this.bw)[record].other;
+      let rows = [];
+      for (const f of frames) rows = rows.concat(fmFrameRows(l, other, p, this.encode(record, f)));
+      return rows;
+    }
+    transmission(record, key, frames, lead, opt, rand) {
+      const l = this.level(record), o = Object.assign({driveDb: 0, preSignal: false}, opt || {});
+      let rows = o.preSignal ? preSignalRows() : [];
+      rows = rows.concat(fmLeadRows(l, lead, rand), this.rows(record, key, frames));
+      const x = fmSynth(rows, l.gain(o.driveDb) / l.ampNorm);
+      for (let i = 0; i < x.length; i++) x[i] = Math.min(1, Math.max(-1, x[i]));
+      return x;
+    }
+  }
+  const fmToI16 = x => Int16Array.from(x, v => rint(v * 32767));
+
+  // ───────────────────────────── FM receive front end (fm/rx/frontend.rs: 48 kHz real -> 6 kHz complex)
+  const FS6 = 6000, FM_DEC = 8, FM_NF = NFFT / FM_DEC, FM_CP = NCP / FM_DEC, FM_SYMLEN = FM_NF + FM_CP;
+  const fmTo48 = m => m * FM_DEC;
+  const FM_FE_TAPS = 481, FM_FE_D = (FM_FE_TAPS - 1) / 2;
+  let FM_FE_H = null;
+  class FmFrontEnd {
+    constructor() {
+      if (!FM_FE_H) {
+        const lp = kaiserLowpass(FM_FE_TAPS, 3000, FS, 6.76);
+        FM_FE_H = {re: new Float64Array(FM_FE_TAPS), im: new Float64Array(FM_FE_TAPS)};
+        for (let i = 0; i < FM_FE_TAPS; i++) {
+          const p = polar(1, 2 * PI * 3000 * (i - FM_FE_D) / FS);
+          FM_FE_H.re[i] = lp[i] * p[0]; FM_FE_H.im[i] = lp[i] * p[1];
+        }
+      }
+      this.x = new Track(4 * FM_FE_TAPS); this.outNext = 0;
+    }
+    process(x) {
+      this.x.append(this.x.end(), x);
+      const m0 = this.outNext, mHi = divEuclid(this.x.end() - 1 - FM_FE_D, FM_DEC), out = [];
+      const hr = FM_FE_H.re, hi = FM_FE_H.im, buf = this.x.buf, base = this.x.base;
+      for (let m = m0; m <= mHi; m++) {
+        const c = FM_DEC * m + FM_FE_D;
+        let ar = 0, ai = 0;
+        for (let i = 0; i < FM_FE_TAPS; i++) {
+          const n = c - i;
+          if (n >= base) { const v = buf[n - base]; ar += hr[i] * v; ai += hi[i] * v; }
+        }
+        out.push([ar, ai]);
+      }
+      this.outNext = m0 + out.length;
+      return [m0, out];
+    }
+  }
+
+  // f32 complex arithmetic, for the parts upstream computes in Complex32
+  const f32 = Math.fround;
+  const m32r = (ar, ai, br, bi) => f32(f32(ar * br) - f32(ai * bi));
+  const m32i = (ar, ai, br, bi) => f32(f32(ar * bi) + f32(ai * br));
+  const ns32 = (r, i) => f32(f32(r * r) + f32(i * i));
+  const F32_EPS30 = f32(1e-30);
+
+  // ───────────────────────────── FM control-frame detector (fm/rx/ctrl.rs)
+  const FMC_HOP = 16, FMC_ROW = 8, FMC_MIN_HITS = 18, FMC_NO_LEAD_HITS = 22, FMC_HOLD = 4, FMC_TOP = 64;
+  const FMC_SPAN = FMC_ROW * (FM_CODE_ROWS - 1), FMC_KEEP = 8 * (FM_LEAD_ROWS + FM_CODE_ROWS + 4);
+  class FmCtrlDetector {
+    constructor(cb, enabled) {
+      this.cb = cb; this.enabled = enabled.slice(); this.win = new Window(FM_NF); this.spec = new Track(FMC_KEEP);
+      this.stftNext = 0; this.erased = MIN_I64; this.best = null; this.hold = 0;
+    }
+    codebook() { return this.cb; }
+    setCodebook(cb) { this.cb = cb; }
+    setEnabled(enabled) { this.enabled = enabled.slice(); this.best = null; this.hold = 0; }
+    startAt(m) { this.stftNext = Math.max(this.stftNext, divEuclid(m, FMC_HOP)); }
+    spectrum(buf, j) {
+      const w = this.win.at(buf, j * FMC_HOP, FM_NF), power = new Float32Array(FMC_TOP), peak = new Uint8Array(FMC_TOP);
+      for (let k = 0; k < FMC_TOP; k++) power[k] = w.re[k] * w.re[k] + w.im[k] * w.im[k];
+      for (let b = CODE_BLOCK0; b < CODE_BLOCK0 + 7 * FM_BLOCK; b += FM_BLOCK) {
+        let m = 0;
+        for (let i = 0; i < FM_BLOCK; i++) m = Math.max(m, power[b + i]);
+        for (let i = 0; i < FM_BLOCK; i++) peak[b + i] = m > 0 && power[b + i] === m ? 1 : 0;
+      }
+      return {power, peak};
+    }
+    row(j) { return j > this.erased && j >= this.spec.base && j < this.spec.end() ? this.spec.at(j) : null; }
+    correlate(j, cw) {
+      let hits = 0, energy = 0;
+      for (let r = 0; r < cw.length; r++) {
+        const s = this.row(j - FMC_ROW * (FM_CODE_ROWS - 1 - r));
+        if (!s) continue;
+        for (const k of cw[r]) { energy += s.power[k]; hits += s.peak[k]; }
+      }
+      return hits >= FMC_MIN_HITS ? [hits, energy] : null;
+    }
+    leadRow(j) {
+      const lead = fmLeadIn();
+      let start = 0, run = 0;
+      for (let r = 1; r <= FM_LEAD_ROWS; r++) {
+        const s = this.row(j - FMC_SPAN - FMC_ROW * (NO_LEAD_ROW - r));
+        const ok = !!s && lead[r - 1].every(k => s.peak[k]);
+        if (ok) { if (start === 0) start = r; run++; if (run === 4) break; }
+        else { start = 0; run = 0; }
+      }
+      return start === 0 ? NO_LEAD_ROW : start;
+    }
+    step(buf) {
+      const jHi = divEuclid(buf.end() - FM_NF, FMC_HOP);
+      this.stftNext = Math.max(this.stftNext, divEuclid(buf.base + FMC_HOP - 1, FMC_HOP));
+      const out = [];
+      while (this.stftNext <= jHi) {
+        const j = this.stftNext;
+        this.spec.append(j, [this.spectrum(buf, j)]);
+        this.stftNext++;
+        for (const c of this.enabled) {
+          const r = this.correlate(j, this.cb.code(c));
+          if (r && (!this.best || r[1] >= this.best.energy)) { this.best = {energy: r[1], j, code: c, hits: r[0]}; this.hold = FMC_HOLD; }
+        }
+        if (this.hold > 0) this.hold--;
+        else if (this.best) {
+          const b = this.best;
+          this.best = null;
+          const leadRow = this.leadRow(b.j);
+          if (leadRow > FM_LEAD_ROWS && b.hits < FMC_NO_LEAD_HITS) continue;
+          out.push({code: b.code, hits: b.hits, leadRow, tEnd: b.j * FMC_HOP + FM_NF});
+          this.erased = j;
+        }
+      }
+      return out;
+    }
+  }
+
+  // ───────────────────────────── FM OFDM engine (fm/rx/ofdm.rs)
+  const FMO_HOP = 4, FMO_SYM = FM_SYMLEN / FMO_HOP, MK_FRAC = 0.25, MIN_COHERENCE = 0.45, CP_MID = 10;
+  const FMO_MAX_DAT = 600, FMO_REFINE = 3, SN_BW_HZ = 2500;
+  class FmStft {
+    constructor(maxSpf) {
+      this.win = new Window(FM_NF); this.spectra = new Track(2 * FMO_SYM + 8); this.diff = new Track(FMO_SYM * maxSpf + 64);
+      this.stftNext = 0;
+    }
+    update(buf) {
+      const jHi = divEuclid(buf.end() - FM_NF, FMO_HOP), j0 = Math.max(this.stftNext, divEuclid(buf.base + FMO_HOP - 1, FMO_HOP));
+      for (let j = j0; j <= jHi; j++) {
+        const w = this.win.at(buf, j * FMO_HOP, FM_NF), row = new Float32Array(2 * FM_NF), g = new Float32Array(2 * FM_NF);
+        for (let k = 0; k < FM_NF; k++) { row[2 * k] = w.re[k]; row[2 * k + 1] = w.im[k]; }
+        const jp = j - FMO_SYM;
+        if (jp >= this.spectra.base && jp < this.spectra.end()) {
+          const o = this.spectra.at(jp);
+          for (let k = 0; k < FM_NF; k++) {
+            const ar = row[2 * k], ai = row[2 * k + 1], br = o[2 * k], bi = -o[2 * k + 1];
+            const pr = m32r(ar, ai, br, bi), pi = m32i(ar, ai, br, bi), n = f32(f32(Math.hypot(pr, pi)) + F32_EPS30);
+            g[2 * k] = f32(pr / n); g[2 * k + 1] = f32(pi / n);
+          }
+        }
+        this.spectra.append(j, [row]);
+        this.diff.append(j, [g]);
+      }
+      this.stftNext = Math.max(this.stftNext, jHi + 1);
+    }
+  }
+  const q32 = z => [f32(z[0]), f32(z[1])];
+  function pow4f32(r, i) { const ar = m32r(r, i, r, i), ai = m32i(r, i, r, i); return [m32r(ar, ai, ar, ai), m32i(ar, ai, ar, ai)]; }
+  class FmOfdmEngine {
+    constructor(l, other, phasors) {
+      this.record = l.record; this.l = l;
+      const map = fmSymbolMap(l, other), bins = l.bins(), nsym = l.nsym;
+      this.map = map; this.bins = bins;
+      this.phasors = [];
+      for (let r = 0; r < nsym; r++) this.phasors.push(bins.map(b => phasors[b][r]));
+      const markers = [], data = [];
+      bins.forEach((bin, c) => {
+        for (let r = 1; r < nsym; r++) {
+          const q = cmul(this.phasors[r][c], cconj(this.phasors[r - 1][c]));
+          if (map[c][r]) markers.push({row: r, carrier: c, bin, ref: q32(q)});
+          else if (!l.isQam) data.push({row: r, carrier: c, bin, ref: q32(cpowi(q, 4))});
+        }
+      });
+      this.markers = markers; this.data = thin(data, FMO_MAX_DAT);
+      this.span = nsym * FM_SYMLEN; this.searchNext = null;
+      this.hold = new Hold(Math.trunc(FMO_SYM / 2), FMO_SYM * (nsym - 2));
+    }
+    startAt(j) { this.searchNext = Math.max(this.searchNext === null ? j : this.searchNext, j); }
+    terms(st, j) {
+      let ar = 0, ai = 0;
+      for (const m of this.markers) {
+        const d = st.diff.at(j + FMO_SYM * m.row), xr = d[2 * m.bin], xi = d[2 * m.bin + 1];
+        ar = f32(ar + m32r(xr, xi, m.ref[0], m.ref[1])); ai = f32(ai + m32i(xr, xi, m.ref[0], m.ref[1]));
+      }
+      let br = 0, bi = 0;
+      for (const c of this.data) {
+        const d = st.diff.at(j + FMO_SYM * c.row), p = pow4f32(d[2 * c.bin], d[2 * c.bin + 1]);
+        br = f32(br + m32r(p[0], p[1], c.ref[0], c.ref[1])); bi = f32(bi + m32i(p[0], p[1], c.ref[0], c.ref[1]));
+      }
+      const markerChi = ns32(ar, ai) / this.markers.length;
+      const dataChi = this.data.length ? ns32(br, bi) / this.data.length : 0;
+      return [markerChi, dataChi];
+    }
+    step(st) {
+      const need = FMO_SYM * (this.l.nsym - 1), hi = st.diff.end() - 1 - need - 2 * FMO_REFINE;
+      const lo = Math.max(this.searchNext === null ? st.diff.base : this.searchNext, st.diff.base), out = [];
+      if (hi < lo) return out;
+      const markerMin = Math.max(MK_FRAC * this.markers.length, 6);
+      for (let j = lo; j <= hi; j++) {
+        const [mc, dc] = this.terms(st, j), chi = mc + dc;
+        const r = this.hold.offer(j, mc >= markerMin && chi >= CHI_MIN ? [chi, null] : null);
+        if (r) out.push({record: this.record, t: r[0] * FMO_HOP, metric: r[1]});
+      }
+      this.searchNext = hi + 1;
+      return out;
+    }
+    cells(buf, t, rows) {
+      const seg = buf.get(t, t + rows * FM_SYMLEN), re = new Float64Array(FM_NF), im = new Float64Array(FM_NF), out = [];
+      for (let r = 0; r < rows; r++) {
+        for (let i = 0; i < FM_NF; i++) { const z = seg[r * FM_SYMLEN + i]; re[i] = z[0]; im[i] = z[1]; }
+        fft(re, im, -1);
+        const p = this.phasors[r];
+        out.push(this.bins.map((b, c) => cmul([re[b], im[b]], p[c])));
+      }
+      return out;
+    }
+    coherence(c) {
+      let sr = 0, si = 0;
+      for (const m of this.markers) { const u = unit(cmul(cconj(c[m.row - 1][m.carrier]), c[m.row][m.carrier])); sr += u[0]; si += u[1]; }
+      return [Math.hypot(sr, si) / this.markers.length, [sr, si]];
+    }
+    earlyCoherence(buf, t0, rows) {
+      rows = Math.min(rows, this.l.nsym);
+      if (t0 + rows * FM_SYMLEN + FMO_REFINE > buf.end() || t0 - FMO_REFINE < buf.base) return null;
+      const qam = this.l.isQam, cells = [];
+      for (let r = 1; r < rows; r++) for (let k = 0; k < this.l.nc; k++) if (!qam || this.map[k][r]) cells.push([r, k]);
+      let best = -Infinity;
+      for (let t = t0 - FMO_REFINE; t <= t0 + FMO_REFINE; t++) {
+        const c = this.cells(buf, t, rows);
+        let sr = 0, si = 0;
+        for (const [r, k] of cells) {
+          const d = cmul(cconj(c[r - 1][k]), c[r][k]), u = unit(qam ? d : cpowi(d, 4));
+          sr += u[0]; si += u[1];
+        }
+        best = Math.max(best, Math.hypot(sr, si) / Math.max(cells.length, 1));
+      }
+      return best;
+    }
+    decode(buf, codec, t0, index) {
+      if (t0 + this.span + FMO_REFINE > buf.end() || t0 - FMO_REFINE < buf.base) return null;
+      const cand = [];
+      for (let t = t0 - FMO_REFINE; t <= t0 + FMO_REFINE; t++) {
+        const c = this.cells(buf, t, this.l.nsym), [m, s] = this.coherence(c);
+        cand.push([c, m, s]);
+      }
+      const vals = cand.map(x => x[1]), i = peakMid(vals, argmax(vals), 0.02), t = t0 - FMO_REFINE + i;
+      const [c, coh, s] = cand[i];
+      const [llr, esn0] = this.l.isQam ? this.qamLlr(c) : this.dpskLlr(c, s);
+      const out = codec.decode(this.record, llr);
+      const esn0Db = 10 * Math.log10(Math.max(esn0, 1e-6));
+      return {record: this.record, index, t, tEnd: t - CP_MID + this.span, ok: out.ok, missing: false, bytes: out.bytes,
+        esn0Db, snrDb: esn0Db + 10 * Math.log10(this.l.nc * FS6 / FM_NF / SN_BW_HZ), iterations: out.iterations, coherence: coh};
+    }
+    dpskLlr(c, s) {
+      const nc = this.l.nc, rot = unit(cconj(s)), d = eqDiff(c, c.length, nc, rot);
+      const nvar = dpskNvar(d, 1e-30, this.markers.map(m => [m.row - 1, m.carrier])), cst = fmConstellation(2), llr = [];
+      for (let b = 0; b < nc; b++) {
+        const obs = [];
+        for (let r = 1; r < c.length; r++) if (!this.map[b][r]) obs.push(d[r - 1][b]);
+        softBits(obs, cst, nvar, llr);
+      }
+      return [llr, 2 / nvar];
+    }
+    qamLlr(c0) {
+      const nc = this.l.nc, nsy = this.l.nsym, bins = this.bins, known = (b, r) => fmQamPilot(bins[b], r + 2) || this.map[b][r];
+      let vr = 0, vi = 0;
+      for (let b = 0; b < nc; b++)
+        for (let r = 0; r < Math.max(0, nsy - FM_PP); r++)
+          if (fmQamPilot(bins[b], r + 2)) { const z = cmul(cconj(c0[r][b]), c0[r + FM_PP][b]); vr += z[0]; vi += z[1]; }
+      const thd = Math.atan2(vi, vr) / FM_PP, c = c0.map(row => row.slice());
+      derotate(c, thd);
+      const cst = fmConstellation(this.l.bps);
+      let es = 0;
+      for (const z of cst) es += cnorm2(z);
+      es /= cst.length;
+      const e = new Eq();
+      for (let b = 0; b < nc; b++) {
+        const ks = [];
+        for (let r = 0; r < nsy; r++) if (known(b, r)) ks.push(r);
+        const hs = ks.map(r => c[r][b]);
+        for (let r = 0; r < nsy; r++) if (!known(b, r)) e.push(c[r][b], r, ks, hs);
+      }
+      const llr = [], nvar = e.llrs(cst, 1e-4, llr);
+      return [llr, es / nvar];
+    }
+  }
+
+  // ───────────────────────────── FM receiver (fm/rx/receiver.rs)
+  const FM_BUF_SECONDS = 12, FM_GRACE = 2 * FM_SYMLEN, FM_CONTINUE_AT = 2 * FM_SYMLEN, FM_NOISE_BLOCK = 60, FM_PROBE_ROWS = 6;
+  class FmReceiver extends Assembler {
+    constructor(bw, key, records, nframes) {
+      super();
+      this.bw = bw; this.key = key >>> 0; this.fe = new FmFrontEnd(); this.buf = ctrack(FM_BUF_SECONDS * FS6);
+      this.stft = new FmStft(FM_MAX_SPF + 1); this.engines = new Map(); this.initAsm(nframes); this.muted = new Muted();
+      this.ctrl = [null, null]; this.codec = new FmCodec(bw); this.probed = null;
+      this.stats = {decode: {decodes: 0, crcOk: 0}, discarded: 0, tx: 0, unexpectedFrame2: 0};
+      this.expect(records, nframes);
+    }
+    engine(record) {
+      const l = this.bw.level(record);
+      const e = new FmOfdmEngine(l, fmTables(this.bw)[record].other, fmPhasors(fmRecordKey(record, this.key)));
+      const spanHops = Math.trunc(e.span / FMO_HOP);
+      e.startAt(Math.max(this.stft.diff.base, this.stft.diff.end() - spanHops - FS6 / FMO_HOP));
+      return e;
+    }
+    expect(records, nframes) {
+      for (const r of records) if (!this.engines.has(r)) this.engines.set(r, this.engine(r));
+      for (const r of Array.from(this.engines.keys())) if (!records.includes(r)) this.engines.delete(r);
+      this.engines = new Map(Array.from(this.engines.entries()).sort((a, b) => a[0] - b[0]));
+      if (nframes !== null && nframes !== undefined) this.asm.nframes = nframes;
+    }
+    expected() { return Array.from(this.engines.keys()); }
+    setKey(key) {
+      key >>>= 0;
+      if (key === this.key) return;
+      this.key = key;
+      for (const r of Array.from(this.engines.keys())) if (fmKeyed(r)) this.engines.set(r, this.engine(r));
+    }
+    setBandwidth(bw) {
+      if (bw === this.bw) return;
+      this.bw = bw; this.codec = new FmCodec(bw);
+      const recs = this.expected();
+      this.engines.clear();
+      this.expect(recs, null);
+    }
+    setCtrl(side, cb, codes) {
+      const start = Math.max(this.buf.base, this.buf.end() - 40 * 128), c = this.ctrl[side];
+      if (!cb) this.ctrl[side] = null;
+      else if (c) { if (!c.codebook().equals(cb)) c.setCodebook(cb); c.setEnabled(codes); }
+      else { const d = new FmCtrlDetector(cb, codes); d.startAt(start); this.ctrl[side] = d; }
+    }
+    mute(a48, b48) { this.muted.mute(this.buf, FS6, Math.trunc(a48 / FM_DEC), Math.trunc(b48 / FM_DEC)); }
+    markTxEnd(n48) { this.asm.txEnd48 = n48; }
+    feed(x) { const [m0, y] = this.fe.process(x); return this.feedBb(m0, y); }
+    feedBb(m0, y) {
+      if (y.length) this.buf.append(m0, y);
+      let ev = [];
+      for (const side of [SIDE.SOURCE, SIDE.TARGET]) {
+        const c = this.ctrl[side];
+        if (c) for (const det of c.step(this.buf)) ev.push({kind: "ctrl", det, side});
+      }
+      this.stft.update(this.buf);
+      let dets = [];
+      for (const e of this.engines.values()) dets = dets.concat(e.step(this.stft));
+      dets.sort((a, b) => a.t - b.t || b.metric - a.metric);
+      for (const d of dets) ev = ev.concat(this.onDet(d.record, d.t, null));
+      return ev.concat(this.pending());
+    }
+    flush() { return this.finalize(); }
+    noiseFloor() { const p = this.muted.quietBlocks(this.buf, FS6, FM_NOISE_BLOCK); return p ? p[Math.floor(p.length / 100)] : 0; }
+    continuesAt(end) {
+      return continues(this.buf, [end + FM_CP, end + FM_CONTINUE_AT], [end - 2 * FM_SYMLEN, end - FM_CP], this.noiseFloor());
+    }
+    pending() {
+      const cur = this.asm.cur;
+      if (!cur) return [];
+      this.asm.cur = null;
+      if (!this.engines.has(cur.record)) return this.finish(cur);
+      const span = this.span(cur.record), end1 = cur.t - CP_MID + span;
+      if (!cur.two) {
+        if (this.buf.end() < end1 + FM_CONTINUE_AT) { this.asm.cur = cur; return []; }
+        if (!(fOk(cur.frames[0]) && cur.record !== FM_REC.BROADCAST && this.continuesAt(end1))) return this.finish(cur);
+        this.stats.unexpectedFrame2++;
+        cur.two = true;
+      }
+      const t2 = cur.t + span, record = cur.record, guessed = this.asm.nframes !== 2;
+      if (guessed && this.probed !== t2) {
+        const c = this.engines.get(record).earlyCoherence(this.buf, t2, FM_PROBE_ROWS);
+        if (c === null) { this.asm.cur = cur; return []; }
+        if (c < MIN_COHERENCE) return this.finish(cur);
+        this.probed = t2;
+      }
+      this.asm.cur = cur;
+      if (this.buf.end() < t2 + span + FM_GRACE) return [];
+      const r = this.decode(record, t2, 1, null);
+      if (r && (!guessed || r.frame.ok || r.frame.coherence >= MIN_COHERENCE)) return this.close(r, false, []);
+      return this.finalize();
+    }
+    // Assembler hooks
+    track() { return this.buf; }
+    has(record) { return this.engines.has(record); }
+    span(record) { return this.bw.level(record).nsym * FM_SYMLEN; }
+    decode(record, t, index) {
+      const e = this.engines.get(record);
+      if (!e) return null;
+      const r = e.decode(this.buf, this.codec, t, index);
+      if (!r) return null;
+      this.stats.decode.decodes++;
+      if (r.ok) this.stats.decode.crcOk++;
+      return {frame: r, missing: false};
+    }
+    pairs(_cur, record) { return record !== FM_REC.BROADCAST; }
+    frame1End(cur) { return cur.t + this.span(cur.record); }
+    lost(record, back, _t, span) {
+      if (this.asm.txEnd48 === null) return null;
+      const te = Math.trunc(this.asm.txEnd48 / FM_DEC);
+      if (!(back - CP_MID >= te)) return null;
+      const f = {record, index: 0, t: back, tEnd: back - CP_MID + span, ok: false, missing: true, bytes: new Uint8Array(0),
+        esn0Db: 0, snrDb: 0, iterations: 0, coherence: 0};
+      return {frame: f, missing: true};
+    }
+    keepFrame(r) { const k = r.frame.ok || r.frame.coherence >= MIN_COHERENCE; if (!k) this.stats.discarded++; return k; }
+    wait() { return null; }
+    expectedFrames() { return Math.max(this.asm.nframes, 1); }
+    finished() { this.stats.tx++; }
+  }
+  FmReceiver.PAIR_TOL = FM_SYMLEN / 2; FmReceiver.EMIT_BAD = false; FmReceiver.CLOSE_ON_MISS = true; FmReceiver.LOST_NEEDS_OK = true;
+
+  // ───────────────────────────── FM ARQ: control codes (fm/ctrl/code.rs)
+  const FMC = {ACK_STAY: 1, NACK: 2, QRT: 3, BREAK: 4, ACK_UP2: 5, ACK_DOWN: 6, ACK_UP1: 7, ACK_UP3: 8, ACK_UP6: 9,
+    ACK_SECOND_ONLY: 10, ACK_FIRST_ONLY: 11, ACK_REQ_0: 12, ACK_REQ_1: 13, GO_AHEAD: 14, IDLE: 20, NO_TRAFFIC: 21,
+    RELAY_FAILED: 22, CONNECT_REPLY_NARROW: 23, CONNECT_REPLY_WIDE: 24};
+  const FM_ACK_REQ = [FMC.ACK_REQ_0, FMC.ACK_REQ_1];
+
+  // ───────────────────────────── FM ARQ: adaptation (fm/adapt.rs)
+  const FM_SNR_OFFSET_DB = -3.5, FM_HINT_MAX = 7;
+  const fmPayload = (bw, record, vias) => fmPayloadLen(record, bw.level(record).frameBytes, vias);
+  const fmThr = (bw, record) => dec1(bw.level(record).thr);
+  const fmWidePen = (bw, record) => dec1(bw.level(record).widePenalty);
+  const fmDecodeAllow = (bw, record) => bw.level(record).decodeAllow;
+  const fmFrameTicks = (bw, record) => bw.level(record).frameTicks;
+  function fmQamCap(bw) { let m = 1; for (let l = 1; l <= bw.numLevels; l++) if (bw.level(l).bps < 7) m = l; return m; }
+  const fmAsLevel = r => fmRecLevel(r) || 1;
+  const fmLvlDown = l => l > 1 ? l - 1 : l;
+  const FM_UP = [[1, 4], [2, 5], [3, 6], [6, 7]];
+  function fmHintBy(bw, record, fits) {
+    const i = record === FM_REC.START ? 1 : record;
+    const f = (r, k) => r >= 0 && r <= 16 && fits(r, k);
+    return linkQueueHintBy(i, bw.numLevels, [[0, 2, FM_UP], [1, 3, FM_UP.slice(0, 3)]], FM_HINT_MAX, f);
+  }
+  const fmQueueHint = (bw, record, q, vias) => fmHintBy(bw, record, (l, k) => q <= k * fmPayload(bw, l, vias));
+  const fmQueueHintText = (bw, record, queued, state, vias) =>
+    fmHintBy(bw, record, (l, k) => { const p = fmPayload(bw, l, vias); return fitsFrames(queued, k, p, p, state); });
+  class FmAdaptation {
+    constructor() { this.hist = [NO_SNR, NO_SNR, NO_SNR, NO_SNR]; this.nGood = 0; this.climbFail = false; this.maxLevel = 0; this.prevMax = 0; this.good = 0; this.lost = 0; }
+    ratio() { return this.lost === 0 ? 100 : this.good / this.lost; }
+    frameOk(snr, l, n) {
+      l = l > n ? 1 : l;
+      this.hist.shift(); this.hist.push(snr);
+      if (this.nGood < 4) this.nGood++;
+      if (this.maxLevel < l) { this.maxLevel = l; if (l > 1) this.prevMax = l - 1; }
+      this.good++;
+      return this.held();
+    }
+    held() { return Math.min(...this.hist); }
+    frameLost() { this.climbFail = true; this.lost++; }
+  }
+  const FM_STEPS = [0, 1, 2, 3, 6], FM_PEN = [0.5, 0.5, 1.0, 2.0, 3.0], FM_MARGIN = [1.0, 0.5, 0.0, 0.0];
+  function fmMargins(bw, ad, l, s) {
+    const n = bw.numLevels;
+    if (l > n) l = 1;
+    const a = ad.nGood > 0 ? FM_MARGIN[ad.nGood - 1] : FM_MARGIN[3], m = [0, 0, 0, 0, 0];
+    FM_STEPS.forEach((d, i) => {
+      const room = d === 0 ? true : d === 6 ? l + 5 < n : l + d - 1 < n;
+      const up = l + d <= 13 && room ? l + d : null;
+      let v = 0;
+      if (up !== null) { const pen = d > 0 ? fmWidePen(bw, up) - fmWidePen(bw, l) : 0; v = s - fmThr(bw, up) - FM_PEN[i] - pen; }
+      m[i] = v - a;
+    });
+    if (ad.climbFail) { m[2] = 0; m[3] = 0; m[4] = 0; }
+    if (bw === FM_NARROW) { const cap = fmQamCap(bw); for (let i = 2; i < 5; i++) if (l + FM_STEPS[i] > cap) m[i] = 0; }
+    if (l < n) {
+      const x = ad.ratio();
+      const block = (x < 12 && l >= ad.maxLevel) || (l + 1 === ad.maxLevel && x < 10) || (l + 1 === ad.prevMax && x < 8) || x < 6;
+      if (block) for (let i = 1; i < 5; i++) m[i] = 0;
+    }
+    return m;
+  }
+  const FM_UNREGISTERED_TOP = 2;
+  const fmMaxLevel = (bw, registered) => registered ? bw.topLevel : FM_UNREGISTERED_TOP;
+  function fmDecide(bw, ad, h, s, registered) {
+    const top = fmMaxLevel(bw, registered), was15 = h.record === FM_REC.START, l = fmAsLevel(h.record);
+    const m = fmMargins(bw, ad, l, s), d = (code, level, stayReset) => ({code, level, stayReset, held: s, m});
+    for (const [i, code, need] of [[4, FMC.ACK_UP6, 7], [3, FMC.ACK_UP3, 6], [2, FMC.ACK_UP2, 5], [1, FMC.ACK_UP1, 4]]) {
+      const up = l + FM_STEPS[i];
+      if (up <= 13 && h.complete && up <= top && m[i] > 0 && h.hint >= need) return d(code, up, true);
+    }
+    if (!h.complete) return d(FMC.ACK_SECOND_ONLY, fmLvlDown(l), false);
+    if (l > 1 && h.hint === 0) return d(FMC.ACK_DOWN, fmLvlDown(l), true);
+    if (l > 1 && (h.hint === 1 || m[0] < 0)) return d(FMC.ACK_DOWN, fmLvlDown(l), false);
+    return d(FMC.ACK_STAY, was15 ? FM_REC.SHORT : l, h.hint === 2);
+  }
+  function fmSenderLevelAfter(record, code) {
+    let l;
+    if (record === FM_REC.START) { if (code === FMC.ACK_STAY) return FM_REC.SHORT; l = 1; }
+    else if (record === FM_REC.SHORT) l = 1;
+    else if (record >= 1 && record <= 13) l = record;
+    else return record;
+    const up = d => l + d <= 13 ? l + d : 13;
+    switch (code) {
+      case FMC.ACK_UP6: return up(6);
+      case FMC.ACK_UP3: return up(3);
+      case FMC.ACK_UP2: return up(2);
+      case FMC.ACK_UP1: return up(1);
+      case FMC.NACK: case FMC.ACK_DOWN: case FMC.ACK_SECOND_ONLY: case FMC.ACK_FIRST_ONLY: return fmLvlDown(l);
+      default: return l;
+    }
+  }
+  const fmStepDown = record => fmLvlDown(fmAsLevel(record));
+  function fmRecommendLevel(bw, ad, registered) {
+    const s = ad.held();
+    let top = fmMaxLevel(bw, registered);
+    if (bw === FM_NARROW) top = Math.min(top, fmQamCap(bw));
+    for (let l = top; l >= 1; l--) if (s - fmThr(bw, l) - (fmWidePen(bw, l) - fmWidePen(bw, 1)) > 3) return l;
+    return null;
+  }
+
+  // ───────────────────────────── FM ARQ: timing (fm/timing.rs)
+  const FM_TICK = 128, CODE_GATE = 80, DETECT_HOLD = 4, FM_IDLE_DATA_WAIT = 101, FM_FQ_WAIT_REPLIES = 4;
+  const VIA_ACK_ADD = [250.0, 353.5533905932738, 433.0127018922193], VIA_CTRL_ADD = [75.0, 433.0127018922193, 559.0169943749474];
+  const VIA_SPAN = [246.49999999999997, 739.4999999999999, 1232.4999999999998], VIA_GATES = [80, 160, 240];
+  const DIRECT_CONNECT_SPAN = 326.5, SYNC_SLACK = 520, ACTIVE_SCAN_SLACK = 60, FM_BACKOFF = [846.5, 1499.5, 2152.5];
+  const FM_WATCHDOG_MS = [16400, 22400, 31400], FM_RECENT = 8, MISS_TICKS = 38, MISS_LIMIT = 4;
+  const fmWatchdog = vias => FM_WATCHDOG_MS[Math.min(vias, 2)] * SECOND / 1000;
+  const state2Backoff = (vias, mult) => rint(FM_BACKOFF[Math.min(vias, 2)] * mult);
+  function callerConnectWindow(bw, vias, activeScan) {
+    const u = fmDecodeAllow(bw, FM_REC.CONNECT) - CODE_GATE, f = fmFrameTicks(bw, FM_REC.CONNECT);
+    const x = vias === 0 ? u + DIRECT_CONNECT_SPAN : vias === 1 ? 2 * u + f + VIA_SPAN[1] + VIA_GATES[1] : 3 * u + 2 * f + VIA_SPAN[2] + VIA_GATES[2];
+    return rint(x + (activeScan ? ACTIVE_SCAN_SLACK : SYNC_SLACK));
+  }
+  function receiverSyncWindow(bw, record, vias, two) {
+    const f = fmFrameTicks(bw, record), u = fmDecodeAllow(bw, record);
+    if (two) return [f - 40, 2 * f + VIA_SPAN[0] + SYNC_SLACK];
+    const lo = (vias + 1) * f - 40, g = CODE_GATE;
+    const hi = vias === 0 ? f + VIA_SPAN[0] + SYNC_SLACK : vias === 1 ? (u - g) + 2 * f + VIA_SPAN[1] + VIA_GATES[0] + SYNC_SLACK
+      : 2 * (u - g) + 3 * f + VIA_SPAN[2] + VIA_GATES[1] + SYNC_SLACK;
+    return [lo, hi];
+  }
+  class Recent {
+    constructor() { this.v = []; }
+    push(t) { if (this.v.length === FM_RECENT) this.v.shift(); this.v.push(t); let s = 0; for (const x of this.v) s += x; return rint(s / this.v.length); }
+  }
+  class FmTiming {
+    constructor(bw, vias) {
+      this.bw = bw; this.vias = Math.min(vias, 2);
+      this.count = new Array(17).fill(0); this.recent = Array.from({length: 17}, () => new Recent());
+      this.mean = new Array(17).fill(0); this.window = new Array(17).fill(0);
+      this.ctrlN = 0; this.ctrlRecent = new Recent(); this.ctrlMean = 0; this.ctrlWin = 0; this.misses = 0;
+    }
+    ackWindow(mean) { return this.vias === 0 ? mean + 250 : rint(mean + VIA_ACK_ADD[this.vias]); }
+    ack(ticks, record) {
+      const bw = this.bw, v = this.vias, i = record;
+      if (record === FM_REC.CONNECT && v > 0) ticks = rint(ticks + 40 * v);
+      this.count[i]++;
+      this.mean[i] = this.recent[i].push(ticks);
+      this.misses = 0;
+      const base = record >= 1 && record <= 13 ? record : 0;
+      for (let l = base + 1; l <= bw.numLevels; l++) {
+        if (this.count[l] !== 0) break;
+        const du = fmDecodeAllow(bw, l) - fmDecodeAllow(bw, record), df = fmFrameTicks(bw, l) - fmFrameTicks(bw, record);
+        this.mean[l] = this.mean[i] + [du, df + 2 * du, 2 * df + 3 * du][v];
+      }
+      for (const r of [FM_REC.SHORT, FM_REC.START]) if (this.count[r] === 0) this.mean[r] = this.mean[1];
+      for (let l = 1; l <= FM_REC.START; l++) this.window[l] = this.ackWindow(this.mean[l]);
+      if (this.ctrlWin === 0) {
+        const fl = fmFrameTicks(bw, record) - 80, m = this.mean[i];
+        this.ctrlWin = rint(v === 0 ? m + 75 : v === 1 ? m - fl + VIA_CTRL_ADD[1] : m - 2 * fl + VIA_CTRL_ADD[2]);
+      }
+    }
+    ctrl(ticks) {
+      const bw = this.bw, v = this.vias;
+      this.ctrlN++;
+      this.ctrlMean = this.ctrlN === 1 ? ticks : this.ctrlRecent.push(ticks);
+      this.misses = 0;
+      this.ctrlWin = v === 0 ? this.ctrlMean + 75 : rint(this.ctrlMean + VIA_CTRL_ADD[v]);
+      if (this.ctrlN !== 1) return;
+      for (let i = 1; i <= bw.numLevels; i++) {
+        if (this.window[i] !== 0) break;
+        const u = fmDecodeAllow(bw, i) - 80, f = fmFrameTicks(bw, i) - 80;
+        this.mean[i] = rint([u, 2 * u + f, 3 * u + 2 * f][v] + this.ctrlMean);
+        this.window[i] = this.ackWindow(this.mean[i]);
+      }
+      for (const r of [FM_REC.SHORT, FM_REC.START]) if (this.window[r] === 0) this.window[r] = this.window[1];
+    }
+    miss() { this.misses = Math.min(this.misses + 1, MISS_LIMIT); }
+    dataWindow(record) {
+      let w = this.window[record];
+      if (w === 0) w = this.ackWindow(fmDecodeAllow(this.bw, fmRecLevel(record) === null ? record : fmRecLevel(record)) + 300);
+      return w + this.misses * MISS_TICKS;
+    }
+    ctrlWindow() { return (this.ctrlWin === 0 ? 500 : this.ctrlWin) + this.misses * MISS_TICKS; }
+  }
+
+  // ───────────────────────────── FM ARQ: session (fm/session.rs)
+  const FM_RX_GRACE = 2400, REPEAT_LIMIT = 100, NO_LEAD_HEARD = FM_LEAD_ROWS + 1, QRT_RECEIVED = "QRT Received";
+  const fmConfig = (bw, mycall) => ({bw, host: hostSettings(mycall, 10), seed: 1});
+  const cloneFmCfg = c => ({...c, host: {...c.host, mycalls: c.host.mycalls.slice()}});
+  const FM_IN_LISTEN_STATES = ["Listen", "Qrt"];
+  class FmSession {
+    constructor(cfg) { this.reset(cfg, new Core(cfg.seed)); this.announce(); }
+    reset(cfg, core) {
+      Object.assign(this, {core, cfg, mycall: primaryCall(cfg.host), bw: cfg.bw, state: "Listen", caller: "", answerer: "",
+        vias: [], keyD: 0, keyU: 0, connected: false, registered: cfg.host.registered, firstTurn: false,
+        level: FM_REC.START, prevLevel: FM_REC.START, offerRx: null, offerTx: null, stays: 0, stayLevel: null, two: false,
+        adapt: new FmAdaptation(), nackRun: 0, alt: false, lastCode: null, lastTx: {kind: "none"}, lead: new LeadIn(),
+        heardRow: NO_LEAD_HEARD, attempts: 0, repeats: 0, timing: new FmTiming(cfg.bw, 0), window: null, qrtLeft: 0,
+        tx: {buf: new ByteQ(), inflight: [], states: [], state: TC_START, textTurn: null, lastHint: 0},
+        link: new Link(), lastHeld: 0, dataStored: false});
+    }
+    peer() { return this.caller === this.mycall ? this.answerer : this.caller; }
+    pop() { return this.core.pop(); }
+    key() { return this.keyD; }
+    buffered() { return this.tx.buf.length + this.link.files.length; }
+    nextDeadline() { return this.core.nextDeadline(this.link); }
+    top() { return fmMaxLevel(this.bw, this.registered); }
+    ackReq() { return this.alt ? FMC.ACK_REQ_1 : FMC.ACK_REQ_0; }
+    codes() {
+      const C = FMC;
+      switch (this.state) {
+        case "Listen": case "Qrt": return [];
+        case "Calling": return [C.QRT, C.CONNECT_REPLY_NARROW, C.CONNECT_REPLY_WIDE];
+        case "Receiving": return this.dataStored ? [C.QRT, C.BREAK, C.ACK_REQ_0, C.ACK_REQ_1, C.IDLE, C.RELAY_FAILED]
+          : [C.QRT, C.BREAK, C.ACK_REQ_0, C.ACK_REQ_1, C.IDLE, C.RELAY_FAILED, C.CONNECT_REPLY_NARROW, C.CONNECT_REPLY_WIDE];
+        case "AwaitGo": return [C.QRT, C.ACK_REQ_0, C.ACK_REQ_1, C.GO_AHEAD, C.IDLE];
+        case "Sending": return [C.ACK_STAY, C.NACK, C.QRT, C.BREAK, C.ACK_UP2, C.ACK_DOWN, C.ACK_UP1, C.ACK_UP3, C.ACK_UP6,
+          C.ACK_SECOND_ONLY, C.ACK_FIRST_ONLY, C.IDLE];
+        case "IdleSent": return [C.QRT, C.BREAK, C.ACK_REQ_0, C.ACK_REQ_1, C.NO_TRAFFIC];
+        case "Idle": return [C.QRT, C.BREAK, C.IDLE];
+        case "FqWait": return [C.QRT, C.ACK_REQ_0, C.ACK_REQ_1];
+      }
+      return [];
+    }
+    records() {
+      if (this.state === "Listen") return [FM_REC.CONNECT];
+      if (this.state === "AwaitGo" && this.firstTurn) return [FM_REC.CONNECT];
+      if (this.state !== "Receiving") return [];
+      const v = [FM_REC.START, FM_REC.SHORT, this.level, this.prevLevel, 1].filter(r =>
+        r === FM_REC.START || r === FM_REC.SHORT || (r >= 1 && r <= 13 && r <= this.top()));
+      return Array.from(new Set(v)).sort((a, b) => a - b);
+    }
+    announce() {
+      const listening = this.state === "Listen";
+      this.core.out.push({kind: "listen", listen: {bw: this.bw, key: listening ? 0 : this.keyD,
+        ctrl: listening ? null : [this.keyD, this.keyU], codes: this.codes(), records: this.records(),
+        nframes: this.state === "Receiving" ? this.nframes() : 1, linked: this.connected}});
+    }
+    enter(s) {
+      if (s !== this.state) {
+        this.alt = false; this.stays = 0; this.two = false;
+        if (s === "Sending") { this.tx.textTurn = null; this.tx.state = TC_START; }
+        if (s === "Receiving") {
+          this.link.rx.turnCompressed = null;
+          const start = this.offerTx === null ? FM_REC.START : this.offerTx;
+          this.offerTx = null;
+          this.level = start; this.prevLevel = start;
+        }
+        this.state = s;
+      }
+      this.announce();
+    }
+    setState(s) { this.state = s; this.announce(); }
+    listen() { this.reset(cloneFmCfg(this.cfg), this.core); this.announce(); }
+    close() {
+      if (this.connected || this.state === "Calling") this.core.host({kind: "disconnected"});
+      this.core.host({kind: "cancelPending"});
+      this.listen();
+    }
+    feedWatchdog(now) { this.link.watchdog = now + fmWatchdog(this.vias.length); }
+    sendCtrl(code) {
+      const req = FM_ACK_REQ.includes(code);
+      if (!req) this.lastCode = code;
+      this.lastTx = {kind: req ? "req" : "ctrl"};
+      this.core.transmitting = true;
+      this.link.deadline = null; this.window = null; this.link.idleTimer = null;
+      this.core.out.push({kind: "tx", tx: {type: "ctrl", code, lead: this.lead.len}});
+    }
+    say(code, next) { this.sendCtrl(code); this.enter(next); }
+    resendLast() { this.repeats++; if (this.lastCode !== null) this.sendCtrl(this.lastCode); }
+    wantsQrt() { return this.link.wantsQrt(this.tx.buf.length); }
+    qrt() { this.qrtLeft = this.vias.length === 0 && this.connected ? 1 : 0; this.sendCtrl(FMC.QRT); this.setState("Qrt"); }
+    connect(now, mycall, remote, vias) {
+      vias = vias || [];
+      if (this.state !== "Listen" || vias.length > 2) return false;
+      this.mycall = mycall || primaryCall(this.cfg.host);
+      this.caller = this.mycall; this.answerer = remote; this.vias = vias.slice();
+      const d = this.vias.length ? this.vias[0] : remote;
+      this.keyD = callHash(ascii(d)); this.keyU = callHash(ascii(this.mycall));
+      this.timing = new FmTiming(this.bw, this.vias.length);
+      this.link.comp = this.cfg.host.registered ? this.cfg.host.compression : COMP.OFF;
+      this.lead.newSession();
+      this.attempts = 0;
+      this.setState("Calling");
+      this.feedWatchdog(now);
+      this.sendConnect();
+      return true;
+    }
+    sendConnect() {
+      this.attempts++;
+      const via = i => this.vias[i] || "", wide = this.cfg.bw === FM_WIDE;
+      const r = Record0.connect(this.caller, this.answerer, via(0), via(1), this.cfg.host.registered, wide);
+      r.compression = this.link.comp;
+      const bytes = r.toBytes();
+      if (!bytes) { this.core.host({kind: "disconnected"}); this.listen(); return; }
+      this.core.host({kind: "unencrypted"});
+      this.lastTx = {kind: "data", record: FM_REC.CONNECT};
+      this.core.transmitting = true;
+      this.link.deadline = null; this.window = null;
+      this.core.out.push({kind: "tx", tx: {type: "data", record: FM_REC.CONNECT, frames: [bytes], lead: CONNECT_LEAD_IN}});
+    }
+    send(now, data) { this.link.queue(now, this.connected, data, this.tx.buf); this.idleWake(now); }
+    idleWake(now) {
+      if (this.state === "Idle" && !this.core.transmitting && this.link.deadline === null && this.buffered() > 0)
+        this.link.deadline = Math.max(now, this.core.txEnd + FM_IDLE_DATA_WAIT * FM_TICK);
+    }
+    disconnect(now) {
+      if (this.buffered() > 0 && this.connected) this.link.discAfterTx = true;
+      else this.abort(now);
+      this.discWake(now);
+    }
+    abort(now) {
+      if (FM_IN_LISTEN_STATES.includes(this.state)) return;
+      this.link.discNow = true;
+      this.discWake(now);
+    }
+    discWake(now) {
+      if (this.core.transmitting || !this.wantsQrt()) return;
+      if (this.state === "Idle") this.link.deadline = Math.max(now, this.core.txEnd + FM_IDLE_DATA_WAIT * FM_TICK);
+      else if (this.state === "Receiving") this.link.deadline = Math.max(now, this.syncEnd());
+    }
+    syncEnd() { const [, hi] = receiverSyncWindow(this.bw, this.level, this.vias.length, this.two); return this.core.txEnd + Math.trunc(hi) * FM_TICK; }
+    dropLink() {
+      if (FM_IN_LISTEN_STATES.includes(this.state)) return;
+      this.link.discNow = true;
+      if (!this.core.transmitting) this.close();
+    }
+    onTxDone(now) {
+      this.core.transmitting = false;
+      this.core.txEnd = now;
+      const vias = this.vias.length;
+      let w = null;
+      switch (this.state) {
+        case "Calling": w = callerConnectWindow(this.bw, vias, false); break;
+        case "Sending": w = this.lastTx.kind === "data" ? this.timing.dataWindow(this.lastTx.record) : this.timing.ctrlWindow(); break;
+        case "IdleSent": w = this.timing.ctrlWindow(); break;
+        case "FqWait": w = FM_FQ_WAIT_REPLIES * this.timing.ctrlWindow(); break;
+        case "AwaitGo": w = state2Backoff(vias, this.core.rng.upto(2) + 1); break;
+        case "Receiving": if (this.wantsQrt()) w = Math.trunc((this.syncEnd() - now) / FM_TICK); break;
+        case "Idle": if (this.wantsQrt() || this.buffered() > 0) w = FM_IDLE_DATA_WAIT; break;
+        case "Qrt":
+          if (this.qrtLeft > 0) { this.qrtLeft--; this.sendCtrl(FMC.QRT); } else this.close();
+          break;
+      }
+      this.window = w;
+      this.link.deadline = w === null ? null : now + w * FM_TICK + FM_RX_GRACE;
+    }
+    poll(now) {
+      if (this.core.transmitting) return;
+      if (this.link.watchdogFired(now)) { this.core.host({kind: "timedOut"}); this.close(); return; }
+      if (this.link.files.due(now)) { this.link.files.flush(this.tx.buf); this.idleWake(now); }
+      const ticks = this.link.idleFired(now);
+      if (ticks !== null) {
+        if (!this.cfg.host.chat && ticks >= IDLE_POLL_LIMIT) {
+          this.core.host({kind: "log", text: "stopped sending due to CMS failure"}); this.qrt();
+        } else this.say(FMC.IDLE, "IdleSent");
+        return;
+      }
+      if (!this.link.deadlineFired(now)) return;
+      this.window = null;
+      if (this.repeats >= REPEAT_LIMIT) { this.core.host({kind: "timedOut"}); this.close(); return; }
+      switch (this.state) {
+        case "Calling":
+          if (this.link.discNow) this.close();
+          else if (this.attempts < this.cfg.host.retries) this.sendConnect();
+          else { this.core.host({kind: "unableToConnect"}); this.close(); }
+          break;
+        case "Sending":
+          if (this.wantsQrt()) {
+            this.link.discTimeouts++;
+            this.core.host({kind: "log", text: `disconnecting ${this.link.discTimeouts}/${DISC_TIMEOUT_LIMIT}`});
+            if (this.link.discTimeouts >= DISC_TIMEOUT_LIMIT) { this.qrt(); return; }
+          }
+          this.repeats++;
+          this.timing.miss();
+          this.sendCtrl(this.ackReq());
+          break;
+        case "IdleSent": case "AwaitGo": this.timing.miss(); this.resendLast(); break;
+        case "FqWait": this.core.host({kind: "disconnected"}); this.core.host({kind: "cancelPending"}); this.listen(); break;
+        case "Receiving": if (this.wantsQrt()) this.qrt(); break;
+        case "Idle": if (this.wantsQrt() || this.buffered() > 0) this.say(FMC.BREAK, "AwaitGo"); break;
+      }
+    }
+    codeTicks(tEnd) { return divEuclid(tEnd - this.core.txEnd, FM_TICK) + DETECT_HOLD; }
+    onCtrl(now, c) {
+      const C = FMC;
+      if (this.core.transmitting || !this.codes().includes(c.code)) return;
+      const ticks = this.codeTicks(c.tEnd);
+      if (ticks < CODE_GATE || (this.window !== null && ticks > this.window)) return;
+      if (this.state !== "Calling") this.feedWatchdog(now);
+      this.heardRow = c.leadRow;
+      const lt = this.lastTx;
+      if (lt.kind === "data" && !(c.code === C.NACK && this.vias.length)) this.timing.ack(ticks, lt.record);
+      else if (lt.kind === "ctrl" && !(this.state === "Sending" && (c.code === C.BREAK || c.code === C.GO_AHEAD))) this.timing.ctrl(ticks);
+      if (c.code === C.QRT) { this.core.host({kind: "log", text: QRT_RECEIVED}); this.close(); return; }
+      switch (this.state) {
+        case "Calling": this.onConnectReply(now, c.code); break;
+        case "Receiving": this.ctrlReceiving(c.code); break;
+        case "AwaitGo": this.ctrlAwaitGo(c.code); break;
+        case "Sending": this.ctrlSending(c.code); break;
+        case "IdleSent":
+          if (c.code === C.NO_TRAFFIC && this.wantsQrt()) this.qrt();
+          else if (c.code === C.NO_TRAFFIC && this.buffered() === 0) { this.repeats = 0; this.enter("Idle"); this.link.idleTimer = now + IDLE_POLL; }
+          else if (c.code === C.NO_TRAFFIC) this.say(C.BREAK, "AwaitGo");
+          else if (c.code === C.BREAK) this.grant();
+          else this.resendLast();
+          break;
+        case "Idle": if (c.code === C.IDLE) this.answerPoll(); else if (c.code === C.BREAK) this.grant(); break;
+        case "FqWait": this.resendLast(); break;
+      }
+    }
+    grant() { this.repeats = 0; this.say(FMC.GO_AHEAD, "Receiving"); }
+    answerPoll() {
+      this.repeats = 0;
+      if (this.wantsQrt() || this.buffered() > 0) this.say(FMC.BREAK, "AwaitGo");
+      else this.say(FMC.NO_TRAFFIC, "Idle");
+    }
+    onConnectReply(now, code) {
+      if (code !== FMC.CONNECT_REPLY_NARROW && code !== FMC.CONNECT_REPLY_WIDE) return;
+      this.bw = code === FMC.CONNECT_REPLY_WIDE ? FM_WIDE : FM_NARROW;
+      if (this.bw !== this.cfg.bw) {
+        const t = this.timing;
+        this.timing = new FmTiming(this.bw, this.vias.length);
+        this.timing.ack(t.mean[FM_REC.CONNECT], FM_REC.CONNECT);
+      }
+      this.lead.newSession();
+      this.connected = true;
+      this.link.startFiles(this.tx.buf);
+      this.feedWatchdog(now);
+      this.core.host({kind: "pending"});
+      this.core.host({kind: "connected", caller: this.caller, answerer: this.answerer, vias: this.vias.slice(), bw: this.bw});
+      if (this.link.discNow) { this.qrt(); return; }
+      this.grant();
+    }
+    onRecord0(now, bytes, snrDb) {
+      const r = Record0.parse(bytes);
+      if (!r || r.kind !== R0_KIND.CONNECT || r.hop !== r.vias()) return;
+      const me = this.cfg.host.mycalls.find(c => c.toUpperCase() === r.target.toUpperCase());
+      if (me === undefined) return;
+      if (this.state === "Listen") { /* fall through */ }
+      else if (this.state === "AwaitGo" && this.firstTurn && r.source === this.caller) { this.feedWatchdog(now); this.resendLast(); return; }
+      else return;
+      this.mycall = me;
+      this.caller = r.source; this.answerer = me;
+      this.vias = [r.via1, r.via2].filter(v => v);
+      const up = this.vias.length ? this.vias[this.vias.length - 1] : r.source;
+      this.keyD = callHash(ascii(me)); this.keyU = callHash(ascii(up));
+      this.registered = r.registered;
+      this.link.comp = compFromBits(r.compression);
+      this.lead.newSession();
+      this.feedWatchdog(now);
+      this.core.host({kind: "unencrypted"});
+      const sn = this.vias.length === 0 ? snrDb + FM_SNR_OFFSET_DB : r.chainSnr / 7;
+      this.core.host({kind: "sn", sn});
+      this.core.host({kind: "pending"});
+      if (this.vias.length && !r.registered) { this.timing = new FmTiming(this.cfg.bw, this.vias.length); this.qrt(); return; }
+      this.bw = r.wide && this.cfg.bw === FM_WIDE ? FM_WIDE : FM_NARROW;
+      this.timing = new FmTiming(this.bw, this.vias.length);
+      this.connected = true;
+      this.firstTurn = true;
+      this.link.startFiles(this.tx.buf);
+      this.core.host({kind: "connected", caller: this.caller, answerer: this.answerer, vias: this.vias.slice(), bw: this.bw});
+      this.core.host({kind: "registered", registered: this.registered});
+      this.say(this.bw === FM_WIDE ? FMC.CONNECT_REPLY_WIDE : FMC.CONNECT_REPLY_NARROW, "AwaitGo");
+    }
+    ctrlAwaitGo(code) {
+      if (code === FMC.GO_AHEAD) {
+        this.repeats = 0;
+        if (this.wantsQrt()) { this.qrt(); return; }
+        if (this.firstTurn) { this.firstTurn = false; this.startTurn(); return; }
+        const q = this.buffered();
+        if (q === 0) { this.link.idleTicks = 0; this.say(FMC.IDLE, "IdleSent"); }
+        else if (this.offerRx !== null && q <= fmPayload(this.bw, this.offerRx, this.vias.length > 0) && q !== this.lastHeld) {
+          this.lastHeld = q; this.sendCtrl(FMC.BREAK); this.announce();
+        } else this.startTurn();
+      } else if (code === FMC.IDLE) this.answerPoll();
+      else this.resendLast();
+    }
+    hasVias() { return this.vias.length > 0; }
+    startTurn() {
+      this.link.files.flush(this.tx.buf);
+      const start = this.offerRx;
+      this.offerRx = null;
+      this.enter("Sending");
+      this.level = start === null ? FM_REC.START : Math.min(start, this.top());
+      this.prevLevel = this.level;
+      this.offerTx = this.link.b2f.fs ? fmRecommendLevel(this.bw, this.adapt, this.registered) : null;
+      this.transmit();
+    }
+    transmit() {
+      const bw = this.bw, rec = this.level, vias = this.vias.length > 0;
+      const flen = bw.level(rec).frameBytes, p = fmPayload(bw, rec, vias), text = this.link.text(), nf = this.nframes();
+      const levelByte = rec === FM_REC.START && this.offerTx !== null ? this.offerTx : 0;
+      this.tx.inflight = []; this.tx.states = [];
+      let state = Math.max(this.tx.state, TC_START), pos = 0;
+      const frames = [], all = this.tx.buf.view();
+      for (let i = 0; i < nf; i++) {
+        const q = all.subarray(pos), rest = q.length;
+        let squeeze = false;
+        if (text && nf === 1 && rest > p) {
+          if (this.tx.textTurn === null) this.tx.textTurn = turnCompresses(q);
+          squeeze = this.tx.textTurn;
+        }
+        let data, take;
+        if (squeeze) { const e = fillFrame(q, p, state); state = e.endState; data = e.bytes; take = e.consumed; }
+        else { take = Math.min(rest, p); data = q.subarray(0, take); }
+        const after = q.subarray(take), last = after.length === 0 && (nf === 1 || i === 1);
+        const hint = levelByte !== 0 ? FM_HINT_MAX : this.tx.textTurn === true ? fmQueueHintText(bw, rec, after, state, vias)
+          : fmQueueHint(bw, rec, after.length, vias);
+        const trailer = {leadReport: this.heardRow, level: levelByte, chainSnr: vias ? 0 : null};
+        frames.push(fmBuildData(rec, flen, data, squeeze, hint, last, trailer));
+        this.tx.inflight.push(take); this.tx.states.push(state); this.tx.lastHint = hint;
+        pos += take;
+      }
+      if (rec !== FM_REC.START) this.offerTx = null;
+      this.lastTx = {kind: "data", record: rec};
+      this.core.transmitting = true;
+      this.link.deadline = null; this.window = null;
+      this.core.out.push({kind: "tx", tx: {type: "data", record: rec, frames, lead: this.lead.dataSymbols()}});
+    }
+    compressedTurn() { return this.state === "Sending" ? this.tx.textTurn === true : this.link.rx.turnCompressed === true; }
+    countFrame(record) {
+      const l = fmAsLevel(record);
+      if (this.compressedTurn()) this.stays = 0;
+      else if (this.stayLevel === null || l > this.stayLevel) this.stays = 1;
+      else this.stays++;
+      this.stayLevel = l;
+    }
+    nframes() { return this.two ? 2 : 1; }
+    updateTwo() { this.two = this.vias.length === 0 && this.stays > 1 && !this.compressedTurn(); }
+    txTake(keep) {
+      const t = this.tx, inflight = t.inflight, left = [];
+      t.inflight = [];
+      let pos = 0;
+      inflight.forEach((n, i) => {
+        if (keep[i]) {
+          t.buf.remove(pos, Math.min(n, t.buf.length - pos));
+          if (n > 0) left.push(t.buf.length);
+          if (i < t.states.length) t.state = t.states[i];
+        } else pos += n;
+      });
+      t.states = [];
+      return left;
+    }
+    accept(keep) {
+      const rec = this.level, n = this.tx.inflight.length;
+      for (let i = 0; i < n; i++) { if (keep[i]) this.countFrame(rec); else this.stays = 0; }
+      for (const left of this.txTake(keep)) this.core.host({kind: "buffer", n: left + this.link.files.length});
+    }
+    ctrlSending(code) {
+      const C = FMC;
+      this.alt = !this.alt;
+      this.repeats = 0;
+      const was = this.level;
+      if ([C.ACK_STAY, C.ACK_UP2, C.ACK_DOWN, C.ACK_UP1, C.ACK_UP3, C.ACK_UP6].includes(code)) this.accept([true, true]);
+      else if (code === C.ACK_SECOND_ONLY) this.accept([false, true]);
+      else if (code === C.ACK_FIRST_ONLY) this.accept([true, false]);
+      else if (code === C.NACK) this.accept([]);
+      else if (code === C.BREAK || code === C.IDLE) {
+        this.accept([true, true]);
+        this.link.turnQuit(this.tx.buf);
+        if (this.wantsQrt()) this.qrt();
+        else if (code === C.BREAK) this.grant();
+        else this.answerPoll();
+        return;
+      } else return;
+      if (code === C.NACK && fmAsLevel(was) === 1) this.nackRun++; else this.nackRun = 0;
+      const h = this.tx.lastHint;
+      if ([C.ACK_UP2, C.ACK_UP1, C.ACK_UP3, C.ACK_UP6, C.ACK_FIRST_ONLY].includes(code) || (code === C.ACK_DOWN && h === 0) ||
+        (code === C.ACK_STAY && h === 2)) this.stays = 0;
+      this.prevLevel = was;
+      const r = fmSenderLevelAfter(was, code);
+      this.level = r === FM_REC.SHORT || r === FM_REC.START ? r : r >= 1 && r <= 13 ? Math.min(r, this.bw.topLevel) : this.bw.topLevel;
+      this.updateTwo();
+      if (this.nackRun >= 4) { this.core.host({kind: "log", text: "disconnecting due to poor conditions"}); this.qrt(); }
+      else if (this.wantsQrt()) this.qrt();
+      else this.transmit();
+    }
+    ctrlReceiving(code) {
+      const C = FMC;
+      if ((code === C.ACK_REQ_0 || code === C.ACK_REQ_1 || code === C.RELAY_FAILED) && (code === this.ackReq() || code === C.RELAY_FAILED)) {
+        this.alt = !this.alt;
+        const n = code === C.RELAY_FAILED ? 1 : this.nframes();
+        for (let i = 0; i < n; i++) this.adapt.frameLost();
+        this.stays = 0; this.two = false;
+        this.prevLevel = this.level;
+        this.level = fmStepDown(this.level);
+        this.sendCtrl(C.NACK);
+        this.announce();
+      } else if (code === C.ACK_REQ_0 || code === C.ACK_REQ_1) this.resendLast();
+      else if (code === C.BREAK || code === C.CONNECT_REPLY_NARROW || code === C.CONNECT_REPLY_WIDE) this.sendCtrl(C.GO_AHEAD);
+      else if (code === C.IDLE) this.answerPoll();
+    }
+    onData(now, d) {
+      if (this.core.transmitting || !d.frames.length || d.tEnd < this.core.txEnd) return;
+      if (d.record === FM_REC.CONNECT) {
+        const f = d.frames.find(x => x.ok);
+        if (f) this.onRecord0(now, f.bytes, f.snrDb);
+        return;
+      }
+      if (this.state !== "Receiving" || !this.records().includes(d.record)) return;
+      this.feedWatchdog(now);
+      if (this.wantsQrt()) { this.qrt(); return; }
+      this.receive(d);
+    }
+    receive(d) {
+      const rec = d.record, vias = this.vias.length > 0, two = d.frames.length === 2;
+      const parsed = this.parseFrames(d);
+      if (parsed.length && parsed[0] && this.link.rx.turnCompressed === null) this.link.rx.turnCompressed = parsed[0].control.compressed;
+      const ok = parsed.map(p => p !== null);
+      this.dataStored = true;
+      this.alt = !this.alt;
+      this.repeats = 0;
+      const lastok = ok.lastIndexOf(true), held = this.rxStats(d, parsed, lastok), skip = fmPayload(this.bw, rec, vias);
+      parsed.forEach((p, i) => { if (p) this.core.deliver(this.link, p.data, i === 1 && !ok[0] ? skip : 0); });
+      if (lastok < 0 || held === null) { this.stepBack(rec, FMC.NACK); return; }
+      const lastf = parsed[lastok];
+      if ((two && ok[0] && !ok[1]) || (!two && this.two && ok[0])) {
+        if (!two) { this.adapt.frameLost(); this.stays = 0; }
+        this.stepBack(rec, FMC.ACK_FIRST_ONLY);
+        return;
+      }
+      if (lastf.control.last && ok.every(o => o)) {
+        const fq = !two && !lastf.control.full && bytesEq(lastf.data, "FQ\r");
+        this.endTurn(rec, lastf.trailer.level, fq);
+        return;
+      }
+      const dec = fmDecide(this.bw, this.adapt, {record: rec, hint: lastf.control.hint, complete: ok[0]}, held, this.registered);
+      if (dec.stayReset) this.stays = 0;
+      this.prevLevel = rec;
+      this.level = dec.level;
+      this.updateTwo();
+      this.sendCtrl(dec.code);
+      this.announce();
+    }
+    parseFrames(d) {
+      const vias = this.vias.length > 0;
+      return d.frames.map((f, i) => {
+        if (!f.ok) return null;
+        const p = fmParseData(d.record, f.bytes, vias);
+        if (!p) return null;
+        const data = this.link.inflate(i === 1, p.control.compressed, p.data);
+        if (data === null || data === undefined) return null;
+        p.data = data;
+        return p;
+      });
+    }
+    rxStats(d, parsed, lastok) {
+      const rec = d.record, n = this.bw.topLevel;
+      let held = null;
+      parsed.forEach((p, i) => {
+        if (p) {
+          this.lead.report(p.trailer.leadReport);
+          const snr = d.frames[i].snrDb + FM_SNR_OFFSET_DB;
+          held = this.adapt.frameOk(snr, fmAsLevel(rec), n);
+          this.countFrame(rec);
+          if (i === lastok) this.core.host({kind: "sn", sn: snr});
+          this.core.host({kind: "rxFrame", record: rec});
+        } else { this.adapt.frameLost(); this.stays = 0; }
+      });
+      return held;
+    }
+    stepBack(rec, code) { this.prevLevel = rec; this.level = fmStepDown(rec); this.two = false; this.sendCtrl(code); this.announce(); }
+    endTurn(rec, offer, fq) {
+      if (rec === FM_REC.START) { const o = Math.min(offer, this.top()); this.offerRx = o >= 1 && o <= 13 ? o : null; }
+      if (this.wantsQrt()) { this.qrt(); return; }
+      const code = this.cfg.host.chat && this.buffered() === 0 ? FMC.IDLE : FMC.BREAK;
+      this.level = rec;
+      if (code === FMC.IDLE) this.link.idleTicks = 0;
+      this.say(code, code === FMC.BREAK ? (fq ? "FqWait" : "AwaitGo") : "IdleSent");
+    }
+  }
+
+  // ───────────────────────────── station: FM modem (station/fm.rs). Not ported: the digipeater and
+  // the broadcast frames (CQ and KISS over AX.25 in record 16) -- CQFRAME answers WRONG on FM.
+  const FM_SILENT_TAIL = 45 * 1152, FM_WAVEOUT_QUEUE = 200 * 256, FM_DATA_OVERHANG = FM_SILENT_TAIL - FM_WAVEOUT_QUEUE;
+  const FM_SEED_MIX = 0x9E3779B97F4A7C15n;
+  function fmBitrate(bw, record, tx) {
+    const shown = record >= 1 && record <= 13 ? record : 1;
+    return {kind: "bitrate", level: shown, bps: rint(bw.level(record).netBps), tx};
+  }
+  function fmLevelNote(record, frame, vias) {
+    const d = fmParseData(record, frame, vias);
+    return d && record === FM_REC.START && d.trailer.level !== 0 ? ` lvl ${d.trailer.level}` : "";
+  }
+  function fmPassband(bw) {
+    let lo = Infinity, hi = 0;
+    for (const r of bw.layouts) { lo = Math.min(lo, r.first); hi = Math.max(hi, r.first + r.step * (r.nc - 1)); }
+    const df = FS / NFFT;
+    return [(lo - 0.5) * df, (hi + 0.5) * df];
+  }
+  const fmQuantised = x => { for (let i = 0; i < x.length; i++) x[i] = quantise(x[i]); return x; };
+  class FmStation {
+    constructor(cfg, opts) {
+      fmWarm();
+      const o = Object.assign({driveDb: DEFAULT_DRIVE_DB, txLatency: 0, rxLag: 0, pttTail: 0}, opts || {});
+      this.cfg = cloneFmCfg(cfg); this.opts = o;
+      this.rng = new XorShift((BigInt(cfg.seed) * FM_SEED_MIX) & 0xFFFFFFFFFFFFFFFFn);
+      this.session = new FmSession(cloneFmCfg(cfg));
+      this.tx = new TxScheduler(o.txLatency, o.rxLag);
+      this.listenOn = true; this.listening = null; this.now = 0; this.reports = []; this.pending = new ByteQ();
+      this.busyDet = new Busy(BW2750);
+      this.rx = new FmReceiver(cfg.bw, 0, [FM_REC.CONNECT], 1); this.rxBase = 0;
+      this.modm = new FmModulator(cfg.bw); this.cb = null;
+      this.drain();
+    }
+    get state() { return this.session.state; }
+    bandwidth() { return this.session.bw; }
+    linked() { return !!this.listening && this.listening.linked; }
+    isFree() { return this.idle() && !this.tx.ptt && !this.tx.tuning(); }
+    setBusy() {}
+    onEvent(ev) {
+      const now = this.now;
+      let tEnd;
+      if (ev.kind === "ctrl") tEnd = this.rxBase + fmTo48(ev.det.tEnd);
+      else if (ev.kind === "tx") tEnd = this.rxBase + fmTo48(ev.tEnd);
+      else { this.drain(); return; }
+      this.tx.hold(tEnd + MIN_GAP);
+      if (ev.kind === "ctrl") {
+        const d = ev.det;
+        this.reports.push({kind: "trace", text: `rx c${d.code} hits ${d.hits} lead ${d.leadRow} end ${(tEnd / SECOND).toFixed(3)} ${this.session.state}`});
+        if (ev.side !== SIDE.SOURCE) return;
+        this.session.onCtrl(now, {code: d.code, leadRow: d.leadRow, tEnd});
+      } else if (ev.record === FM_REC.BROADCAST) {
+        /* record 16 (broadcast) is not ported */
+      } else {
+        const ok = ev.frames.map(f => f.frame.ok ? "+" : "-").join("");
+        const last = ev.frames[ev.frames.length - 1];
+        const lvl = last && last.frame.ok ? fmLevelNote(ev.record, last.frame.bytes, this.session.hasVias()) : "";
+        this.reports.push({kind: "trace", text: `rx rec${ev.record} [${ok}]${lvl} end ${(tEnd / SECOND).toFixed(3)} ${this.session.state}`});
+        this.session.onData(now, {record: ev.record, tEnd, frames: ev.frames.map(f => ({ok: f.frame.ok && !f.frame.missing,
+          bytes: f.frame.ok ? f.frame.bytes : new Uint8Array(0), snrDb: f.frame.snrDb}))});
+      }
+      this.drain();
+    }
+    host(h) {
+      if (h.kind === "unencrypted") this.reports.push({kind: "unencrypted"});
+      else if (h.kind === "rxFrame") this.reports.push(fmBitrate(this.session.bw, h.record, false));
+      else if (h.kind === "log") this.reports.push({kind: "trace", text: h.text});
+      else this.reports.push({kind: "host", ev: h});
+    }
+    refreshListen() { if (this.listening) this.apply(this.listening); }
+    render(t) {
+      const d = this.opts.driveDb, keyed = [];
+      let x, tail;
+      if (t.type === "ctrl") { x = fmFrameAudio(this.cb, t.code, t.lead, d); tail = 0; }
+      else {
+        const bw = t.record === FM_REC.CONNECT ? this.cfg.bw : this.session.bw;
+        if (this.modm.bw !== bw) this.modm = new FmModulator(bw);
+        this.reports.push(fmBitrate(bw, t.record, true));
+        for (let i = 1; i < t.frames.length; i++) keyed.push(fmBitrate(bw, t.record, true));
+        x = this.modm.transmission(t.record, this.session.key(), t.frames, t.lead, {driveDb: d, preSignal: false}, n => this.rng.below(n));
+        tail = FM_DATA_OVERHANG;
+      }
+      return [fmQuantised(x), tail, keyed];
+    }
+    burstDone(kind, start, end) {
+      const heard = end + this.tx.latency;
+      this.rx.mute(start - this.rxBase, heard - this.rxBase);
+      this.rx.markTxEnd(heard - this.rxBase);
+      const mark = this.reports.length;
+      if (kind === KIND.SESSION) { this.session.onTxDone(heard + this.opts.pttTail); this.drainAt(end); }
+      this.tx.release(end, this.reports, mark);
+    }
+    apply(l) {
+      const o = this.listening;
+      if (!o || o.records.join() !== l.records.join() || o.nframes !== l.nframes)
+        this.reports.push({kind: "trace", text: `expect [${l.records.join(", ")}] x${l.nframes}`});
+      this.rx.setBandwidth(l.bw);
+      this.rx.setKey(l.key);
+      const answering = this.listenOn || l.linked || this.session.state !== "Listen";
+      this.rx.expect(answering ? l.records.slice() : [], l.nframes);
+      this.cb = l.ctrl ? new FmCodebook(l.ctrl[0], l.ctrl[1]) : null;
+      if (this.cb && l.codes.length) this.rx.setCtrl(SIDE.SOURCE, this.cb, l.codes);
+      else this.rx.setCtrl(SIDE.SOURCE, null, []);
+      this.listening = l;
+    }
+    drain() { this.drainAt(this.now); }
+    drainAt(now) {
+      if (this.pending.length && this.session.state !== "Listen") this.session.send(now, this.pending.take());
+      const txs = [];
+      let o;
+      while ((o = this.session.pop())) {
+        if (o.kind === "tx") txs.push(o.tx);
+        else if (o.kind === "listen") this.apply(o.listen);
+        else this.host(o.ev);
+      }
+      for (const t of txs) {
+        const what = t.type === "ctrl" ? `tx c${t.code} lead ${t.lead}`
+          : `tx rec${t.record}x${t.frames.length}${fmLevelNote(t.record, t.frames[t.frames.length - 1], this.session.hasVias())} lead ${t.lead}`;
+        this.reports.push({kind: "trace", text: `${what} ${this.session.state}`});
+        this.tx.stopTune();
+        const earliest = this.tx.nextStart(now), [samples, tail, keyed] = this.render(t);
+        this.tx.push(samples, tail, earliest, keyed, KIND.SESSION);
+      }
+    }
+    idle() { return this.session.state === "Listen" && this.tx.isEmpty(); }
+    link() {
+      const s = this.session;
+      return {state: s.state, level: fmAsLevel(s.level), peer: s.peer(), bw: s.bw.wide ? "wide" : "narrow",
+        passband: fmPassband(s.bw), attempts: s.attempts, afcHz: null};
+    }
+    reconfigure(cfg) {
+      if (!this.idle()) return false;
+      this.cfg = cloneFmCfg(cfg);
+      this.session = new FmSession(cloneFmCfg(this.cfg));
+      this.listening = null;
+      this.drain();
+      return true;
+    }
+    resetSession() { this.session = new FmSession(cloneFmCfg(this.cfg)); this.drain(); }
+    keyBlock(t0, input, output) { return HfStation.prototype.keyBlock.call(this, t0, input, output); }
+    process(input, output) {
+      const t0 = this.now, fed = this.keyBlock(t0, input, output);
+      this.now = t0 + input.length;
+      const forced = this.tx.ptt || !this.tx.isEmpty() || this.session.state !== "Listen";
+      for (const e of this.busyDet.feed(input, forced)) this.reports.push({kind: "busy", on: e});
+      for (const ev of this.rx.feed(fed)) this.onEvent(ev);
+      const dl = this.session.nextDeadline();
+      if (dl !== null && dl <= this.now) this.session.poll(this.now);
+      this.drain();
+    }
+    connect(mycall, remote, vias) {
+      if (this.session.state === "AwaitGo" && !this.tx.ptt && this.tx.isEmpty() && !this.linked()) this.resetSession();
+      if (this.session.state !== "Listen") return false;
+      const ok = this.session.connect(this.now, mycall, remote, vias || []);
+      this.drain();
+      return ok;
+    }
+    cqFrame() { return false; }
+    setIgnoreDcd() {}
+    setBw() { return false; }
+    setP2p() {}
+    setKissRx() {}
+    // Modem trait defaults (station/mod.rs), as HfStation
+    ptt() { return this.tx.ptt; }
+    busy() { return this.busyDet.on; }
+    buffered() { return this.pending.length + this.session.buffered(); }
+    tune(on) {
+      if (!on) { this.tx.untune(this.now, this.reports); return true; }
+      if (!this.idle() || this.tx.ptt) return false;
+      this.tx.startTune(FmStation.tuneTone(this.opts.driveDb));
+      return true;
+    }
+    static tuneTone(db) { return Array.from(fmTuneBlock(db), v => quantise(v)); }
+    tuning() { return this.tx.tuning(); }
+    setDrive(db) { this.opts.driveDb = db; this.tx.retune(() => FmStation.tuneTone(db)); }
+    setTxLatency(t, lag) { this.opts.txLatency = t; this.opts.rxLag = lag; this.tx.setLatency(t, lag); }
+    config() { return this.cfg; }
+    update(f) { f(this.cfg); f(this.session.cfg); }
+    pop() { return this.tx.pop(this.reports); }
+    send(data) {
+      if (this.session.state === "Listen") {
+        const room = Math.max(TX_RING_BYTES - this.buffered(), 0);
+        if (data.length > room) this.reports.push({kind: "trace", text: "buffer limit exceeded"});
+        this.pending.push(data.subarray(0, Math.min(data.length, room)));
+        return;
+      }
+      this.session.send(this.now, data);
+      this.drain();
+    }
+    disconnect() { this.session.disconnect(this.now); this.drain(); }
+    abort() { this.session.abort(this.now); this.drain(); }
+    dropLink() { this.session.dropLink(); this.drain(); }
+    setListen(on) { this.listenOn = on; if (this.listening) this.apply(this.listening); }
+  }
+  FmStation.VERSION = "VERSION VARA FM v4.4.0"; FmStation.VIAS = true; FmStation.CWID_GATEWAY = false;
+
   // @@PART5@@
 
   // @@EXPORTS@@
   return {
+    // FM physical layer (TX)
+    FM_REC, fmKeyed, fmRecLevel, fmQamPilot, FmLevel, FmBandwidth, FM_NARROW, FM_WIDE, FM_MAX_SPF, fmGain,
+    fmConstellation, fmTablesGen, fmTables, fmDat, fmWhitening, fmWarm, fmPhaseIndices, fmPhasors, fmRecordKey,
+    fmEncode, FmCodec, RECORD0_LEN, fmPayloadLen, fmCtrlByte, fmCtrlFromByte, trailerRead, trailerRestamp,
+    fmBuildData, fmParseData, R0_KIND, Record0, fmSnrByte, FM_SYMBOL, FM_CODE_ROWS, FM_LEAD_ROWS, NO_LEAD_ROW,
+    TAMPER_KEY, fmCodes, fmConnectCodes, fmLeadIn, SIDE, FmCodebook, fmCtrlGain, fmCtrlSynth, fmFrameAudio,
+    dataLeadIn, LeadIn, PRE_SIGNAL_SYMBOLS, CONNECT_LEAD_IN, IDLE_BEACON_LEAD_IN, fmSymbolMap, fmFrameRows,
+    fmLeadRows, preSignalRows, fmSynth, fmTuneBlock, FM_TUNE_BACKOFF_DB, FmModulator, fmToI16,
+    // FM physical layer (RX)
+    FS6, FM_DEC, FM_NF, FM_CP, FM_SYMLEN, fmTo48, FmFrontEnd, FmCtrlDetector, FmStft, FmOfdmEngine, FmReceiver,
+    MIN_COHERENCE, CP_MID,
+    // FM ARQ
+    FMC, FM_ACK_REQ, FM_SNR_OFFSET_DB, FM_HINT_MAX, fmPayload, fmThr, fmQamCap, fmQueueHint, fmQueueHintText,
+    FmAdaptation, fmMargins, fmMaxLevel, fmDecide, fmSenderLevelAfter, fmStepDown, fmRecommendLevel, FM_TICK, CODE_GATE,
+    DETECT_HOLD, fmWatchdog, state2Backoff, callerConnectWindow, receiverSyncWindow, FmTiming, MISS_TICKS,
+    FM_RX_GRACE, NO_LEAD_HEARD, fmConfig, cloneFmCfg, FmSession,
+    // FM station
+    FM_DATA_OVERHANG, fmPassband, FmStation,
     // basics
     crc16, crcOk, VbRnd, HF_SEED, FM_SEED, whitening, pskPhasorIndex, dataDat, ofdmPhasorIndex,
     callHash, ssidCode, withSsid, packCall, unpackCall,
