@@ -37,12 +37,14 @@ const cfg = partition("cfg"), assets = partition("spiffs"), app = partition("app
 check("partitions.csv declares a cfg partition", !!cfg);
 check("partitions.csv still declares the asset partition under the name spiffs", !!assets);
 if (cfg && assets && app) {
-  check("cfg does not overlap the application", cfg.offset >= app.offset + app.size);
-  check("the asset partition starts where cfg ends", assets.offset === cfg.offset + cfg.size);
+  check("the asset partition starts where the application ends",
+    assets.offset === app.offset + app.size);
+  check("cfg starts where the asset partition ends", cfg.offset === assets.offset + assets.size);
   // Written at an offset, sized to the partition: an inconsistency here is not
   // an error at build time, it is a bundle that runs off the end of the chip.
-  check("both partitions fit a 4 MB flash exactly",
-    assets.offset + assets.size === 4 * 1024 * 1024);
+  // And cfg sits at the very end so that the next app0/spiffs move leaves it be.
+  check("cfg ends exactly at the end of a 4 MB flash",
+    cfg.offset + cfg.size === 4 * 1024 * 1024);
 }
 
 // ---- the mounts ------------------------------------------------------------
@@ -100,11 +102,24 @@ check("the release script never puts cfg in the bundle",
 for (const script of ["upload-firmware-spiffs.sh", "upload-spiffs.sh"]) {
   const text = fs.readFileSync(path.join(ROOT, "tools", script), "utf8");
   check(script + " reads the layout from partitions.csv",
-    /partitions\.csv/.test(text) && !/0x170000["\s]*$/m.test(text));
+    /partitions\.csv/.test(text) && !/0x(170000|3E0000)["\s]*$/im.test(text));
   check(script + " writes the asset partition, never cfg", !/\bcfg\b.*write_flash/.test(text));
+  check(script + " checks the device's partition table before writing",
+    /read_flash[\s\S]*DEVICE_PARTITIONS[\s\S]*write_flash/.test(text));
 }
+// The one write of cfg anywhere: a layout migration, putting back the bytes it
+// has just read off the same device -- never an image from the build.
+const fullUpload = fs.readFileSync(path.join(ROOT, "tools", "upload-firmware-spiffs.sh"), "utf8");
+// (read_flash and erase_region also name the offset, followed by the size.)
+const cfgWrites = fullUpload.match(/"\$CFG_NEW_OFFSET" "\$(?!CFG_SIZE")[A-Z_]+"/g) || [];
+check("upload-firmware-spiffs.sh writes cfg only from what it read off the device",
+  cfgWrites.length === 1 && cfgWrites[0] === '"$CFG_NEW_OFFSET" "$CFG_SAVED"'
+  && /"\$CFG_OLD_OFFSET" "\$CFG_SIZE" "\$CFG_SAVED"/.test(fullUpload)
+  && /"\$FLASH_LAYOUT" cfg "\$CFG_SAVED"/.test(fullUpload));
+check("upload-spiffs.sh never touches cfg", !/CFG_/.test(
+  fs.readFileSync(path.join(ROOT, "tools", "upload-spiffs.sh"), "utf8")));
 
-const total = 18;
+const total = 22;
 if (failures.length) {
   console.error("FS PARTITION AUDIT FAIL (" + failures.length + " of " + total + ")\n  "
     + failures.join("\n  "));

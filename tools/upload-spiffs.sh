@@ -3,7 +3,8 @@ set -euo pipefail
 
 # Build and optionally upload LittleFS to the partition named "spiffs". The source data/
 # directory is never renamed or modified except for regenerated compressed
-# assets. Partition offset and size come from the installed no_ota.csv.
+# assets. Partition offset and size come from the sketch-local partitions.csv,
+# and the device's own table is checked against it before anything is written.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT=""
@@ -46,18 +47,18 @@ fi
 
 ESP32_HW_ROOT="$(find "$ARDUINO15_DIR/packages/esp32/hardware/esp32" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
 # The sketch-local partitions.csv wins whenever it exists, because that is the
-# layout the firmware is actually built and flashed with: app0 is shrunk to
-# 0x160000 and the reclaimed space handed to spiffs, which moves the filesystem to
-# offset 0x170000 and grows it to 0x290000. Reading the core's no_ota.csv instead
-# produced a 0x1E0000 image written at 0x210000 -- 640 kB past the start of the
-# real partition, so LittleFS found no filesystem and the stored configuration went
-# with it. upload-firmware-spiffs.sh and gh-pages.sh already use the local file.
+# layout the firmware is actually built and flashed with. Reading the core's
+# no_ota.csv instead once produced a 0x1E0000 image written at 0x210000 -- 640 kB
+# past the start of the real partition, so LittleFS found no filesystem and the
+# stored configuration went with it. upload-firmware-spiffs.sh and gh-pages.sh use
+# the local file too.
 PARTITION_CSV="$ROOT_DIR/partitions.csv"
 [[ -f "$PARTITION_CSV" ]] || PARTITION_CSV="$ESP32_HW_ROOT/tools/partitions/no_ota.csv"
+GEN_PARTITIONS="$ESP32_HW_ROOT/tools/gen_esp32part.py"
 MKLITTLEFS_BIN="$(find "$ARDUINO15_DIR/packages/esp32/tools/mklittlefs" -type f -name mklittlefs -perm -u+x | sort -V | tail -1)"
 ESPTOOL_PY="$(find "$ARDUINO15_DIR/packages/esp32/tools/esptool_py" -type f -name esptool.py | sort -V | tail -1)"
 
-for required in "$PARTITION_CSV" "$MKLITTLEFS_BIN" "$ESPTOOL_PY"; do
+for required in "$PARTITION_CSV" "$MKLITTLEFS_BIN" "$ESPTOOL_PY" "$GEN_PARTITIONS"; do
   [[ -f "$required" ]] || { echo "ERROR: required tool/file missing: $required" >&2; exit 1; }
 done
 
@@ -104,6 +105,24 @@ fi
 [[ -n "$PORT" ]] || { echo "ERROR: --write requires --port DEVICE" >&2; exit 2; }
 [[ -e "$PORT" ]] || { echo "ERROR: serial port does not exist: $PORT" >&2; exit 1; }
 [[ "$BAUD" =~ ^[0-9]+$ ]] || { echo "ERROR: invalid baud rate: $BAUD" >&2; exit 2; }
+
+# The same LittleFS offset means something else on a device with another
+# layout: written to a device still on the REV 20261101 table (or older), this image would
+# land on the tail of the firmware and on cfg. Only the full upload script
+# migrates a layout, so this one refuses any mismatch.
+EXPECTED_PARTITIONS="${BUILD_DIR}/expected-partitions.bin"
+DEVICE_PARTITIONS="${BUILD_DIR}/device-partitions.bin"
+python3 "$GEN_PARTITIONS" "$PARTITION_CSV" "$EXPECTED_PARTITIONS" >/dev/null
+echo "==> Verifying the device partition table before writing"
+python3 "$ESPTOOL_PY" --chip esp32 --port "$PORT" --baud "$BAUD" \
+  --before default_reset --after no_reset read_flash \
+  0x8000 "$(stat -c '%s' "$EXPECTED_PARTITIONS")" "$DEVICE_PARTITIONS"
+if ! cmp -s "$EXPECTED_PARTITIONS" "$DEVICE_PARTITIONS"; then
+  echo "ERROR: device partition table does not match $PARTITION_CSV." >&2
+  echo "       Nothing was written. Use tools/upload-firmware-spiffs.sh, which" >&2
+  echo "       moves an older layout over and carries the configuration with it." >&2
+  exit 1
+fi
 
 echo "==> Writing only LittleFS at $SPIFFS_OFFSET on $PORT"
 python3 "$ESPTOOL_PY" --chip esp32 --port "$PORT" --baud "$BAUD" \

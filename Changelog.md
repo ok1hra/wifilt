@@ -11,6 +11,26 @@ published.
 
 ## Working tree — not committed
 
+**Flash layout: `cfg` moved to the end of the flash, +192 kB for the web assets.**
+
+* **What.** `app0` 0x160000 → 0x130000 (firmware ~1.06 MB, ~150 kB headroom), `spiffs`
+  0x190000 + 0x270000 → 0x140000 + 0x2A0000, `cfg` 0x170000 → 0x3E0000 (same 128 kB). The
+  asset gate grows from 2 228 224 to 2 424 832 B, which makes room for the XARA
+  (VARA-compatible) modem; `tools/prepare-spiffs-tree.sh` no longer holds `vara-*` back.
+  With `cfg` at the very end, the next move of the firmware/asset boundary leaves it alone.
+* **Migration.** `tools/upload-firmware-spiffs.sh` recognises the previous table, reads
+  `cfg` off the device (copy kept in `build/release-upload/cfg-backup-*.bin`), writes it at
+  the new offset first and then the new partition table, firmware and assets. Repeatable
+  after an interruption. The decision lives in `tools/flash-layout.py` (with `selftest`).
+  `tools/upload-spiffs.sh` now checks the device table too, so it cannot write the assets
+  over an old device's firmware and `cfg`.
+* **Web installer.** It cannot read the flash, so upgrading from REV 20261101 or older
+  through it loses the configuration: the page asks for a backup first and says that the
+  upload script carries it over instead.
+* **Checks.** `tools/fs-partition-audit.js` asserts the new order (`app0`, `spiffs`, `cfg`
+  ending at 4 MB), that both upload scripts verify the device table, and that the only
+  write of `cfg` is the image just read off the same device.
+
 **WATCH: other browsers follow the data page of whoever holds the radio (PC build only).**
 
 * **What.** `/watch.html` shows what the operator's JS8, WSPR, RTTY, JTTY or Mercury page

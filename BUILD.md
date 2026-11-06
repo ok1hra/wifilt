@@ -221,7 +221,18 @@ node ./tools/stamp-asset-versions.js --check
 The script builds the LittleFS image for the partition named `spiffs`, verifies the
 partition table already on the device before it writes anything, and deliberately leaves
 the bootloader, the partition table and the `cfg` partition alone. `tools/upload-spiffs.sh`
-uploads only the filesystem.
+uploads only the filesystem, and refuses a device whose partition table differs.
+
+**A device on the previous layout is migrated, not refused.** REV 20261101 and older had
+`cfg` between `app0` and `spiffs` (0x170000); it now sits at the end of the flash (0x3E0000)
+so that the `app0`/`spiffs` boundary can move without it. When the script finds that older
+table it reads `cfg` off the device into `build/release-upload/cfg-backup-*.bin`, writes it
+at the new offset, and then writes the new partition table, firmware and filesystem. An
+interrupted run can simply be repeated. `tools/flash-layout.py` makes the decision; a
+table it cannot migrate (no `cfg` at all, i.e. older than REV 20260808, or a moved `nvs`)
+is refused as before, and needs a backup, a full flash and **Upload config**. The web
+installer cannot read the flash, so upgrading such a device through it loses `cfg`; the
+installer page says so.
 
 The very first flash of a blank board is the exception: it needs the bootloader and
 partition table too, which is what the web installer writes.

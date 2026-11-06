@@ -43,12 +43,12 @@ and the whole SETUP page. No custom board is required.
 |---|---|---|
 | `nvs` | 20 kB | WiFi credentials, callsign, locator, radio login — survives a firmware update |
 | `otadata` | 8 kB | boot selection |
-| `app0` | 1.375 MB | the firmware (~1.0 MB, leaving roughly 440 kB of headroom) |
+| `app0` | 1.19 MB | the firmware (~1.06 MB, leaving roughly 150 kB of headroom) |
+| `spiffs` | 2.63 MB | the web assets — pages, scripts, and the browser-side modems (JS8 as WebAssembly, Mercury, XARA) |
 | `cfg` | 128 kB | your configuration: radio slots, LOG and JS8 settings, TX gain calibrations, CW and frequency memories, MSG BOX |
-| `spiffs` | 2.5 MB | the web assets — pages, scripts, and the JS8 modem compiled to WebAssembly |
 
-`0x190000 + 0x270000 = 0x400000` exactly: the layout ends precisely at the end of a 4 MB
-chip. An 8 MB or 16 MB module works too — the extra flash simply goes unused — but a 2 MB
+`0x3E0000 + 0x20000 = 0x400000` exactly: `cfg` ends precisely at the end of a 4 MB chip,
+where moving the boundary between firmware and assets never touches it. An 8 MB or 16 MB module works too — the extra flash simply goes unused — but a 2 MB
 module cannot hold the assets.
 
 Any WROOM form factor will do: a dev board, or one of the USB-dongle style carriers, for

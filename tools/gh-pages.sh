@@ -308,6 +308,13 @@ SPIFFS_SIZE_DEC=$((SPIFFS_SIZE_HEX))
 # Rounded to two decimals in integer arithmetic: +5000 is half of the 10 000 the
 # division discards.
 SPIFFS_SIZE_MB="$(( (SPIFFS_SIZE_DEC + 5000) / 1000000 )).$(printf '%02d' "$(( ((SPIFFS_SIZE_DEC + 5000) / 10000) % 100 ))")"
+APP_SIZE_DEC=$(( $(partition_field app0 5) ))
+APP_SIZE_MB="$(( (APP_SIZE_DEC + 5000) / 1000000 )).$(printf '%02d' "$(( ((APP_SIZE_DEC + 5000) / 10000) % 100 ))")"
+# The last release whose cfg partition sat between app0 and spiffs (0x170000).
+# The installer writes the assets over that spot, so an upgrade from it or from
+# anything older loses the configuration unless the operator restores a backup;
+# tools/upload-firmware-spiffs.sh migrates it instead (tools/flash-layout.py).
+CFG_MOVED_AFTER_REV=20261101
 
 # The image is written at SPIFFS_OFFSET and is exactly SPIFFS_SIZE_DEC long, so
 # an offset and a size that disagree with the flash chip do not fail loudly --
@@ -951,7 +958,7 @@ cat > "${OUTPUT_DIR}/index.html" <<EOF
           </div>
           <div class="hardware-item">
             <dt>Flash layout</dt>
-            <dd>No OTA: 1.375 MB application and ${SPIFFS_SIZE_MB} MB LittleFS web assets$(if [[ -n "$CFG_OFFSET" ]]; then echo ", plus a
+            <dd>No OTA: ${APP_SIZE_MB} MB application and ${SPIFFS_SIZE_MB} MB LittleFS web assets$(if [[ -n "$CFG_OFFSET" ]]; then echo ", plus a
                 separate ${CFG_SIZE_KB} kB configuration partition the installer never writes"; fi).</dd>
           </div>
         </dl>
@@ -1003,13 +1010,17 @@ cat > "${OUTPUT_DIR}/index.html" <<EOF
                 so flashing cannot touch it.</dd>
           </dl>
           <p style="margin-top:0.7rem">
-            <strong>Coming from a release older than 20260808?</strong> Those builds kept the
-            configuration inside the web-asset filesystem that this flash replaces, so it is lost
-            whichever way you answer. Save a backup first and restore it afterwards:
-            <a href="http://wifilt.local/config/download">download it now</a>, or open your
-            device's address and use <strong>SETUP &rarr; Download config</strong>. This page
-            cannot fetch it for you &mdash; it is served over HTTPS and your device over HTTP, so the
-            browser blocks the request.
+            <strong>Coming from REV ${CFG_MOVED_AFTER_REV} or older? Then the configuration is lost
+            whichever way you answer &mdash; save a backup first.</strong> This release moved the
+            configuration partition to the end of the flash to make room for the web modems, and
+            the web pages now cover the place it used to be (releases older than 20260808 kept it
+            inside the web pages themselves). This installer cannot read the board, so it cannot
+            carry it over: <a href="http://wifilt.local/config/download">download the backup now</a>,
+            or open your device's address and use <strong>SETUP &rarr; Download config</strong>, and
+            restore it after flashing. This page cannot fetch it for you &mdash; it is served over
+            HTTPS and your device over HTTP, so the browser blocks the request. (Flashing from the
+            source tree with <code>tools/upload-firmware-spiffs.sh</code> carries the configuration
+            over by itself.)
           </p>
           <p style="margin-top:0.5rem">
             Two things a backup file never carries. The <strong>MSG BOX</strong>: stored messages
@@ -1057,8 +1068,8 @@ cat > "${OUTPUT_DIR}/index.html" <<EOF
           </li>
           <li><strong>Open <code>http://192.168.4.1</code>.</strong> The setup page appears;
               some phones open it by themselves.</li>
-          <li id="restoreStep-esp32" hidden><strong>Erased the device, or came from a release older
-              than 20260808? Restore your backup first</strong> &mdash; <strong>Upload config</strong> at
+          <li id="restoreStep-esp32" hidden><strong>Erased the device, or came from REV
+              ${CFG_MOVED_AFTER_REV} or older? Restore your backup first</strong> &mdash; <strong>Upload config</strong> at
               the bottom of the setup page &mdash; before setting anything by hand. Anything you type
               before restoring will be overwritten by the file.</li>
           <li><strong>Enter your WiFi network and password</strong>, then save. The device joins
@@ -1168,13 +1179,17 @@ $(if [[ "$HAVE_M5ATOM" -eq 1 ]]; then cat <<M5ATOM
                 so flashing cannot touch it.</dd>
           </dl>
           <p style="margin-top:0.7rem">
-            <strong>Coming from a release older than 20260808?</strong> Those builds kept the
-            configuration inside the web-asset filesystem that this flash replaces, so it is lost
-            whichever way you answer. Save a backup first and restore it afterwards:
-            <a href="http://wifilt.local/config/download">download it now</a>, or open your
-            device's address and use <strong>SETUP &rarr; Download config</strong>. This page
-            cannot fetch it for you &mdash; it is served over HTTPS and your device over HTTP, so the
-            browser blocks the request.
+            <strong>Coming from REV ${CFG_MOVED_AFTER_REV} or older? Then the configuration is lost
+            whichever way you answer &mdash; save a backup first.</strong> This release moved the
+            configuration partition to the end of the flash to make room for the web modems, and
+            the web pages now cover the place it used to be (releases older than 20260808 kept it
+            inside the web pages themselves). This installer cannot read the board, so it cannot
+            carry it over: <a href="http://wifilt.local/config/download">download the backup now</a>,
+            or open your device's address and use <strong>SETUP &rarr; Download config</strong>, and
+            restore it after flashing. This page cannot fetch it for you &mdash; it is served over
+            HTTPS and your device over HTTP, so the browser blocks the request. (Flashing from the
+            source tree with <code>tools/upload-firmware-spiffs.sh</code> carries the configuration
+            over by itself.)
           </p>
           <p style="margin-top:0.5rem">
             Two things a backup file never carries. The <strong>MSG BOX</strong>: stored messages
@@ -1218,8 +1233,8 @@ $(if [[ "$HAVE_M5ATOM" -eq 1 ]]; then cat <<M5ATOM
           </li>
           <li><strong>Open <code>http://192.168.4.1</code>.</strong> The setup page appears;
               some phones open it by themselves.</li>
-          <li id="restoreStep-m5atom" hidden><strong>Erased the device, or came from a release older
-              than 20260808? Restore your backup first</strong> &mdash; <strong>Upload config</strong> at
+          <li id="restoreStep-m5atom" hidden><strong>Erased the device, or came from REV
+              ${CFG_MOVED_AFTER_REV} or older? Restore your backup first</strong> &mdash; <strong>Upload config</strong> at
               the bottom of the setup page &mdash; before setting anything by hand. Anything you type
               before restoring will be overwritten by the file.</li>
           <li><strong>Enter your WiFi network and password</strong>, then save. The device joins
