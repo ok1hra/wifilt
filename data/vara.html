@@ -33,15 +33,29 @@
        the same single firmware record, so XARA and any other DATA page never
        transmit over each other. -->
   <nav class="subtabs" aria-label="DATA mode">
-    <a class="subtab" href="/data">JS8Call-ICOM</a><a class="subtab" href="/rtty.html">RTTY-ICOM</a><a class="subtab" href="/jtty.html">JTTY</a><a class="subtab" href="/wspr.html">WSPR</a><a class="subtab" href="/mercury.html">Mercury</a><a class="subtab subtab-active" href="/vara.html" title="XARA, a VARA-compatible modem">XARA</a>
+    <a class="subtab" href="/data">JS8Call-ICOM</a><a class="subtab" href="/rtty.html">RTTY-ICOM</a><a class="subtab" href="/jtty.html">JTTY</a><a class="subtab" href="/wspr.html">WSPR</a><a class="subtab subtab-active" href="/vara.html" title="XARA, a VARA-compatible modem">XARA</a><a class="subtab" href="/mercury.html">Mercury</a>
   </nav>
 </header>
 
 <header class="radio-bar">
   <div class="trx-control">
-    <span class="trx-frequency" id="trxFrequency" title="Tune the radio from its own controls or another DATA page">
-      <span><small id="trxSlotLabel">TRX</small><b id="trxFrequencyValue">--.---.---</b></span><span class="unit">MHz</span>
-    </span>
+    <button id="trxFrequency" class="trx-frequency" type="button" aria-expanded="false" aria-controls="frequencyMenu">
+      <span><small id="trxSlotLabel">TRX</small><b id="trxFrequencyValue">--.---.---</b></span><span class="unit">MHz</span><span class="chevron">▾</span>
+    </button>
+    <!-- The Winlink VARA HF / ARDOP dial frequencies -- the same catalogue as
+         Mercury's (data/mercury-presets.js), which was chosen by that
+         convention in the first place. FM has no catalogue: VARA FM channels
+         are local. -->
+    <section id="frequencyMenu" class="frequency-menu" hidden aria-label="XARA dial frequencies"></section>
+  </div>
+  <!-- The band x power grid every DATA page mounts (TxGainPlanUi), measured on a
+       real XARA OFDM frame (data/vara-cal-worker.js) into /vara-txgain.json. -->
+  <div class="trx-control tt-control">
+    <button id="planButton" class="freq-timetable" type="button" aria-expanded="false"
+            aria-controls="planField" title="TX gain calibration plan">
+      <span><small>CAL PLAN</small><b id="planButtonValue">--</b></span><span class="chevron">▾</span>
+    </button>
+    <section id="planField" class="freq-timetable-panel" hidden aria-label="TX gain calibration plan"></section>
   </div>
   <span id="trxMode" class="trx-mode">---</span>
   <span id="radioModel" class="radio-model" title="Model reported by the radio itself">--</span>
@@ -63,6 +77,9 @@
     <div id="waterfall" class="waterfall" title="Receiver audio. Blank while this station transmits.">
       <canvas id="waterfallCanvas" width="1024" height="64"></canvas>
       <canvas id="waterfallOverlay" width="1024" height="64"></canvas>
+    </div>
+    <div class="quick-controls">
+      <span class="inline-status audio-level">Audio <span id="audioMeter" class="audio-meter" aria-hidden="true"></span><b id="audioLevel">-- dBFS</b></span>
     </div>
   </details>
 
@@ -133,7 +150,8 @@
     <summary><span>SETTINGS</span><span id="settingsSummary" class="summary-status"></span></summary>
     <div class="settings vara-settings">
       <p class="settings-group-title">Transmit</p>
-      <label>Drive <input id="setDrive" type="number" min="-30" max="0" step="1"><small>dB below full scale, default −5 — set the radio's ALC with TUNE</small></label>
+      <label>Drive <input id="setDrive" type="number" min="-30" max="0" step="1"><small>dB below full scale, default −5 — used only where CAL PLAN has no calibration for this band and power</small></label>
+      <p id="calResolved" class="identity-note">TX level: —</p>
       <label class="safety-setting">Enable radio TX <input id="txSafety" type="checkbox">
         <small>I will use safe RF power and a suitable load/antenna. The same confirmation as on the
                JS8Call-ICOM and WSPR pages, kept in this browser. Off: XARA does not transmit at all,
@@ -184,8 +202,19 @@
 <script src="/js8-settings.js?v=b1e44675"></script>
 <script src="/tx-pledge.js?v=5750feea"></script>
 <script src="/mercury-session.js?v=bd9d947d"></script>
+<script src="/icom-models.js?v=543117c2"></script>
+<script src="/js8-presets.js?v=7131988f"></script>
+<script src="/wspr-core.js?v=981ff9bf"></script>
+<script src="/tx-gain-cal.js?v=8664a2ed"></script>
+<script src="/tx-gain-mod-level.js?v=97525416"></script>
+<script src="/tx-gain-plan.js?v=6df74d9e"></script>
+<script src="/tx-gain-plan-store.js?v=3ec54e59"></script>
+<script src="/tx-gain-plan-ui.js?v=70907036"></script>
+<script src="/mercury-gain-cal.js?v=bd89d137"></script>
+<script src="/audio-level.js?v=bc56f98e"></script>
+<script src="/mercury-presets.js?v=9f4074aa"></script>
 <script src="/spectrum.js?v=7fafbbb5"></script>
 <script src="/audio-health.js?v=9efe092e"></script>
-<script src="/vara.js?v=ecc092d5"></script>
+<script src="/vara.js?v=47bd9305"></script>
 </body>
 </html>

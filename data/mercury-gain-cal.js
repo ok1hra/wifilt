@@ -170,7 +170,8 @@
         if (!this.page.sessionHeld()) {
           const granted = await this.page.claimSession();
           if (!granted) {
-            this.onOutcome && this.onOutcome({ok: false, reason: "another device holds the Mercury session"});
+            this.onOutcome && this.onOutcome({ok: false,
+              reason: `another device holds the ${this.page.sessionName || "Mercury"} session`});
             this.onOutcome = null;
             return;
           }
@@ -200,7 +201,10 @@
 
       // The worker passes this ?v= on to every script and blob it loads.
       const MERCURY_CAL_WORKER_REV = "e01709cf"; // stamped from /mercury-cal-worker.js
-      this.worker = new Worker(`/mercury-cal-worker.js?v=${MERCURY_CAL_WORKER_REV}`);
+      // XARA mounts this same adapter with its own carrier (data/vara-cal-worker.js):
+      // `workerUrl` and `startExtra` are the only two things that differ.
+      this.worker = new Worker(this.page.workerUrl ? this.page.workerUrl()
+        : `/mercury-cal-worker.js?v=${MERCURY_CAL_WORKER_REV}`);
       this.worker.onmessage = event => {
         const msg = event.data || {};
         if (msg.type === "progress") {
@@ -234,6 +238,7 @@
         type: "start", wsPort: this.page.audioPort(), token: this.page.audioToken(),
         model: identity.model, frequencyHz: Number(this.page.radio().frequency) || 0,
         percent: identity.percent, knownKnee: seed, modLevel,
+        ...(this.page.startExtra ? this.page.startExtra() : {}),
       });
     }
 

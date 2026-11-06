@@ -113,12 +113,12 @@
   function command(line) { hostLog(`> ${line}`, "vara-log-cmd"); post({type: "cmd", line}); }
 
   function startWorker() {
-    if (worker) return;
+    if (worker || calRunning || planRunning) return; // a CAL PLAN run has the AUD1 socket
     worker = new Worker(`/vara-worker.js?v=${VARA_WORKER_REV}`);
     worker.onmessage = event => onWorker(event.data || {});
     worker.onerror = event => { setAud1("error", "error"); hostLog(`worker error: ${event.message || event}`, "vara-log-error"); };
     worker.postMessage({type: "start", wsPort: audioWsPort(), token: lease.token(),
-      settings: {...settings, mycall: myCall, listen: Boolean(myCall) && lease.isArmed(), txEnabled: txOn}});
+      settings: {...settings, mycall: myCall, listen: Boolean(myCall) && lease.isArmed(), txEnabled: txOn, gain: appliedGain}});
   }
   function stopWorker() {
     if (!worker) return;
@@ -139,9 +139,9 @@
         else if (hostPeer) { chatSystem("Winlink client left"); hostPeer = ""; }
         break;
       case "rx-samples":
-        if (!waterfall) break;
+        if (!waterfall) { noteAudio(m.samples); break; }
         setWaterfallRate(m.rate || 8000);
-        if (!(status && status.ptt) && !radio.tx) waterfall.ingest(m.samples);
+        if (!(status && status.ptt) && !radio.tx) { waterfall.ingest(m.samples); noteAudio(m.samples); }
         break;
       case "aud1":
         if (m.status === "ready") setAud1("ready", "ok");
@@ -234,7 +234,10 @@
   }
   function renderRadio() {
     const connected = radio.connected && radio.transceiverType === "ICOM-LAN";
-    dom.trxFrequencyValue.textContent = formatFrequency(radio.frequency);
+    const shownHz = pendingHz || radio.frequency;
+    dom.trxFrequencyValue.textContent = formatFrequency(shownHz);
+    dom.trxFrequency.classList.toggle("pending", Boolean(pendingHz));
+    if (menuKey !== `${shownHz}|${settings.bw}`) renderFrequencyMenu();
     dom.trxMode.textContent = radio.mode || "---";
     const fm = isFm(settings.bw), want = fm ? ["FM", "FM-D"] : ["USB", "USB-D"];
     const usb = want.includes(radio.mode);
@@ -250,9 +253,185 @@
     pollInFlight = true;
     try {
       const r = await fetch("/state?radio=lan", {cache: "no-store", signal: AbortSignal.timeout(8000)});
-      if (r.ok) { radio = {...radio, ...(await r.json())}; renderRadio(); renderStatus(); }
+      if (r.ok) {
+        radio = {...radio, ...(await r.json())};
+        radio.frequency = Number(radio.frequency) || 0;
+        if (calRunning && varaGainCal) varaGainCal.noteMeters({swr: radio.swr});
+        renderRadio(); renderStatus();
+        if (varaGainCal && !calRunning && !planRunning) applyCalGain();
+      }
     } catch (_e) { radio.connected = false; renderRadio(); }
     finally { pollInFlight = false; }
+  }
+
+  // ---- TRX band menu ----------------------------------------------------------
+  // The Winlink VARA HF / ARDOP dial frequencies (MercuryTrxPresets: Mercury
+  // picked its list by the same convention). Choosing one tunes the radio and
+  // puts it in USB-D. FM has no list -- VARA FM channels are local.
+  const RADIO_CMD_URL = "/cmd?radio=lan";
+  const PRESETS = () => (typeof MercuryTrxPresets !== "undefined" ? MercuryTrxPresets.PRESETS : []);
+  let pendingHz = 0, menuKey = "";
+  function closeFrequencyMenu() {
+    dom.frequencyMenu.hidden = true;
+    dom.trxFrequency.setAttribute("aria-expanded", "false");
+  }
+  function renderFrequencyMenu() {
+    const selected = pendingHz || radio.frequency;
+    menuKey = `${selected}|${settings.bw}`;
+    const head = `<header><strong>XARA dial frequencies</strong><small>Choose a band to tune the TRX</small>` +
+      `<span class="tt-actions"><button class="tt-clear" type="button" data-menu-close title="Close">CLOSE</button></span></header>`;
+    if (isFm(settings.bw)) {
+      dom.frequencyMenu.innerHTML = head + `<footer>VARA FM channels are local: tune the radio to yours and set it to FM-D.</footer>`;
+      return;
+    }
+    dom.frequencyMenu.innerHTML = head + `<div class="frequency-presets">${PRESETS().map(item =>
+        `<button class="frequency-preset${item.frequencyHz === selected ? " current" : ""}" ` +
+        `data-frequency="${item.frequencyHz}" type="button"><strong>${item.band}</strong>` +
+        `<span>${formatFrequency(item.frequencyHz)}</span></button>`).join("")}</div>` +
+      `<footer>Winlink VARA HF / ARDOP convention, the same list as Mercury's — Region 1 numbers not yet confirmed</footer>`;
+  }
+  async function radioCmd(payload) {
+    const r = await fetch(RADIO_CMD_URL, {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload), signal: AbortSignal.timeout(8000)});
+    if (!r.ok) throw new Error(`${payload.type} failed (HTTP ${r.status})`);
+    return r;
+  }
+  // USB-D, keeping the radio's filter: 26 00 <mode 01> <data 01> <filter>.
+  async function ensureUsbDataMode() {
+    if (!radio.connected || radio.mode === "USB-D") return;
+    const filter = [1, 2, 3].includes(Number(radio.filter)) ? Number(radio.filter) : 1;
+    try { await radioCmd({type: "civ.raw", data: "26000101" + String(filter).padStart(2, "0")}); } catch (_e) { /* best effort */ }
+  }
+  async function requestFrequency(hz) {
+    pendingHz = hz; closeFrequencyMenu(); renderRadio();
+    try {
+      await radioCmd({type: "setFrequency", frequency: String(hz)});
+      await ensureUsbDataMode();
+    } catch (e) {
+      hostLog(`tuning failed: ${e.message || e}`, "vara-log-error");
+    }
+    setTimeout(() => { pendingHz = 0; renderRadio(); }, 3000);
+  }
+
+  // ---- CAL PLAN -----------------------------------------------------------------
+  // TxGainPlanUi, as Mercury mounts it, with Mercury's own adapter
+  // (mercury-gain-cal.js) pointed at XARA's carrier: data/vara-cal-worker.js
+  // loops a real OFDM frame of the fastest level and stores the knee in
+  // /vara-txgain.json. The run takes the AUD1 socket, so the modem worker
+  // stops for it and starts again afterwards.
+  const VARA_CAL_WORKER_REV = "e64dff8c"; // stamped from /vara-cal-worker.js
+  const calReady = () => typeof TxGainCal !== "undefined" && typeof TxGainPlanUi !== "undefined" &&
+    typeof TxGainPlanStore !== "undefined" && typeof MercuryGainCal !== "undefined" && typeof WsprCore !== "undefined";
+  const percentOf = r => (r.rfPowerSeen === true ? WsprCore.civPercent(r.rfPower) : 0);
+  const liveModel = () => (typeof IcomModels !== "undefined" ? IcomModels.liveRadioModel(radio) : "");
+  let gainStore = null, gainPlanStore = null, varaGainCal = null, gainPlan = null;
+  let calRunning = false, planRunning = false, appliedGain = 1;
+  function calBlockingReason() {
+    if (!(radio.connected && radio.transceiverType === "ICOM-LAN")) return "ICOM-LAN is offline";
+    if (radio.tx) return "TRX PTT is active";
+    if (!txOn) return PLEDGE;
+    if (isFm(settings.bw)) return "CAL PLAN calibrates VARA HF — set Mode to 500, 2300 or 2750 Hz";
+    if (!ownLease) return "another page holds the radio";
+    const s = status;
+    if (s && (s.ptt || s.tuning || !["Idle", "Listen"].includes(s.state))) return "a XARA link is active — disconnect first";
+    if (hostPeer) return "a Winlink client is attached";
+    return "";
+  }
+  function onCalRunChange() {
+    const running = calRunning || planRunning;
+    if (running) { stopWorker(); status = null; setAud1("CAL PLAN", ""); }
+    else {
+      if (gainStore) gainStore.load().then(applyCalGain, () => {});
+      if (ownLease) setTimeout(startWorker, 600);
+    }
+    renderStatus();
+  }
+  // The worker's multiplier: a calibrated knee is for the 0 dB-drive frame, so
+  // it is scaled back by the Drive the station runs at -- calibrated, Drive
+  // does not matter; uncalibrated, Drive is all there is (multiplier 1).
+  function resolvedGain() {
+    if (!varaGainCal) return {gain: 1, calibrated: false, why: "CAL PLAN not loaded"};
+    const r = varaGainCal.resolved();
+    return r.calibrated ? {...r, gain: r.gain * Math.pow(10, -settings.driveDb / 20)} : {...r, gain: 1};
+  }
+  function applyCalGain() {
+    const r = resolvedGain();
+    dom.calResolved.textContent = r.calibrated
+      ? `TX level: calibrated for ${r.band} @ ${r.percent} % (CAL PLAN), Drive not used`
+      : `TX level: Drive ${settings.driveDb} dB — ${r.why || "not calibrated"}`;
+    dom.calResolved.classList.toggle("warn", !r.calibrated);
+    if (Math.abs(r.gain - appliedGain) < 1e-6) return;
+    appliedGain = r.gain;
+    post({type: "configure", settings: {gain: appliedGain}});
+  }
+  function createGainPlan() {
+    if (!calReady() || gainPlan) return;
+    const bands = () => PRESETS().map(p => ({band: TxGainCal.bandOf(p.frequencyHz), hz: p.frequencyHz}));
+    gainStore = new TxGainCal.TxGainStore({url: "/vara-txgain.json"});
+    gainPlanStore = new TxGainPlanStore.PlanStore({profile: TxGainPlanStore.PROFILE_VARA, bands});
+    varaGainCal = MercuryGainCal.create({
+      store: gainStore, radio: () => radio, model: liveModel, percentOf,
+      manualGain: () => 1, blockingReason: calBlockingReason,
+      ensureDataMode: ensureUsbDataMode,
+      modLevel: () => (gainPlan ? gainPlan.modLevel() : 0),
+      refreshModLevel: () => (gainPlan ? gainPlan.refreshModLevel() : null),
+      audioPort: audioWsPort, audioToken: () => lease.token(),
+      sessionHeld: () => ownLease, sessionName: "XARA",
+      claimSession: async () => { const ok = await lease.claim(false); if (ok) ownLease = true; return ok; },
+      releaseSession: () => {}, // the page holds the lease for its whole life
+      workerUrl: () => `/vara-cal-worker.js?v=${VARA_CAL_WORKER_REV}`,
+      startExtra: () => ({bw: Number(settings.bw) || 2300}),
+      onRunChange: running => { calRunning = running; onCalRunChange(); },
+      wallNow: () => Date.now(),
+    });
+    const waitFor = async (ok, what) => {
+      for (let waited = 0; waited < 9000; waited += 200) { if (ok()) return; await new Promise(r => setTimeout(r, 200)); await pollRadio(); }
+      throw new Error(what());
+    };
+    gainPlan = TxGainPlanUi.create({
+      mount: dom.planField, button: dom.planButton,
+      resultStore: gainStore, planStore: gainPlanStore, cal: varaGainCal,
+      calibrationProfileLabel: "XARA OFDM",
+      model: liveModel, modelNumber: () => IcomModels.modelNumber(liveModel()),
+      radio: () => radio,
+      send: async payload => { const r = await radioCmd(payload); return r.json().catch(() => ({ok: true})); },
+      bands,
+      wsprPresets: WsprCore.PRESETS,
+      js8Presets: typeof Js8TrxPresets !== "undefined" ? Js8TrxPresets.PRESETS : [],
+      percentOf,
+      defaultPowers: () => (radio.rfPowerSeen === true ? [WsprCore.civPercent(radio.rfPower)] : []),
+      setFrequency: async hz => {
+        await radioCmd({type: "setFrequency", frequency: String(hz)});
+        await waitFor(() => radio.frequency === hz,
+          () => `the radio did not confirm the band: asked for ${(hz / 1000).toFixed(1)} kHz, it reports ${(radio.frequency / 1000).toFixed(1)} kHz`);
+        await new Promise(r => setTimeout(r, 300));
+      },
+      setPercent: async percent => {
+        const level = WsprCore.percentToLevel(percent);
+        await radioCmd({type: "civ.raw", data: WsprCore.civLevelCommand(level).data});
+        await waitFor(() => {
+          radioCmd({type: "civ.raw", data: "140A"}).catch(() => {});
+          return radio.rfPowerSeen === true && (radio.rfPower === level || WsprCore.civPercent(radio.rfPower) === percent);
+        }, () => `the radio did not confirm the power: asked for ${percent} %`);
+      },
+      setModeFilter: (mode, filter) => radioCmd({type: "setMode", mode, filter: filter ? "FIL" + filter : undefined}),
+      planBlockingReason: () => "",
+      onPlanChange: running => { planRunning = running; onCalRunChange(); },
+    });
+    gainPlanStore.loadAndMigrate([{profile: TxGainPlanStore.PROFILE_VARA, store: gainStore}])
+      .then(() => { gainPlan.reload(); applyCalGain(); }, () => {});
+  }
+
+  // ---- RX level (audio-level.js, as on the JS8 and WSPR pages) ----------------
+  let audioDb = -Infinity, audioShown = 0;
+  function noteAudio(samples) {
+    let sum = 0;
+    for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+    audioDb = 20 * Math.log10(Math.sqrt(sum / Math.max(1, samples.length)) + 1e-9);
+    const now = performance.now();
+    if (now - audioShown < 200) return;
+    audioShown = now;
+    if (typeof AudioLevel !== "undefined") AudioLevel.render(dom.audioMeter, dom.audioLevel, audioDb);
   }
 
   // ---- controls -------------------------------------------------------------------
@@ -295,6 +474,7 @@
     const relink = next.link16k !== settings.link16k;
     settings = next;
     renderSettings();
+    if (varaGainCal) applyCalGain();
     post({type: "configure", settings: {driveDb: next.driveDb, latencyMs: next.latencyMs, slotMs: next.slotMs, prebufferMs: next.prebufferMs}});
     try {
       const r = await fetch(SETTINGS_URL, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(next)});
@@ -328,7 +508,7 @@
 
   async function init() {
     if (typeof LanGate !== "undefined" && !(await LanGate.gate())) return;
-    ["trxFrequencyValue", "trxMode", "radioModel", "aud1State", "linkState", "listenToggle", "listenState",
+    ["planButton", "planField", "calResolved", "trxFrequency", "frequencyMenu", "audioMeter", "audioLevel", "trxFrequencyValue", "trxMode", "radioModel", "aud1State", "linkState", "listenToggle", "listenState",
       "waterfall", "waterfallCanvas", "waterfallOverlay", "myCall", "peerCall", "bwSelect", "sessionSelect",
       "connectButton", "disconnectButton", "abortButton", "cqButton", "connectSummary",
       "stState", "stPeer", "stSpeed", "stSn", "stBusy", "stBuffer", "stLoad", "stHost",
@@ -380,6 +560,16 @@
     dom.chatForm.addEventListener("submit", onChatSend);
     dom.tuneButton.addEventListener("click", () => post({type: "tune", on: !(status && status.tuning)}));
     dom.settingsSave.addEventListener("click", () => saveSettings());
+    dom.trxFrequency.addEventListener("click", () => {
+      const open = dom.frequencyMenu.hidden;
+      dom.frequencyMenu.hidden = !open;
+      dom.trxFrequency.setAttribute("aria-expanded", String(open));
+    });
+    dom.frequencyMenu.addEventListener("click", event => {
+      if (event.target.closest("[data-menu-close]")) { closeFrequencyMenu(); return; }
+      const button = event.target.closest("[data-frequency]");
+      if (button) requestFrequency(Number(button.dataset.frequency));
+    });
     txOn = txEnabled(); dom.txSafety.checked = txOn;
     if (window.TxPledge) TxPledge.install(revealTxSafety);
     dom.txSafety.addEventListener("change", () => { setTxEnabled(dom.txSafety.checked); applyTxEnabled(); });
@@ -393,6 +583,7 @@
         ownLease = true; startWorker();
       }
     });
+    createGainPlan();
     renderStatus();
     pollRadio();
     setInterval(pollRadio, 1000);

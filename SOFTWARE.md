@@ -115,7 +115,7 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
 
 **[8b. DATA — XARA (VARA-compatible)](#8b-data--xara-vara-compatible)**
  · [8b.1 What XARA is](#8b1-what-xara-is)
- · [8b.2 Header and LISTEN](#8b2-header-and-listen)
+ · [8b.2 Header, CAL PLAN and LISTEN](#8b2-header-cal-plan-and-listen)
  · [8b.3 CONNECT, CQ and the terminal](#8b3-connect-cq-and-the-terminal)
  · [8b.4 STATUS and HOST LOG](#8b4-status-and-host-log)
  · [8b.5 Winlink clients on TCP 8300/8301](#8b5-winlink-clients-on-tcp-83008301)
@@ -294,7 +294,7 @@ Every page carries the same bar:
 | *(logo)* | — | opens a small About panel with links to the project and to RemoteQTH |
 | **QRPLog** | `/log` | the logbook |
 | **DXC** | `/dxc.html` | the DX cluster client — splits the QRPLog page in two; its own 600×750 window from anywhere else |
-| **DATA** | `/data` | the modes over the radio's LAN audio, chosen in the page's own sub-navigation: **JS8Call-ICOM**, **RTTY-ICOM**, **JTTY**, **WSPR**, **Mercury** and **XARA**. Only one of them can run at a time — see [section 12](#12-transmit-safety). |
+| **DATA** | `/data` | the modes over the radio's LAN audio, chosen in the page's own sub-navigation: **JS8Call-ICOM**, **RTTY-ICOM**, **JTTY**, **WSPR**, **XARA** and **Mercury**. Only one of them can run at a time — see [section 12](#12-transmit-safety). |
 | **SETUP** | `/setup` | configuration |
 | **LOGSYNC** | `/datasync` | log synchronisation, backup, import |
 | **BD** | `/bd` | band decoder — hidden unless the hardware has it |
@@ -1903,6 +1903,22 @@ filling as the slot runs — and the quick controls:
 
 **TUNE turns into STOP** while the carrier is up, and **GPS glows red** while position
 tracking is armed.
+
+**Setting the RX level.** The JS8, WSPR and XARA pages show it beside *Audio*. Judge it on
+an empty stretch of band, with only noise: about **−40 dBFS** is the target, and green runs
+from −60 to −20. A strong station lifts the reading, briefly into amber or red, and that is
+fine as long as the noise between signals sits near −40. The radio's network audio has no
+level control of its own: the IC-705's *WLAN AF/IF Output* and the IC-7610/IC-9700 *LAN AF/IF
+Output* offer only Output Select and AF SQL, unlike *USB AF/IF Output*, which has an AF
+Output Level. WIFILT passes the radio's µ-law audio through unchanged, so the level is set in
+the receiver:
+
+- **RF Gain** down, the first thing to turn when the noise alone reads above −20 dBFS;
+- **P.AMP off**, or **ATT** on, on a band with strong signals;
+- **AGC on**, FAST or MID, never OFF: with AGC off a strong station clips the audio.
+
+If the reading stays in the red on an empty band, lower RF Gain until it comes back to
+around −40.
 
 When *Enable radio TX* is the **only** thing in the way, the buttons are not greyed out but
 dimmed, and they still answer a tap: nothing is transmitted, and a notice says *Nothing was
@@ -3852,11 +3868,26 @@ XARA holds the radio through its own lease under `/vara/session`, the same singl
 every other DATA page. Only one of them, on one device, can transmit at a time. A second
 attempt gets **TAKE THE RADIO OVER HERE**.
 
-### 8b.2 Header and LISTEN
+### 8b.2 Header, CAL PLAN and LISTEN
 
-The frequency, mode, radio model, **AUD1** and link indicator read the same as on the other
-DATA pages. XARA does not tune the radio. Set the frequency on the radio or on another DATA
-page, and for FM set the radio to **FM-D**.
+The mode, radio model, **AUD1** and link indicator read the same as on the other DATA pages.
+
+**TRX** opens the dial frequencies for VARA HF: 80, 40, 30, 20, 17, 15, 12 and 10 m, the
+Winlink VARA HF / ARDOP convention, the same list as Mercury's
+([section 8.2](#82-header-radio-timetable-and-cal-plan)). Choosing one tunes the radio and
+switches it to USB-D. The Region 1 numbers are not yet confirmed against an official source.
+With Mode set to FM the menu is empty: VARA FM channels are local, so tune the radio yourself
+and set it to **FM-D**.
+
+**CAL PLAN** is the band × power calibration grid of the JS8, WSPR and Mercury pages
+([section 7.8](#78-tx-audio-gain-and-cal-plan)), measured on XARA's own signal: a real OFDM
+frame of the fastest level, which peaks about 11 dB above its average, looped while the
+search finds where the radio's ALC starts to act. A tone would put that point somewhere the
+data never is, so XARA keeps its own results (`/vara-txgain.json`) apart from the tone
+calibration of JS8/WSPR and from Mercury's. The run keys the transmitter. It needs **Enable
+radio TX**, a VARA HF Mode (not FM), no link and no Winlink client, and the modem pauses
+while it runs. Where a band and power are calibrated, XARA transmits at the calibrated level
+and **Drive** is not used. SETTINGS shows which applies.
 
 **LISTEN**, at the right, decides whether this station answers a station that connects to it.
 With it on, the station may transmit at any moment, unattended. With it off, XARA transmits
@@ -3892,6 +3923,9 @@ client owns the link, the input is locked: the link's data belongs to the client
 | **HOST** | the Winlink client attached on TCP 8300/8301, if any |
 | **MODEM LOAD** | share of real time the modem needs; above about 80 % it falls behind the radio, which matters on a slow phone |
 
+**Audio**, under the waterfall, is the RX level in dBFS, as on the JS8 and WSPR pages. How to
+set it is in [section 5.3](#53-waterfall).
+
 The **HOST LOG** (folded by default) shows the VARA host conversation: commands with `>`,
 replies with `<`, refusals in red. It is what a VARA host application would see, and the first
 place to look when a link does not come up.
@@ -3925,8 +3959,8 @@ Stored on the interface, not in the browser, except Enable radio TX.
 | Setting | Meaning |
 |---|---|
 | **Enable radio TX** | the same pledge as on the JS8Call-ICOM and WSPR pages, *"I will use safe RF power and a suitable load/antenna"*, kept in this browser and shared with them. Off (the default), XARA transmits nothing: CONNECT, CQ, TUNE and LISTEN show a notice with **GO TO SETTING**, and a Winlink client's CONNECT is aborted before a single sample reaches the radio. Unticking it stops TUNE and LISTEN at once; a link still up is aborted the next time it would key. |
-| **Drive** | transmit level in dB below full scale, −30 to 0, default −5 |
-| **TUNE** | a steady two-tone carrier for up to 20 s, to set the radio's ALC and power; press again to stop |
+| **Drive** | transmit level in dB below full scale, −30 to 0, default −5. Used only where CAL PLAN has no calibration for the band and power the radio is on; the line under it, *TX level*, says which applies. |
+| **TUNE** | a steady two-tone carrier for up to 20 s, to check the radio's ALC and power; press again to stop |
 | **Audio round trip** *(ADVANCED)* | ms from this modem's output back to its own input (radio, network and TX slot together), default 350. The modem times its replies on it. |
 | **TX slot** *(ADVANCED)* | ms between keying and the first audio sample, default 200 |
 | **TX prebuffer** *(ADVANCED)* | ms of audio queued before the radio keys, default 120, below the slot |
@@ -4475,7 +4509,7 @@ at that moment. They are gathered here so nothing is a surprise.
 | **PA — TUNE** | starts the amplifier's own tuning cycle ([section 3.14](#314-pa--the-linear-amplifier)) |
 
 **One radio, one operator.** The interface has exactly one audio link to the transceiver, so
-**JS8Call-ICOM, RTTY-ICOM, JTTY, WSPR, Mercury and XARA cannot run at the same time** — and neither
+**JS8Call-ICOM, RTTY-ICOM, JTTY, WSPR, XARA and Mercury cannot run at the same time** — and neither
 can the RTTY palette in QRPLog, which is a full holder of that same session. Opening a second
 one shows *The radio is driven from somewhere else*, says where, and offers **TAKE THE SESSION
 OVER HERE**. Nothing ever takes the session on its own, not even a page restoring itself after

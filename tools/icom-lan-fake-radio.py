@@ -68,6 +68,15 @@ def hexdump(data, limit=32):
     return text + (" ..." if len(data) > limit else "")
 
 
+def hz_from_bcd(data):
+    """The inverse of bcd_from_hz."""
+    hz, scale = 0, 1
+    for byte in data[:5]:
+        hz += ((byte & 0x0F) + 10 * (byte >> 4)) * scale
+        scale *= 100
+    return hz
+
+
 def bcd_from_hz(hz):
     """5-byte little-endian BCD as ICOM sends frequencies."""
     digits = f"{hz:010d}"[::-1]          # least significant digit first
@@ -399,6 +408,18 @@ class CivChannel(Channel):
                 reply(b"\xFB")
             else:
                 reply(bytes([0x1A, 0x05]) + self.power_menu + bytes([self.power_off_setting]))
+        elif cmd in (0x00, 0x05) and len(body) == 5:   # set operating frequency
+            self.freq_hz = hz_from_bcd(body)
+            self.log(f"-- frequency set to {self.freq_hz} Hz")
+            if cmd == 0x05:
+                reply(b"\xFB")
+        elif cmd == 0x25 and len(body) == 6 and body[0] == 0x00:   # set selected VFO
+            self.freq_hz = hz_from_bcd(body[1:])
+            self.log(f"-- frequency set to {self.freq_hz} Hz")
+            reply(b"\xFB")
+        elif cmd == 0x26 and len(body) >= 2 and body[0] == 0x00:   # set selected VFO mode
+            self.mode = body[1]
+            reply(b"\xFB")
         elif cmd == 0x03:                    # read operating frequency
             reply(bytes([0x03]) + bcd_from_hz(self.freq_hz))
             if self.answered == 1:

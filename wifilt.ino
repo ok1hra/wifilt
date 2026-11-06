@@ -1024,6 +1024,11 @@ int incomingByte = 0;   // for incoming serial data
   // contract as the Mercury tuning above.
   static const char* VARA_SETTINGS_CONFIG_PATH = "/vara-settings.json";
   static const size_t VARA_SETTINGS_MAX_BYTES = 2048;
+  // XARA's own TX gain table (data/vara-cal-worker.js): measured on a real
+  // XARA OFDM frame, whose crest factor is neither a tone's nor a Mercury
+  // burst's -- the same reason Mercury keeps MERCURY_TXGAIN_CONFIG_PATH apart.
+  static const char* VARA_TXGAIN_CONFIG_PATH = "/vara-txgain.json";
+  static const size_t VARA_TXGAIN_MAX_BYTES = 6144;
   // The station's operating profile (data/station-profile.js): JS8 -- speed, TX
   // offset, heartbeat interval, groups, the 24 h band schedule, the RF power
   // percent -- plus WSPR, RTTY and the Mercury band schedule beside it. It used
@@ -1354,6 +1359,8 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void handleGetMercuryTuning(void);
   void handlePostMercuryTuning(void);
   void handleGetVaraSettings(void);
+  void handleGetVaraTxGain(void);
+  void handlePostVaraTxGain(void);
   void handlePostVaraSettings(void);
   void varaApplyLinkRate(bool reconnect);
   void handleGetCivRead(void);
@@ -4025,6 +4032,7 @@ void handleConfigDownload() {
   configDownloadBlob("logMacros", LOG_MACROS_PATH);
   configDownloadBlob("mercuryTuning", MERCURY_TUNING_CONFIG_PATH);
   configDownloadBlob("varaSettings", VARA_SETTINGS_CONFIG_PATH);
+  configDownloadBlob("varaTxGain", VARA_TXGAIN_CONFIG_PATH);
   if (bdEnabled) {
     String b = ",\"bd\":{\"source\":"; b += bdSource;
     b += ",\"rows\":[";
@@ -4344,6 +4352,24 @@ void handleConfigUpload() {
       }
       f.close();
       varaApplyLinkRate(true);
+    }
+  }
+
+  {
+    String varaGainCfg = extractJsonObject(body, "varaTxGain");
+    if (varaGainCfg.length() > VARA_TXGAIN_MAX_BYTES) {
+      rejectOversize("varaTxGain", varaGainCfg.length(), VARA_TXGAIN_MAX_BYTES);
+      return;
+    }
+    if (varaGainCfg.length() > 0) {
+      File f = cfgFS.open(VARA_TXGAIN_CONFIG_PATH, "w");
+      if (!f || f.print(varaGainCfg) != varaGainCfg.length()) {
+        if (f) f.close();
+        webServer.send(500, "application/json",
+          "{\"ok\":false,\"error\":\"storage\",\"section\":\"varaTxGain\"}");
+        return;
+      }
+      f.close();
     }
   }
 
@@ -5059,6 +5085,40 @@ void handlePostMercuryTuning() {
 }
 
 // XARA settings: the same verbatim-blob pair as the Mercury tuning above.
+// XARA's gain table: the Mercury pair above again, on its own file.
+void handleGetVaraTxGain() {
+  webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  webServer.sendHeader("Connection", "close");
+  webServer.client().setNoDelay(true);
+  String json;
+  if (cfgFS.exists(VARA_TXGAIN_CONFIG_PATH)) {
+    File vf = cfgFS.open(VARA_TXGAIN_CONFIG_PATH, "r");
+    if (vf) { json = vf.readString(); vf.close(); json.trim(); }
+  }
+  if (json.length() < 2 || json[0] != '{') json = "{}";
+  webServer.send(200, "application/json", json);
+}
+
+void handlePostVaraTxGain() {
+  webServer.sendHeader("Connection", "close");
+  webServer.client().setNoDelay(true);
+  String body = webServer.arg("plain");
+  body.trim();
+  if (body.length() == 0 || body.length() > VARA_TXGAIN_MAX_BYTES) {
+    webServer.send(400, "application/json", "{\"error\":\"bad_request\"}");
+    return;
+  }
+  if (body[0] != '{' || body[body.length()-1] != '}') {
+    webServer.send(400, "application/json", "{\"error\":\"not_json\"}");
+    return;
+  }
+  File vf = cfgFS.open(VARA_TXGAIN_CONFIG_PATH, "w");
+  if (!vf) { webServer.send(500, "application/json", "{\"error\":\"write\"}"); return; }
+  vf.print(body);
+  vf.close();
+  webServer.send(200, "application/json", "{\"ok\":true}");
+}
+
 void handleGetVaraSettings() {
   webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   webServer.sendHeader("Connection", "close");
@@ -5936,6 +5996,8 @@ void setupWebServer(void){
   webServer.on("/mercury-tuning.json", HTTP_POST, handlePostMercuryTuning);
   webServer.on("/vara-settings.json", HTTP_GET,  handleGetVaraSettings);
   webServer.on("/vara-settings.json", HTTP_POST, handlePostVaraSettings);
+  webServer.on("/vara-txgain.json",   HTTP_GET,  handleGetVaraTxGain);
+  webServer.on("/vara-txgain.json",   HTTP_POST, handlePostVaraTxGain);
   webServer.on("/aprsis/spot",   HTTP_POST, handleAprsisSpot);
   webServer.on("/aprsis/status", HTTP_GET,  handleAprsisStatus);
   webServer.on("/civread",     HTTP_GET,  handleGetCivRead);

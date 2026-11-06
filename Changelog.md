@@ -11,6 +11,31 @@ published.
 
 ## Working tree — not committed
 
+**XARA: RX level, band menu, CAL PLAN; XARA before Mercury.**
+
+* **RX level.** The XARA page shows the RX audio level in dBFS under the waterfall, the
+  JS8/WSPR meter (`audio-level.js`). SOFTWARE.md §5.3 now says how to set it on ICOM LAN:
+  the network audio has no level control of its own (WLAN/LAN AF/IF Output offers only
+  Output Select and AF SQL), so it is RF Gain, P.AMP/ATT and AGC.
+* **Band menu.** TRX opens the VARA HF dial frequencies, the same Winlink VARA HF / ARDOP
+  list as Mercury's (`mercury-presets.js`). Choosing one tunes the radio and sets USB-D.
+  FM has no list.
+* **CAL PLAN.** The band × power calibration grid (`TxGainPlanUi`), measured on a real XARA
+  OFDM frame of the fastest level (`data/vara-cal-worker.js`), stored in the new
+  `/vara-txgain.json` (firmware endpoint, in the config backup and restore as
+  `varaTxGain`) and its own plan profile `xara-ofdm`. Mercury's adapter
+  (`mercury-gain-cal.js`) takes a `workerUrl`/`startExtra` so XARA mounts it unchanged.
+  Where a band and power are calibrated, XARA transmits at that level and Drive is not
+  used; SETTINGS shows which applies. The run needs Enable radio TX and pauses the modem.
+* **Menu.** XARA moves before Mercury in the DATA sub-navigation of every page.
+* **Fake radio.** `tools/icom-lan-fake-radio.py` now sets frequency (CI-V 00/05/25) and mode
+  (26) instead of only acknowledging them.
+* **Checks.** `tools/vara-page-native-check.sh`: the dBFS reading, the band menu tuning
+  20 m, the TX level line, CAL PLAN opening, and the calibration worker keying one
+  transmission of the XARA carrier and ending it itself (no ALC on the fake radio, so it
+  climbs to the ceiling and stores nothing). `config-backup-smoke` covers `varaSettings`
+  and `varaTxGain`.
+
 **XARA obeys Enable radio TX.**
 
 * **What.** The XARA page has the *Enable radio TX* pledge in SETTINGS, the same browser-side

@@ -23,6 +23,7 @@
   const SCHEMA_VERSION = 1;
   const PROFILE_TONE = "single-tone";
   const PROFILE_MERCURY = "mercury-datac1";
+  const PROFILE_VARA = "xara-ofdm";
 
   const emptyDoc = () => ({v: SCHEMA_VERSION, powers: [], rows: [], pendingByProfile: {}});
   const selected = value => value ? 1 : 0;
@@ -260,6 +261,6 @@
     }
   }
 
-  return {PlanStore, STORE_URL, SCHEMA_VERSION, PROFILE_TONE, PROFILE_MERCURY,
+  return {PlanStore, STORE_URL, SCHEMA_VERSION, PROFILE_TONE, PROFILE_MERCURY, PROFILE_VARA,
           emptyDoc, normalizeDoc, normalizePending, remapCells};
 });

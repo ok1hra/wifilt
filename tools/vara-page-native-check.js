@@ -135,6 +135,28 @@ async function main() {
     const saved = await (await fetch(`http://127.0.0.1:${port}/vara-settings.json`)).json().catch(() => ({}));
     check("settings are stored on the device", saved.latencyMs === 420, JSON.stringify(saved));
 
+    // ---- RX level, band menu, CAL PLAN ------------------------------------------
+    const level = await waitFor(`/^-?\\d+ dBFS$/.test(document.getElementById("audioLevel").textContent)`, 4000);
+    check("the RX level shows in dBFS", level, await text("audioLevel"));
+    await evaluate(`document.getElementById("trxFrequency").click()`);
+    const presets = await evaluate(`document.querySelectorAll("#frequencyMenu [data-frequency]").length`);
+    check("TRX opens the band menu (the Winlink VARA HF list)", presets === 8 &&
+      !(await evaluate(`document.getElementById("frequencyMenu").hidden`)), `${presets} bands`);
+    await evaluate(`document.querySelector('#frequencyMenu [data-frequency="14105000"]').click()`);
+    let st = {};
+    for (let i = 0; i < 40 && Number(st.frequency) !== 14105000; i++) {
+      await sleep(250);
+      st = await (await fetch(`http://127.0.0.1:${port}/state?radio=lan`)).json().catch(() => ({}));
+    }
+    const tuned = await waitFor(`document.getElementById("trxFrequencyValue").textContent === "14.105.000"`, 6000);
+    check("choosing 20 m tunes the radio", tuned && Number(st.frequency) === 14105000, `${await text("trxFrequencyValue")} / ${st.frequency}`);
+    await sleep(1500);
+    check("the TX level line reports Drive while uncalibrated", /^TX level: Drive -5 dB/.test(await text("calResolved")), await text("calResolved"));
+    await evaluate(`document.getElementById("planButton").click()`);
+    const plan = await waitFor(`!document.getElementById("planField").hidden && document.getElementById("planField").textContent.length > 50`, 4000);
+    check("CAL PLAN opens the band x power plan", plan, (await text("planField")).slice(0, 80));
+    await evaluate(`document.getElementById("planButton").click()`);
+
     // ---- a Winlink client on TCP 8300/8301 (phase 4) ----------------------------
     // What Pat does, byte for byte: commands with CR, replies one per command,
     // events in between; data on the second socket.
@@ -199,6 +221,33 @@ async function main() {
     const refused = lone ? await until(() => lone.closed, 4000) : true;
     check("with no XARA page open a client is refused at once", refused && /client refused: no XARA page/.test(log()));
     if (lone && !lone.closed) lone.sock.destroy();
+
+    // ---- the calibration carrier, end to end ---------------------------------------
+    // The fake radio has no ALC, so the search climbs to its ceiling and stores
+    // nothing -- what this proves is the rest: the worker builds the XARA frame,
+    // keys one AUD1 transmission, follows tx-level and ends it itself.
+    await send("Page.navigate", {url: `http://127.0.0.1:${port}/vara-settings.json`});
+    await sleep(1500);
+    const token = "cafefeedcafefeedcafefeedcafefeed";
+    await fetch(`http://127.0.0.1:${port}/vara/session/claim`, {method: "POST",
+      headers: {"Content-Type": "application/json"}, body: JSON.stringify({token, force: true, role: "vara"})});
+    const calBefore = count(/AUD1 \| TX ready/g);
+    await evaluate(`(() => {
+      window.calLog = []; window.calDone = null;
+      const w = new Worker("/vara-cal-worker.js");
+      w.onmessage = e => { window.calLog.push(e.data); if (e.data.type === "done" || e.data.type === "error") window.calDone = e.data; };
+      w.postMessage({type: "start", wsPort: 83, token: ${JSON.stringify(token)}, model: "IC-705", frequencyHz: 14105000, percent: 100, bw: 2300});
+      window.calPing = setInterval(() => fetch("/vara/session/ping", {method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({token: ${JSON.stringify(token)}})}), 4000);
+    })()`);
+    const finished = await waitFor(`window.calDone !== null`, 120000);
+    const calLog = await evaluate(`JSON.stringify(window.calLog.filter(m => m.type !== "progress").concat(window.calLog.filter(m => m.type === "progress").slice(-1)))`);
+    const done = await evaluate(`window.calDone`);
+    check("the calibration worker builds the XARA carrier", /carrier: XARA 2300 Hz level 16/.test(calLog), calLog.slice(0, 200));
+    check("the calibration keys one transmission and ends it itself", finished && done && done.type === "done" &&
+      count(/AUD1 \| TX ready/g) === calBefore + 1 && (await evaluate(`window.calLog.some(m => m.type === "progress" && m.steps > 0)`)),
+      JSON.stringify(done).slice(0, 200));
+    await evaluate(`clearInterval(window.calPing)`);
 
     check("nothing threw", errors.length === 0, errors.join(" | "));
     ws.close();

@@ -96,7 +96,7 @@ check("every key the backup writes is read back by the restore",
 // These blobs carry the operator's real work, so they get
 // named individually rather than trusted to the sweep above.
 for (const blob of ["radioConfig", "logConfig", "txGain", "txGainPlan", "mercuryTxGain",
-                    "logMacros", "mercuryTuning"]) {
+                    "logMacros", "mercuryTuning", "varaSettings", "varaTxGain"]) {
   check("the backup carries " + blob, mentions(download, blob));
   check("the restore writes " + blob + " back", mentions(upload, blob));
 }
