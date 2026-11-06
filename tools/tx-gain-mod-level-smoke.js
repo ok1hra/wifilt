@@ -248,10 +248,49 @@ check("every level round-trips",
   {
     const iface = makeInterface({answers: {}});
     const client = new Mod.ModLevelClient({send: iface.send, fetchImpl: iface.fetchImpl,
-                                          model: 7610});
+                                          model: 9700});
     const input = await client.readInput();
     check("a model with no known input subaddress simply does not know",
       !input.known && input.raw === null, JSON.stringify(input));
+  }
+
+  // The IC-7610 picks the input per DATA profile: 1A 06 says which is active,
+  // then that profile's DATAn MOD (00 91~94, 05 = LAN). Found live: DATA1 MOD
+  // on MIC, the search saw no ALC and pushed the LAN MOD level to 255.
+  {
+    const iface = makeInterface({answers: {"1A06": "0101", "1A050092": "00"}});
+    const client = new Mod.ModLevelClient({send: iface.send, fetchImpl: iface.fetchImpl,
+                                          model: 7610});
+    const input = await client.readInput();
+    check("IC-7610: DATA1 MOD on MIC is detected",
+      input.known && !input.isNet && input.raw === 0 && input.profile === 1 &&
+      /DATA1 MOD → LAN/.test(input.menu), JSON.stringify(input));
+    check("IC-7610: it read the active profile, then that profile's input",
+      iface.state.reads.join(",") === "1A06,1A050092", iface.state.reads.join(","));
+  }
+  {
+    const iface = makeInterface({answers: {"1A06": "0301", "1A050094": "05"}});
+    const client = new Mod.ModLevelClient({send: iface.send, fetchImpl: iface.fetchImpl,
+                                          model: 7610});
+    const input = await client.readInput();
+    check("IC-7610: DATA3 on LAN passes", input.known && input.isNet && input.profile === 3,
+      JSON.stringify(input));
+  }
+  {
+    const iface = makeInterface({answers: {"1A06": "0001", "1A050092": "05"}});
+    const client = new Mod.ModLevelClient({send: iface.send, fetchImpl: iface.fetchImpl,
+                                          model: 7610});
+    const input = await client.readInput();
+    check("IC-7610: data mode off checks DATA1, the profile USB-D selects",
+      input.known && input.isNet && input.profile === 1 && iface.state.reads.includes("1A050092"),
+      JSON.stringify(input));
+  }
+  {
+    const iface = makeInterface({answers: {}});
+    const client = new Mod.ModLevelClient({send: iface.send, fetchImpl: iface.fetchImpl,
+                                          model: 7610});
+    const input = await client.readInput();
+    check("IC-7610: no answer to 1A 06 is not a verdict", !input.known, JSON.stringify(input));
   }
 
   // ---- RF power ceiling -----------------------------------------------------

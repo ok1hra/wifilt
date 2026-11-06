@@ -1174,5 +1174,55 @@ check("percent columns are whole, sorted, deduplicated and capped at four",
   check("STOP never arms it", stopping.autoAnswer === false && stopping.stopped === true);
 }
 
+// ---- the panel's own requests (found on an IC-705, 2026-11-06) ---------------
+//
+// The radio sat on 40 m, the operator clicked the 40 m value expecting it to be
+// measured again, and RUN keyed 20 m: the click only unticked the cell, and
+// 20 m @ 100 % was stored with knee 0 -- green in the grid, re-keyed by the survey.
+{
+  const plan = {powers: [10, 100], rows: [
+    {band: "20m", hz: 14095600, cells: [1, 1]},
+    {band: "40m", hz: 7038600, cells: [1, 1]}]};
+  const table = {
+    "20m|10": {gain: 0.56, knee: 0.56, modLevel: 128},
+    "20m|100": {gain: 0.6, knee: 0, modLevel: 128},       // stored without a knee
+    "40m|10": {gain: 0.52, knee: 0.73, modLevel: 128},
+    "40m|100": {gain: 0.55, knee: 0.62, modLevel: 128}};
+  const resolve = cell => table[`${cell.band}|${cell.percent}`] || null;
+
+  const view = new Plan.TxGainPlanRun({plan, modLevel: 128, resolve}).preview();
+  check("preview: a knee-0 entry is work, and says why",
+    view.survey.length === 1 && view.survey[0].band === "20m" && view.survey[0].percent === 100 &&
+    /without a knee/.test(view.survey[0].reason) && view.matrix.length === 0,
+    JSON.stringify(view));
+
+  const forced = new Plan.TxGainPlanRun({plan, modLevel: 128, resolve, startBand: "40m",
+                                         force: new Set(["40m|10", "40m|100"])}).preview();
+  const order = [...forced.survey, ...forced.matrix].map(cell => `${cell.band}|${cell.percent}`);
+  check("preview: RE-MEASURE AT RUN counts, and the band the radio is on goes first",
+    order.join(",") === "40m|100,20m|100,40m|10" &&
+    forced.matrix.some(cell => cell.band === "40m" && cell.percent === 10 && /re-measure/.test(cell.reason)),
+    order.join(","));
+  const elsewhere = new Plan.TxGainPlanRun({plan, modLevel: 128, resolve, startBand: "20m",
+                                            force: new Set(["40m|10", "40m|100"])}).preview();
+  check("preview: on 20 m, 20 m goes first instead",
+    [...elsewhere.survey, ...elsewhere.matrix][0].band === "20m");
+
+  // MEASURE NOW: one cell, straight to it -- no survey, no MOD write.
+  const single = new Plan.TxGainPlanRun({single: true, modLevel: 128, resolve,
+    plan: {powers: [10], rows: [{band: "40m", hz: 7038600, cells: [1]}]}});
+  single.begin();
+  const radio = makeRadio(128);
+  const log = drive(single, radio);
+  const keyed = log.filter(step => step.type === "measure");
+  check("MEASURE NOW keys exactly that cell, though it is calibrated",
+    keyed.length === 1 && keyed[0].band === "40m" && keyed[0].percent === 10 && !keyed[0].survey,
+    JSON.stringify(keyed));
+  check("MEASURE NOW never writes the MOD level",
+    !log.some(step => step.type === "writeMod") && radio.modLevel === 128);
+  check("MEASURE NOW still asks about the antenna and puts the radio back",
+    log.some(step => step.type === "askAntenna") && log.some(step => step.type === "restore"));
+}
+
 console.log(`${checks - failures}/${checks} checks passed`);
 if (failures) process.exitCode = 1;

@@ -192,11 +192,22 @@
   // means this file never learns the table's schema.
 
   class TxGainPlanRun {
+    // startBand: the band the radio is on now -- with work left there, the run
+    //   begins with it (one retune and one antenna question fewer).
+    // force: a Set of "band|percent" the operator asked to measure again; they
+    //   count as not measured whatever the table holds.
+    // single: MEASURE NOW on one cell -- straight to that cell at the MOD level
+    //   the radio has, no survey and therefore no MOD write: the MOD level is
+    //   every band's, and one cell is not evidence enough to move it.
     constructor({plan, modLevel = 0, store = null, resolve = null,
-                 measureAll = false, resumeTransition = null} = {}) {
+                 measureAll = false, resumeTransition = null,
+                 startBand = "", force = null, single = false} = {}) {
       this.plan = normalizePlan(plan);
       this.modLevel = Number(modLevel) || 0;
-      this.measureAll = Boolean(measureAll);
+      this.measureAll = Boolean(measureAll) || Boolean(single);
+      this.startBand = String(startBand || "");
+      this.force = force instanceof Set ? force : new Set(force || []);
+      this.single = Boolean(single);
       this.resumeTransition = resumeTransition && typeof resumeTransition === "object"
         ? resumeTransition : null;
       // resolve(cell) -> {valid, knee, modLevel} | null
@@ -233,6 +244,14 @@
 
     begin() {
       if (!cellsOf(this.plan).length) return this.fail("the plan has no cells selected");
+      if (this.single) {
+        this.state = "matrix";
+        this.secondPass = true;          // one carrier, asked for once
+        this.queue = cellsOf(this.plan);
+        this.index = 0;
+        this.pendingRestore = true;
+        return this.snapshot();
+      }
       const resume = this.resumeTransition;
       if (resume && Number(resume.target) === this.modLevel) {
         this.modFrom = Number(resume.from) || this.modLevel;
@@ -267,7 +286,7 @@
       this.queue = [];
       for (const cell of surveyFrom(this.orderedCells())) {
         const entry = !this.measureAll && this.isValid(cell) ? this.resolve(cell) : null;
-        const knee = entry ? Number(entry.knee) || 0 : 0;
+        const knee = entry ? Number(entry.knee) || 0 : 0;   // isValid already wants > 0
         if (knee > 0)
           this.surveyKnees.push({band: cell.band, hz: cell.hz, percent: cell.percent, knee,
                                  swrMax: Number(entry.swrMax) || 0, reachedCeiling: false,
@@ -377,10 +396,47 @@
     // it is not evidence about the MOD level now in the radio, and a plan that
     // accepted it would report a station calibrated on the strength of a number
     // whose conditions nobody recorded.
+    // And only one with a KNEE: an entry stored with knee 0 (a ceiling, or a
+    // gain set by hand) is usable on the air, but it is not a measurement --
+    // the survey always re-keyed it at a band's top power while the matrix
+    // skipped it below, so the grid showed it green and RUN still keyed it.
     isValid(cell) {
+      if (this.force.has(`${cell.band}|${cell.percent}`)) return false;
       const entry = this.resolve(cell);
       if (entryStatus(entry, this.modLevel) !== "calibrated") return false;
-      return Boolean(Number(entry.modLevel));
+      return Boolean(Number(entry.modLevel)) && Number(entry.knee) > 0;
+    }
+
+    // Why a cell would be keyed, or "" when it would be skipped. The grid and the
+    // line under RUN read this, so what the panel promises is what the run does.
+    reasonFor(cell) {
+      if (this.measureAll) return "measure all";
+      if (this.force.has(`${cell.band}|${cell.percent}`)) return "re-measure asked";
+      const entry = this.resolve(cell);
+      const status = entryStatus(entry, this.modLevel);
+      if (status === "missing") return "not measured";
+      if (status === "stale") return `measured at MOD ${Number(entry.modLevel)}, the radio is on ${this.modLevel}`;
+      if (!Number(entry.modLevel)) return "measured before the MOD level was recorded";
+      if (!(Number(entry.knee) > 0)) return "stored without a knee (ceiling or hand-set)";
+      return "";
+    }
+
+    // What RUN would key, before it keys anything: the survey carriers (one per
+    // band that needs one, at its top power) and the matrix cells after them.
+    // An estimate in one respect only -- a MOD write after the survey makes every
+    // entry stale, and then the matrix keys every selected cell.
+    preview() {
+      const ordered = this.orderedCells();
+      if (this.single) return {survey: [], matrix: ordered.map(cell => ({...cell, reason: "measure now"})),
+                               mayGrow: false};
+      const survey = surveyFrom(ordered)
+        .filter(cell => this.measureAll || !this.isValid(cell))
+        .map(cell => ({...cell, reason: this.reasonFor(cell)}));
+      const surveyed = new Set(survey.map(cell => `${cell.band}|${cell.percent}`));
+      const matrix = ordered
+        .filter(cell => (this.measureAll || !this.isValid(cell)) && !surveyed.has(`${cell.band}|${cell.percent}`))
+        .map(cell => ({...cell, reason: this.reasonFor(cell)}));
+      return {survey, matrix, mayGrow: survey.length > 0};
     }
 
     // The plan's cells, with the bands that still have something to measure first.
@@ -410,13 +466,17 @@
       const cells = cellsOf(this.plan);
       // measureAll means the operator asked for every cell regardless of status, so
       // there is no "already measured" half to move behind anything.
-      if (this.measureAll) return cells;
       const pending = new Set();
-      for (const cell of cells) if (!this.isValid(cell)) pending.add(cell.band);
+      for (const cell of cells) if (this.measureAll || !this.isValid(cell)) pending.add(cell.band);
       if (!pending.size) return cells;
       const done = cells.filter(cell => !pending.has(cell.band));
-      if (!done.length) return cells;
-      return [...cells.filter(cell => pending.has(cell.band)), ...done];
+      let out = done.length ? [...cells.filter(cell => pending.has(cell.band)), ...done] : cells;
+      // The band the radio is on goes first when it has work: whole band, still
+      // ascending inside it, so the safety ordering above is untouched.
+      if (this.startBand && pending.has(this.startBand))
+        out = [...out.filter(cell => cell.band === this.startBand),
+               ...out.filter(cell => cell.band !== this.startBand)];
+      return out;
     }
 
     // Returns an INTENT, never a snapshot. fail() and stop() answer with a
@@ -778,7 +838,7 @@
       // survey and the MOD level write -- a minute or more of carriers during which
       // the number never moves, which looks like nothing is happening.
       const label = {survey: this.modCorrections ? "verifying MOD level" : "survey",
-                     mod: "MOD level", matrix: this.secondPass ? "finishing" : "measuring"
+                     mod: "MOD level", matrix: this.secondPass && !this.single ? "finishing" : "measuring"
                     }[this.state] || this.state;
       const progress = {label,
                         at: Math.min(this.index + 1, Math.max(this.queue.length, 1)),

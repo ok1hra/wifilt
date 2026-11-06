@@ -89,7 +89,9 @@
               reason: `${command} is on the refused list`, menu: row.modMenu || ""};
     return {model: row, readable: true, writable: true, reason: "",
             menu: row.modMenu || "", command,
-            inputCommand: row.modInputCmd || "", inputNet: row.modInputNet};
+            inputCommand: row.modInputCmd || "", inputNet: row.modInputNet,
+            dataModeCommand: row.dataModeCmd || "", inputByData: row.modInputByData || null,
+            inputMenu: row.modInputMenu || ""};
   }
 
   class ModLevelClient {
@@ -197,16 +199,28 @@
     // Is the modulator actually listening to the network input? Readable on models
     // whose DATA MOD subaddress is known, and worth reading: "the MOD source is not
     // the LAN one" used to be one of three guesses printed after a failed search.
+    // A radio with one input per DATA profile (IC-7610: inputByData) is read in
+    // two steps: which profile is active (dataModeCommand, 00 = data off), then
+    // that profile's input. Data off counts as DATA1, the profile USB-D selects.
     async readInput() {
-      const command = this.capability.inputCommand;
+      const cap = this.capability;
+      let command = cap.inputCommand, profile = 0;
+      if (!command && cap.inputByData && cap.dataModeCommand) {
+        const mode = await this.read(cap.dataModeCommand);
+        if (!mode) return {known: false, isNet: false, raw: null};
+        const data = parseInt(mode.value.slice(0, 2), 16);
+        profile = data >= 1 && data <= 3 ? data : 1;
+        command = cap.inputByData[profile];
+      }
       if (!command) return {known: false, isNet: false, raw: null};
       const answer = await this.read(command);
       if (!answer) return {known: false, isNet: false, raw: null};
       const raw = parseInt(answer.value.slice(0, 2), 16);
-      const expected = Number(this.capability.inputNet);
+      const expected = Number(cap.inputNet);
       if (!Number.isFinite(raw) || !Number.isFinite(expected))
         return {known: false, isNet: false, raw};
-      return {known: true, isNet: raw === expected, raw, expected};
+      const menu = cap.inputMenu ? cap.inputMenu.replace("{n}", String(profile || "")) : "";
+      return {known: true, isNet: raw === expected, raw, expected, profile, menu};
     }
 
     // Write, then read back. The read-back is not politeness: the write is

@@ -46,6 +46,13 @@
     + ".plan-cell.ok{background:#16301f;color:#9fd39f;border-color:#3f7f4f}"
     + ".plan-cell.stale{background:#2e2410;color:#e0a020;border-color:#7f6320}"
     + ".plan-cell.failed{background:#2e1614;color:#e06c5a;border-color:#7f3a30}"
+    + ".plan-cell.noknee{background:#2e2410;color:#e0a020;border-color:#7f6320}"
+    + ".plan-cell.forced{border-style:dashed;border-color:#e0a020;color:#e0a020}"
+    + ".plan-cell.picked{outline:2px solid #e0a020}"
+    + ".plan-cellmenu{border:1px solid #e0a020;padding:6px 8px;display:grid;gap:6px;background:#241c08}"
+    + ".plan-cellmenu .plan-tools{flex-wrap:wrap}"
+    + ".plan-will{font-size:12px;color:#c9d6d1;margin:0}"
+    + ".plan-will li{margin-left:16px}"
     + ".plan-cell.busy{outline:1px solid #e0a020}"
     + ".plan-grid.locked .plan-cell,.plan-grid.locked .plan-hz{cursor:default;opacity:.75}"
     + ".plan-grid.locked [data-remove-row]{visibility:hidden}"
@@ -114,7 +121,12 @@
     // the plan lacks is a calibration that mode will be missing.
     + '<p class="plan-note" data-plan="modepowers" hidden></p>'
     + '<div class="plan-grid" data-plan="grid"></div>'
+    // What a click on a cell offers. A click used to only tick or untick the cell,
+    // which read as "delete this value" -- the value stayed, and RUN went elsewhere.
+    + '<div class="plan-cellmenu" data-plan="cellmenu" hidden></div>'
     + '<p class="plan-note" data-plan="estimate"></p>'
+    // Exactly what RUN will key, and why, before anything is keyed.
+    + '<div class="plan-will" data-plan="will"></div>'
     // The two numbers the whole feature turns on, and neither was visible anywhere:
     // what the radio's own MOD level is (ONE value for every band -- that is what makes
     // it the outer loop) and what audio level a transmission would actually use right
@@ -197,6 +209,8 @@
       this.cal = adapter.cal;
       this.plan = TxGainPlan.normalizePlan(this.planStore.plan());
       this.run = null;
+      this.picked = null;            // {row, column}: the cell whose menu is open
+      this.force = new Set();        // "band|percent" to measure again at the next RUN
       this.ask = null;               // the pending antenna question
       this.askAtMs = 0;
       // The operator's opt-out from the question, and the box that arms it. Both
@@ -263,13 +277,17 @@
         // already detached -- the trap this repo has hit three times.
         this.dom.grid.addEventListener("click", event => {
           const cell = event.target.closest("[data-cell]");
-          if (cell) this.toggleCell(Number(cell.dataset.row), Number(cell.dataset.column));
+          if (cell) this.pickCell(Number(cell.dataset.row), Number(cell.dataset.column));
           const remove = event.target.closest("[data-remove-row]");
           if (remove) this.removeBand(Number(remove.dataset.removeRow));
         });
         this.dom.grid.addEventListener("change", event => {
           const input = event.target.closest("[data-hz]");
           if (input) this.setHz(Number(input.dataset.hz), input.value);
+        });
+        this.dom.cellmenu.addEventListener("click", event => {
+          const action = event.target.closest("[data-cellaction]");
+          if (action) this.cellAction(action.dataset.cellaction);
         });
         this.dom.ask.addEventListener("click", event => {
           const action = event.target.closest("[data-answer]");
@@ -552,9 +570,115 @@
       this.savePlan();
     }
 
+    pickCell(rowIndex, column) {
+      if (this.running || this.starting) return;
+      const same = this.picked && this.picked.row === rowIndex && this.picked.column === column;
+      this.picked = same ? null : {row: rowIndex, column};
+      this.render();
+    }
+
+    pickedCell() {
+      if (!this.picked) return null;
+      const row = this.plan.rows[this.picked.row];
+      const percent = this.plan.powers[this.picked.column];
+      if (!row || !percent) return null;
+      const key = TxGainCal.entryKey(this.page.model(), row.band, percent);
+      return {row, rowIndex: this.picked.row, column: this.picked.column, band: row.band,
+              hz: row.hz, percent, key, entry: this.store.entry(key),
+              selected: Boolean(row.cells[this.picked.column]),
+              forced: this.force.has(`${row.band}|${percent}`)};
+    }
+
+    async cellAction(action) {
+      const cell = this.pickedCell();
+      if (!cell || this.running || this.starting) return;
+      const id = `${cell.band}|${cell.percent}`;
+      if (action === "close") { this.picked = null; this.render(); return; }
+      if (action === "now") {
+        this.picked = null;
+        this.begin(false, {band: cell.band, hz: cell.hz, percent: cell.percent});
+        return;
+      }
+      if (action === "force") {
+        if (cell.forced) this.force.delete(id);
+        else {
+          this.force.add(id);
+          if (!cell.selected) this.toggleCell(cell.rowIndex, cell.column);
+        }
+      } else if (action === "toggle") {
+        this.toggleCell(cell.rowIndex, cell.column);
+        if (cell.selected) this.force.delete(id);
+      } else if (action === "delete") {
+        try { await this.store.remove(cell.key); }
+        catch (error) { this.message = `deleting ${cell.band} @ ${cell.percent} % failed: ${error.message || error}`; }
+        this.force.delete(id);
+      }
+      this.picked = null;
+      this.render();
+    }
+
+    renderCellMenu() {
+      const menu = this.dom.cellmenu;
+      const cell = this.running || this.starting ? null : this.pickedCell();
+      menu.hidden = !cell;
+      if (!cell) { menu.innerHTML = ""; return; }
+      const knee = cell.entry ? Number(cell.entry.knee) || 0 : 0;
+      const what = !cell.entry ? "not measured yet"
+        : knee > 0 ? `gain ${Number(cell.entry.gain).toFixed(3)}, measured at MOD ${Number(cell.entry.modLevel) || "?"}`
+        : `gain ${Number(cell.entry.gain).toFixed(3)} stored without a knee (a ceiling, or set by hand) — RUN measures it`;
+      const buttons = [`<button type="button" data-cellaction="now">MEASURE NOW</button>`];
+      if (cell.entry && knee > 0)
+        buttons.push(`<button type="button" data-cellaction="force">${cell.forced
+          ? "KEEP THE VALUE" : "RE-MEASURE AT RUN"}</button>`);
+      buttons.push(`<button type="button" data-cellaction="toggle">${cell.selected
+        ? "LEAVE OUT OF THE PLAN" : "PUT IN THE PLAN"}</button>`);
+      if (cell.entry) buttons.push(`<button type="button" data-cellaction="delete">DELETE THE VALUE</button>`);
+      buttons.push(`<button type="button" data-cellaction="close">CLOSE</button>`);
+      menu.innerHTML = `<b>${cell.band} @ ${cell.percent} % — ${(cell.hz / 1000).toFixed(1)} kHz</b>` +
+        `<span class="plan-note">${what}${cell.selected ? "" : " · left out of the plan"}` +
+        `${cell.forced ? " · RUN measures it again" : ""}</span>` +
+        `<div class="plan-tools">${buttons.join("")}</div>` +
+        `<span class="plan-note">MEASURE NOW keys this one cell at once, at the MOD level the radio has — ` +
+        `no other band, no MOD change.${cell.entry ? " DELETE THE VALUE sends this band and power out " +
+        "at the manual level until it is measured again." : ""}</span>`;
+    }
+
+    // What RUN would do now, from the same TxGainPlanRun the run itself uses.
+    preview(measureAll = false) {
+      const radio = this.page.radio ? this.page.radio() : {};
+      const run = new TxGainPlan.TxGainPlanRun({
+        plan: this.plan, modLevel: this.modLevel(), measureAll,
+        startBand: TxGainCal.bandOf(Number(radio.frequency) || 0) || "", force: this.force,
+        resolve: cell => this.store.entry(TxGainCal.entryKey(this.page.model(), cell.band, cell.percent)),
+      });
+      const view = run.preview();
+      const cells = [...view.survey, ...view.matrix];
+      const visits = new Set(view.survey.map(cell => cell.band)).size +
+                     new Set(view.matrix.map(cell => cell.band)).size;
+      return {...view, cells, carriers: cells.length, prompts: visits,
+              minutes: Math.max(1, Math.round(cells.length * 15000 / 60000 + visits * 2000 / 60000))};
+    }
+
+    renderWill() {
+      const will = this.dom.will;
+      if (this.running || this.starting || !this.plan.rows.length) { will.innerHTML = ""; return; }
+      const view = this.preview();
+      if (!view.cells.length) {
+        will.innerHTML = `<p class="plan-will">RUN has nothing to key: every ticked cell has a knee at ` +
+          `this MOD level. Click a cell to measure it again.</p>`;
+        return;
+      }
+      const item = cell => `<li>${cell.band} @ ${cell.percent} % — ${cell.reason}</li>`;
+      will.innerHTML = `<p class="plan-will">RUN will key, in this order:</p><ul class="plan-will">` +
+        view.cells.map(item).join("") + `</ul>` +
+        (view.mayGrow ? `<p class="plan-will">If the first carriers move the MOD level, every ticked ` +
+          `cell is measured again after them.</p>` : "");
+    }
+
     // ---- the run -----------------------------------------------------------
 
-    async begin(measureAll) {
+    // `only`: MEASURE NOW on one cell ({band, hz, percent}).
+    async begin(measureAll, only = null) {
       if (this.running || this.starting) return;
       this.starting = true;
       this.message = "";
@@ -608,9 +732,11 @@
         this.render();
         const input = await this.mod.readInput();
         if (input.known && !input.isNet) {
-          this.message = `the radio's data-mode MOD input is set to ${input.raw}, not ` +
+          const where = input.profile ? `DATA${input.profile} MOD input` : "data-mode MOD input";
+          this.message = `the radio's ${where} is set to ${input.raw}, not ` +
             `${this.mod.capability.inputNet} (${this.mod.capability.model.net}) — LAN audio ` +
-            "does not reach the modulator, so nothing here can be measured";
+            "does not reach the modulator, so nothing here can be measured" +
+            (input.menu ? `. Set ${input.menu} and start the plan again.` : "");
           return;
         }
 
@@ -622,17 +748,19 @@
         this.render();
         const radio = this.page.radio ? this.page.radio() : {};
         const ceiling = await this.mod.readPowerCeiling({supplyVolts: Number(radio.supplyVolts) || 0});
-        let runPlan = this.plan;
+        const basePlan = only
+          ? {powers: [only.percent], rows: [{band: only.band, hz: only.hz, cells: [1]}]} : this.plan;
+        let runPlan = basePlan;
         this.ceilingNote = "";
-        if (ceiling.limited && this.plan.powers.some(percent => percent > ceiling.percent)) {
-          const keep = this.plan.powers.map(percent => percent <= ceiling.percent);
-          const above = this.plan.powers.filter(percent => percent > ceiling.percent);
+        if (ceiling.limited && basePlan.powers.some(percent => percent > ceiling.percent)) {
+          const keep = basePlan.powers.map(percent => percent <= ceiling.percent);
+          const above = basePlan.powers.filter(percent => percent > ceiling.percent);
           if (!keep.some(Boolean)) {
             this.message = `${ceiling.text} — every column is above that, nothing to measure`;
             return;
           }
-          runPlan = {powers: this.plan.powers.filter((_, index) => keep[index]),
-                     rows: this.plan.rows.map(row => ({...row,
+          runPlan = {powers: basePlan.powers.filter((_, index) => keep[index]),
+                     rows: basePlan.rows.map(row => ({...row,
                        cells: row.cells.filter((_, index) => keep[index])}))};
           this.ceilingNote = `${ceiling.text} — ${above.map(percent => `${percent} %`).join(", ")} ` +
             `left out; run again on external power to measure ${above.length > 1 ? "them" : "it"}`;
@@ -651,8 +779,11 @@
           return;
         }
 
+        const radioNow = this.page.radio ? this.page.radio() : {};
         this.run = new TxGainPlan.TxGainPlanRun({
-          plan: runPlan, modLevel, measureAll, resumeTransition,
+          plan: runPlan, modLevel, measureAll, resumeTransition: only ? null : resumeTransition,
+          single: Boolean(only), force: this.force,
+          startBand: TxGainCal.bandOf(Number(radioNow.frequency) || 0) || "",
           resolve: cell => this.store.entry(TxGainCal.entryKey(
             this.page.model(), cell.band, cell.percent)),
         });
@@ -1041,6 +1172,8 @@
         parts.push(`MOD level ${snapshot.modFrom} → ${snapshot.modLevel}`);
       this.summary = parts.join(", ");
       this.results = snapshot.results;
+      for (const row of snapshot.results || [])
+        if (row.status === "ok") this.force.delete(`${row.band}|${row.percent}`);
       this.message = snapshot.error || "";
       if (snapshot.modAdvice && snapshot.modAdvice.reason)
         this.message = (this.message ? this.message + " · " : "") +
@@ -1063,7 +1196,9 @@
 
     cellClass(row, column) {
       const percent = this.plan.powers[column];
-      if (!row.cells[column]) return "plan-cell";
+      if (!row.cells[column])
+        return this.picked && this.plan.rows[this.picked.row] === row && this.picked.column === column
+          ? "plan-cell picked" : "plan-cell";
       const key = TxGainCal.entryKey(this.page.model(), row.band, percent);
       const status = this.store.status(key, this.modLevel());
       const failed = (this.results || []).find(result =>
@@ -1071,22 +1206,30 @@
       const busy = this.busyCell && this.busyCell.band === row.band &&
                    this.busyCell.percent === percent;
       const classes = ["plan-cell", "on"];
-      if (status === "calibrated") classes.push("ok");
+      const entry = this.store.entry(key);
+      const noKnee = status === "calibrated" && entry && !(Number(entry.knee) > 0);
+      if (noKnee) classes.push("noknee");
+      else if (status === "calibrated") classes.push("ok");
       else if (status === "stale") classes.push("stale");
       else if (failed) classes.push("failed");
       if (busy) classes.push("busy");
+      if (this.force.has(`${row.band}|${percent}`)) classes.push("forced");
+      if (this.picked && this.plan.rows[this.picked.row] === row && this.picked.column === column)
+        classes.push("picked");
       return classes.join(" ");
     }
 
     cellText(row, column) {
       const percent = this.plan.powers[column];
-      if (!row.cells[column]) return "·";
       const entry = this.store.entry(TxGainCal.entryKey(this.page.model(), row.band, percent));
+      if (!row.cells[column]) return entry ? `(${Number(entry.gain).toFixed(3)})` : "·";
       if (!entry) return "measure";
       const status = this.store.status(
         TxGainCal.entryKey(this.page.model(), row.band, percent), this.modLevel());
-      return status === "stale" ? `stale ${Number(entry.gain).toFixed(3)}`
-                               : Number(entry.gain).toFixed(3);
+      if (this.force.has(`${row.band}|${percent}`)) return `↻ ${Number(entry.gain).toFixed(3)}`;
+      if (status === "stale") return `stale ${Number(entry.gain).toFixed(3)}`;
+      if (!(Number(entry.knee) > 0)) return `no knee ${Number(entry.gain).toFixed(3)}`;
+      return Number(entry.gain).toFixed(3);
     }
 
     modLevel() {
@@ -1156,10 +1299,8 @@
 
       const cost = TxGainPlan.estimate(this.plan);
       this.dom.estimate.textContent = cost.cells
-        ? `${cost.cells} cells on ${cost.bands} bands · ${cost.carriers} carriers, ` +
-          `${Math.round(cost.airMs / 60000)} min of transmission, about ` +
-          `${Math.round(cost.totalMs / 60000)} min in total · ` +
-          `${cost.prompts} antenna questions`
+        ? `${cost.cells} cells ticked on ${cost.bands} bands · click a cell to measure it now, ` +
+          "measure it again, leave it out or delete its value"
         : this.plan.rows.length
           ? "nothing ticked — click a cell to include that band at that power"
           : this.plan.powers.length
@@ -1231,6 +1372,8 @@
       this.dom.error.hidden = !this.message;
       this.dom.error.textContent = this.message;
       this.renderTodo(snapshot, problem);
+      this.renderCellMenu();
+      this.renderWill();
       this.renderButton();
     }
 
@@ -1266,10 +1409,16 @@
         todo.textContent = `Your turn: ${problem}.`;
         return;
       }
-      const cost = TxGainPlan.estimate(this.plan);
+      const view = this.preview();
       todo.className = "plan-todo";
-      todo.textContent = `Your turn: press RUN. ${cost.carriers} carriers, about ` +
-        `${Math.round(cost.totalMs / 60000)} min, ${cost.prompts} antenna questions.`;
+      if (!view.carriers) {
+        todo.textContent = "Nothing to measure — every ticked cell is calibrated. " +
+          "Click a cell to measure it again, or press RE-MEASURE ALL.";
+        return;
+      }
+      todo.textContent = `Your turn: press RUN. ${view.carriers} carrier${view.carriers > 1 ? "s" : ""}` +
+        `${view.mayGrow ? " or more" : ""}, about ${view.minutes} min, ` +
+        `${view.prompts} antenna question${view.prompts > 1 ? "s" : ""}.`;
       this.dom.run.classList.add("wanted");
     }
 
