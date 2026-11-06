@@ -80,6 +80,16 @@ The tests are ports of upstream's own:
   path, 48 kHz TX -> 8 kHz G.711 mu-law + noise -> 48 kHz RX, optionally with
   a path delay (`... 2300 30 4000 ulaw 500 p2p`).
 
+## Phase 4: Winlink clients on TCP 8300/8301
+
+`vara_host_bridge.h` (firmware) listens on the two VARA host ports and relays
+both sockets to the XARA page over its AUD1 socket (`vara.host` frames,
+docs/aud1-audio-websocket-protocol.md); the worker feeds them to the same
+`Tnc` the page uses (`xara-host/src/server.rs`'s rules: one client per port,
+either ending closes both). The page has to be open: with no XARA page holding
+the radio, a client is refused. Replies to the page's own commands are kept
+from the client, which pairs each command with one reply.
+
 ## Phase 3: the page
 
 `data/vara-worker.js` runs one `HfStation` + `Tnc` on the AUD1 socket: the RX

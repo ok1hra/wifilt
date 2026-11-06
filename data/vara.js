@@ -12,7 +12,7 @@
 // waterfall runs off it, and LISTEN decides only whether this station answers.
 (function () {
   "use strict";
-  const VARA_WORKER_REV = "f799cfa3"; // stamped from /vara-worker.js
+  const VARA_WORKER_REV = "47df5d16"; // stamped from /vara-worker.js
   const audioWsPort = () => Number((window.WIFILT_PORTS || {}).audio) || 83;
   const SETTINGS_URL = "/vara-settings.json";
   const DEFAULTS = {bw: 2300, p2p: true, driveDb: -5, latencyMs: 350, slotMs: 200, prebufferMs: 120};
@@ -21,7 +21,7 @@
   const dom = {};
   const byId = id => document.getElementById(id);
   let worker = null, lease = null, ownLease = false, settings = {...DEFAULTS};
-  let myCall = "", status = null, radio = {connected: false, tx: false};
+  let myCall = "", status = null, radio = {connected: false, tx: false}, hostPeer = "";
   const rxText = new TextDecoder("utf-8");
 
   function normalise(raw) {
@@ -90,6 +90,10 @@
       case "line": onHostLine(m.line); break;
       case "data": chatText(rxText.decode(m.bytes, {stream: true}), "vara-chat-rx"); break;
       case "trace": hostLog(`  ${m.text}`, "vara-log-trace"); break;
+      case "host":
+        if (m.cmd || m.data) { if (!hostPeer) chatSystem(`Winlink client ${m.peer || ""} attached on TCP 8300/8301`); hostPeer = m.peer || "client"; }
+        else if (hostPeer) { chatSystem("Winlink client left"); hostPeer = ""; }
+        break;
       case "rx-samples": if (waterfall && !(status && status.ptt) && !radio.tx) waterfall.ingest(m.samples); break;
       case "aud1":
         if (m.status === "ready") setAud1("ready", "ok");
@@ -137,6 +141,13 @@
     dom.stBusy.classList.toggle("warn", Boolean(s && s.busy));
     dom.stBuffer.textContent = s ? `${s.buffered} B` : "—";
     dom.stLoad.textContent = s && s.load ? `${Math.round(s.load * 100)} %` : "—";
+    dom.stHost.textContent = s && s.host ? s.host : "—";
+    // The modem's own LISTEN, which a Winlink client switches too (and a
+    // client leaving switches off) -- the toggle follows it, never the reverse.
+    if (s && dom.listenToggle.checked !== Boolean(s.listen)) {
+      dom.listenToggle.checked = Boolean(s.listen);
+      dom.listenState.textContent = s.listen ? "LISTENING" : "LISTEN OFF";
+    }
     dom.stLoad.classList.toggle("warn", Boolean(s && s.load > 0.8));
     dom.connectButton.disabled = !worker || !haveCall || !idle || !dom.peerCall.value.trim();
     dom.disconnectButton.disabled = !worker || idle;
@@ -145,8 +156,11 @@
     dom.bwSelect.disabled = !worker || !idle;
     dom.sessionSelect.disabled = !worker || !idle;
     dom.listenToggle.disabled = !worker || !haveCall;
-    dom.chatInput.disabled = !worker || !linked;
-    dom.chatSend.disabled = !worker || !linked;
+    // With a client on the data port the link's byte stream is the client's.
+    const ownStream = !(s && s.host);
+    dom.chatInput.disabled = !worker || !linked || !ownStream;
+    dom.chatSend.disabled = !worker || !linked || !ownStream;
+    dom.chatInput.placeholder = ownStream ? "Type, Enter sends once connected" : "The link's data belongs to the Winlink client";
     dom.tuneButton.disabled = !worker || (!idle && !(s && s.tuning));
     dom.tuneButton.classList.toggle("active", Boolean(s && s.tuning));
     dom.tuneButton.textContent = s && s.tuning ? "STOP TUNE" : "TUNE";
@@ -237,7 +251,7 @@
     ["trxFrequencyValue", "trxMode", "radioModel", "aud1State", "linkState", "listenToggle", "listenState",
       "waterfall", "waterfallCanvas", "waterfallOverlay", "myCall", "peerCall", "bwSelect", "sessionSelect",
       "connectButton", "disconnectButton", "abortButton", "cqButton", "connectSummary",
-      "stState", "stPeer", "stSpeed", "stSn", "stBusy", "stBuffer", "stLoad",
+      "stState", "stPeer", "stSpeed", "stSn", "stBusy", "stBuffer", "stLoad", "stHost",
       "chatLog", "chatForm", "chatInput", "chatSend", "hostLog",
       "setDrive", "setLatency", "setSlot", "setPrebuffer", "tuneButton", "settingsSave", "settingsSaveStatus",
       "settingsSummary", "takeoverNotice", "takeoverDetail", "takeoverButton"].forEach(id => { dom[id] = byId(id); });

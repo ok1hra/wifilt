@@ -11,6 +11,20 @@ published.
 
 ## Working tree — not committed
 
+**XARA: Winlink clients (Pat, Winlink Express) on TCP 8300/8301 (docs/vara-implementace.md, phase 4).**
+
+* **What.** Point the client's VARA HF modem at the interface's address, ports 8300/8301, with
+  the DATA → XARA page open. The page shows the client under HOST and keeps logging every
+  host line; the link's data goes to the client, not to the terminal.
+* **How.** `vara_host_bridge.h` relays both sockets to the page that holds the radio lease as
+  `vara.host` frames on its AUD1 socket, so the lease that decides who transmits also decides
+  who gets the host session. Upstream's rules: one client per port, either ending closes both;
+  data reading pauses while the modem's TX buffer is full (`vara.hold`). No XARA page, no
+  modem: a client is refused at once.
+* **Checks.** `tools/vara-page-native-check.sh` drives a TCP client through the native firmware
+  (VERSION, MYCALL, BW, data to the queue, CONNECT with PTT reports, ABORT, closing, refusal);
+  `tools/vara-worker-test.js` runs a whole ARQ link with the client on one side.
+
 **XARA (VARA-compatible) page: the modem on the radio (docs/vara-implementace.md, phase 3).**
 
 * **What.** DATA → XARA (`/vara.html`): waterfall, CONNECT/DISCONNECT/ABORT, CQ, LISTEN,

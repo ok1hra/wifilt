@@ -134,6 +134,33 @@ at most every 500 ms: what its two decoders printed since the last one, for the
 TrxNet text stream (`rtty_stream.h`). The firmware drops it unless the stream is
 switched on and somebody subscribed.
 
+XARA (the VARA-compatible page, `data/vara-worker.js`) streams a transmission
+whose length it does not know in advance: it sends `tx.prepare` for a few
+packets the moment its modem keys, keeps the declared length a few packets
+ahead with `tx.extend` (`samples`, `packets`) while it stays keyed, and pads
+the end with silence to an exact `LAST`. Its packets follow `tx.prepare` on the
+same socket without waiting for `tx-ready`; the firmware handles frames in
+order, so they arrive with the transmission already in `READY`.
+
+### VARA host relay
+
+The same socket carries XARA's host session with a Winlink client on TCP
+8300 (commands) and 8301 (data), relayed by `vara_host_bridge.h` only while
+the socket's owner holds the lease as role `vara`. Text frames, payload in
+base64 because every binary frame on this socket is audio:
+
+| direction | message |
+|---|---|
+| firmware → page | `{"type":"vara.host","ev":"open","ch":"cmd"\|"data","peer":"a.b.c.d"}` |
+| firmware → page | `{"type":"vara.host","ev":"close"}` — either client ended; both are closed |
+| both | `{"type":"vara.host","ch":"cmd"\|"data","b64":"…"}` — bytes on that socket |
+| page → firmware | `{"type":"vara.host","ev":"close"}` — end the host session |
+| page → firmware | `{"type":"vara.hold","on":true\|false}` — stop / resume reading the data socket |
+
+A page frame is at most 2048 bytes (`Aud1WsParser`), so the page sends at most
+1200 payload bytes per frame. The firmware reads a socket only when the AUD1
+send queue has room for the frame plus 4 kB, so RX audio keeps priority.
+
 ```text
 QUEUED -> PREPARING -> WAITING_SLOT -> PREBUFFERING -> TRANSMITTING
              |              |              |                |

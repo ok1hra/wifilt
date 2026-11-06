@@ -462,6 +462,7 @@ char CwMsg[37] = "";
   #include "watch_hub.h"        // viewers follow the holder's data page (native only)
 #endif
 #include "trx_power.h"          // wake / standby / shutdown of the LAN radio from the web UI
+#include "vara_host_bridge.h"   // VARA host ports 8300/8301 relayed to the XARA page
 // See radio_transport.h's own comment on radioLanLocalControlPort(): 0 means
 // "use the real default (50001)", exactly today's behavior on the real
 // device and on native/ unless --lan-port-base overrides it.
@@ -1513,6 +1514,9 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   bool AudioHandleWsUpgrade(WiFiClient& webClient, const String& request, const String& token);
   void AudioHandleWsClient(void);
   void audioHandleRawClient(void);
+  void varaHostBegin(void);
+  void varaHostTick(void);
+  void varaHostFromPage(const String& type, const String& json);
   #if CAP_WATCH
     bool watchWantsRxAudio(void);
     void watchEvent(int role, const String &json);
@@ -6499,6 +6503,7 @@ void setup(){
       setupWebServer();
       dxcRawServer.begin();
       audioWsServer.begin();
+      varaHostBegin();
       // Only what really bound. These lines used to print unconditionally, so a
       // PC build without the capability logged a healthy start while the audio
       // port answered nothing.
@@ -6683,6 +6688,7 @@ void loop(){
   _TIMED("dxcRaw",          dxcHandleRawClient())
   _TIMED("audioRaw",        audioHandleRawClient())
   _TIMED("audioWs",         AudioHandleWsClient())
+  _TIMED("varaHost",        varaHostTick())
   // Persist queued unattended-log events to flash only when no slot key is near,
   // so the append/rotate never stalls the loop across a JS8 slot boundary.
   if(!txRealtimeNow()) unattendedLogFlush();
@@ -11870,6 +11876,7 @@ static int32_t aud1JsonI32(const String& json, const char* key){
 static void aud1HandleControl(const String& json){
   String type = extractJsonString(json, "type");
   uint32_t txId = (uint32_t)aud1JsonU64(json, "txId");
+  if(type == "vara.host" || type == "vara.hold"){ varaHostFromPage(type, json); return; }
   if(type == "tx.abort"){
     if((aud1TxState == AUD1_TX_READY || aud1TxState == AUD1_TX_PREBUFFER ||
         aud1TxState == AUD1_TX_STREAM) && (!txId || txId == aud1TxId)){
@@ -12207,6 +12214,43 @@ void AudioHandleWsClient(){
       Serial.print(" gaveup="); Serial.println(healthClient ? healthClient->audioRtxAbandoned() : 0);
     }
   }
+}
+
+// ── VARA host ports (TCP 8300/8301) for Winlink clients ──────────────────────
+// vara_host_bridge.h has the why. The modem is the XARA page that holds the
+// radio lease: its AUD1 socket is the only one host traffic ever reaches.
+static bool varaHostModemPresent(){
+  return AudioWsClient.connected() && strcmp(js8Session.role, "vara") == 0;
+}
+static bool varaHostSendText(const char* json, size_t n){
+  if(!AudioWsClient.connected() || n > 0xFFFF) return false;
+  uint8_t header[4]; size_t headerLen = 0;
+  header[headerLen++] = 0x80 | 0x1;
+  if(n < 126){ header[headerLen++] = uint8_t(n); }
+  else{ header[headerLen++] = 126; header[headerLen++] = uint8_t(n >> 8); header[headerLen++] = uint8_t(n); }
+  return wsEnqueueFrame(header, headerLen, (const uint8_t*)json, n);
+}
+static size_t varaHostSendRoom(){ return wsOut ? WS_OUT_SIZE - wsOutLen : 0; }
+static void varaHostLog(const char* line){ Serial.println(line); }
+static VaraHostBridge* varaHost = nullptr;
+
+void varaHostBegin(){
+  if(varaHost) return;
+  varaHost = new VaraHostBridge({varaHostModemPresent, varaHostSendText, varaHostSendRoom, varaHostLog});
+  varaHost->begin();
+  Serial.print("HTTP| VARA host ports ");
+  Serial.print(PLATFORM_PORT(VARA_CMD_PORT)); Serial.print("/"); Serial.println(PLATFORM_PORT(VARA_DATA_PORT));
+}
+
+void varaHostTick(){ if(varaHost) varaHost->tick(); }
+
+void varaHostFromPage(const String& type, const String& json){
+  if(!varaHost) return;
+  if(type == "vara.hold"){ varaHost->setHold(extractJsonBool(json, "on", false)); return; }
+  String ev = extractJsonString(json, "ev");
+  String ch = extractJsonString(json, "ch");
+  String b64 = extractJsonString(json, "b64");
+  varaHost->fromPage(ch.c_str(), b64.c_str(), b64.length(), ev == "close");
 }
 
 void audioHandleRawClient(){

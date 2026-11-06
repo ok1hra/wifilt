@@ -157,6 +157,21 @@
     }
   }
 
+  // ---- base64, for the host relay (vara_host_bridge.h) ------------------------
+  function b64(bytes) {
+    let s = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(s);
+  }
+  function unb64(text) {
+    const s = atob(text), out = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+    return out;
+  }
+  // The firmware takes control frames up to 2048 bytes (Aud1WsParser), so the
+  // relay sends at most this much per frame -- 1640 bytes once in base64.
+  const HOST_CHUNK = 1200;
+
   // ---- the core -------------------------------------------------------------
   const DEFAULTS = {mycall: "", bw: 2300, latencyMs: 350, slotMs: 200, prebufferMs: 120, driveDb: -5, gain: 1,
     listen: false, p2p: true};
@@ -173,9 +188,24 @@
       // where the AUD1 transmission has to end -- the firmware itself holds the
       // radio keyed until that audio has actually left.
       this.station = new M.HfStation(cfg, {driveDb: this.s.driveDb, txLatency: lat, rxLag: lat});
+      // Host clients: the page always (it shows every line), plus a Winlink
+      // client on the TCP ports when one is attached (vara_host_bridge.h).
+      // Received data goes to the TCP data client if there is one, otherwise
+      // to the page's terminal -- never to both, it is one byte stream.
+      this.tcp = {cmd: false, data: false, peer: "", held: false, pending: []};
       this.tnc = new this.H.Tnc(this.station, {
-        line: line => this.post({type: "line", line}),
-        data: bytes => this.post({type: "data", bytes: Uint8Array.from(bytes)}),
+        line: line => {
+          this.post({type: "line", line});
+          // The reply to a command from the page is the page's: a Winlink
+          // client pairs every command it sends with one reply, and an extra
+          // OK would put it a line out of step.
+          if (this.tcp.cmd && !(this.fromPage && this.H.isReply(line)))
+            this.hostOut("cmd", new TextEncoder().encode(line + "\r"));
+        },
+        data: bytes => {
+          if (this.tcp.data) this.hostOut("data", Uint8Array.from(bytes));
+          else this.post({type: "data", bytes: Uint8Array.from(bytes)});
+        },
         hasCmdClient: () => true, hasDataClient: () => true,
       }, {onEvent: e => this.onTncEvent(e)});
       this.up = new Upsampler();
@@ -186,11 +216,52 @@
       this.expect = null; this.lastAdvance = 0; this.stalled = 0; this.ready = false;
       this.cpuMs = 0; this.audioMs = 0; this.lastStatus = 0; this.lastStatusKey = "";
       this.rx8 = 0; this.filled = 0; this.trimmed = 0;
-      if (this.s.mycall) this.tnc.cmdLine("MYCALL " + this.s.mycall);
-      this.tnc.cmdLine("LISTEN " + (this.s.listen ? "ON" : "OFF"));
-      this.tnc.cmdLine(this.s.p2p ? "P2P SESSION" : "WINLINK SESSION");
+      this.fromPage = false;
+      if (this.s.mycall) this.command("MYCALL " + this.s.mycall);
+      this.command("LISTEN " + (this.s.listen ? "ON" : "OFF"));
+      this.command(this.s.p2p ? "P2P SESSION" : "WINLINK SESSION");
     }
     post(msg, transfer) { this.d.post(msg, transfer); }
+    // ---- the TCP host relay ---------------------------------------------------
+    hostOut(ch, bytes) {
+      for (let i = 0; i < bytes.length; i += HOST_CHUNK) {
+        try { this.d.aud1.sendControl({type: "vara.host", ch, b64: b64(bytes.subarray(i, i + HOST_CHUNK))}); }
+        catch (_e) { return; } // socket gone: the firmware drops the host session with it
+      }
+    }
+    onHost(m) {
+      const t = this.tcp;
+      if (m.ev === "open") {
+        t[m.ch === "data" ? "data" : "cmd"] = true;
+        if (m.peer) t.peer = m.peer;
+        this.tnc.clientConnected();
+      } else if (m.ev === "close") {
+        t.cmd = t.data = false; t.pending = []; this.setHold(false);
+        this.tnc.clientClosed();
+      } else if (m.b64) {
+        const bytes = unb64(m.b64);
+        if (m.ch === "cmd") this.tnc.cmdBytes(bytes);
+        else t.pending.push(bytes);
+      }
+      this.feedHostData();
+      this.tnc.service();
+      this.post({type: "host", cmd: t.cmd, data: t.data, peer: t.peer});
+      this.status(true);
+    }
+    // Data from the client enters the modem only while the TNC is not holding
+    // it (its TX buffer is full); meanwhile the firmware stops reading the
+    // socket, so TCP itself pushes back on the client.
+    feedHostData() {
+      const t = this.tcp;
+      while (t.pending.length && !this.tnc.hold()) this.tnc.dataBytes(t.pending.shift());
+      this.tnc.service();
+      this.setHold(this.tnc.hold() || t.pending.length > 0);
+    }
+    setHold(on) {
+      if (on === this.tcp.held) return;
+      this.tcp.held = on;
+      try { this.d.aud1.sendControl({type: "vara.hold", on}); } catch (_e) { /* socket gone */ }
+    }
     onTncEvent(e) {
       if (e.kind === "trace") this.post({type: "trace", text: e.text});
       else if (e.kind === "unableToConnect" || e.kind === "timedOut") this.post({type: "event", kind: e.kind});
@@ -236,6 +307,7 @@
       const t0 = this.d.monoNow();
       const rx = this.up.run(x8), out = new Float64Array(rx.length);
       this.tnc.process(rx, out);
+      if (this.tcp.held || this.tcp.pending.length) this.feedHostData();
       this.tx.feed(out, this.station.keyed);
       this.cpuMs += this.d.monoNow() - t0; this.audioMs += x8.length / 8;
       this.status(false);
@@ -248,7 +320,8 @@
         afcHz: link.afcHz, ptt: st.ptt(), txActive: this.tx.active, busy: st.busy(), buffered: st.buffered(),
         tuning: st.tuning(), mycall: (st.config().host.mycalls || [])[0] || "", listen: st.listenOn,
         p2p: Boolean(st.config().p2p), load: this.audioMs ? this.cpuMs / this.audioMs : 0,
-        filledMs: this.filled / 8, trimmedMs: this.trimmed / 8, txFaults: this.tx.faults};
+        filledMs: this.filled / 8, trimmedMs: this.trimmed / 8, txFaults: this.tx.faults,
+        host: this.tcp.cmd || this.tcp.data ? this.tcp.peer || "connected" : ""};
       const key = JSON.stringify(s);
       if (!force && key === this.lastStatusKey && now - this.lastStatus < 1000) return;
       this.lastStatus = now; this.lastStatusKey = key;
@@ -256,7 +329,14 @@
       this.post(s);
     }
     // page -> modem
-    command(line) { this.tnc.cmdLine(line); this.tnc.service(); this.status(true); }
+    command(line) {
+      const c = this.H.parse(line);
+      this.tnc.echo("> " + line);
+      this.fromPage = true;
+      try { if (c) this.tnc.command(c); else this.tnc.say(this.H.R.wrong()); this.tnc.flush(); }
+      finally { this.fromPage = false; }
+      this.status(true);
+    }
     send(bytes) { this.tnc.dataBytes(bytes); this.tnc.service(); this.status(true); }
     tune(on) { this.tnc.uiTune(on); this.status(true); }
     drive(db) { this.s.driveDb = this.tnc.uiDrive(db); this.status(true); }
@@ -289,6 +369,7 @@
         aud1.onSamples((samples, _rate, meta) => {
           try { core.onRx(samples, meta); } catch (e) { post({type: "error", reason: "modem", detail: e && e.stack || String(e)}); }
         });
+        aud1.onControl(m => { if (m.type === "vara.host") core.onHost(m); });
         aud1.onStatus(s => {
           if (s.type === "tx-drained") aud1.complete(s.txId);
           post({type: "aud1", status: s.type, reason: s.reason || s.message || ""});

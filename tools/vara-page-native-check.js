@@ -11,6 +11,7 @@
 //   node --experimental-websocket tools/vara-page-native-check.js <http-port> <app-log>
 
 const {spawn} = require("child_process");
+const net = require("net");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -120,6 +121,72 @@ async function main() {
     await waitFor(`/saved/.test(document.getElementById("settingsSaveStatus").textContent)`, 4000);
     const saved = await (await fetch(`http://127.0.0.1:${port}/vara-settings.json`)).json().catch(() => ({}));
     check("settings are stored on the device", saved.latencyMs === 420, JSON.stringify(saved));
+
+    // ---- a Winlink client on TCP 8300/8301 (phase 4) ----------------------------
+    // What Pat does, byte for byte: commands with CR, replies one per command,
+    // events in between; data on the second socket.
+    const tcp = portNo => new Promise((res, rej) => {
+      const sock = net.connect(portNo, "127.0.0.1");
+      const c = {sock, lines: [], raw: Buffer.alloc(0), closed: false};
+      sock.on("data", d => {
+        c.raw = Buffer.concat([c.raw, d]);
+        let i;
+        while ((i = c.raw.indexOf(13)) >= 0) { c.lines.push(c.raw.subarray(0, i).toString("latin1")); c.raw = c.raw.subarray(i + 1); }
+      });
+      sock.on("close", () => { c.closed = true; });
+      sock.on("error", () => { c.closed = true; });
+      sock.on("connect", () => res(c));
+      setTimeout(() => rej(new Error("connect timeout")), 3000);
+    });
+    const until = async (fn, ms) => { const end = Date.now() + ms; while (Date.now() < end) { if (fn()) return true; await sleep(100); } return false; };
+    const cmd = await tcp(8300), data = await tcp(8301);
+    const shown = await waitFor(`document.getElementById("stHost").textContent === "127.0.0.1"`, 4000);
+    check("the page shows the client attached", shown, await text("stHost"));
+    const ask = async (line, re) => {
+      const from = cmd.lines.length;
+      cmd.sock.write(line + "\r");
+      const ok = await until(() => cmd.lines.slice(from).some(l => re.test(l)), 4000);
+      return [ok, cmd.lines.slice(from).join(" | ")];
+    };
+    let r = await ask("VERSION", /^VERSION VARA HF/);
+    check("VERSION answers like VARA HF", r[0], r[1]);
+    r = await ask("MYCALL OK1HRA", /^OK$/);
+    check("MYCALL is accepted", r[0], r[1]);
+    r = await ask("BW2300", /^OK$/);
+    check("BW2300 is accepted", r[0], r[1]);
+    // Unlinked, the modem queues it for the next link without a BUFFER report
+    // (station.send in Listen, as upstream) -- the page's TX QUEUE shows it.
+    data.sock.write("hello world");
+    const queued = await waitFor(`document.getElementById("stBuffer").textContent === "11 B"`, 4000);
+    check("data on 8301 reaches the modem's queue", queued, await text("stBuffer"));
+    let from = cmd.lines.length;
+    // A command from the page answers the page, not the client.
+    from = cmd.lines.length;
+    await evaluate(`(() => { const s = document.getElementById("sessionSelect"); s.value = "winlink"; s.dispatchEvent(new Event("change")); })()`);
+    await sleep(1200);
+    check("a command from the page sends the client no reply", !cmd.lines.slice(from).some(l => l === "OK" || l === "WRONG"),
+      cmd.lines.slice(from).join(" | "));
+    r = await ask("CONNECT OK1HRA N1CALL", /^PTT OFF$/);
+    check("CONNECT keys the radio and reports PTT ON/OFF", r[0] && /PTT ON/.test(r[1]), r[1]);
+    r = await ask("ABORT", /^OK$/);
+    check("ABORT is accepted", r[0], r[1]);
+    const idle = await waitFor(`document.getElementById("stState").textContent === "Listen"`, 8000);
+    check("the modem is back to listening", idle, await text("stState"));
+    cmd.sock.end();
+    const both = await until(() => data.closed, 4000);
+    check("closing the command socket closes the data socket too", both);
+    const gone = await waitFor(`document.getElementById("stHost").textContent === "—"`, 4000);
+    check("the page shows the client gone", gone, await text("stHost"));
+    check("the firmware logged the host session", /VARA\| cmd client connected/.test(log()) && /VARA\| host closed/.test(log()));
+
+    // ---- no page, no modem: a client is turned away ------------------------------
+    await send("Page.navigate", {url: "about:blank"});
+    await sleep(2500);
+    const lone = await tcp(8300).catch(() => null);
+    const refused = lone ? await until(() => lone.closed, 4000) : true;
+    check("with no XARA page open a client is refused at once", refused && /client refused: no XARA page/.test(log()));
+    if (lone && !lone.closed) lone.sock.destroy();
+
     check("nothing threw", errors.length === 0, errors.join(" | "));
     ws.close();
   } finally {

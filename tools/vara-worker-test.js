@@ -51,6 +51,7 @@ class FakeAud1 {
   constructor(name, sim) {
     this.name = name; this.sim = sim; this.hello = {streamId: 0x51 + name.charCodeAt(0)};
     this.tx = null; this.status = null; this.errors = []; this.transmissions = 0; this.keyedMs = 0;
+    this.hostOut = {cmd: [], data: []}; this.holds = [];
   }
   error(reason) {
     this.errors.push(reason);
@@ -75,6 +76,9 @@ class FakeAud1 {
   complete() {}
   abort(txId, reason) { if (this.tx && this.tx.txId === txId) { this.tx = null; if (VERBOSE) console.log(`  [${this.name}] abort ${reason}`); } }
   sendControl(msg) {
+    // the TCP host relay (vara_host_bridge.h): what would go out on 8300/8301
+    if (msg.type === "vara.host") { this.hostOut[msg.ch].push(...Buffer.from(msg.b64, "base64")); return; }
+    if (msg.type === "vara.hold") { this.holds.push(msg.on); return; }
     if (msg.type !== "tx.extend") return;
     const t = this.tx;
     if (!t || t.txId !== msg.txId) return;
@@ -228,6 +232,37 @@ const cases = [
   ["p2p, bw 500", {p2p: true, bw: 500, repeat: 1}],
 ];
 for (const [name, o, expectFail] of cases) if (!only || name.includes(only)) chat(name, o, expectFail);
+
+// A Winlink client on A's TCP ports: commands and data in through the relay,
+// replies and the far end's data back out on the right socket -- and none of
+// it in A's own page terminal.
+if (!only || "tcp host".includes(only)) {
+  const hostIn = (core, ch, text) => core.onHost({type: "vara.host", ch, b64: Buffer.from(text, "latin1").toString("base64")});
+  const msgA = "Pat on TCP says hello through WIFILT. ".repeat(3), msgB = "B answers the client. ".repeat(2);
+  let phase = 0, linked = false;
+  const st = run("tcp host", {seconds: 240, p2p: true, script: stations => now => {
+    const [a, b] = stations, lines = () => Buffer.from(a.aud1.hostOut.cmd).toString("latin1");
+    if (now === 1000) {
+      a.core.onHost({type: "vara.host", ev: "open", ch: "cmd", peer: "10.0.0.9"});
+      a.core.onHost({type: "vara.host", ev: "open", ch: "data", peer: "10.0.0.9"});
+      hostIn(a.core, "cmd", "VERSION\r");
+    }
+    if (now === 1500) { a.core.command("BW2300"); hostIn(a.core, "cmd", "MYCALL N0CALL\rCONNECT N0CALL N1CALL\r"); }
+    if (phase === 0 && /CONNECTED N0CALL N1CALL/.test(lines())) { phase = 1; linked = true; hostIn(a.core, "data", msgA); }
+    if (phase === 1 && ascii(b.inbox.data) === msgA) { phase = 2; b.core.send(new TextEncoder().encode(msgB)); }
+    if (phase === 2 && Buffer.from(a.aud1.hostOut.data).toString("latin1") === msgB) { phase = 3; hostIn(a.core, "cmd", "DISCONNECT\r"); }
+    if (phase === 3 && /DISCONNECTED/.test(lines())) { phase = 4; a.core.onHost({type: "vara.host", ev: "close"}); }
+  }});
+  const [a, b] = st, lines = Buffer.from(a.aud1.hostOut.cmd).toString("latin1").split("\r");
+  check("tcp host: VERSION reply on 8300", lines.includes("VERSION VARA HF v4.9.0"), lines.slice(0, 4).join(" | "));
+  const oks = lines.filter(l => l === "OK").length;
+  check("tcp host: one OK per client command, none for the page's BW2300", oks === 3, `${oks} OK`);
+  check("tcp host: the link comes up", linked);
+  check("tcp host: client data reaches B", ascii(b.inbox.data) === msgA, `${b.inbox.data.length}/${msgA.length} B`);
+  check("tcp host: B's data goes to the client's data socket", Buffer.from(a.aud1.hostOut.data).toString("latin1") === msgB);
+  check("tcp host: and not to A's page terminal", a.inbox.data.length === 0, `${a.inbox.data.length} B`);
+  check("tcp host: DISCONNECTED reaches the client", phase >= 4, `phase ${phase}`);
+}
 
 // Keyed stretches map 1:1 onto transmissions: what one station keyed for is
 // what the firmware played, to the 20 ms packet.
