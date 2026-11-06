@@ -85,6 +85,9 @@
 # (its own git repository -- vendor it deliberately if it is ever needed).
 /backups/
 /mercury/
+# Upstream xara checkout (VARA-compatible modem, MIT) -- the JS port in data/vara-*.js
+# is tested against its vectors/; pinned in third_party/xara/README.md.
+/xara/
 # Own git repository (remote ok1cdj/FT8web), not a registered submodule --
 # vendor it deliberately if it is ever needed.
 /FT8web/
