@@ -193,6 +193,7 @@ class ControlChannel(Channel):
         self.tok_request = 0
         self.logged_in = False
         self.streaming = False
+        self.rx_rate = 8000
 
     def handle(self, data):
         if self.handle_common(data):
@@ -275,7 +276,11 @@ class ControlChannel(Channel):
         self.log("-> AUTH 0x05 acknowledged (stream request unblocked)")
 
     def on_stream_request(self, data):
-        self.log("<- STREAM REQUEST")
+        # rxsample at 0x74 (BE32): 8000, or 16000 with the XARA 16 kHz link.
+        if len(data) >= 0x78:
+            rate = struct.unpack_from(">I", data, 0x74)[0]
+            self.rx_rate = rate if rate in (8000, 16000) else 8000
+        self.log(f"<- STREAM REQUEST (rx {self.rx_rate} Hz)")
         p = self.long_header(0x50, 0x40)
         p[0x14] = 0x02
         p[0x15] = 0x03
@@ -438,14 +443,12 @@ def ulaw_encode(sample):
 class AudioChannel(Channel):
     """Handshake plus a continuous RX stream, so the whole audio path can run.
 
-    A real IC-705 sends 8 kHz mu-law in small packets. This sends a steady tone
-    at the same rate: enough to drive the browser's waterfall and, more to the
+    A real IC-705 sends 8 kHz mu-law in small packets (16 kHz when the stream
+    request asks for it). This sends a steady tone at the requested rate: enough to drive the browser's waterfall and, more to the
     point, to keep the firmware's dedicated audio thread actually busy -- which
     is the only thing that exercises the FreeRTOS shim under load.
     """
 
-    SAMPLE_RATE = 8000
-    SAMPLES_PER_PACKET = 160          # 20 ms
     TONE_HZ = 1000
 
     def __init__(self, ip, verbose, tone=True):
@@ -455,9 +458,28 @@ class AudioChannel(Channel):
         self.next_send = 0.0
         self.phase = 0
         self.packets_sent = 0
+        self.tx_sizes = {}
+        self.rate = 8000                  # set from the stream request
+
+    @property
+    def SAMPLE_RATE(self):
+        return self.rate
+
+    @property
+    def SAMPLES_PER_PACKET(self):
+        return self.rate // 50            # 20 ms
 
     def handle(self, data):
         if self.handle_common(data):
+            return
+        # TX audio from the client: 0x18-byte header, uLaw payload. Logged once
+        # per payload size, so a check can see the rate the client sends at
+        # (160 B per 20 ms at 8 kHz, 320 B at 16 kHz).
+        if len(data) > 0x18:
+            size = len(data) - 0x18
+            if size not in self.tx_sizes:
+                self.log(f"<- TX audio packets of {size} B")
+            self.tx_sizes[size] = self.tx_sizes.get(size, 0) + 1
             return
         self.vlog(f"<- audio len={len(data)}: {hexdump(data)}")
 
@@ -574,6 +596,7 @@ def main():
                     channel.handle(data)
 
         if not civ.shutdown:
+            audio.rate = control.rx_rate
             audio.tick(time.monotonic())
 
         if not announced and control.streaming and civ.opened:

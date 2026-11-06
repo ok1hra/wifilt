@@ -3,12 +3,14 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include <new>
 
 #include "icom_lan_tx_history.h"
 
 // Deep TX-audio module shared by WSPR and JS8.
 //
-// The application enqueues already converted 8 kHz uLaw bytes and arms one
+// The application enqueues already converted uLaw bytes at the link rate (8 kHz,
+// or 16 kHz with the XARA FM Wide link -- setPacketBytes) and arms one
 // transmission. A dedicated socket owner calls poll() from its real-time task,
 // sends the returned byte image, and reports the local UDP result through
 // commitSend(). Packet pacing, both ICOM sequence spaces, bounded replay,
@@ -19,8 +21,12 @@
 // harness two adapters at the same seam.
 class IcomLanAudioTx {
  public:
-  static const size_t QUEUE_CAPACITY = 12288;  // 1.536 s at uLaw/8 kHz
-  static const size_t MAX_PAYLOAD = 160;       // one 20 ms radio packet
+  // 1.536 s of queue at the link rate (setPacketBytes): 12288 B at 8 kHz,
+  // 24576 B at 16. Pages ask for up to a second of prebuffer (Mercury's
+  // calibration), which has to fit at either rate. Heap, so an 8 kHz link
+  // never pays for the 16 kHz one.
+  static const size_t QUEUE_MS = 1536;
+  static const size_t MAX_PAYLOAD = 320;       // one 20 ms radio packet at 16 kHz
   static const size_t HEADER_SIZE = 0x18;
   static const size_t MAX_PACKET = HEADER_SIZE + MAX_PAYLOAD;
   static const uint32_t PACKET_MS = 20;
@@ -63,7 +69,10 @@ class IcomLanAudioTx {
     bool drained;
   };
 
-  IcomLanAudioTx() { reset(); }
+  IcomLanAudioTx() { setPacketBytes(160); reset(); }
+  ~IcomLanAudioTx() { delete[] queue_; }
+  IcomLanAudioTx(const IcomLanAudioTx&) = delete;
+  IcomLanAudioTx& operator=(const IcomLanAudioTx&) = delete;
 
   // Reset the complete ICOM audio-channel epoch, including both sequence
   // counters and replay history. Use clearTx() between browser transmissions.
@@ -75,6 +84,22 @@ class IcomLanAudioTx {
     replayRequests_ = replayedPackets_ = replayMisses_ = sendFailures_ = 0;
     clearTx();
   }
+
+  // Bytes per 20 ms packet: 160 at 8 kHz uLaw, 320 at 16 kHz; the queue is
+  // resized to match. Only between transmissions (it clears the queue).
+  // False when the queue could not be allocated -- every enqueue then fails.
+  bool setPacketBytes(size_t bytes) {
+    bytes = bytes == 0 || bytes > MAX_PAYLOAD ? 160 : bytes;
+    size_t capacity = bytes * QUEUE_MS / PACKET_MS;
+    packetBytes_ = bytes;
+    if (queue_ && capacity == capacity_) { clearTx(); return true; }
+    delete[] queue_;
+    queue_ = new (std::nothrow) uint8_t[capacity];
+    capacity_ = queue_ ? capacity : 0;
+    clearTx();
+    return queue_ != nullptr;
+  }
+  size_t packetBytes() const { return packetBytes_; }
 
   void configure(uint32_t myId, uint32_t remoteId) {
     myId_ = myId;
@@ -100,7 +125,7 @@ class IcomLanAudioTx {
 
   bool enqueue(const uint8_t* data, size_t length) {
     if ((!data && length) || fault_ != FAULT_NONE) return false;
-    if (length > QUEUE_CAPACITY - queued_) {
+    if (!queue_ || length > capacity_ - queued_) {
       fail(FAULT_OVERFLOW);
       return false;
     }
@@ -108,11 +133,11 @@ class IcomLanAudioTx {
       fail(FAULT_OVERFLOW);
       return false;
     }
-    size_t first = QUEUE_CAPACITY - write_;
+    size_t first = capacity_ - write_;
     if (first > length) first = length;
     if (first) memcpy(queue_ + write_, data, first);
     if (length > first) memcpy(queue_, data + first, length - first);
-    write_ = (write_ + length) % QUEUE_CAPACITY;
+    write_ = (write_ + length) % capacity_;
     queued_ += length;
     return true;
   }
@@ -175,7 +200,7 @@ class IcomLanAudioTx {
     }
 
     uint64_t remaining = total_ - consumed_;
-    size_t wanted = remaining < MAX_PAYLOAD ? size_t(remaining) : MAX_PAYLOAD;
+    size_t wanted = remaining < packetBytes_ ? size_t(remaining) : packetBytes_;
     if (wanted == 0) {
       draining_ = true;
       drainUntilMs_ = now + PLAYOUT_TAIL_MS;
@@ -247,13 +272,13 @@ class IcomLanAudioTx {
   }
 
   size_t queued() const { return queued_; }
-  size_t capacity() const { return QUEUE_CAPACITY; }
+  size_t capacity() const { return capacity_; }
   bool active() const { return armed_ || packetPending_ || draining_; }
 
   Snapshot snapshot() const {
     Snapshot result;
     result.queued = queued_;
-    result.capacity = QUEUE_CAPACITY;
+    result.capacity = capacity_;
     result.consumed = consumed_;
     result.total = total_;
     result.sentPackets = sentPackets_;
@@ -286,18 +311,20 @@ class IcomLanAudioTx {
   }
 
   void copyQueue(uint8_t* destination, size_t length) const {
-    size_t first = QUEUE_CAPACITY - read_;
+    size_t first = capacity_ - read_;
     if (first > length) first = length;
     if (first) memcpy(destination, queue_ + read_, first);
     if (length > first) memcpy(destination + first, queue_, length - first);
   }
 
   void consumeQueue(size_t length) {
-    read_ = (read_ + length) % QUEUE_CAPACITY;
+    read_ = (read_ + length) % capacity_;
     queued_ -= length;
   }
 
-  uint8_t queue_[QUEUE_CAPACITY];
+  uint8_t* queue_ = nullptr;
+  size_t capacity_ = 0;
+  size_t packetBytes_ = 160;
   size_t read_ = 0, write_ = 0, queued_ = 0;
   uint64_t consumed_ = 0, total_ = 0;
   uint32_t myId_ = 0, remoteId_ = 0;

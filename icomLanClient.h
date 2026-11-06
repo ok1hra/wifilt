@@ -254,6 +254,12 @@ public:
   // rxenable=1 (see sendStreamRequest), so the radio streams once we complete the
   // audio-channel handshake. Called on WebSocket connect/disconnect so the audio
   // UDP traffic only exists while the page is open.
+  // 8000 or 16000. Takes effect with the next stream request, i.e. after a
+  // reconnect; audioSampleRate() is the rate actually in use.
+  void setAudioRate(uint32_t hz) { audioRateWanted = hz == 16000 ? 16000 : 8000; }
+  uint32_t audioSampleRate() const { return audioRateActive; }
+  uint32_t audioSampleRateWanted() const { return audioRateWanted; }
+
   void startRxAudio() {
     if (state != LAN_CONNECTED || audioOpened || audioPort == 0) return;
     openAudioChannel();
@@ -337,7 +343,6 @@ public:
 
   IcomLanAudioTx::Snapshot audioTxSnapshot() const {
     IcomLanAudioTx::Snapshot result = {};
-    result.capacity = IcomLanAudioTx::QUEUE_CAPACITY;
     if (!audioRuntime) {
       result.fault = IcomLanAudioTx::FAULT_NOT_READY;
       return result;
@@ -718,10 +723,13 @@ private:
   // ~6 packets/s so the single-threaded loop tolerates it), 0x04 = LPCM 16-bit 1ch.
   // If the radio refuses to stream, try LPCM16 (0x04 @ 16000/48000) — see
   // docs/icom-lan-implementace.md and the bench note (LPCM16/48k verified working).
+  // The rate is 8 kHz unless the XARA "16 kHz radio link" setting asks for 16
+  // (VARA FM Wide reaches 5.7 kHz): same codec, both directions, fixed by the
+  // stream request -- so a change takes a reconnect (setAudioRate).
   static const uint8_t  AUDIO_RX_CODEC   = 0x01;
-  static const uint32_t AUDIO_RX_SAMPLE  = 8000;    // Hz
   static const uint8_t  AUDIO_TX_CODEC   = 0x01;    // uLaw 8-bit 1ch (M3 TX)
-  static const uint32_t AUDIO_TX_SAMPLE  = 8000;    // Hz
+  uint32_t audioRateWanted = 8000;                  // next stream request
+  uint32_t audioRateActive = 8000;                  // the one the radio was asked for
   // Freshness window for audioReady(): the radio only streams audio while there
   // is AF (nothing on a quiet/squelched channel), so this is a "recently flowing"
   // threshold for the RX-live status, NOT a wedge/reopen trigger.
@@ -736,7 +744,7 @@ private:
   // volatile matches every other cross-task field in this group, no mutex.
   volatile uint32_t audioPingRtt = 0, audioPingRttMax = 0;
 
-  static const size_t AUDIO_RX_PACKET_BYTES = 160;
+  static const size_t AUDIO_RX_PACKET_BYTES = 320;   // the largest: 20 ms at 16 kHz
   static const size_t AUDIO_RX_QUEUE_PACKETS = 64;
   static const uint32_t AUDIO_TASK_STOP_TIMEOUT_MS = 750;
 
@@ -753,17 +761,36 @@ private:
   static const uint16_t AUDIO_RTX_MAX_CHASE = 8;    // wider holes are not worth the storm
   static const size_t   AUDIO_RX_HOLD_HIGH  = 48;   // occupancy bound for the hold
 
+  // The payload lives in AudioRuntime::rxPool, one slot per entry, sized for
+  // the link rate. The N entries always hold N distinct slots: the ordered
+  // insert moves the free one to where the new packet lands.
   struct AudioRxPacket {
     uint16_t sequence;
     uint16_t length;
-    uint8_t payload[AUDIO_RX_PACKET_BYTES];
+    uint8_t* payload;
   };
 
   // Allocated only for the unique LAN slot that owns audio. Embedding this in
   // all three IcomLanClient instances would waste ~30 kB per secondary radio.
+  // The RX pool and the TX queue follow the link rate (sizeFor), so the 8 kHz
+  // link does not carry the 16 kHz one's buffers.
   struct AudioRuntime {
     IcomLanAudioTx tx;
     AudioRxPacket rx[AUDIO_RX_QUEUE_PACKETS];
+    uint8_t* rxPool = nullptr;
+    size_t rxSlot = 0;
+    ~AudioRuntime() { delete[] rxPool; }
+    // Only with no audio task running. False on an allocation failure.
+    bool sizeFor(size_t packetBytes) {
+      if (rxPool && rxSlot == packetBytes && tx.packetBytes() == packetBytes && tx.capacity()) return true;
+      delete[] rxPool;
+      rxPool = new (std::nothrow) uint8_t[AUDIO_RX_QUEUE_PACKETS * packetBytes];
+      rxSlot = rxPool ? packetBytes : 0;
+      for (size_t i = 0; i < AUDIO_RX_QUEUE_PACKETS; i++)
+        rx[i].payload = rxPool ? rxPool + i * packetBytes : nullptr;
+      bool txOk = tx.setPacketBytes(packetBytes);
+      return rxPool && txOk;
+    }
     size_t rxRead = 0, rxWrite = 0, rxCount = 0;
     volatile uint32_t rxDropped = 0;
     volatile uint32_t maxSendUs = 0;
@@ -1023,16 +1050,17 @@ private:
     buf[0x71] = audioAllowed ? 1 : 0;      // txenable (M3: TX audio)
     buf[0x72] = AUDIO_RX_CODEC;            // rxcodec
     buf[0x73] = AUDIO_TX_CODEC;            // txcodec
-    putBE32(buf+0x74, AUDIO_RX_SAMPLE);    // rxsample rate
-    putBE32(buf+0x78, AUDIO_TX_SAMPLE);    // txsample rate
+    audioRateActive = audioRateWanted;
+    putBE32(buf+0x74, audioRateActive);    // rxsample rate
+    putBE32(buf+0x78, audioRateActive);    // txsample rate
     putBE32(buf+0x7c, civLocalPort);        // civ local port
     putBE32(buf+0x80, audioAllowed ? audioLocalPort : 0);
     putBE32(buf+0x84, 150);                // txbuffer
     buf[0x88] = 1;                         // convert
     sendTracked(ctrlUdp, 0x90, 0x90);
-    Serial.println(audioAllowed
-      ? "LAN | stream request sent (rx+tx audio uLaw/8k)"
-      : "LAN | stream request sent (CI-V only)");
+    Serial.println(!audioAllowed ? "LAN | stream request sent (CI-V only)"
+      : audioRateActive == 16000 ? "LAN | stream request sent (rx+tx audio uLaw/16k)"
+      : "LAN | stream request sent (rx+tx audio uLaw/8k)");
   }
 
   void sendCivOpenClose(bool close) {
@@ -1348,6 +1376,10 @@ private:
       }
     }
     if (audioRuntime->task || audioRuntime->detached) return;
+    if (!audioRuntime->sizeFor(audioRateActive / 50)) {
+      Serial.println("LAN | audio buffer allocation failed");
+      return;
+    }
     audioLock();
     audioRuntime->txEpoch++;
     audioRuntime->tx.reset();
@@ -1381,6 +1413,7 @@ private:
 #else
     if (!audioRuntime) audioRuntime = new (std::nothrow) AudioRuntime();
     if (!audioRuntime) return;
+    if (!audioRuntime->sizeFor(audioRateActive / 50)) return;
     audioUdp.begin(audioLocalPort);
     audioMyId = mkId(audioLocalPort);
     audioRemoteId = 0;
@@ -1550,7 +1583,7 @@ private:
   }
 
   void audioEnqueueRx(const uint8_t* payload, size_t length, uint16_t sequence) {
-    if (!audioRuntime || length != AUDIO_RX_PACKET_BYTES) {
+    if (!audioRuntime || length != audioRateActive / 50 || length != audioRuntime->rxSlot) {
       if (audioRuntime) audioRuntime->rxDropped++;
       return;
     }
@@ -1587,10 +1620,12 @@ private:
     }
     if (!duplicate) {
       if (place != rt.rxCount) rt.rtxRecovered++;
+      uint8_t* spare = rt.rx[(rt.rxRead + rt.rxCount) % AUDIO_RX_QUEUE_PACKETS].payload;
       for (size_t at = rt.rxCount; at > place; at--)
         rt.rx[(rt.rxRead + at) % AUDIO_RX_QUEUE_PACKETS] =
             rt.rx[(rt.rxRead + at - 1) % AUDIO_RX_QUEUE_PACKETS];
       AudioRxPacket& target = rt.rx[(rt.rxRead + place) % AUDIO_RX_QUEUE_PACKETS];
+      target.payload = spare;
       target.sequence = sequence;
       target.length = uint16_t(length);
       memcpy(target.payload, payload, length);
@@ -1810,7 +1845,10 @@ private:
   void drainAudioRx() {
     if (!audioRuntime) return;
     for (int budget = 0; budget < 16; ++budget) {
-      AudioRxPacket packet;
+      // Copied out under the lock: once it is released the audio task may
+      // reuse the slot.
+      uint8_t payload[AUDIO_RX_PACKET_BYTES];
+      AudioRxPacket packet = {0, 0, payload};
       bool have = false;
       uint32_t now = millis();
       audioLock();
@@ -1834,7 +1872,9 @@ private:
           }
         }
         if (release) {
-          packet = head;
+          packet.sequence = head.sequence;
+          packet.length = head.length;
+          memcpy(payload, head.payload, head.length);
           rt.rxRead = (rt.rxRead + 1) % AUDIO_RX_QUEUE_PACKETS;
           rt.rxCount--;
           // Forward only: the enqueue guard drops too-late replays, but the

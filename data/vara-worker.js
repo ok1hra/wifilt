@@ -32,33 +32,39 @@
   "use strict";
   const FS = 48000, PACKET = 960; // AUD1 TX: 20 ms packets at 48 kHz
 
-  // ---- 8 kHz -> 48 kHz, polyphase windowed-sinc interpolator -------------
-  // The station's front end decimates by 16 to 3 kHz on its own, so all this
-  // has to do is put the AUD1 band back at 48 kHz without images that alias
-  // into it. 24 taps per phase, Blackman, cut at 3.7 kHz (the 2750 band ends
-  // at ~3.1 kHz, mu-law's own band at 4).
-  const UP = 6, TAPS = 24;
-  const UP_H = (() => {
-    const n = UP * TAPS, h = new Float64Array(n), m = (n - 1) / 2, fc = 3700 / FS;
+  // ---- 8 or 16 kHz -> 48 kHz, polyphase windowed-sinc interpolator --------
+  // The station's front end decimates to 3 kHz (HF) or 6 kHz (FM) on its own,
+  // so all this has to do is put the AUD1 band back at 48 kHz without images
+  // that alias into it. 24 taps per phase, Blackman, cut at 3.7 kHz for the
+  // 8 kHz stream (the 2750 band ends at ~3.1 kHz, mu-law's own band at 4) and
+  // at 7.4 kHz for the 16 kHz one (FM Wide reaches 5.7 kHz).
+  const TAPS = 24;
+  function upTaps(up, fcHz) {
+    const n = up * TAPS, h = new Float64Array(n), m = (n - 1) / 2, fc = fcHz / FS;
     let s = 0;
     for (let i = 0; i < n; i++) {
       const x = i - m, w = 0.42 - 0.5 * Math.cos(2 * Math.PI * i / (n - 1)) + 0.08 * Math.cos(4 * Math.PI * i / (n - 1));
       h[i] = (x === 0 ? 2 * fc : Math.sin(2 * Math.PI * fc * x) / (Math.PI * x)) * w;
       s += h[i];
     }
-    for (let i = 0; i < n; i++) h[i] *= UP / s;
+    for (let i = 0; i < n; i++) h[i] *= up / s;
     return h;
-  })();
+  }
+  const UP_TAPS = {};
   class Upsampler {
-    constructor() { this.hist = new Float64Array(TAPS); this.p = 0; }
+    constructor(rate) {
+      this.rate = rate || 8000; this.up = FS / this.rate;
+      this.h = UP_TAPS[this.rate] || (UP_TAPS[this.rate] = upTaps(this.up, this.rate === 16000 ? 7400 : 3700));
+      this.hist = new Float64Array(TAPS); this.p = 0;
+    }
     run(x) {
-      const out = new Float64Array(x.length * UP), hist = this.hist;
+      const UP = this.up, H = this.h, out = new Float64Array(x.length * UP), hist = this.hist;
       for (let n = 0; n < x.length; n++) {
         this.p = (this.p + TAPS - 1) % TAPS;
         hist[this.p] = x[n];
         for (let ph = 0; ph < UP; ph++) {
           let y = 0;
-          for (let k = 0; k < TAPS; k++) y += UP_H[ph + UP * k] * hist[(this.p + k) % TAPS];
+          for (let k = 0; k < TAPS; k++) y += H[ph + UP * k] * hist[(this.p + k) % TAPS];
           out[n * UP + ph] = y;
         }
       }
@@ -175,7 +181,7 @@
   // ---- the core -------------------------------------------------------------
   const DEFAULTS = {mycall: "", bw: 2300, latencyMs: 350, slotMs: 200, prebufferMs: 120, driveDb: -5, gain: 1,
     listen: false, p2p: true};
-  const STALL_MS = 250, STALL_KEEP_MS = 150, STALL_MAX_MS = 3000, GAP_MAX_SAMPLES = 8000 * 5;
+  const STALL_MS = 250, STALL_KEEP_MS = 150, STALL_MAX_MS = 3000, GAP_MAX_S = 5;
   class VaraCore {
     // deps: {M: vara-modem, H: vara-host, aud1, post(msg, transfer), wallNow(), monoNow()}
     constructor(deps, settings) {
@@ -186,10 +192,14 @@
       // where the AUD1 transmission has to end -- the firmware itself holds the
       // radio keyed until that audio has actually left.
       const opts = {driveDb: this.s.driveDb, txLatency: lat, rxLag: lat};
-      // bw "fmn": VARA FM Narrow, the one FM width the 8 kHz AUD1 stream carries
-      // (FM Wide reaches 5.7 kHz and waits for a 16 kHz stream).
-      this.fm = this.s.bw === "fmn";
-      if (this.fm) this.station = new M.FmStation(M.fmConfig(M.FM_NARROW, this.s.mycall || "N0CALL"), opts);
+      // bw "fmn": VARA FM Narrow, which the 8 kHz AUD1 stream carries; "fmw":
+      // FM Wide, which reaches 5.7 kHz and so takes the 16 kHz stream -- the
+      // firmware offers it only on the 16 kHz radio link (XARA setting), and
+      // until it has switched (rx.select) the modem gets nothing.
+      this.fm = this.s.bw === "fmn" || this.s.bw === "fmw";
+      this.rate = this.s.bw === "fmw" ? 16000 : 8000;
+      this.rateOk = this.rate === 8000;
+      if (this.fm) this.station = new M.FmStation(M.fmConfig(this.rate === 16000 ? M.FM_WIDE : M.FM_NARROW, this.s.mycall || "N0CALL"), opts);
       else {
         const cfg = M.hfConfig(M.bandwidth(this.s.bw) || M.BW2300, this.s.mycall || "N0CALL");
         cfg.p2p = Boolean(this.s.p2p);
@@ -215,7 +225,7 @@
         },
         hasCmdClient: () => true, hasDataClient: () => true,
       }, {onEvent: e => this.onTncEvent(e)});
-      this.up = new Upsampler();
+      this.up = new Upsampler(this.rate);
       this.tx = new TxStream(deps.aud1, {
         gain: () => this.s.gain, slotMs: () => this.s.slotMs, prebufferMs: () => this.s.prebufferMs,
         wallNow: deps.wallNow, event: e => this.post({type: "tx", ...e}),
@@ -273,16 +283,30 @@
       if (e.kind === "trace") this.post({type: "trace", text: e.text});
       else if (e.kind === "unableToConnect" || e.kind === "timedOut") this.post({type: "event", kind: e.kind});
     }
-    // AUD1 RX: `samples` are floats at 8 kHz, `meta.firstSample` the radio's
-    // media time for the first of them.
+    // AUD1 hello: ask for the 16 kHz stream when the modem needs it. Without
+    // the offer FM Wide cannot run -- the page says what to switch on.
+    onHello(hello) {
+      if (this.rate === 8000) return;
+      const offered = (hello && hello.rx || []).some(r => r.sampleRate === this.rate);
+      if (!offered) { this.post({type: "event", kind: "needs16k"}); return; }
+      this.d.aud1.sendControl({type: "rx.select", sampleRate: this.rate});
+    }
+    // AUD1 RX: `samples` are floats at the stream's rate (8 or 16 kHz),
+    // `meta.firstSample` the radio's media time for the first of them. A
+    // FIRST packet starts a new media epoch (a new socket, or the firmware
+    // switching rate on rx.select).
     onRx(samples, meta) {
+      const rate = meta.sampleRate || 8000;
+      if (rate !== this.rate) return; // not (yet) the stream this modem needs
+      if (!this.rateOk) { this.rateOk = true; this.expect = null; }
+      if (meta.flags & 1) this.expect = null;
       this.ready = true;
       const first = Number(meta.firstSample);
       let x = samples;
       if (this.expect === null) this.expect = first;
       if (first > this.expect) {
         const gap = first - this.expect;
-        if (gap > GAP_MAX_SAMPLES) this.expect = first; // a new epoch, not a hole worth filling
+        if (gap > GAP_MAX_S * this.rate) this.expect = first; // a new epoch, not a hole worth filling
         else this.feed8(new Float32Array(gap), true);
       } else if (first < this.expect) {
         const skip = this.expect - first;
@@ -301,22 +325,24 @@
       if (!this.ready || this.expect === null) return;
       const now = this.d.monoNow(), late = now - this.lastAdvance;
       if (late < STALL_MS || this.stalled >= STALL_MAX_MS) return;
-      const ms = Math.min(late - STALL_KEEP_MS, STALL_MAX_MS - this.stalled);
-      const n = Math.floor(ms * 8);
+      const ms = Math.min(late - STALL_KEEP_MS, STALL_MAX_MS - this.stalled), kHz = this.rate / 1000;
+      const n = Math.floor(ms * kHz);
       if (n <= 0) return;
-      this.stalled += n / 8; this.lastAdvance += n / 8;
+      this.stalled += n / kHz; this.lastAdvance += n / kHz;
       this.feed8(new Float32Array(n), true);
     }
+    // x8: one block of the AUD1 stream at this.rate (the name is from when
+    // that was always 8 kHz).
     feed8(x8, synthetic) {
       if (synthetic) this.filled += x8.length;
       this.expect += x8.length; this.rx8 += x8.length;
-      if (!synthetic) this.post({type: "rx-samples", samples: Float32Array.from(x8)});
+      if (!synthetic) this.post({type: "rx-samples", samples: Float32Array.from(x8), rate: this.rate});
       const t0 = this.d.monoNow();
       const rx = this.up.run(x8), out = new Float64Array(rx.length);
       this.tnc.process(rx, out);
       if (this.tcp.held || this.tcp.pending.length) this.feedHostData();
       this.tx.feed(out, this.station.keyed);
-      this.cpuMs += this.d.monoNow() - t0; this.audioMs += x8.length / 8;
+      this.cpuMs += this.d.monoNow() - t0; this.audioMs += x8.length * 1000 / this.rate;
       this.status(false);
     }
     status(force) {
@@ -328,7 +354,8 @@
         afcHz: link.afcHz, ptt: st.ptt(), txActive: this.tx.active, busy: st.busy(), buffered: st.buffered(),
         tuning: st.tuning(), mycall: (st.config().host.mycalls || [])[0] || "", listen: st.listenOn,
         p2p: Boolean(st.config().p2p), version: st.constructor.VERSION, load: this.audioMs ? this.cpuMs / this.audioMs : 0,
-        filledMs: this.filled / 8, trimmedMs: this.trimmed / 8, txFaults: this.tx.faults,
+        filledMs: this.filled * 1000 / this.rate, trimmedMs: this.trimmed * 1000 / this.rate, txFaults: this.tx.faults,
+        rate: this.rate, rateOk: this.rateOk,
         host: this.tcp.cmd || this.tcp.data ? this.tcp.peer || "connected" : ""};
       const key = JSON.stringify(s);
       if (!force && key === this.lastStatusKey && now - this.lastStatus < 1000) return;
@@ -380,6 +407,7 @@
         aud1.onControl(m => { if (m.type === "vara.host") core.onHost(m); });
         aud1.onStatus(s => {
           if (s.type === "tx-drained") aud1.complete(s.txId);
+          if (s.type === "ready") core.onHello(aud1.hello);
           post({type: "aud1", status: s.type, reason: s.reason || s.message || ""});
         });
         aud1.start();

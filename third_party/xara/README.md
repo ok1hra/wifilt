@@ -92,8 +92,8 @@ The tests are ports of upstream's own:
 
 Not ported: the FM digipeater (`fm/digi.rs`) and the broadcast frames
 (`fm/broadcast.rs`, CQ and KISS over AX.25 in record 16), so `CQFRAME` answers
-`WRONG` on FM. The page offers FM Narrow; FM Wide reaches 5.7 kHz and needs a
-16 kHz AUD1 stream (phase 6).
+`WRONG` on FM. FM Wide reaches 5.7 kHz and runs on the 16 kHz radio link
+(phase 6).
 
 `tools/vara-fm-test.js` ports `crates/xara-phy/tests/fm_{tx,frames,rx}.rs`,
 `crates/xara-arq/tests/fm_{vectors,session}.rs` and `crates/xara/tests/fm_host.rs`.
@@ -101,6 +101,22 @@ All 210 TX audio vectors are bit-exact. `fm_captures.rs` needs the lab
 recordings; `fm_link.rs`, `fm_audio_link.rs`, `fm_broadcast.rs` and
 `fm_digi*.rs` are not ported (the link is covered by `fm_host` and by
 `tools/vara-worker-test.js` "fm narrow").
+
+## Phase 6: FM Wide and the 16 kHz radio link
+
+FM Wide needs no new port: `FM_WIDE` and its levels came with phase 5. What it
+needs is audio up to 5.7 kHz. The XARA setting "16 kHz radio link" makes the
+firmware ask the radio for 16 kHz µ-law in both directions. AUD1 offers the
+16 kHz stream, and the worker for Mode "FM Wide" switches to it with
+`rx.select`. Everything else still gets 8 kHz through a half-band decimator in
+the firmware (docs/aud1-audio-websocket-protocol.md, "The 16 kHz radio link").
+Without the setting, FM Wide reports that it needs it and stays silent.
+
+Checks: `tools/vara-worker-test.js` "fm wide on the 16 kHz link" (the
+simulated firmware starts at 8 kHz and switches on `rx.select`) and
+`tools/aud1-16k-native-check.sh` (native firmware and fake radio: the setting
+reconnects at 16 kHz, the tone survives the decimator, `rx.select`, TX as
+320-byte packets, and back to 8 kHz).
 
 ## Phase 4: Winlink clients on TCP 8300/8301
 

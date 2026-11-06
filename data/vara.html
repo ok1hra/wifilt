@@ -81,6 +81,7 @@
           <option value="2300" selected>2300 Hz</option>
           <option value="2750">2750 Hz</option>
           <option value="fmn" title="VARA FM Narrow, for an FM voice channel (set the radio to FM-D)">FM Narrow</option>
+          <option value="fmw" title="VARA FM Wide, for a 9600-capable FM radio; needs the 16 kHz radio link in SETTINGS">FM Wide</option>
         </select>
       </label>
       <label class="call-field">Session
@@ -144,6 +145,8 @@
           <label>TX slot <input id="setSlot" type="number" min="100" max="1000" step="10"><small>ms between keying and the first audio sample; default 200</small></label>
           <label>TX prebuffer <input id="setPrebuffer" type="number" min="20" max="800" step="20"><small>ms of audio queued before the radio keys; default 120, below the slot</small></label>
           <p class="identity-note">The other station waits only so long for this one's reply: about 200 ms of round trip with Winlink timing, about 500 ms with P2P / chat. Keep slot and prebuffer short.</p>
+          <p class="settings-group-title">Radio link</p>
+          <label class="safety-setting">16 kHz radio link <input id="setLink16k" type="checkbox"><small>LAN audio at 16 kHz instead of 8, both ways — needed for FM Wide, twice the Wi-Fi traffic. Every other mode keeps getting 8 kHz. SAVE reconnects the radio.</small></label>
         </div>
       </details>
       <div class="tuning-actions">
@@ -176,6 +179,6 @@
 <script src="/mercury-session.js?v=bd9d947d"></script>
 <script src="/spectrum.js?v=7fafbbb5"></script>
 <script src="/audio-health.js?v=9efe092e"></script>
-<script src="/vara.js?v=b94489f5"></script>
+<script src="/vara.js?v=e967e14d"></script>
 </body>
 </html>

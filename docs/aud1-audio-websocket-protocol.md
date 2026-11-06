@@ -37,6 +37,28 @@ session restart, on a sample counter reset and on a new login to the radio. On
 a change the client discards partially assembled slots; it must not read the
 difference as packet loss inside the previous epoch.
 
+### The 16 kHz radio link (XARA FM Wide)
+
+The LAN radio link normally runs at 8 kHz µ-law in both directions. The XARA
+setting "16 kHz radio link" (`"link16k": true` in `/vara-settings.json`) makes
+the firmware request 16 kHz µ-law from the radio instead. The rate is part of
+the stream request, so saving the setting reconnects the radio and closes the
+audio socket. On that link:
+
+- the hello offers a second RX entry,
+  `"rx":[{"kind":"RX_ULAW","sampleRate":8000},{"kind":"RX_ULAW","sampleRate":16000}]`;
+- the RX stream still starts at 8 kHz. The firmware decimates the radio's
+  16 kHz with a 63-tap half-band filter, flat to 3.4 kHz and 58 dB down from
+  4.6 kHz. Every client that knows nothing of 16 kHz keeps working, and so do
+  the watch viewers;
+- `{"type":"rx.select","sampleRate":16000}` switches this socket to the
+  radio's 16 kHz, and `8000` switches it back. A switch starts a new media
+  epoch: the next frame has `FIRST`, `firstSample` 0 and the new `sampleRate`.
+  On an 8 kHz link the request is remembered and has no effect;
+- TX is unchanged on the wire (PCM16 at 48 kHz). The firmware takes every 3rd
+  sample instead of every 6th, its queue is 1.536 s at either rate (24576 B
+  at 16 kHz) and each radio packet is 320 B.
+
 ## Binary message
 
 Every binary WebSocket message carries exactly one 40-byte header and exactly
@@ -116,9 +138,10 @@ instant, if sequence/`firstSample` disagree, if the ring overflows, or if an
 underrun follows PTT, the whole `txId` goes to fault and PTT OFF.
 
 Production JS8LAN uses `prebufferSamples=48000` (1 s) and allows at most 25
-packets (500 ms) of catch-up. After conversion to 8 kHz µ-law the firmware
-holds a 12288-byte ring (1.536 s), so a brief stall in a mobile browser does
-not cost the slot while catch-up stays bounded. PTT is not keyed while the ring
+packets (500 ms) of catch-up. After conversion to the link's µ-law the firmware
+holds a 1.536 s ring (12288 B at 8 kHz, 24576 B on the 16 kHz link), so a
+brief stall in a mobile browser does not cost the slot while catch-up stays
+bounded. PTT is not keyed while the ring
 buffer is being filled.
 
 The first and last audio block carry the `FIRST` and `LAST` flags. The firmware

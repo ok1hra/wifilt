@@ -873,11 +873,18 @@ int incomingByte = 0;   // for incoming serial data
   uint64_t audioRxFirstSample = 0;
   bool audioRxFirst = true;
   bool audioRxDiscontinuity = false;
+  // AUD1 RX rate. The radio link runs at 8 kHz, or at 16 kHz with the XARA
+  // "16 kHz radio link" setting (VARA FM Wide); then every consumer still gets
+  // 8 kHz (aud1Half) unless the AUD1 client asked for 16 with rx.select.
+  uint32_t audioRxSelect = 8000;       // what the client asked for
+  uint32_t audioRxRate = 8000;         // what the stream carries right now
+  bool varaLink16k = false;            // /vara-settings.json "link16k"
   bool audioRadioSequenceValid = false;
   uint16_t audioRadioExpectedSequence = 0;
 
   Aud1TxState aud1TxState = AUD1_TX_IDLE;
-  static const size_t AUD1_TX_RING_SIZE = IcomLanAudioTx::QUEUE_CAPACITY;
+  // The radio-side TX queue (IcomLanAudioTx): 1.536 s at the link rate --
+  // aud1TxRingSize(), since that rate is 8 or 16 kHz.
   // The longest one AUD1 transmission may grow to through tx.extend (JTTY live
   // entry): 180 s at 48 kHz. A stuck page cannot hold the transmitter longer.
   static const uint64_t AUD1_TX_EXTEND_CAP_SAMPLES = 180ULL * 48000ULL;
@@ -1348,6 +1355,7 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void handlePostMercuryTuning(void);
   void handleGetVaraSettings(void);
   void handlePostVaraSettings(void);
+  void varaApplyLinkRate(bool reconnect);
   void handleGetCivRead(void);
   uint16_t aprsisPasscode(const String &call);
   bool aprsisFieldSafe(const String &value);
@@ -3694,6 +3702,7 @@ bool beginRadioLanClient(uint8_t slot) {
   bool withAudio = slot == lanRadioSlotIndex();
   if (withAudio && slot != lanRadioSnap.slot) lanRadioSnap = LanRadioSnapshot{};
   if (withAudio) lanRadioSnap.slot = slot;
+  client->setAudioRate(withAudio && varaLink16k ? 16000 : 8000);
   client->begin(radioIp, 50001,
                 radioSlots[slot].lanUser.c_str(), radioSlots[slot].lanPass.c_str(),
                 radioSlots[slot].civAddr, slot, localControlPort, withAudio);
@@ -4334,6 +4343,7 @@ void handleConfigUpload() {
         return;
       }
       f.close();
+      varaApplyLinkRate(true);
     }
   }
 
@@ -5078,6 +5088,29 @@ void handlePostVaraSettings() {
   }
   vf.close();
   webServer.send(200, "application/json", "{\"ok\":true}");
+  varaApplyLinkRate(true);
+}
+
+// The one XARA setting the firmware itself reads: the 16 kHz radio link. The
+// rate is part of the LAN stream request, so a change reconnects the radio, and
+// the audio socket is dropped so its page gets a hello that tells the truth.
+void varaApplyLinkRate(bool reconnect) {
+  String json;
+  if (cfgFS.exists(VARA_SETTINGS_CONFIG_PATH)) {
+    File vf = cfgFS.open(VARA_SETTINGS_CONFIG_PATH, "r");
+    if (vf) { json = vf.readString(); vf.close(); }
+  }
+  bool want = extractJsonBool(json, "link16k", false);
+  if (want == varaLink16k) return;
+  varaLink16k = want;
+  uint32_t hz = want ? 16000 : 8000;
+  lanClient.setAudioRate(radioSlots[0].transport == RADIO_LAN && lanRadioSlotIndex() == 0 ? hz : 8000);
+  for (uint8_t i = 0; i < 2; i++)
+    if (secondaryLanClients[i]) secondaryLanClients[i]->setAudioRate(lanRadioSlotIndex() == i + 1 ? hz : 8000);
+  Serial.printf("XARA | radio link %s kHz%s\n", want ? "16" : "8", reconnect ? ", reconnecting" : "");
+  if (!reconnect) return;
+  if (lanRadioSlotIndex() != 0xFF) lanReconnectRequested = true;
+  if (AudioWsClient.connected()) AudioDisconnectWs();
 }
 
 // ---- the last CI-V reply a page asked for ------------------------------------
@@ -6545,6 +6578,7 @@ void setup(){
 
     // Start every configured LAN slot. Each instance owns a distinct local
     // 500x1/2/3 port triplet; only TRX1 advertises/opens network audio.
+    varaApplyLinkRate(false);   // the audio rate goes into the first stream request
     for (uint8_t slot = 0; slot < 3; slot++) {
       if (radioSlots[slot].enabled && radioSlots[slot].transport == RADIO_LAN)
         beginRadioLanClient(slot);
@@ -11248,6 +11282,61 @@ static uint8_t aud1Pcm16ToUlaw(int16_t input){
   return uint8_t(~(sign | (exponent << 4) | mantissa));
 }
 
+static int16_t aud1UlawToPcm16(uint8_t u){
+  u = ~u;
+  int32_t t = ((int32_t(u & 0x0F) << 3) + 0x84) << ((u & 0x70) >> 4);
+  return int16_t((u & 0x80) ? (0x84 - t) : (t - 0x84));
+}
+
+// 16 kHz -> 8 kHz for everything that is not XARA FM Wide (AUD1 at 8 kHz, the
+// watch viewers): a 63-tap half-band low-pass (Kaiser-windowed sinc, beta 8),
+// so only the centre and the odd taps around it are non-zero, then every
+// second sample. Flat to 0.01 dB over the 3.4 kHz the 8 kHz modes use, 58 dB
+// down from 4.6 kHz on (what would fold back in band) -- under uLaw's own floor.
+struct Aud1Half {
+  static const int TAPS = 63, MID = 31, SIDE = 16;
+  float hist[TAPS] = {};
+  uint8_t at = 0;
+  bool odd = false;
+  // n input samples (uLaw) -> n/2 output samples (uLaw); returns the count.
+  size_t run(const uint8_t* in, size_t n, uint8_t* out){
+    static const float CENTRE = 4.999999672e-01f;
+    static const float SIDE_TAPS[SIDE] = {   // h[MID +- (2k+1)]
+      3.170728721e-01f, -1.024425088e-01f, 5.772404439e-02f, -3.748938157e-02f,
+      2.563768528e-02f, -1.780470021e-02f, 1.231558303e-02f, -8.376210429e-03f,
+      5.543647017e-03f, -3.534414302e-03f, 2.145908571e-03f, -1.222076003e-03f,
+      6.381063754e-04f, -2.935600810e-04f, 1.090362306e-04f, -2.401525244e-05f};
+    size_t m = 0;
+    for(size_t i = 0; i < n; i++){
+      at = at ? at - 1 : TAPS - 1;
+      hist[at] = aud1UlawToPcm16(in[i]);
+      odd = !odd;
+      if(!odd) continue;
+      float y = CENTRE * hist[(at + MID) % TAPS];
+      for(int k = 0; k < SIDE; k++){
+        int d = 2 * k + 1;
+        y += SIDE_TAPS[k] * (hist[(at + MID - d) % TAPS] + hist[(at + MID + d) % TAPS]);
+      }
+      int32_t v = int32_t(lrintf(y));
+      out[m++] = aud1Pcm16ToUlaw(int16_t(v > 32767 ? 32767 : v < -32768 ? -32768 : v));
+    }
+    return m;
+  }
+};
+static Aud1Half aud1Half;
+
+// The radio link's rate (8000, or 16000 with the XARA link setting) and the
+// factor AUD1 TX decimates its 48 kHz PCM by to reach it.
+static uint32_t lanLinkRate(){
+  IcomLanClient *client = lanRadioClient();
+  return client ? client->audioSampleRate() : 8000;
+}
+static uint32_t aud1TxDecim(){ return 48000 / lanLinkRate(); }
+static size_t aud1TxRingSize(){
+  IcomLanClient *client = lanRadioClient();
+  return client ? client->audioTxSnapshot().capacity : 0;
+}
+
 // Flush the coalesced audio buffer as one WS frame.
 void audioFlush(){
   if(audioTxLen == 0) return;
@@ -11256,7 +11345,7 @@ void audioFlush(){
   uint16_t flags = (audioRxFirst ? 0x0001 : 0) | (audioRxDiscontinuity ? 0x0004 : 0);
   aud1PutBE16(wire+6, flags); aud1PutBE16(wire+8, 40); aud1PutBE16(wire+10, 0);
   aud1PutBE32(wire+12, audioStreamId); aud1PutBE32(wire+16, audioRxSequence);
-  aud1PutBE32(wire+20, 8000); aud1PutBE64(wire+24, audioRxFirstSample);
+  aud1PutBE32(wire+20, audioRxRate); aud1PutBE64(wire+24, audioRxFirstSample);
   aud1PutBE32(wire+32, 0); aud1PutBE32(wire+36, audioTxLen);
   memcpy(wire+40, audioTxBuf, audioTxLen);
   bool sent = AudioSendBinary(wire, 40 + audioTxLen);
@@ -11539,7 +11628,7 @@ void handleUnattendedGet(){
   json += ",\"ptt\":" + String(audioTxKeyed ? "true" : "false");
   json += ",\"txState\":" + String((int)aud1TxState);
   json += ",\"txUsed\":" + String((unsigned long)aud1TxUsed);
-  json += ",\"txCapacity\":" + String((unsigned long)AUD1_TX_RING_SIZE);
+  json += ",\"txCapacity\":" + String((unsigned long)aud1TxRingSize());
   json += ",\"txPackets\":" + String((unsigned long)audioTx.sentPackets);
   json += ",\"txReplays\":" + String((unsigned long)audioTx.replayedPackets);
   json += ",\"txReplayMisses\":" + String((unsigned long)audioTx.replayMisses);
@@ -11741,7 +11830,7 @@ void aud1TxTick(bool deferPrebufferMiss){
         aud1TxLevelNextMs = now + 200;   // ~5/s until PTT
         AudioSendText("{\"type\":\"tx-level\",\"txId\":" + String(aud1TxId) +
                       ",\"used\":" + String((unsigned long)aud1TxUsed) +
-                      ",\"capacity\":" + String((unsigned long)AUD1_TX_RING_SIZE) +
+                      ",\"capacity\":" + String((unsigned long)aud1TxRingSize()) +
                       ",\"consumed\":" + String((unsigned long long)aud1TxConsumedUlaw) +
                       ",\"udpPackets\":" + String((unsigned long)txSnapshot.sentPackets) +
                       ",\"maxLateMs\":" + String((unsigned long)txSnapshot.maxLatenessMs) +
@@ -11754,7 +11843,7 @@ void aud1TxTick(bool deferPrebufferMiss){
       }
       return;
     }
-    size_t required = (aud1TxPrebufferSamples + 5) / 6;
+    size_t required = (aud1TxPrebufferSamples + aud1TxDecim() - 1) / aud1TxDecim();
     if(aud1TxExpectedSample < aud1TxPrebufferSamples || aud1TxUsed < required){
       // A complete packet may already be queued behind a fragmented TCP read.
       // Give the non-blocking parser a short, bounded chance to consume only
@@ -11775,7 +11864,7 @@ void aud1TxTick(bool deferPrebufferMiss){
     }
     audioPttOn();
     if(!audioTxKeyed){ aud1TxAbort("PTT command failed"); return; }
-    uint64_t totalUlaw = (aud1TxTotalSamples + 5) / 6;
+    uint64_t totalUlaw = (aud1TxTotalSamples + aud1TxDecim() - 1) / aud1TxDecim();
     if(!txClient->startAudioTx(totalUlaw, now)){
       aud1TxAbort("audio scheduler did not start"); return;
     }
@@ -11803,7 +11892,7 @@ void aud1TxTick(bool deferPrebufferMiss){
     aud1TxLevelNextMs = now + 200;   // ~5/s
     AudioSendText("{\"type\":\"tx-level\",\"txId\":" + String(aud1TxId) +
                   ",\"used\":" + String((unsigned long)aud1TxUsed) +
-                  ",\"capacity\":" + String((unsigned long)AUD1_TX_RING_SIZE) +
+                  ",\"capacity\":" + String((unsigned long)aud1TxRingSize()) +
                   ",\"consumed\":" + String((unsigned long long)aud1TxConsumedUlaw) +
                   ",\"udpPackets\":" + String((unsigned long)txSnapshot.sentPackets) +
                   ",\"maxLateMs\":" + String((unsigned long)txSnapshot.maxLatenessMs) +
@@ -11831,14 +11920,8 @@ void AudioDisconnectWs(){
     if(IcomLanClient *client = lanRadioClient()) client->stopRxAudio();
 }
 
-// Called by the LAN client for every RX audio datagram payload (~160 B / 20 ms).
-// Coalesce a few packets into one WS frame to cut the frame rate (~50/s -> ~10/s)
-// and keep the single-threaded loop responsive to the port-80 /state polls.
-void lanAudioHandler(const uint8_t *data, size_t len, uint16_t radioSequence){
-#if CAP_WATCH
-  watchHubOnRxAudio(data, len, radioSequence);   // the viewers' own stream, holder or not
-#endif
-  if(len == 0 || !AudioWsClient.connected()) return;
+// One RX packet into the AUD1 stream at the rate the stream carries.
+static void aud1RxForward(const uint8_t *data, size_t len, uint16_t radioSequence){
   if(audioRadioSequenceValid){
     int16_t delta = int16_t(radioSequence - audioRadioExpectedSequence);
     if(delta < 0) return; // duplicate or stale radio datagram
@@ -11864,6 +11947,38 @@ void lanAudioHandler(const uint8_t *data, size_t len, uint16_t radioSequence){
   if(audioTxLen >= 512) audioFlush();                                   // keep frames < 1 MSS
 }
 
+// Called by the LAN client for every RX audio datagram payload (~160 B / 20 ms,
+// 320 B on the 16 kHz link). Coalesce a few packets into one WS frame to cut
+// the frame rate (~50/s -> ~10/s) and keep the single-threaded loop responsive
+// to the port-80 /state polls.
+void lanAudioHandler(const uint8_t *data, size_t len, uint16_t radioSequence){
+  const uint8_t *rx8 = data;
+  size_t len8 = len;
+  uint8_t half[160] = {};            // 20 ms at 8 kHz
+  bool wide = lanLinkRate() == 16000;
+  if(wide){
+    if(len > 2 * sizeof(half)) return;
+    len8 = aud1Half.run(data, len, half);
+    rx8 = half;
+  }
+#if CAP_WATCH
+  watchHubOnRxAudio(rx8, len8, radioSequence);   // the viewers' own stream, holder or not
+#endif
+  if(len == 0 || !AudioWsClient.connected()) return;
+  // The stream's rate follows the client's rx.select and the link. A change
+  // is a new media epoch: flushed, firstSample from 0, FIRST set.
+  uint32_t rate = wide && audioRxSelect == 16000 ? 16000 : 8000;
+  if(rate != audioRxRate){
+    audioFlush();
+    audioRxRate = rate;
+    audioRxFirstSample = 0; audioRxFirst = true; audioRxDiscontinuity = false;
+    audioRadioSequenceValid = false;
+    Serial.printf("AUD1 | rx stream now %u Hz\n", (unsigned)rate);
+  }
+  if(rate == 16000) aud1RxForward(data, len, radioSequence);
+  else aud1RxForward(rx8, len8, radioSequence);
+}
+
 static uint64_t aud1JsonU64(const String& json, const char* key){
   String value = extractJsonString(json, key);
   return value.length() ? strtoull(value.c_str(), nullptr, 10) : 0;
@@ -11877,6 +11992,9 @@ static void aud1HandleControl(const String& json){
   String type = extractJsonString(json, "type");
   uint32_t txId = (uint32_t)aud1JsonU64(json, "txId");
   if(type == "vara.host" || type == "vara.hold"){ varaHostFromPage(type, json); return; }
+  // RX stream rate (XARA FM Wide). Takes effect with the next radio packet
+  // once the link really runs at 16 kHz -- lanAudioHandler.
+  if(type == "rx.select"){ audioRxSelect = aud1JsonU64(json, "sampleRate") == 16000 ? 16000 : 8000; return; }
   if(type == "tx.abort"){
     if((aud1TxState == AUD1_TX_READY || aud1TxState == AUD1_TX_PREBUFFER ||
         aud1TxState == AUD1_TX_STREAM) && (!txId || txId == aud1TxId)){
@@ -11946,7 +12064,7 @@ static void aud1HandleControl(const String& json){
     }
     if(aud1TxState == AUD1_TX_STREAM){
       IcomLanClient *client = lanRadioClient();
-      if(!client || !client->extendAudioTx(more / 6)){ aud1TxAbort("audio scheduler refused tx.extend"); return; }
+      if(!client || !client->extendAudioTx(more / aud1TxDecim())){ aud1TxAbort("audio scheduler refused tx.extend"); return; }
     }
     aud1TxTotalSamples += more; aud1TxExpectedPackets += morePackets;
     aud1TxDeadlineMs += uint32_t(more / 48);
@@ -11983,7 +12101,7 @@ static void aud1HandleControl(const String& json){
   int64_t delayMs = int64_t(slotUtcMs) - int64_t(clientUtcMs);
   if(txId == 0 || sampleRate != 48000 || packetMs != 20 || totalSamples == 0 ||
      packets == 0 || prebuffer == 0 || prebuffer > totalSamples ||
-     prebuffer > AUD1_TX_RING_SIZE * 6 || delayMs < 100 || delayMs > 35000 ||
+     prebuffer > aud1TxRingSize() * aud1TxDecim() || delayMs < 100 || delayMs > 35000 ||
      !lanRadioConnected() || !lanRadioClient() || !lanRadioClient()->audioTxReady()){
     aud1TxId = txId; aud1TxAbort("invalid tx.prepare"); return;
   }
@@ -12045,12 +12163,16 @@ static bool aud1AcceptTxPacket(const uint8_t* wire, size_t length){
   }
   uint16_t flags = aud1GetBE16(wire+6);
   bool first = (flags & 0x0001) != 0, last = (flags & 0x0002) != 0;
-  size_t samples = (length-40)/2, ulawSamples = samples/6;
+  // 48 kHz -> the link rate by plain decimation (every 6th sample at 8 kHz,
+  // every 3rd at 16): the pages already band-limit what they send. Packets are
+  // whole multiples of 6 samples, so the phase carries over at either rate.
+  const uint32_t decim = aud1TxDecim();
+  size_t samples = (length-40)/2, ulawSamples = samples/decim;
   IcomLanClient *txClient = lanRadioClient();
   if(!txClient){ aud1TxAbort("LAN radio gone"); return false; }
   IcomLanAudioTx::Snapshot snapshot = txClient->audioTxSnapshot();
   aud1TxUsed = snapshot.queued;
-  if(aud1TxUsed + ulawSamples > AUD1_TX_RING_SIZE || ulawSamples > 192){
+  if(aud1TxUsed + ulawSamples > snapshot.capacity || ulawSamples > 320){
     aud1TxAbort("TX ring overflow before write"); return false;
   }
   if((aud1TxExpectedSequence == 0) != first || (flags & ~0x0003) != 0 ||
@@ -12061,9 +12183,9 @@ static bool aud1AcceptTxPacket(const uint8_t* wire, size_t length){
      (!last && aud1TxReceivedPackets + 1 == aud1TxExpectedPackets)){
     aud1TxAbort("TX FIRST/LAST/length/buffer failure"); return false;
   }
-  uint8_t converted[192];
+  uint8_t converted[320];
   size_t convertedLength = 0;
-  for(size_t i=0; i<samples; i+=6){
+  for(size_t i=0; i<samples; i+=decim){
     size_t at = 40 + i*2;
     int16_t pcm = int16_t(uint16_t(wire[at]) | (uint16_t(wire[at+1]) << 8));
     converted[convertedLength++] = aud1Pcm16ToUlaw(pcm);
@@ -12114,10 +12236,16 @@ bool AudioHandleWsUpgrade(WiFiClient& webClient, const String& request, const St
   audioStreamId = esp_random(); if(audioStreamId == 0) audioStreamId = 1;
   audioRxSequence = 0; audioRxFirstSample = 0; audioRxFirst = true; audioRxDiscontinuity = false;
   audioRadioSequenceValid = false; audioRadioExpectedSequence = 0;
+  audioRxSelect = 8000; audioRxRate = 8000;
   aud1WsParser.reset();
   aud1TxResetState(); aud1TxId = 0;
+  // 16 kHz is offered only on the 16 kHz radio link (XARA setting); the stream
+  // starts at 8 kHz either way and switches on the client's rx.select.
+  IcomLanClient *helloClient = lanRadioClient();
+  bool offer16k = helloClient && helloClient->audioSampleRateWanted() == 16000;
   String hello = "{\"type\":\"hello\",\"protocol\":\"AUD1\",\"version\":1,\"streamId\":" +
-                 String(audioStreamId) + ",\"rx\":[{\"kind\":\"RX_ULAW\",\"sampleRate\":8000}]," +
+                 String(audioStreamId) + ",\"rx\":[{\"kind\":\"RX_ULAW\",\"sampleRate\":8000}" +
+                 (offer16k ? ",{\"kind\":\"RX_ULAW\",\"sampleRate\":16000}" : "") + "]," +
                  "\"tx\":[{\"kind\":\"TX_PCM16\",\"sampleRate\":48000}],\"maxPayloadBytes\":1920}";
   if(!AudioSendText(hello)){ AudioDisconnectWs(); return false; }
   if(IcomLanClient *client = lanRadioClient()) client->startRxAudio();   // opens the LAN audio channel
@@ -12173,7 +12301,7 @@ void AudioHandleWsClient(){
         // Once keyed, drain according to elapsed monotonic time between every
         // received packet. Before keying, start as soon as the full prebuffer
         // is present but do not fault while queued bytes remain to be parsed.
-        size_t required = (aud1TxPrebufferSamples + 5) / 6;
+        size_t required = (aud1TxPrebufferSamples + aud1TxDecim() - 1) / aud1TxDecim();
         if(aud1TxState == AUD1_TX_STREAM ||
            ((aud1TxState == AUD1_TX_READY || aud1TxState == AUD1_TX_PREBUFFER) &&
             aud1TxExpectedSample >= aud1TxPrebufferSamples && aud1TxUsed >= required))

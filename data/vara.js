@@ -12,7 +12,7 @@
 // waterfall runs off it, and LISTEN decides only whether this station answers.
 (function () {
   "use strict";
-  const VARA_WORKER_REV = "972b2fcc"; // stamped from /vara-worker.js
+  const VARA_WORKER_REV = "c40d1221"; // stamped from /vara-worker.js
   const audioWsPort = () => Number((window.WIFILT_PORTS || {}).audio) || 83;
   const SETTINGS_URL = "/vara-settings.json";
   const DEFAULTS = {bw: 2300, p2p: true, driveDb: -5, latencyMs: 350, slotMs: 200, prebufferMs: 120};
@@ -27,7 +27,8 @@
   function normalise(raw) {
     const s = {...DEFAULTS, ...(raw && typeof raw === "object" ? raw : {})};
     const num = (v, lo, hi, d) => { v = Number(v); return Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : d; };
-    s.bw = s.bw === "fmn" ? "fmn" : [500, 2300, 2750].includes(Number(s.bw)) ? Number(s.bw) : DEFAULTS.bw;
+    s.bw = s.bw === "fmn" || s.bw === "fmw" ? s.bw : [500, 2300, 2750].includes(Number(s.bw)) ? Number(s.bw) : DEFAULTS.bw;
+    s.link16k = s.link16k === true;
     s.p2p = s.p2p !== false;
     s.driveDb = num(s.driveDb, -30, 0, DEFAULTS.driveDb);
     s.latencyMs = num(s.latencyMs, 50, 2000, DEFAULTS.latencyMs);
@@ -94,7 +95,11 @@
         if (m.cmd || m.data) { if (!hostPeer) chatSystem(`Winlink client ${m.peer || ""} attached on TCP 8300/8301`); hostPeer = m.peer || "client"; }
         else if (hostPeer) { chatSystem("Winlink client left"); hostPeer = ""; }
         break;
-      case "rx-samples": if (waterfall && !(status && status.ptt) && !radio.tx) waterfall.ingest(m.samples); break;
+      case "rx-samples":
+        if (!waterfall) break;
+        setWaterfallRate(m.rate || 8000);
+        if (!(status && status.ptt) && !radio.tx) waterfall.ingest(m.samples);
+        break;
       case "aud1":
         if (m.status === "ready") setAud1("ready", "ok");
         else if (m.status === "closed" || m.status === "error") setAud1("lost", "error");
@@ -106,6 +111,10 @@
       case "event":
         if (m.kind === "unableToConnect") chatSystem("no answer");
         else if (m.kind === "timedOut") chatSystem("link timed out");
+        else if (m.kind === "needs16k") {
+          chatSystem("FM Wide needs the 16 kHz radio link — switch it on in SETTINGS › ADVANCED");
+          hostLog("FM Wide: the firmware offers no 16 kHz stream (16 kHz radio link is off)", "vara-log-error");
+        }
         break;
       case "error":
         setAud1("error", "error");
@@ -177,7 +186,7 @@
     const connected = radio.connected && radio.transceiverType === "ICOM-LAN";
     dom.trxFrequencyValue.textContent = formatFrequency(radio.frequency);
     dom.trxMode.textContent = radio.mode || "---";
-    const fm = settings.bw === "fmn", want = fm ? ["FM", "FM-D"] : ["USB", "USB-D"];
+    const fm = isFm(settings.bw), want = fm ? ["FM", "FM-D"] : ["USB", "USB-D"];
     const usb = want.includes(radio.mode);
     dom.trxMode.classList.toggle("incompatible", connected && !usb);
     dom.trxMode.title = connected && !usb ? (fm ? "VARA FM needs FM or FM-D" : "VARA HF needs USB or USB-D") : "TRX mode";
@@ -225,23 +234,42 @@
     dom.setPrebuffer.value = settings.prebufferMs;
     dom.bwSelect.value = String(settings.bw);
     dom.sessionSelect.value = settings.p2p ? "p2p" : "winlink";
-    dom.settingsSummary.textContent = `${settings.bw === "fmn" ? "FM Narrow" : settings.bw + " Hz"} · ${settings.p2p ? "P2P" : "Winlink"} · ${settings.latencyMs} ms`;
+    dom.setLink16k.checked = settings.link16k;
+    const mode = settings.bw === "fmn" ? "FM Narrow" : settings.bw === "fmw" ? "FM Wide" : settings.bw + " Hz";
+    dom.settingsSummary.textContent = `${mode} · ${settings.p2p ? "P2P" : "Winlink"} · ${settings.latencyMs} ms${settings.link16k ? " · 16 kHz link" : ""}`;
   }
   async function saveSettings(extra) {
     const next = normalise({...settings, ...(extra || {}),
-      driveDb: dom.setDrive.value, latencyMs: dom.setLatency.value, slotMs: dom.setSlot.value, prebufferMs: dom.setPrebuffer.value});
+      driveDb: dom.setDrive.value, latencyMs: dom.setLatency.value, slotMs: dom.setSlot.value, prebufferMs: dom.setPrebuffer.value,
+      link16k: dom.setLink16k.checked});
+    const relink = next.link16k !== settings.link16k;
     settings = next;
     renderSettings();
     post({type: "configure", settings: {driveDb: next.driveDb, latencyMs: next.latencyMs, slotMs: next.slotMs, prebufferMs: next.prebufferMs}});
     try {
       const r = await fetch(SETTINGS_URL, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(next)});
       dom.settingsSaveStatus.textContent = r.ok ? "saved" : `not saved (HTTP ${r.status})`;
+      // The firmware reconnects the radio at the new rate and drops the audio
+      // socket; the worker starts again once the link has had time to return.
+      if (r.ok && relink) {
+        hostLog(`(radio link to ${next.link16k ? 16 : 8} kHz, reconnecting)`, "vara-log-cmd");
+        stopWorker(); setTimeout(() => { if (ownLease) startWorker(); }, 4000);
+      }
     } catch (_e) { dom.settingsSaveStatus.textContent = "not saved (no answer)"; }
     setTimeout(() => { dom.settingsSaveStatus.textContent = ""; }, 4000);
   }
 
   // ---- waterfall + start --------------------------------------------------------
   let waterfall = null;
+  const isFm = bw => bw === "fmn" || bw === "fmw";
+  // The waterfall follows the AUD1 stream: 0.3-3 kHz at 8 kHz, 0.3-6 kHz on
+  // the 16 kHz stream FM Wide uses.
+  function setWaterfallRate(rate) {
+    if (waterfall.sampleRate === rate) return;
+    waterfall.sampleRate = rate;
+    waterfall.reset();
+    waterfall.setRange(300, rate === 16000 ? 6000 : 3000);
+  }
   function onBusy(info) {
     dom.takeoverNotice.hidden = false;
     document.body.classList.add("session-busy-only");
@@ -255,7 +283,7 @@
       "connectButton", "disconnectButton", "abortButton", "cqButton", "connectSummary",
       "stState", "stPeer", "stSpeed", "stSn", "stBusy", "stBuffer", "stLoad", "stHost",
       "chatLog", "chatForm", "chatInput", "chatSend", "hostLog",
-      "setDrive", "setLatency", "setSlot", "setPrebuffer", "tuneButton", "settingsSave", "settingsSaveStatus",
+      "setDrive", "setLatency", "setSlot", "setPrebuffer", "setLink16k", "tuneButton", "settingsSave", "settingsSaveStatus",
       "settingsSummary", "takeoverNotice", "takeoverDetail", "takeoverButton"].forEach(id => { dom[id] = byId(id); });
 
     if (typeof Spectrum !== "undefined") {
@@ -283,12 +311,15 @@
     dom.abortButton.addEventListener("click", () => { hostLog("> (abort)", "vara-log-cmd"); post({type: "abort"}); });
     dom.cqButton.addEventListener("click", () => command(`CQFRAME ${myCall} ${settings.bw}`));
     dom.bwSelect.addEventListener("change", () => {
-      const v = dom.bwSelect.value, wasFm = settings.bw === "fmn", fm = v === "fmn";
-      saveSettings({bw: fm ? "fmn" : Number(v)});
-      // HF and FM are different modems: switching between them starts the
-      // worker again with the other one; within HF it is the BW command.
-      if (fm !== wasFm) { hostLog(`(switching to ${fm ? "VARA FM" : "VARA HF"})`, "vara-log-cmd"); stopWorker(); setTimeout(startWorker, 600); }
-      else command(`BW${v}`);
+      const v = dom.bwSelect.value, was = settings.bw, fm = isFm(v);
+      saveSettings({bw: fm ? v : Number(v)});
+      // HF, FM Narrow and FM Wide are different modems (FM Wide on its own
+      // 16 kHz stream): switching between them starts the worker again with
+      // the other one; within HF it is the BW command.
+      if (fm || isFm(was)) {
+        hostLog(`(switching to ${fm ? (v === "fmw" ? "VARA FM Wide" : "VARA FM Narrow") : "VARA HF"})`, "vara-log-cmd");
+        stopWorker(); setTimeout(startWorker, 600);
+      } else command(`BW${v}`);
     });
     dom.sessionSelect.addEventListener("change", () => {
       const p2p = dom.sessionSelect.value === "p2p";

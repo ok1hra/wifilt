@@ -11,6 +11,25 @@ published.
 
 ## Working tree — not committed
 
+**XARA: VARA FM Wide and the 16 kHz radio link (docs/vara-implementace.md, phase 6).**
+
+* **What.** DATA → XARA → Mode: FM Wide, for a 9600-capable FM radio. It needs SETTINGS →
+  ADVANCED → "16 kHz radio link". That setting runs the LAN audio at 16 kHz instead of 8 in
+  both directions, with twice the Wi-Fi traffic. Saving it reconnects the radio. Without it,
+  FM Wide says what is missing and stays off the air.
+* **How.** The firmware puts the rate into the radio's stream request
+  (`IcomLanClient::setAudioRate`). It sizes the RX packet pool and TX queue to the rate on
+  the heap, and decimates 48 kHz TX by 3 instead of 6. Over AUD1 it offers a 16 kHz RX
+  stream next to the 8 kHz one; a page switches to it with `rx.select`. Everything else,
+  JS8 to Mercury and the watch viewers, keeps getting 8 kHz through a half-band decimator
+  (docs/aud1-audio-websocket-protocol.md). The worker upsamples 16 kHz ×3 for FM Wide.
+* **Checks.** `tools/aud1-16k-native-check.sh` (native firmware and fake radio: link switch, the
+  tone through the decimator, `rx.select`, 320-byte TX packets, back to 8 kHz);
+  `tools/vara-worker-test.js` "fm wide on the 16 kHz link". The fake radio now streams at the
+  rate the stream request asks for and logs the size of the TX packets it receives.
+* **Not yet on a real radio.** That the IC-705 streams 16 kHz µ-law in 320-byte packets is
+  assumed from RS-BA1/wfview, not measured.
+
 **XARA: VARA FM Narrow (docs/vara-implementace.md, phase 5).**
 
 * **What.** DATA → XARA → Mode: FM Narrow, for an FM voice channel (radio in FM-D). Same

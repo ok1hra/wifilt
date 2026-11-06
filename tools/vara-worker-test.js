@@ -47,9 +47,14 @@ class Rng {
 }
 
 // ---- the fake firmware: one AUD1 session's TX side ---------------------------
+// `rate` is the radio link (8000, or 16000 with the XARA 16 kHz link): the
+// hello offers 16 kHz only then, and TX is decimated 48k -> rate.
 class FakeAud1 {
-  constructor(name, sim) {
-    this.name = name; this.sim = sim; this.hello = {streamId: 0x51 + name.charCodeAt(0)};
+  constructor(name, sim, rate) {
+    this.rate = rate || 8000; this.decim = 48000 / this.rate; this.selected = 8000;
+    this.name = name; this.sim = sim;
+    this.hello = {streamId: 0x51 + name.charCodeAt(0),
+      rx: [{kind: "RX_ULAW", sampleRate: 8000}].concat(this.rate === 16000 ? [{kind: "RX_ULAW", sampleRate: 16000}] : [])};
     this.tx = null; this.status = null; this.errors = []; this.transmissions = 0; this.keyedMs = 0;
     this.hostOut = {cmd: [], data: []}; this.holds = [];
   }
@@ -62,7 +67,7 @@ class FakeAud1 {
   prepare(txId, m) {
     const delay = m.slotUtcMs - this.sim.nowMs;
     if (!(m.samples > 0 && m.packets > 0 && m.prebufferSamples > 0 && m.prebufferSamples <= m.samples &&
-          m.prebufferSamples <= 12288 * 6 && m.packetMs === 20 && delay >= 100 && delay <= 35000)) {
+          m.prebufferSamples <= 24576 * this.decim && m.packetMs === 20 && delay >= 100 && delay <= 35000)) {
       this.error("invalid tx.prepare"); return Promise.reject(new Error("invalid tx.prepare"));
     }
     if (this.tx && !this.tx.drained) this.error("new TX replaced active TX");
@@ -79,6 +84,7 @@ class FakeAud1 {
     // the TCP host relay (vara_host_bridge.h): what would go out on 8300/8301
     if (msg.type === "vara.host") { this.hostOut[msg.ch].push(...Buffer.from(msg.b64, "base64")); return; }
     if (msg.type === "vara.hold") { this.holds.push(msg.on); return; }
+    if (msg.type === "rx.select") { this.selected = msg.sampleRate === 16000 ? 16000 : 8000; return; }
     if (msg.type !== "tx.extend") return;
     const t = this.tx;
     if (!t || t.txId !== msg.txId) return;
@@ -98,11 +104,11 @@ class FakeAud1 {
     if ((t.expSeq === 0) !== first || t.expSample + samples > t.total || t.received + 1 > t.packets ||
         (last && (t.expSample + samples !== t.total || t.received + 1 !== t.packets)) ||
         (!last && t.received + 1 === t.packets)) { this.error("TX FIRST/LAST/length/buffer failure"); return; }
-    for (let i = 0; i < samples; i += 6) t.ring.push(v.getInt16(40 + i * 2, true) / 32768);
-    if (t.ring.length > 12288) { this.error("TX ring overflow"); return; }
+    for (let i = 0; i < samples; i += this.decim) t.ring.push(v.getInt16(40 + i * 2, true) / 32768);
+    if (t.ring.length > 24576) { this.error("TX ring overflow"); return; }
     t.expSample += samples; t.expSeq++; t.received++; t.last = last;
   }
-  // one 8 kHz sample period of the firmware's playout; returns the sample
+  // one link sample period of the firmware's playout; returns the sample
   // handed to the radio, or null while not keyed
   play() {
     const t = this.tx;
@@ -115,13 +121,13 @@ class FakeAud1 {
       }
       t.keyed = true;
     }
-    if (t.played * 6 >= t.total) {
+    if (t.played * this.decim >= t.total) {
       t.drained = true; this.tx = null;
       if (this.status) this.status({type: "tx-drained", txId: t.txId});
       return null;
     }
     if (!t.ring.length) { this.error("TX underrun"); return null; }
-    t.played++; this.keyedMs += 1 / 8;
+    t.played++; this.keyedMs += 1000 / this.rate;
     return t.ring.shift();
   }
 }
@@ -130,11 +136,12 @@ class FakeAud1 {
 function run(name, o) {
   const sim = {nowMs: 0};
   const rng = new Rng(o.seed || 5);
+  const R = o.rate || 8000, N = R / 50, kHz = R / 1000;
   const stations = ["A", "B"].map((n, i) => {
     // `o.b` overrides the path of station B alone: a fast answerer stands in
     // for a VARA station on a sound card (an RMS gateway, say).
     const p = Object.assign({rxDelayMs: 60, radioTxDelayMs: 40, slotMs: 200, prebufferMs: 120}, o, i === 1 ? o.b || {} : {});
-    const aud1 = new FakeAud1(n, sim);
+    const aud1 = new FakeAud1(n, sim, R);
     const inbox = {lines: [], data: [], tx: [], events: []};
     const call = i === 0 ? "N0CALL" : "N1CALL";
     const latencyMs = p.latencyMs ?? (p.rxDelayMs + p.slotMs + p.radioTxDelayMs);
@@ -147,8 +154,9 @@ function run(name, o) {
       }},
       {mycall: call, bw: o.bw || 2300, latencyMs, slotMs: p.slotMs, prebufferMs: p.prebufferMs,
         p2p: o.p2p !== false, listen: i === 1});
-    return {n, aud1, core, inbox, air: new Float32Array(8000 * (o.seconds + 5)), rxQueue: [], held: 0, t8: 1000 + i * 37,
-      rxDelay8: Math.round(p.rxDelayMs * 8), txDelay8: Math.round(p.radioTxDelayMs * 8)};
+    core.onHello(aud1.hello);
+    return {n, aud1, core, inbox, air: new Float32Array(R * (o.seconds + 5)), rxQueue: [], held: 0, t8: 1000 + i * 37,
+      rxDelay8: Math.round(p.rxDelayMs * kHz), txDelay8: Math.round(p.radioTxDelayMs * kHz), epoch: null};
   });
   const noise = Math.pow(10, -(o.noiseDb ?? 45) / 20);
   const totalMs = o.seconds * 1000;
@@ -156,7 +164,7 @@ function run(name, o) {
   const script = o.script(stations);
   for (sim.nowMs = 0; sim.nowMs < totalMs; sim.nowMs += 20) {
     for (const s of stations) {
-      for (let k = 0; k < 160; k++) {
+      for (let k = 0; k < N; k++) {
         const v = s.aud1.play();
         if (v !== null) s.air[t8 + k + s.txDelay8] = v;
       }
@@ -166,12 +174,22 @@ function run(name, o) {
       // the radio's own RX: the other station's air, silent while this one is keyed
       const start = t8 - s.rxDelay8;
       if (start >= 0) {
-        const pkt = new Float32Array(160);
-        for (let k = 0; k < 160; k++) {
+        const pkt = new Float32Array(N);
+        for (let k = 0; k < N; k++) {
           const own = s.air[start + k] !== 0;
           pkt[k] = own ? 0 : ulaw(other.air[start + k] + noise * rng.gauss());
         }
-        s.rxQueue.push({samples: pkt, meta: {firstSample: BigInt(s.t8 + start)}});
+        if (R === 8000 || s.aud1.selected === 16000) {
+          // the firmware switching to 16 kHz starts a new epoch: FIRST, firstSample from 0
+          let flags = 0;
+          if (R === 16000 && s.epoch === null) { s.epoch = s.t8 + start; flags = 1; }
+          s.rxQueue.push({samples: pkt, meta: {firstSample: BigInt(s.t8 + start - (s.epoch || 0)), sampleRate: R, flags}});
+        } else {
+          // 16 kHz link, 8 kHz stream until rx.select (every other sample is enough here)
+          const half = new Float32Array(N / 2);
+          for (let k = 0; k < half.length; k++) half[k] = pkt[2 * k];
+          s.rxQueue.push({samples: half, meta: {firstSample: BigInt(Math.floor((s.t8 + start) / 2)), sampleRate: 8000, flags: 0}});
+        }
       }
       // Wi-Fi: now and then a packet is lost, and deliveries bunch up
       if (o.jitter && rng.next() < 0.02) s.held = 1 + Math.floor(rng.next() * (o.jitter / 20));
@@ -180,7 +198,7 @@ function run(name, o) {
       else while (s.rxQueue.length) { const p = s.rxQueue.shift(); s.core.onRx(p.samples, p.meta); }
       s.core.tick();
     }
-    t8 += 160;
+    t8 += N;
     script(sim.nowMs);
   }
   return stations;
@@ -231,7 +249,20 @@ const cases = [
   ["p2p, wifi jitter 120 ms + 1% loss", {p2p: true, jitter: 120, loss: 0.01, seed: 9}],
   ["p2p, bw 500", {p2p: true, bw: 500, repeat: 1}],
   ["fm narrow", {bw: "fmn"}],
+  ["fm wide on the 16 kHz link", {bw: "fmw", rate: 16000}],
 ];
+// FM Wide with the link at 8 kHz: the modem says so and stays deaf.
+if (!only || "fm wide without".includes(only) || "fm wide without the 16 kHz link".includes(only)) {
+  const events = [];
+  const aud1 = new FakeAud1("A", {nowMs: 0}, 8000);
+  const core = new VaraCore({M, H, aud1, wallNow: () => 0, monoNow: () => 0,
+    post: m => { if (m.type === "event") events.push(m.kind); }}, {mycall: "N0CALL", bw: "fmw"});
+  core.onHello(aud1.hello);
+  check("fm wide without the 16 kHz link: reports needs16k", events.includes("needs16k"));
+  check("fm wide without the 16 kHz link: asks for nothing", aud1.selected === 8000);
+  core.onRx(new Float32Array(160), {firstSample: 0n, sampleRate: 8000, flags: 1});
+  check("fm wide without the 16 kHz link: ignores 8 kHz audio", core.rx8 === 0);
+}
 for (const [name, o, expectFail] of cases) if (!only || name.includes(only)) chat(name, o, expectFail);
 
 // A Winlink client on A's TCP ports: commands and data in through the relay,
