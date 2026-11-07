@@ -282,12 +282,32 @@
 
   function closeSession() {
     jttyTx.reset();
+    rxNextSample = null;
     if (session) { session.stop(); session = null; }
   }
 
   // During this station's own TX the receiver gets silence of the same length:
   // its clock keeps running, and it never decodes its own transmitter.
-  function onSamples(samples) {
+  //
+  // A radio packet lost on the way (WiFi, typically) reaches the page only as
+  // a jump in firstSample. Fed straight through, the samples after it would
+  // arrive 20 ms early and every frame straddling the hole would lose symbol
+  // timing; filled with silence, the hole is just an erasure the FEC rides
+  // over. Found on air: IC-7610 -> IC-705 over WiFi lost one frame in two
+  // messages to a 60 ms hole. A jump back, or one too long to be a hole, is a
+  // new epoch (rx.select, a reconnect): follow it without filling.
+  const RX_HOLE_FILL_MAX = 2 * RX_AUDIO_RATE;
+  let rxNextSample = null;
+  function onSamples(samples, _rate, metadata) {
+    const first = metadata ? Number(metadata.firstSample) : NaN;
+    if (Number.isSafeInteger(first)) {
+      const hole = rxNextSample === null ? 0 : first - rxNextSample;
+      if (hole > 0 && hole <= RX_HOLE_FILL_MAX) {
+        if (session && session.ptt) receiver.gap(hole);
+        else receiver.push(new Float32Array(hole));
+      }
+      rxNextSample = first + samples.length;
+    }
     if (session && session.ptt) { receiver.gap(samples.length); return; }
     receiver.push(samples);
     scope.ingest(samples);
