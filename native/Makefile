@@ -16,7 +16,11 @@
 
 SKETCH_DIR  := ..
 TRXNET_DIR  ?= $(HOME)/Arduino/libraries/TrxNet/src
-BUILD_DIR   ?= build
+# NO_ADDONS=1 builds the public edition even with addons/ beside the sketch
+# (-DWIFILT_NO_ADDONS, addon_hooks.h): in its own build directories, so the
+# two editions never overwrite each other's objects. tools/release.sh builds both.
+NO_ADDONS   ?=
+BUILD_DIR   ?= build$(if $(NO_ADDONS),-public)
 TARGET      ?= wifilt
 
 CXX      ?= g++
@@ -33,6 +37,7 @@ DEFINES  := -DARDUINO=10819 -DWIFILT_NATIVE=1
 # that does not fit is dropped SILENTLY -- /pa-temp and /lptune simply never
 # fired here. Same numbers as the ESP32, as the library asks: build flag only.
 DEFINES  += -DTRXNET_MAX_PEERS=24 -DTRXNET_MAX_PENDING=24 -DTRXNET_MAX_SUBS=16 -DTRXNET_MAX_SEEN=48
+DEFINES  += $(if $(NO_ADDONS),-DWIFILT_NO_ADDONS)
 
 WARNINGS := -Wall -Wextra -Wno-unused-parameter
 OPT      ?= -O2
@@ -110,7 +115,7 @@ FORCE:
 # .d file. The stamp lists the add-on headers, so putting the folder in or
 # taking it out rebuilds the sketch. Their contents are tracked by the .d file.
 ADDONS_STAMP := $(BUILD_DIR)/.addons
-ADDONS_LINE  := $(sort $(wildcard $(SKETCH_DIR)/addons/*.h $(SKETCH_DIR)/addons/*/*.h))
+ADDONS_LINE  := $(if $(NO_ADDONS),,$(sort $(wildcard $(SKETCH_DIR)/addons/*.h $(SKETCH_DIR)/addons/*/*.h)))
 $(ADDONS_STAMP): FORCE
 	@mkdir -p $(dir $@)
 	@echo '$(ADDONS_LINE)' | cmp -s - $@ || echo '$(ADDONS_LINE)' > $@
@@ -141,11 +146,12 @@ $(BUILD_DIR)/%.c.o: %.c $(FLAGS_STAMP)
 # std::mutex or std::condition_variable at all -- and those are exactly what the
 # FreeRTOS shim is built from. Naming the variant here means the build does not
 # depend on how update-alternatives happens to be set on the machine.
+WIN_DIR = build-win$(if $(NO_ADDONS),-public)
 win:
 	$(MAKE) \
 	  CXX=x86_64-w64-mingw32-g++-posix \
 	  CC=x86_64-w64-mingw32-gcc-posix \
-	  BUILD_DIR=build-win \
+	  BUILD_DIR=$(WIN_DIR) \
 	  TARGET=wifilt.exe \
 	  LDFLAGS="-static -static-libstdc++ -static-libgcc" \
 	  LDLIBS="-lws2_32 -liphlpapi -lwinmm"
@@ -171,7 +177,7 @@ arm64:
 run: all
 	@mkdir -p _run
 	./$(BUILD_DIR)/$(TARGET) --port 8080 --data-dir $(SKETCH_DIR)/data \
-	  $(foreach d,$(wildcard $(SKETCH_DIR)/addons/*/data),--data-dir $(d)) --config-dir _run
+	  $(if $(ADDONS_LINE),$(foreach d,$(wildcard $(SKETCH_DIR)/addons/*/data),--data-dir $(d))) --config-dir _run
 
 # --- distribution ----------------------------------------------------------
 #
@@ -187,7 +193,9 @@ run: all
 # same source, so they must not be able to claim different versions. That is the
 # mix-up this naming exists to prevent.
 VERSION ?= $(shell awk '/#define REV / { print $$3; exit }' $(SKETCH_DIR)/wifilt.ino)
-DIST    ?= dist
+# The edition with add-ons goes to dist-addons/, never next to the archives
+# tools/gh-pages.sh publishes from dist/.
+DIST    ?= dist$(if $(ADDONS_LINE),-addons)
 ASSETS  := $(DIST)/assets
 
 .PHONY: dist dist-assets dist-linux dist-windows dist-arm64
@@ -207,7 +215,7 @@ dist: dist-linux dist-windows dist-arm64
 # the PC serves (WIFILT_NATIVE_ASSETS, watch_hub.h).
 dist-assets:
 	@rm -rf $(ASSETS)
-	WIFILT_NATIVE_ASSETS=1 $(SKETCH_DIR)/tools/prepare-spiffs-tree.sh $(SKETCH_DIR)/data $(abspath $(ASSETS))
+	WIFILT_NATIVE_ASSETS=1 WIFILT_NO_ADDONS=$(if $(ADDONS_LINE),0,1) $(SKETCH_DIR)/tools/prepare-spiffs-tree.sh $(SKETCH_DIR)/data $(abspath $(ASSETS))
 
 dist-linux: all dist-assets
 	@rm -rf $(DIST)/wifilt-linux-x86_64 && mkdir -p $(DIST)/wifilt-linux-x86_64
@@ -221,7 +229,7 @@ dist-linux: all dist-assets
 
 dist-windows: win dist-assets
 	@rm -rf $(DIST)/wifilt-windows-x64 && mkdir -p $(DIST)/wifilt-windows-x64
-	cp build-win/wifilt.exe $(DIST)/wifilt-windows-x64/
+	cp $(WIN_DIR)/wifilt.exe $(DIST)/wifilt-windows-x64/
 	cp start-wifilt.bat     $(DIST)/wifilt-windows-x64/
 	cp -r $(ASSETS)         $(DIST)/wifilt-windows-x64/data
 	@cd $(DIST) && zip -qr wifilt-$(VERSION)-windows-x64.zip wifilt-windows-x64
@@ -242,6 +250,6 @@ dist-arm64: arm64 dist-assets
 	@rm -rf $(DIST)/wifilt-linux-arm64
 
 clean:
-	rm -rf $(BUILD_DIR) build-win build-arm64 $(DIST)
+	rm -rf $(BUILD_DIR) $(WIN_DIR) $(ARM64_DIR) $(DIST)
 
 -include $(OBJECTS:.o=.d)

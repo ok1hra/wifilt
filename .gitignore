@@ -7,6 +7,9 @@
 /native/build/
 /native/build-win/
 /native/build-arm64-addons/
+/native/build-public/
+/native/build-win-public/
+/native/dist-addons/
 /native/build-arm64/.addons
 /native/dist/
 /native/_run/

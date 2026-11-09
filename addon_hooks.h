@@ -39,7 +39,9 @@ void radioLinkSetWide(bool want, bool reconnect);        // 16 kHz radio link on
 bool aud1SendTextFrame(const char* json, size_t n);      // text frame to the AUD1 client
 size_t aud1SendRoom(void);                               // free bytes in its send queue
 
-#if __has_include("addons/addon.h")
+// -DWIFILT_NO_ADDONS builds the public edition with addons/ present
+// (tools/release.sh builds both editions from one tree).
+#if !defined(WIFILT_NO_ADDONS) && __has_include("addons/addon.h")
   #define WIFILT_HAS_ADDONS 1
 #else
   #define WIFILT_HAS_ADDONS 0

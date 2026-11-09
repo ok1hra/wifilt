@@ -15,6 +15,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT=""
 FIRMWARE=""
+EDITION=""
 BAUD=921600
 DRY_RUN=false
 
@@ -26,8 +27,11 @@ Usage:
 
 Options:
   --port DEVICE    Serial port, e.g. /dev/ttyUSB0 or /dev/serial/by-id/...
-  --firmware FILE  Exported application binary
-                   (default: wifilt.ino.esp32.bin)
+  --edition E      addons: firmware and pages with the add-ons from addons/
+                   (wifilt.ino.esp32.addons.bin); public: without them
+                   (wifilt.ino.esp32.bin). Default: addons when addons/addon.h
+                   exists, public otherwise.
+  --firmware FILE  Exported application binary (default: per edition)
   --baud RATE      Upload baud rate (default: 921600)
   --dry-run        Build and validate both images without writing flash
 EOF
@@ -37,12 +41,30 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --port) PORT="${2:-}"; shift 2 ;;
     --firmware) FIRMWARE="${2:-}"; shift 2 ;;
+    --edition) EDITION="${2:-}"; shift 2 ;;
     --baud) BAUD="${2:-}"; shift 2 ;;
     --dry-run) DRY_RUN=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+
+if [[ -z "$EDITION" ]]; then
+  [[ -f "${ROOT_DIR}/addons/addon.h" ]] && EDITION=addons || EDITION=public
+fi
+case "$EDITION" in
+  public) export WIFILT_NO_ADDONS=1 ;;
+  addons)
+    [[ -f "${ROOT_DIR}/addons/addon.h" ]] || { echo "ERROR: --edition addons without addons/addon.h" >&2; exit 1; }
+    export WIFILT_NO_ADDONS=0
+    if [[ -z "$FIRMWARE" ]]; then
+      FIRMWARE="${ROOT_DIR}/wifilt.ino.esp32.addons.bin"
+      [[ -f "$FIRMWARE" ]] || { echo "ERROR: $FIRMWARE not found; run tools/export-compiled-binary.sh --edition addons" >&2; exit 1; }
+    fi ;;
+  *) echo "ERROR: --edition must be public or addons" >&2; exit 2 ;;
+esac
+echo "==> Edition: $EDITION"
 
 if [[ -z "$FIRMWARE" ]]; then
   if [[ -f "${ROOT_DIR}/wifilt.ino.esp32.bin" ]]; then
@@ -57,6 +79,15 @@ else
   FIRMWARE="$(realpath "$FIRMWARE")"
 fi
 [[ -f "$FIRMWARE" ]] || { echo "ERROR: firmware not found: $FIRMWARE" >&2; exit 1; }
+# The pages must match the firmware: add-on pages without their routes, or the
+# routes without the pages, is a half-working device.
+fw_marks="$(LC_ALL=C grep -a -c 'WIFILT-ADDONS' "$FIRMWARE" || true)"
+if [[ "$EDITION" == public && "$fw_marks" != 0 ]]; then
+  echo "ERROR: $(basename "$FIRMWARE") was built with add-ons; use --edition addons" >&2; exit 1
+fi
+if [[ "$EDITION" == addons && "$fw_marks" == 0 ]]; then
+  echo "ERROR: $(basename "$FIRMWARE") has no add-ons; use --edition public" >&2; exit 1
+fi
 
 firmware_magic="$(od -An -t x1 -N1 "$FIRMWARE" | tr -d '[:space:]')"
 [[ "$firmware_magic" == "e9" ]] || {

@@ -11,6 +11,22 @@ published.
 
 ## Working tree — not committed
 
+**Release: both editions from one tree.**
+
+* `tools/release.sh` (now 10 phases) builds the public edition and, with `addons/` beside the
+  sketch, the one with add-ons: firmware for the box and the M5Atom Lite, Linux, Windows and
+  Raspberry Pi archives. Installing on this PC (6) and flashing a device (7) ask which edition
+  (Enter: with add-ons). Phase 8 commits and pushes each repository that has changes. Phase 9
+  publishes the page only when the public source changed since the last publication (the sha
+  in the newest gh-pages commit). Phase 10 uploads the add-on edition as a release of the
+  private add-on repository: an opaque tag, files dated midnight UTC of the REV day.
+* `WIFILT_NO_ADDONS` (`addon_hooks.h`) builds the public edition with `addons/` present.
+  `tools/export-compiled-binary.sh --edition public|addons` (own build folders; the add-on
+  image is exported as `*.addons.bin`; the mark is checked both ways),
+  `tools/upload-firmware-spiffs.sh --edition` (firmware and pages always of one edition),
+  `make -C native NO_ADDONS=1` (`build-public/`, `build-win-public/`, `dist/`; the add-on
+  edition goes to `dist-addons/`).
+
 **Add-ons: optional features built in from a folder beside the sketch.**
 
 * **What.** When `addons/addon.h` exists next to `wifilt.ino` it is included at the end of the

@@ -38,6 +38,7 @@ FQBN="${FQBN:-esp32:esp32:esp32:PartitionScheme=no_ota,FlashMode=dio}"
 SKETCH=""
 CLEAN=false
 VERBOSE=false
+EDITION=""     # "", public or addons -- see --edition
 
 usage() {
   cat <<'EOF'
@@ -52,6 +53,11 @@ Options:
   --fqbn FQBN     Board and options   (default: $FQBN)
   --clean         Discard the incremental build directory first
   --verbose       Show the full compiler output instead of the summary
+  --edition E     public: without add-ons even if addons/ is there
+                  (-DWIFILT_NO_ADDONS), exported under the usual name;
+                  addons: with them (addons/addon.h required), exported as
+                  <name>.<variant>.addons.bin. Each has its own build folder.
+                  Default: whatever addons/ decides, the usual name.
   -h, --help      This text
 
 Environment:
@@ -67,6 +73,7 @@ while [[ $# -gt 0 ]]; do
     --fqbn)    FQBN="${2:-}"; shift 2 ;;
     --clean)   CLEAN=true; shift ;;
     --verbose) VERBOSE=true; shift ;;
+    --edition) EDITION="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -128,6 +135,25 @@ fi
 VARIANT="${VARIANT:-$BOARD_ID}"
 EXPORT_BIN="${SKETCH_DIR}/${PROJECT_NAME}.${VARIANT}.bin"
 
+# ------------------------------------------------------------- the edition --
+# The public and the add-on build come from one tree; the define decides
+# (addon_hooks.h). A WIFILT-ADDONS mark in the image says which one it is, and
+# it is checked after the build both ways.
+EXTRA_PREFS=()
+case "$EDITION" in
+  "") ;;
+  public)
+    BUILD_DIR="${BUILD_DIR}-public"
+    EXTRA_PREFS=(--pref "compiler.cpp.extra_flags=-DWIFILT_NO_ADDONS"
+                 --pref "compiler.c.extra_flags=-DWIFILT_NO_ADDONS") ;;
+  addons)
+    [[ -f "${SKETCH_DIR}/addons/addon.h" ]] || {
+      echo "ERROR: --edition addons, but ${SKETCH_DIR}/addons/addon.h does not exist" >&2; exit 1; }
+    BUILD_DIR="${BUILD_DIR}-addons"
+    EXPORT_BIN="${SKETCH_DIR}/${PROJECT_NAME}.${VARIANT}.addons.bin" ;;
+  *) echo "ERROR: --edition must be public or addons, not '$EDITION'" >&2; exit 2 ;;
+esac
+
 # ------------------------------------------------------ the settings folder --
 [[ -d "$ARDUINO15_DIR/packages" ]] || {
   echo "ERROR: no core installation at $ARDUINO15_DIR/packages" >&2
@@ -186,6 +212,7 @@ set +e
   --preferences-file "${SETTINGS_DIR}/preferences.txt" \
   --board "$FQBN" \
   --pref "build.path=${BUILD_DIR}" \
+  "${EXTRA_PREFS[@]}" \
   $( $VERBOSE && echo --verbose ) \
   "$SKETCH" >"$LOG" 2>&1
 status=$?
@@ -250,6 +277,16 @@ if [[ -f "${SKETCH_DIR}/partitions.csv" ]]; then
       echo "ERROR: the image does not fit the app0 partition of partitions.csv" >&2
       exit 1
     fi
+  fi
+fi
+
+if [[ -n "$EDITION" ]]; then
+  marks="$(LC_ALL=C grep -a -c 'WIFILT-ADDONS' "$BUILT_BIN" || true)"
+  if [[ "$EDITION" == public && "$marks" != 0 ]]; then
+    echo "ERROR: --edition public, but the image carries the WIFILT-ADDONS mark" >&2; exit 1
+  fi
+  if [[ "$EDITION" == addons && "$marks" == 0 ]]; then
+    echo "ERROR: --edition addons, but the image has no WIFILT-ADDONS mark" >&2; exit 1
   fi
 fi
 
