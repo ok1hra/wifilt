@@ -18,6 +18,8 @@
   #include <net/if.h>
   #ifdef __linux__
     #include <linux/if_packet.h>
+    #include <linux/wireless.h>
+    #include <sys/ioctl.h>
   #elif defined(__APPLE__)
     #include <net/if_dl.h>
   #endif
@@ -940,6 +942,106 @@ String WiFiClass::softAPmacAddress() { return macAddress(); }
 // which would show up in SETUP as a fabricated reading.
 int8_t  WiFiClass::RSSI() { return 0; }
 int32_t WiFiClass::channel() { return 0; }
+
+// --- the host's own WiFi link ------------------------------------------------
+//
+// WiFi.RSSI() above is the box's radio and stays zero here. The machine this
+// binary runs on may well have a WiFi link of its own -- a Raspberry Pi in the
+// shack usually does -- and its strength is worth showing, labelled as the host
+// ("RPI -48 dBm") so nobody reads it as the ESP32's figure. Only a client link
+// counts: a Pi serving as a hotspot (hostapd, NetworkManager "hotspot") has no
+// one signal to report, so an interface in AP mode is skipped, as is one that
+// is down or not associated. -999 = nothing to show.
+
+static const char *hostLabelFromModel() {
+#if defined(__linux__)
+  FILE *file = fopen("/proc/device-tree/model", "r");
+  if (file) {
+    char model[64] = "";
+    size_t got = fread(model, 1, sizeof(model) - 1, file);
+    fclose(file);
+    model[got] = '\0';
+    if (strncmp(model, "Raspberry Pi", 12) == 0) return "RPI";
+  }
+#endif
+  return "PC";
+}
+
+const char *nativeHostLabel() {
+  static const char *label = hostLabelFromModel();
+  return label;
+}
+
+#if defined(__linux__)
+// The interface is a WiFi client (managed mode), not an AP, ad-hoc or monitor
+// one. SIOCGIWMODE is cfg80211's wireless-extensions shim, built into Raspberry
+// Pi OS and the usual desktop kernels; a kernel without it answers with an
+// error and the interface is skipped -- no reading rather than a guess.
+static bool wifiInterfaceIsClient(const char *name) {
+  int sock = socket(AF_INET, SOCK_DGRAM, 0);
+  if (sock < 0) return false;
+  struct iwreq request;
+  memset(&request, 0, sizeof(request));
+  strncpy(request.ifr_name, name, IFNAMSIZ - 1);
+  bool client = ioctl(sock, SIOCGIWMODE, &request) == 0 && request.u.mode == IW_MODE_INFRA;
+  close(sock);
+  return client;
+}
+
+static bool interfaceIsUp(const char *name) {
+  char path[96];
+  snprintf(path, sizeof(path), "/sys/class/net/%s/operstate", name);
+  FILE *file = fopen(path, "r");
+  if (!file) return false;
+  char state[16] = "";
+  bool up = fgets(state, sizeof(state), file) && strncmp(state, "up", 2) == 0;
+  fclose(file);
+  return up;
+}
+
+static int readHostWifiRssi() {
+  // /proc/net/wireless: two header lines, then one per wireless interface:
+  //  wlan0: 0000   70.  -40.  -256        0      0      0      0      0        0
+  // The level column is dBm for every cfg80211 driver; an unassociated
+  // interface reports 0 there (brcmfmac on the Pi does), hence level < 0.
+  FILE *file = fopen("/proc/net/wireless", "r");
+  if (!file) return -999;
+  char line[256];
+  int lineNo = 0, rssi = -999;
+  while (fgets(line, sizeof(line), file)) {
+    if (++lineNo <= 2) continue;
+    char name[IFNAMSIZ] = "";
+    unsigned status = 0;
+    float link = 0, level = 0;
+    if (sscanf(line, " %15[^:]: %x %f %f", name, &status, &link, &level) != 4) continue;
+    if (level >= 0 || level < -120) continue;
+    if (!interfaceIsUp(name) || !wifiInterfaceIsClient(name)) continue;
+    rssi = (int)(level - 0.5f);   // -47.6 -> -48, as iw rounds
+    break;
+  }
+  fclose(file);
+  return rssi;
+}
+#endif
+
+int nativeHostWifiRssi() {
+#if defined(__linux__)
+  // /state is polled by every open page; the files are cheap but not free, and
+  // the driver refreshes its figure about once a second anyway.
+  static std::mutex lock;
+  static uint64_t stampMs = 0;
+  static int cached = -999;
+  std::lock_guard<std::mutex> guard(lock);
+  uint64_t now = steadyMs();
+  if (stampMs == 0 || now - stampMs >= 2000) {
+    cached = readHostWifiRssi();
+    stampMs = now;
+  }
+  return cached;
+#else
+  return -999;   // Windows/macOS: not wired up; the topbar then shows nothing
+#endif
+}
 
 uint8_t *WiFiClass::BSSID() { return bssid; }
 

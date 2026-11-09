@@ -59,6 +59,11 @@
   bool        nativeListenerOk(uint16_t requested);
   const char *nativeListenerError(uint16_t requested);
   uint16_t    nativeHomeHttpPort();   // where the QSO log lives; 0 = unknown (main.cpp)
+  // The host machine's own WiFi client link (native/net/WiFi.cpp): dBm, or -999
+  // when it is wired, in AP mode or not associated. The label tells the topbar
+  // whose figure it is -- "RPI" on a Raspberry Pi, "PC" elsewhere.
+  int         nativeHostWifiRssi();
+  const char *nativeHostLabel();
   #define PLATFORM_PORT(requested)        nativeActualPort(requested)
   #define PLATFORM_LISTENER_OK(requested) nativeListenerOk(requested)
   #define PLATFORM_LISTENER_ERROR(requested) nativeListenerError(requested)

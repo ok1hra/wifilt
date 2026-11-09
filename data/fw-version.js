@@ -7,6 +7,10 @@
   var localRev  = null;
   var remoteRev = null;
   var wifiRssi  = null;
+  // Native build only (PC / Raspberry Pi): whose WiFi this is and its dBm.
+  // hostName null = the ESP32 box, which shows wifiRssi unlabelled as before.
+  var hostName  = null;
+  var hostRssi  = null;
   var el        = null;
   var offline   = false;
   var bdSupported = null;
@@ -526,10 +530,22 @@
     }
 
     var rssi = document.createElement('span');
+    var rssiShown = true;
     if (offline) {
       rssi.className = 'topbar-esp-offline';
       rssi.textContent = '⚠ OFFLINE';
       rssi.title = 'Page lost connection to the interface';
+    } else if (hostName !== null) {
+      // Labelled ("RPI -48 dBm") so it is never read as the ESP32's figure.
+      // Nothing at all when the host is wired, a hotspot or not associated.
+      if (hostRssi !== null && hostRssi > -999) {
+        rssi.className = 'topbar-wifi-rssi' + (hostRssi <= -70 ? ' topbar-wifi-rssi-bad' : '');
+        rssi.textContent = hostName + ' ' + hostRssi + ' dBm';
+        rssi.title = 'WiFi signal of the ' + (hostName === 'RPI' ? 'Raspberry Pi' : 'computer') +
+          ' running WIFILT (not an ESP32)';
+      } else {
+        rssiShown = false;
+      }
     } else {
       rssi.className = 'topbar-wifi-rssi';
       if (wifiRssi !== null && wifiRssi > -999) {
@@ -541,14 +557,16 @@
         rssi.textContent = '-- dBm';
       }
     }
-    el.appendChild(rssi);
+    if (rssiShown) el.appendChild(rssi);
 
     if (localRev === null) return;
 
-    var sep = document.createElement('span');
-    sep.className = 'topbar-fw-sep';
-    sep.textContent = '|';
-    el.appendChild(sep);
+    if (rssiShown) {
+      var sep = document.createElement('span');
+      sep.className = 'topbar-fw-sep';
+      sep.textContent = '|';
+      el.appendChild(sep);
+    }
 
     var a = document.createElement('a');
     a.href      = FLASHER_URL;
@@ -601,6 +619,13 @@
         if (d && d.wifiRssi !== undefined) {
           var n = Number(d.wifiRssi);
           wifiRssi = Number.isFinite(n) ? n : null;
+        }
+        if (d && typeof d.hostName === 'string') {
+          hostName = d.hostName;
+          var h = Number(d.hostRssi);
+          hostRssi = Number.isFinite(h) ? h : null;
+        } else {
+          hostName = null; hostRssi = null;
         }
         if (d && d.bdSupported !== undefined) {
           bdSupported = d.bdSupported === true;
