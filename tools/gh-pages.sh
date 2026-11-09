@@ -1662,6 +1662,14 @@ for optional_file in "$DESKTOP_LINUX_NAME" "$DESKTOP_WIN_NAME" "$DESKTOP_ARM64_N
   cp "${OUTPUT_DIR}/${optional_file}" "$TMP_DIR/${optional_file}"
 done
 
+# The guided Raspberry Pi installer, staged above only when the arm64 archive
+# carries pi-setup.sh. Not in the allowlist, it never reached the branch and the
+# page's `curl .../pi-setup | bash` got a 404.
+if [[ "$DESKTOP_PI_SETUP" -eq 1 ]]; then
+  require_file "${OUTPUT_DIR}/pi-setup" "Raspberry Pi installer pi-setup"
+  cp "${OUTPUT_DIR}/pi-setup" "$TMP_DIR/pi-setup"
+fi
+
 if [[ "$HAVE_M5ATOM" -eq 1 ]]; then
   for m5atom_file in manifest-m5atom.json firmware-m5atom.bin "wifilt-${FW_REV}-m5atom-full.bin"; do
     require_file "${OUTPUT_DIR}/${m5atom_file}" "M5Atom artifact ${m5atom_file}"
