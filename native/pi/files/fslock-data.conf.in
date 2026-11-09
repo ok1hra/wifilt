@@ -1,0 +1,5 @@
+# fslock: the settings are on the data card (/data) -- wait for it to mount.
+# Without the card (nofail) the service starts with the copy on the SD card.
+# Written by pi-setup.
+[Unit]
+After=@AFTER@

@@ -1,0 +1,14 @@
+[Unit]
+Description=Wi-Fi fallback - access point with a setup portal when no known network is in range
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/wifi-fallback
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target

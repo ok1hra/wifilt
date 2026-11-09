@@ -69,6 +69,9 @@ cp -r "$ASSETS" "$PREFIX/data"
 # would otherwise have no way to know there even are two separate programs.
 [[ -f "$HERE/start-wifilt.sh" ]] && install -m 0755 "$HERE/start-wifilt.sh" "$PREFIX/start-wifilt.sh"
 
+# The release (firmware REV) this came from -- pi-setup and fslock show it.
+[[ -f "$HERE/VERSION" ]] && install -m 0644 "$HERE/VERSION" "$PREFIX/VERSION"
+
 # The one privileged step. It is a property of the file, so it has to be redone
 # after every upgrade -- which is why upgrading means re-running this script.
 setcap cap_net_bind_service=+ep "$PREFIX/wifilt"

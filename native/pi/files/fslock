@@ -1,0 +1,526 @@
+#!/usr/bin/env bash
+#
+# fslock -- lock / unlock the system against damage from a power cut.
+#
+# Locked:    the root file system (SD card) is read-only, changes go to RAM
+#            (overlayroot) and vanish at reboot. /boot/firmware is read-only.
+#            The data card /data (USB) stays writable -- it carries the station
+#            settings (see DATA_MAP), so settings survive.
+# Unlocked:  an ordinary writable system -- for apt upgrade, pi-setup etc.
+#
+#   fslock               state (same as: fslock status)
+#   fslock lock          back up the data card -> SD, lock, reboot
+#   fslock unlock        offer to restore a backup, unlock, reboot
+#   fslock backup        backup only (unlocked)
+#   fslock list          backups with their details
+#   fslock restore [N|file]  restore a backup onto the data card
+#
+#   -y / --yes           no questions: reboot yes, restore no
+#   --no-reboot          do not reboot (the change applies at the next boot)
+#
+# Backups: $BACKUP_DIR on the SD card. They are made only while unlocked, so the
+# locked root protects them -- they survive even a dead data card.
+#
+# Settings can be overridden in /etc/fslock.conf (shell syntax, same variables);
+# pi-setup writes STATION_USER and DATA_MAP there.
+
+set -euo pipefail
+
+# --- settings ------------------------------------------------------------------
+DATA_MNT=/data
+BACKUP_DIR=/var/backups/fslock
+KEEP=10                       # how many backups to keep
+STATION_USER=""
+# directory_on_card:target_path (the target is bind-mounted from the card by fstab)
+DATA_MAP=()
+SERVICES=(wifilt local-trx)   # stopped while a backup is restored
+WIFILT_VERSION_FILE=/opt/wifilt/VERSION
+OI3_STATE=/var/lib/wifilt-pi/oi3-flashed
+
+BOOT_MP=/boot/firmware
+CMDLINE=$BOOT_MP/cmdline.txt
+# recurse=0: overlay on / only, other fstab file systems (above all /data) stay
+# writable. The default recurse=1 would lock the data card as well.
+OVL_PARAM="overlayroot=tmpfs:recurse=0"
+ROOT_RO=/media/root-ro        # where overlayroot mounts the real root
+
+# shellcheck disable=SC1091
+[ -r /etc/fslock.conf ] && . /etc/fslock.conf
+
+[ -n "$STATION_USER" ] || STATION_USER=$(getent passwd 1000 | cut -d: -f1)
+STATION_HOME=$(getent passwd "$STATION_USER" | cut -d: -f6)
+if [ ${#DATA_MAP[@]} -eq 0 ]; then
+  DATA_MAP=(
+    "wifilt:$STATION_HOME/.config/wifilt"
+    "local-trx:$STATION_HOME/.config/local-trx"
+    "nm-connections:/etc/NetworkManager/system-connections"
+  )
+fi
+# sources of the backup details: file|path.in.json
+META_CALL="$STATION_HOME/.config/wifilt/js8-config.json|js8.modems.js8call.myCall"
+META_GRID="$STATION_HOME/.config/wifilt/js8-config.json|js8.modems.js8call.grid"
+META_APRS="$STATION_HOME/.config/wifilt/js8-config.json|js8.aprsis.call"
+META_RADIO="$STATION_HOME/.config/local-trx/config.json|identity.radioName"
+[ -r "$OI3_STATE" ] || OI3_STATE="$STATION_HOME/.local/state/oi3/flashed"
+
+# --- helpers -------------------------------------------------------------------
+ASSUME_YES=0
+NO_REBOOT=0
+
+die()  { echo "ERROR: $*" >&2; exit 1; }
+info() { echo "==> $*"; }
+warn() { echo "WARNING: $*" >&2; }
+
+has_tty() { (exec </dev/tty) 2>/dev/null; }
+
+# ask "question" default(y|n) -- 0 for yes; without a terminal or with -y the default applies
+ask() {
+  local q=$1 def=$2 ans hint
+  [ "$def" = y ] && hint="[Y/n]" || hint="[y/N]"
+  if [ "$ASSUME_YES" = 1 ] || ! has_tty; then
+    [ "$def" = y ]; return
+  fi
+  read -r -p "$q $hint " ans </dev/tty || ans=""
+  ans=${ans,,}
+  [ -z "$ans" ] && ans=$def
+  [[ "$ans" == y* ]]
+}
+
+locked_now()  { [ "$(findmnt -no FSTYPE /)" = overlay ]; }
+locked_conf() { grep -q 'overlayroot=tmpfs' "$CMDLINE"; }
+data_mounted() { mountpoint -q "$DATA_MNT"; }
+
+# the fstab that applies to the next boot (locked: /etc/fstab is overlayroot's
+# copy in RAM, the real one is on the original root)
+real_fstab() { locked_now && echo "$ROOT_RO/etc/fstab" || echo /etc/fstab; }
+
+boot_ro_conf() {
+  awk -v mp="$BOOT_MP" '$0 !~ /^[[:space:]]*#/ && $2==mp {print $4}' "$(real_fstab)" \
+    | grep -E '(^|,)ro(,|$)' >/dev/null
+}
+
+is_ro_mount() { findmnt -no OPTIONS "$1" | grep -E '(^|,)ro(,|$)' >/dev/null; }
+
+# run_rw mountpoint command... -- temporarily remount the mountpoint writable
+run_rw() {
+  local mp=$1; shift
+  local was_ro=0 rc=0
+  if is_ro_mount "$mp"; then
+    mount -o remount,rw "$mp" || die "cannot remount $mp for writing"
+    was_ro=1
+  fi
+  "$@" || rc=$?
+  sync
+  if [ $was_ro = 1 ]; then
+    mount -o remount,ro "$mp" || warn "cannot return $mp to read-only"
+  fi
+  return $rc
+}
+
+# set_boot_ro fstab_file on|off
+set_boot_ro() {
+  local f=$1 mode=$2
+  awk -v mp="$BOOT_MP" -v mode="$mode" '
+    BEGIN { OFS="\t" }
+    $0 !~ /^[[:space:]]*#/ && $2==mp {
+      n=split($4, o, ","); s=""
+      for (i=1; i<=n; i++) { if (o[i]=="ro" || o[i]=="rw") continue; s = s (s ? "," : "") o[i] }
+      if (mode=="on") s = s (s ? "," : "") "ro"
+      if (s=="") s="defaults"
+      $4=s
+    }
+    { print }' "$f" > "$f.fslock.tmp"
+  cat "$f.fslock.tmp" > "$f"
+  rm -f "$f.fslock.tmp"
+}
+
+cmdline_add() {
+  grep -q 'overlayroot=' "$CMDLINE" || sed -i "1s/^/$OVL_PARAM /" "$CMDLINE"
+}
+cmdline_del() {
+  sed -i -E '1s/(^| )overlayroot=[^ ]*//g; 1s/^ +//' "$CMDLINE"
+}
+
+json_get() { # file|path
+  local f=${1%%|*} p=${1#*|}
+  [ -r "$f" ] || return 0
+  python3 - "$f" "$p" <<'EOF' 2>/dev/null || true
+import json, sys
+d = json.load(open(sys.argv[1]))
+for k in sys.argv[2].split("."):
+    d = d[k]
+print(d)
+EOF
+}
+
+# replace a path on the data card with its equivalent under directory $1 (details from a backup)
+remap() { # root file|path
+  local root=$1 spec=$2 f=${2%%|*} p=${2#*|} e name target
+  for e in "${DATA_MAP[@]}"; do
+    name=${e%%:*}; target=${e#*:}
+    if [[ "$f" == "$target"/* ]]; then
+      echo "$root/$name/${f#"$target"/}|$p"; return
+    fi
+  done
+  echo "$spec"
+}
+
+# collect_meta data_root reason -> META on stdout
+# data_root: a directory with subdirectories named as in DATA_MAP
+collect_meta() {
+  local root=$1 reason=$2 src ssids files size last wifilt oi3
+  if data_mounted; then
+    src="usb $(findmnt -no SOURCE "$DATA_MNT") UUID=$(findmnt -no UUID "$DATA_MNT")"
+  else
+    src="sd-copy (data card not mounted)"
+  fi
+  ssids=$(grep -lE '^mode=infrastructure|^type=wifi' "$root"/nm-connections/*.nmconnection 2>/dev/null \
+          | xargs -r grep -L '^mode=ap' 2>/dev/null \
+          | xargs -r grep -h '^ssid=' 2>/dev/null | cut -d= -f2- | sort -u | paste -sd, - || true)
+  files=$(find "$root" -type f | wc -l)
+  size=$(du -sh "$root" 2>/dev/null | cut -f1)
+  last=$(find "$root" -type f -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f1)
+  [ -n "$last" ] && last=$(date -d "@${last%.*}" '+%Y-%m-%d %H:%M:%S')
+  wifilt=$(cat "$WIFILT_VERSION_FILE" 2>/dev/null || true)
+  oi3=$(awk '{printf "oi3 %s, board %s, fw %s", substr($1,1,7), $3, $4}' "$OI3_STATE" 2>/dev/null || true)
+  cat <<EOF
+CREATED=$(date -Iseconds)
+NTP_SYNC=$(timedatectl show -p NTPSynchronized --value 2>/dev/null || echo ?)
+REASON=$reason
+HOST=$(hostname)
+MYCALL=$(json_get "$(remap "$root" "$META_CALL")")
+GRID=$(json_get "$(remap "$root" "$META_GRID")")
+APRS_CALL=$(json_get "$(remap "$root" "$META_APRS")")
+RADIO=$(json_get "$(remap "$root" "$META_RADIO")")
+WIFI=$ssids
+LAST_CHANGE=$last
+FILES=$files
+SIZE=$size
+WIFILT=$wifilt
+OI3=$oi3
+SOURCE=$src
+KERNEL=$(uname -r)
+EOF
+}
+
+meta_val() { grep -m1 "^$2=" "$1" 2>/dev/null | cut -d= -f2- || true; }
+
+# stage_live dir -- copy the current data (what the targets show right now)
+stage_live() {
+  local dst=$1 e name target
+  for e in "${DATA_MAP[@]}"; do
+    name=${e%%:*}; target=${e#*:}
+    mkdir -p "$dst/$name"
+    [ -d "$target" ] && cp -a "$target/." "$dst/$name/"
+  done
+}
+
+# --- backup --------------------------------------------------------------------
+make_backup() { # reason
+  local reason=$1 tmp call ts name
+  locked_now && die "the system is locked -- a backup would end up in RAM. First: fslock unlock"
+  install -d -m 700 "$BACKUP_DIR"
+  tmp=$(mktemp -d)
+  stage_live "$tmp/data"
+  collect_meta "$tmp/data" "$reason" > "$tmp/META"
+  call=$(meta_val "$tmp/META" MYCALL | tr -cd 'A-Za-z0-9-')
+  ts=$(date +%Y%m%d-%H%M%S)
+  name="fslock-$ts-${call:-NOCALL}"
+  tar --numeric-owner -czf "$BACKUP_DIR/$name.tar.gz" -C "$tmp" META data
+  cp "$tmp/META" "$BACKUP_DIR/$name.meta"
+  chmod 600 "$BACKUP_DIR/$name".*
+  rm -rf "$tmp"
+  sync
+  info "Backup: $BACKUP_DIR/$name.tar.gz"
+  # drop old ones
+  ls -1t "$BACKUP_DIR"/fslock-*.tar.gz 2>/dev/null | tail -n +$((KEEP + 1)) | while read -r old; do
+    rm -f "$old" "${old%.tar.gz}.meta"
+  done
+}
+
+backups() { ls -1t "$BACKUP_DIR"/fslock-*.tar.gz 2>/dev/null || true; }
+
+meta_line() { # file.meta
+  local m=$1 c
+  c=$(meta_val "$m" CREATED); c=${c%%+*}; c=${c/T/ }
+  printf '%s  %-9s %-7s %-9s data from: %s  Wi-Fi: %s' \
+    "${c:0:16}" "$(meta_val "$m" MYCALL)" "$(meta_val "$m" GRID)" "($(meta_val "$m" REASON))" \
+    "$(meta_val "$m" LAST_CHANGE)" "$(meta_val "$m" WIFI)"
+  [ "$(meta_val "$m" NTP_SYNC)" = yes ] || printf '  [clock not synchronised]'
+  echo
+}
+
+meta_detail() { # file.meta
+  local m=$1
+  printf '    Created:      %s (NTP: %s), reason: %s\n' "$(meta_val "$m" CREATED)" "$(meta_val "$m" NTP_SYNC)" "$(meta_val "$m" REASON)"
+  printf '    Station:      %s  %s  APRS %s  TRX %s\n' "$(meta_val "$m" MYCALL)" "$(meta_val "$m" GRID)" "$(meta_val "$m" APRS_CALL)" "$(meta_val "$m" RADIO)"
+  printf '    Last change:  %s  (%s files, %s)\n' "$(meta_val "$m" LAST_CHANGE)" "$(meta_val "$m" FILES)" "$(meta_val "$m" SIZE)"
+  printf '    Wi-Fi:        %s\n' "$(meta_val "$m" WIFI)"
+  printf '    WIFILT:       %s\n' "$(meta_val "$m" WIFILT)"
+  printf '    OI3:          %s\n' "$(meta_val "$m" OI3)"
+  printf '    Source:       %s  (host %s, kernel %s)\n' "$(meta_val "$m" SOURCE)" "$(meta_val "$m" HOST)" "$(meta_val "$m" KERNEL)"
+}
+
+meta_of() { # backup.tar.gz -> path to .meta (extracted from the archive if missing)
+  local b=$1 m=${1%.tar.gz}.meta
+  if [ ! -r "$m" ]; then
+    m=$(mktemp); tar -xzf "$b" -O META > "$m" 2>/dev/null || true
+  fi
+  echo "$m"
+}
+
+cmd_list() {
+  local i=0 b
+  mapfile -t list < <(backups)
+  if [ ${#list[@]} -eq 0 ]; then echo "No backups in $BACKUP_DIR."; return 1; fi
+  for b in "${list[@]}"; do
+    i=$((i + 1))
+    printf ' [%d] ' "$i"; meta_line "$(meta_of "$b")"
+  done
+}
+
+show_current() {
+  local tmp
+  tmp=$(mktemp -d); stage_live "$tmp/data"
+  collect_meta "$tmp/data" current > "$tmp/META"
+  echo "Current data ($(data_mounted && echo 'data card' || echo 'SD -- data card not mounted')):"
+  meta_detail "$tmp/META" | grep -vE 'Created|WIFILT|OI3'
+  rm -rf "$tmp"
+}
+
+# pick_backup [N|file] -> path (empty = none)
+pick_backup() {
+  local sel=${1:-} n
+  mapfile -t list < <(backups)
+  [ ${#list[@]} -gt 0 ] || return 0
+  if [ -z "$sel" ]; then
+    echo >&2
+    echo "Backups (newest first):" >&2
+    cmd_list >&2 || true
+    echo >&2
+    if [ "$ASSUME_YES" = 1 ] || ! has_tty; then return 0; fi
+    read -r -p "Restore a backup? Its number, Enter = no: " sel </dev/tty || sel=""
+    [ -n "$sel" ] || return 0
+  fi
+  if [[ "$sel" =~ ^[0-9]+$ ]]; then
+    n=$sel
+    [ "$n" -ge 1 ] && [ "$n" -le ${#list[@]} ] || die "invalid number: $sel"
+    echo "${list[$((n - 1))]}"
+  else
+    [ -r "$sel" ] || die "file not found: $sel"
+    echo "$sel"
+  fi
+}
+
+restore_backup() { # backup.tar.gz
+  local b=$1 tmp e name target pre
+  tar -tzf "$b" META >/dev/null 2>&1 || die "damaged archive: $b"
+  echo
+  echo "Restoring: $(basename "$b")"
+  meta_detail "$(meta_of "$b")"
+  echo
+  ask "Really overwrite the current data with this backup?" n || { echo "Restore cancelled."; return 0; }
+
+  # safety net: the current state goes to the data card (writable even when locked)
+  if data_mounted; then
+    pre="$DATA_MNT/.fslock"
+    install -d -m 700 "$pre"
+    tmp=$(mktemp -d); stage_live "$tmp/data"
+    collect_meta "$tmp/data" pre-restore > "$tmp/META"
+    tar --numeric-owner -czf "$pre/pre-restore-$(date +%Y%m%d-%H%M%S).tar.gz" -C "$tmp" META data
+    rm -rf "$tmp"
+    ls -1t "$pre"/pre-restore-*.tar.gz | tail -n +4 | xargs -r rm -f
+    info "Previous state saved to $pre/"
+  fi
+
+  tmp=$(mktemp -d)
+  tar --numeric-owner -xzf "$b" -C "$tmp"
+  info "Stopping services: ${SERVICES[*]}"
+  systemctl stop "${SERVICES[@]}" 2>/dev/null || true
+  for e in "${DATA_MAP[@]}"; do
+    name=${e%%:*}; target=${e#*:}
+    if [ -d "$tmp/data/$name" ]; then
+      mkdir -p "$target"
+      rsync -aHAX --delete "$tmp/data/$name/" "$target/"
+    else
+      warn "the backup has no $name -- left unchanged"
+    fi
+  done
+  rm -rf "$tmp"
+  sync
+  nmcli connection reload 2>/dev/null || true
+  info "Starting services"
+  systemctl start "${SERVICES[@]}" 2>/dev/null || true
+  info "Restore done."
+}
+
+# copy the data from the card to the fallback directories on the SD card (under
+# the bind mounts), so the station starts with the last settings without the card
+sync_fallback() {
+  local tmp e target
+  data_mounted || { warn "the data card is not mounted -- the fallback copy on the SD card stays as it is"; return 0; }
+  locked_now && return 0
+  tmp=$(mktemp -d)
+  mount --bind / "$tmp"
+  for e in "${DATA_MAP[@]}"; do
+    target=${e#*:}
+    mountpoint -q "$target" || continue
+    mkdir -p "$tmp$target"
+    rsync -aHAX --delete "$target/" "$tmp$target/"
+  done
+  sync
+  umount "$tmp"; rmdir "$tmp"
+  info "Fallback copy of the settings on the SD card updated."
+}
+
+check_initramfs() {
+  local f
+  case "$(uname -r)" in
+    *2712*) f=$BOOT_MP/initramfs_2712 ;;
+    *v8*)   f=$BOOT_MP/initramfs8 ;;
+    *v7l*)  f=$BOOT_MP/initramfs7l ;;
+    *v7*)   f=$BOOT_MP/initramfs7 ;;
+    *)      f=$BOOT_MP/initramfs ;;
+  esac
+  dpkg -s overlayroot >/dev/null 2>&1 || die "the overlayroot package is missing (sudo apt install overlayroot)"
+  [ -r "$f" ] || die "$f is missing"
+  lsinitramfs "$f" 2>/dev/null | grep 'scripts/init-bottom/overlayroot' >/dev/null \
+    || die "$f does not contain overlayroot (sudo update-initramfs -u)"
+}
+
+do_reboot() {
+  if [ "$NO_REBOOT" = 1 ]; then echo "The change applies after a reboot."; return; fi
+  if ask "Reboot now?" y; then
+    info "Rebooting..."; sync; systemctl reboot
+  else
+    echo "The change applies after a reboot (sudo reboot)."
+  fi
+}
+
+# --- commands ------------------------------------------------------------------
+cmd_status() {
+  local s c
+  if locked_now; then s="LOCKED (root in RAM, changes are dropped at reboot)"; else s="UNLOCKED (root writable)"; fi
+  if locked_conf; then c="locked"; else c="unlocked"; fi
+  echo "Now:               $s"
+  echo "After reboot:      $c$(locked_now && ! locked_conf && echo '  <- waiting for a reboot')$(! locked_now && locked_conf && echo '  <- waiting for a reboot')"
+  echo "/boot/firmware:    $(is_ro_mount $BOOT_MP && echo 'read-only' || echo writable) (after reboot: $(boot_ro_conf && echo 'read-only' || echo writable))"
+  if data_mounted; then
+    echo "Data card:         $DATA_MNT ($(findmnt -no SOURCE "$DATA_MNT"), $(df -h --output=used,size "$DATA_MNT" | tail -1 | awk '{print $1 " of " $2}'))"
+  else
+    echo "Data card:         NOT MOUNTED -- services run with the fallback copy on the SD card"
+  fi
+  local e target
+  for e in "${DATA_MAP[@]}"; do
+    target=${e#*:}
+    printf '  %-42s %s\n' "$target" "$(mountpoint -q "$target" && echo 'on card' || echo 'SD (fallback copy)')"
+  done
+  local last; last=$(backups | head -1)
+  if [ -n "$last" ]; then
+    printf 'Last backup:       '; meta_line "$(meta_of "$last")"
+  else
+    echo "Last backup:       none"
+  fi
+}
+
+cmd_lock() {
+  if locked_now; then
+    if locked_conf; then echo "The system is already locked."; return 0; fi
+    echo "The system runs locked, but is set to unlock at the next boot. Locking again:"
+    run_rw "$BOOT_MP" cmdline_add
+    echo "Done -- it stays locked after a reboot too."
+    return 0
+  fi
+  if locked_conf; then
+    echo "Locking is already set, waiting for a reboot."
+    do_reboot; return 0
+  fi
+  check_initramfs
+  if ! data_mounted; then
+    warn "the data card $DATA_MNT is not mounted. While locked, settings changes will not be kept."
+    ask "Lock anyway?" n || exit 1
+  fi
+  make_backup lock
+  sync_fallback
+  info "/boot/firmware becomes read-only after the reboot"
+  set_boot_ro /etc/fstab on
+  info "Enabling the overlay ($OVL_PARAM)"
+  run_rw "$BOOT_MP" cmdline_add
+  sync
+  echo "Lock set."
+  do_reboot
+}
+
+cmd_unlock() {
+  if ! locked_now; then
+    if locked_conf; then
+      info "Cancelling the pending (not yet active) lock"
+      run_rw "$BOOT_MP" cmdline_del
+      set_boot_ro /etc/fstab off
+      echo "Done -- the system stays unlocked, no reboot needed."
+    else
+      echo "The system is not locked."
+    fi
+    return 0
+  fi
+
+  # restore a backup
+  echo
+  show_current
+  local b
+  if data_mounted || [ -n "${1:-}" ]; then
+    b=$(pick_backup "${1:-}")
+    if [ -n "$b" ]; then
+      if data_mounted; then
+        restore_backup "$b"
+      else
+        warn "the data card is not mounted -- a restore would end up in RAM. After the reboot: sudo fslock restore"
+      fi
+    fi
+  else
+    warn "the data card is not mounted -- restore after the reboot if needed: sudo fslock restore"
+  fi
+
+  info "Disabling the overlay"
+  run_rw "$BOOT_MP" cmdline_del
+  info "/boot/firmware becomes writable after the reboot"
+  run_rw "$ROOT_RO" set_boot_ro "$ROOT_RO/etc/fstab" off
+  sync
+  echo "Unlock set. After the reboot: upgrade, then 'sudo fslock lock' again."
+  do_reboot
+}
+
+cmd_restore() {
+  local b
+  b=$(pick_backup "${1:-}")
+  [ -n "$b" ] || { echo "Nothing restored."; return 0; }
+  if locked_now && ! data_mounted; then
+    die "the system is locked and the data card is missing -- a restore would end up in RAM"
+  fi
+  restore_backup "$b"
+  if ! locked_now && data_mounted; then sync_fallback; fi
+}
+
+# --- main ----------------------------------------------------------------------
+[ "$(id -u)" -eq 0 ] || exec sudo -- "$0" "$@"
+
+args=()
+for a in "$@"; do
+  case "$a" in
+    -y|--yes)    ASSUME_YES=1 ;;
+    --no-reboot) NO_REBOOT=1 ;;
+    -h|--help)   sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
+    *)           args+=("$a") ;;
+  esac
+done
+set -- "${args[@]+"${args[@]}"}"
+
+case "${1:-status}" in
+  status)  cmd_status ;;
+  lock)    cmd_lock ;;
+  unlock)  shift; cmd_unlock "${1:-}" ;;
+  backup)  make_backup manual ;;
+  list)    cmd_list ;;
+  restore) shift; cmd_restore "${1:-}" ;;
+  *)       die "unknown command: $1 (fslock --help)" ;;
+esac

@@ -1,0 +1,511 @@
+#!/usr/bin/env python3
+#
+# wifi-fallback -- Wi-Fi with a fallback access point and a setup portal.
+#
+# After boot it waits BOOT_WAIT s for NetworkManager to connect wlan0 to a
+# known network. If that does not happen, it scans and tries the known networks
+# that are in range, by priority. If none connects, it starts its own access
+# point with DHCP/DNS (dnsmasq) and a captive portal: a phone or laptop that
+# joins it opens a page by itself where Wi-Fi networks can be added or removed.
+# After saving, the access point goes down and the known networks are tried
+# again. Without a connected client the access point does that by itself every
+# RETRY_IDLE s (e.g. the router boots slower than the Pi after a power cut).
+# The same happens when Wi-Fi is lost for more than LOST_WAIT s during operation.
+#
+# The portal runs on PORTAL_ADDR:80 (DNS on the access point sends every name
+# there); WIFILT stays reachable on AP_ADDR:80. Settings: /etc/default/wifi-fallback
+#
+# Installed by pi-setup (WIFILT for Raspberry Pi); runs as the systemd service
+# wifi-fallback.
+
+import html
+import ipaddress
+import os
+import signal
+import socket
+import subprocess
+import threading
+import time
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+CONF_FILE = "/etc/default/wifi-fallback"
+DEFAULTS = {
+    "IFACE": "wlan0",
+    "AP_SSID": "",            # empty = WIFILT-setup-<end of MAC>
+    "AP_PSK": "",             # empty = open access point
+    "AP_CHANNEL": "6",
+    "AP_ADDR": "192.168.4.1",
+    "PORTAL_ADDR": "192.168.4.2",
+    "PORTAL_PORT": "8090",
+    "BOOT_WAIT": "40",
+    "LOST_WAIT": "120",
+    "RETRY_IDLE": "300",
+}
+AP_CON = "wifi-fallback-ap"
+RUN_DIR = "/run/wifi-fallback"
+NFT_TABLE = "wifi_fallback"
+
+STOP = threading.Event()    # SIGTERM
+APPLY = threading.Event()   # portal: saved, try the known networks
+SCAN = []                   # last scan [(ssid, signal, security)]
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+def load_conf():
+    conf = dict(DEFAULTS)
+    try:
+        with open(CONF_FILE) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                conf[key.strip()] = val.strip().strip("\"'")
+    except FileNotFoundError:
+        pass
+    for key in ("PORTAL_PORT", "BOOT_WAIT", "LOST_WAIT", "RETRY_IDLE"):
+        conf[key] = int(conf[key])
+    if not conf["AP_SSID"]:
+        try:
+            with open(f"/sys/class/net/{conf['IFACE']}/address") as f:
+                mac = f.read().strip().replace(":", "")
+        except OSError:
+            mac = "0000"
+        conf["AP_SSID"] = f"WIFILT-setup-{mac[-4:].upper()}"
+    return conf
+
+
+# --- NetworkManager --------------------------------------------------------
+
+def nmcli(*args, check=True, timeout=60):
+    r = subprocess.run(["nmcli", *args], capture_output=True, text=True, timeout=timeout)
+    if check and r.returncode != 0:
+        raise RuntimeError(r.stderr.strip() or f"nmcli {' '.join(args[:2])} failed")
+    return r.stdout
+
+
+def split_terse(line):
+    """A line from `nmcli -t`: fields separated by ':', escaped '\\:' inside."""
+    parts, cur, esc = [], "", False
+    for ch in line:
+        if esc:
+            cur += ch
+            esc = False
+        elif ch == "\\":
+            esc = True
+        elif ch == ":":
+            parts.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    parts.append(cur)
+    return parts
+
+
+def known_networks():
+    """Saved Wi-Fi profiles (client, not our access point), highest priority first."""
+    nets = []
+    for line in nmcli("-t", "-f", "NAME,UUID,TYPE", "connection", "show").splitlines():
+        name, uuid, ctype = (split_terse(line) + ["", "", ""])[:3]
+        if ctype != "802-11-wireless" or name == AP_CON:
+            continue
+        ssid, mode, prio, hidden = (nmcli(
+            "-g", "802-11-wireless.ssid,802-11-wireless.mode,"
+                  "connection.autoconnect-priority,802-11-wireless.hidden",
+            "connection", "show", "uuid", uuid).split("\n") + ["", "", "", ""])[:4]
+        if mode not in ("", "infrastructure"):
+            continue
+        nets.append({"name": name, "uuid": uuid, "ssid": ssid.replace("\\:", ":"),
+                     "prio": int(prio or 0), "hidden": hidden == "yes"})
+    nets.sort(key=lambda n: -n["prio"])
+    return nets
+
+
+def device_state(iface):
+    """(state, connection name) of the device according to `nmcli device`."""
+    for line in nmcli("-t", "-f", "DEVICE,STATE,CONNECTION", "device").splitlines():
+        dev, state, con = (split_terse(line) + ["", "", ""])[:3]
+        if dev == iface:
+            return state, con
+    return "", ""
+
+
+def wifi_connected(iface):
+    state, con = device_state(iface)
+    return state == "connected" and con != AP_CON
+
+
+def wait_connected(iface, seconds):
+    end = time.monotonic() + seconds
+    while not STOP.is_set():
+        if wifi_connected(iface):
+            return True
+        if time.monotonic() >= end:
+            return False
+        STOP.wait(2)
+    return False
+
+
+def scan(iface):
+    """Scan the surroundings; right after the access point goes down NM needs a moment."""
+    global SCAN
+    for _ in range(5):
+        out = nmcli("-t", "-f", "SSID,SIGNAL,SECURITY", "device", "wifi", "list",
+                    "ifname", iface, "--rescan", "yes", check=False)
+        best = {}
+        for line in out.splitlines():
+            ssid, signal_, sec = (split_terse(line) + ["", "", ""])[:3]
+            if ssid and int(signal_ or 0) > best.get(ssid, (0, ""))[0]:
+                best[ssid] = (int(signal_ or 0), sec)
+        if best:
+            SCAN = sorted(((s, sig, sec) for s, (sig, sec) in best.items()),
+                          key=lambda x: -x[1])
+            return SCAN
+        if STOP.wait(3):
+            break
+    return SCAN
+
+
+def try_known(conf):
+    """Scan and try the known networks in range, by priority."""
+    iface = conf["IFACE"]
+    known = known_networks()
+    log("scanning...")
+    visible = {s for s, _, _ in scan(iface)}
+    log(f"{len(visible)} networks in range, {len(known)} saved")
+    # after the access point goes down NM often connects by itself before we do
+    if wait_connected(iface, 5):
+        return True
+    for net in known:
+        if STOP.is_set():
+            return False
+        if net["ssid"] not in visible and not net["hidden"]:
+            continue
+        log(f"connecting to \"{net['ssid']}\"...")
+        r = subprocess.run(["nmcli", "--wait", "30", "connection", "up", "uuid",
+                            net["uuid"], "ifname", iface],
+                           capture_output=True, text=True, timeout=60)
+        if r.returncode == 0 and wifi_connected(iface):
+            log(f"connected to \"{net['ssid']}\"")
+            return True
+        log(f"\"{net['ssid']}\": {r.stderr.strip() or 'not connected'}")
+    return False
+
+
+def add_network(iface, ssid, psk, prio, hidden):
+    """Add a network; for an SSID already saved change its priority (and password, if given)."""
+    if not 1 <= len(ssid.encode()) <= 32:
+        raise ValueError("an SSID has 1 to 32 bytes")
+    if psk and not (8 <= len(psk) <= 63 or
+                    (len(psk) == 64 and all(c in "0123456789abcdefABCDEF" for c in psk))):
+        raise ValueError("a password has 8 to 63 characters")
+    args = ["connection.autoconnect", "yes",
+            "connection.autoconnect-priority", str(prio),
+            "802-11-wireless.hidden", "yes" if hidden else "no"]
+    if psk:
+        args += ["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", psk]
+    for net in known_networks():
+        if net["ssid"] == ssid:
+            nmcli("connection", "modify", "uuid", net["uuid"], *args)
+            return
+    nmcli("connection", "add", "type", "wifi", "ifname", iface,
+          "con-name", f"wifi-{ssid}", "ssid", ssid, *args)
+
+
+def delete_network(uuid):
+    if uuid not in {n["uuid"] for n in known_networks()}:
+        raise ValueError("unknown network")
+    nmcli("connection", "delete", "uuid", uuid)
+
+
+def ensure_ap_profile(conf):
+    """The access point profile is always recreated from the current settings."""
+    nmcli("connection", "delete", AP_CON, check=False)
+    args = ["connection", "add", "type", "wifi", "ifname", conf["IFACE"],
+            "con-name", AP_CON, "ssid", conf["AP_SSID"],
+            "connection.autoconnect", "no",
+            "802-11-wireless.mode", "ap", "802-11-wireless.band", "bg",
+            "802-11-wireless.channel", conf["AP_CHANNEL"],
+            "ipv4.method", "manual",
+            "ipv4.addresses", f"{conf['AP_ADDR']}/24,{conf['PORTAL_ADDR']}/24",
+            "ipv6.method", "disabled"]
+    if conf["AP_PSK"]:
+        # brcmfmac (Raspberry Pi) is reliable in AP mode only with WPA2/CCMP
+        args += ["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", conf["AP_PSK"],
+                 "wifi-sec.proto", "rsn", "wifi-sec.pairwise", "ccmp",
+                 "wifi-sec.group", "ccmp"]
+    nmcli(*args)
+
+
+# --- access point mode -----------------------------------------------------
+
+def nft(script, check=True):
+    r = subprocess.run(["nft", "-f", "-"], input=script, capture_output=True, text=True)
+    if check and r.returncode != 0:
+        raise RuntimeError(f"nft: {r.stderr.strip()}")
+
+
+def nft_up(conf):
+    # HTTP to PORTAL_ADDR -> portal; the portal is reachable from the access point only
+    nft(f"""
+table ip {NFT_TABLE} {{
+  chain prerouting {{
+    type nat hook prerouting priority dstnat; policy accept;
+    iifname "{conf['IFACE']}" ip daddr {conf['PORTAL_ADDR']} tcp dport 80 redirect to :{conf['PORTAL_PORT']}
+  }}
+  chain input {{
+    type filter hook input priority filter; policy accept;
+    iifname != "{conf['IFACE']}" tcp dport {conf['PORTAL_PORT']} drop
+  }}
+}}
+""")
+
+
+def nft_down():
+    nft(f"delete table ip {NFT_TABLE}\n", check=False)
+
+
+def start_dnsmasq(conf):
+    net = ipaddress.ip_network(f"{conf['AP_ADDR']}/24", strict=False)
+    os.makedirs(RUN_DIR, exist_ok=True)
+    return subprocess.Popen([
+        "dnsmasq", "--keep-in-foreground", "--conf-file=/dev/null",
+        "--no-resolv", "--no-hosts", "--leasefile-ro", "--log-facility=-",
+        f"--pid-file={RUN_DIR}/dnsmasq.pid",
+        "--bind-interfaces", f"--interface={conf['IFACE']}", "--except-interface=lo",
+        f"--dhcp-range={net[10]},{net[100]},255.255.255.0,10m",
+        "--dhcp-authoritative",
+        f"--dhcp-option=option:router,{conf['AP_ADDR']}",
+        f"--dhcp-option=option:dns-server,{conf['AP_ADDR']}",
+        # RFC 8910 -- newer phones open the portal straight from DHCP
+        f"--dhcp-option=114,http://{conf['PORTAL_ADDR']}/",
+        # captive DNS: every name -> portal
+        f"--address=/#/{conf['PORTAL_ADDR']}",
+    ])
+
+
+def stations(iface):
+    r = subprocess.run(["iw", "dev", iface, "station", "dump"],
+                       capture_output=True, text=True)
+    return sum(1 for line in r.stdout.splitlines() if line.startswith("Station"))
+
+
+def ap_mode(conf):
+    """Runs until the portal saves changes, the access point has had no client
+    for RETRY_IDLE s (and networks are saved), or SIGTERM arrives."""
+    iface = conf["IFACE"]
+    log(f"starting access point \"{conf['AP_SSID']}\", portal http://{conf['PORTAL_ADDR']}/")
+    dnsmasq = server = None
+    APPLY.clear()
+    try:
+        nmcli("--wait", "30", "connection", "up", AP_CON, timeout=60)
+        nft_up(conf)
+        dnsmasq = start_dnsmasq(conf)
+        server = ThreadingHTTPServer((conf["AP_ADDR"], conf["PORTAL_PORT"]), make_handler(conf))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        idle_since = time.monotonic()
+        while not STOP.is_set():
+            if APPLY.wait(5):
+                log("portal: new settings, trying the known networks")
+                break
+            if dnsmasq.poll() is not None:
+                raise RuntimeError(f"dnsmasq exited (code {dnsmasq.returncode})")
+            if stations(iface):
+                idle_since = time.monotonic()
+            elif time.monotonic() - idle_since >= conf["RETRY_IDLE"]:
+                if known_networks():
+                    log("access point without a client, trying the known networks again")
+                    break
+                idle_since = time.monotonic()
+    finally:
+        if server:
+            server.shutdown()
+            server.server_close()
+        if dnsmasq and dnsmasq.poll() is None:
+            dnsmasq.terminate()
+            dnsmasq.wait(10)
+        nft_down()
+        nmcli("connection", "down", AP_CON, check=False)
+
+
+def fallback_cycle(conf):
+    """Alternate between the known networks and the access point until connected."""
+    while not STOP.is_set():
+        if try_known(conf):
+            return
+        try:
+            ap_mode(conf)
+        except Exception as e:
+            log(f"ACCESS POINT ERROR: {e}")
+            STOP.wait(30)
+
+
+# --- portal ----------------------------------------------------------------
+
+PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WIFILT - Wi-Fi</title>
+<style>
+body{{font-family:system-ui,sans-serif;margin:0;padding:16px;background:#f4f5f7;color:#222}}
+main{{max-width:520px;margin:auto}}
+h1{{font-size:1.3em}} h2{{font-size:1.05em;margin-top:1.6em}}
+.card{{background:#fff;border-radius:8px;padding:12px 14px;box-shadow:0 1px 3px #0002}}
+table{{width:100%;border-collapse:collapse}} td{{padding:6px 4px;border-bottom:1px solid #eee}}
+input[type=text],input[type=password],input[type=number]{{width:100%;box-sizing:border-box;padding:8px;font-size:1em;margin:4px 0 10px}}
+button{{padding:8px 14px;font-size:1em;border:0;border-radius:6px;background:#2563eb;color:#fff}}
+button.del{{background:#dc2626;padding:4px 10px}}
+button.big{{width:100%;padding:12px;background:#16a34a}}
+.scan{{cursor:pointer}} .scan:hover{{background:#eef}}
+.msg{{padding:10px;border-radius:6px;background:#fee2e2;margin-bottom:12px}}
+.muted{{color:#777;font-size:.9em}}
+</style></head><body><main>
+<h1>Wi-Fi setup - {host}</h1>
+{msg}
+<h2>Saved networks <span class="muted">(higher priority wins)</span></h2>
+<div class="card"><table>{known}</table></div>
+<h2>Add / change a network</h2>
+<form class="card" method="post" action="/add">
+<label>SSID<input type="text" name="ssid" id="ssid" required maxlength="32"></label>
+<label>Password <span class="muted">(empty = open network; for a saved network keeps the old one)</span>
+<input type="password" name="psk" maxlength="64"></label>
+<label>Priority<input type="number" name="prio" value="0" min="-999" max="999"></label>
+<label><input type="checkbox" name="hidden"> hidden network</label><br><br>
+<button>Save</button>
+</form>
+<h2>Networks in range <span class="muted">(scanned before the access point started; tap to fill in the SSID)</span></h2>
+<div class="card"><table>{scan}</table></div>
+<h2>Done</h2>
+<form method="post" action="/apply"><button class="big">Stop the access point and connect</button></form>
+<p class="muted">If no saved network connects, the access point "{ap}" comes back after a while.
+WIFILT is also available in access point mode at <a href="http://{ap_addr}/">http://{ap_addr}/</a>.</p>
+</main>
+<script>
+document.querySelectorAll('.scan').forEach(function(r){{r.onclick=function(){{
+document.getElementById('ssid').value=r.dataset.ssid;document.getElementById('ssid').focus();}}}});
+</script></body></html>"""
+
+APPLIED = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>WIFILT - Wi-Fi</title></head>
+<body style="font-family:system-ui,sans-serif;padding:16px">
+<h1>Switching...</h1>
+<p>The access point goes down and {host} tries the saved networks.
+Join the same network and open <b>http://{host}.local/</b>.</p>
+<p>If it does not connect, the access point "{ap}" comes back.</p></body></html>"""
+
+
+def make_handler(conf):
+    host = socket.gethostname()
+    portal_hosts = {conf["PORTAL_ADDR"], conf["AP_ADDR"],
+                    f"{conf['AP_ADDR']}:{conf['PORTAL_PORT']}"}
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):
+            pass
+
+        def send(self, code, body="", headers=()):
+            data = body.encode()
+            self.send_response(code)
+            for k, v in headers:
+                self.send_header(k, v)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def redirect(self, query=""):
+            self.send(302 if self.command == "GET" else 303, "",
+                      [("Location", f"http://{conf['PORTAL_ADDR']}/{query}")])
+
+        def page(self, msg=""):
+            e = html.escape
+            try:
+                rows = "".join(
+                    f"<tr><td>{e(n['ssid'])}{' <span class=muted>(hidden)</span>' if n['hidden'] else ''}</td>"
+                    f"<td class=muted>{n['prio']}</td><td style='text-align:right'>"
+                    f"<form method=post action=/delete style=margin:0>"
+                    f"<input type=hidden name=uuid value='{e(n['uuid'])}'>"
+                    f"<button class=del onclick=\"return confirm('Delete this network?')\">&#x2715;</button>"
+                    f"</form></td></tr>" for n in known_networks())
+            except Exception as ex:
+                rows, msg = "", msg or str(ex)
+            scan_rows = "".join(
+                f"<tr class=scan data-ssid='{e(s)}'><td>{e(s)}</td>"
+                f"<td class=muted>{sig} %</td><td class=muted>{e(sec or 'open')}</td></tr>"
+                for s, sig, sec in SCAN)
+            self.send(200, PAGE.format(
+                host=e(host), ap=e(conf["AP_SSID"]), ap_addr=conf["AP_ADDR"],
+                msg=f"<div class=msg>{e(msg)}</div>" if msg else "",
+                known=rows or "<tr><td class=muted>none</td></tr>",
+                scan=scan_rows or "<tr><td class=muted>nothing found</td></tr>"))
+
+        def do_GET(self):
+            # foreign names (the phone's captive portal check) -> portal
+            if self.headers.get("Host", "") not in portal_hosts:
+                return self.redirect()
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            self.page(q.get("err", [""])[0])
+
+        def do_POST(self):
+            length = min(int(self.headers.get("Content-Length") or 0), 4096)
+            form = urllib.parse.parse_qs(self.rfile.read(length).decode(errors="replace"))
+            get = lambda k: form.get(k, [""])[0]
+            try:
+                if self.path == "/add":
+                    add_network(conf["IFACE"], get("ssid").strip(), get("psk"),
+                                max(-999, min(999, int(get("prio") or 0))), bool(get("hidden")))
+                elif self.path == "/delete":
+                    delete_network(get("uuid"))
+                elif self.path == "/apply":
+                    self.send(200, APPLIED.format(host=html.escape(host),
+                                                  ap=html.escape(conf["AP_SSID"])))
+                    # let the page arrive before the access point disappears
+                    threading.Timer(2, APPLY.set).start()
+                    return
+            except Exception as ex:
+                return self.redirect("?err=" + urllib.parse.quote(str(ex)))
+            self.redirect()
+
+    return Handler
+
+
+# ---------------------------------------------------------------------------
+
+def main():
+    conf = load_conf()
+    iface = conf["IFACE"]
+    signal.signal(signal.SIGTERM, lambda *_: STOP.set())
+    signal.signal(signal.SIGINT, lambda *_: STOP.set())
+
+    # leftovers from a crash
+    nft_down()
+    ensure_ap_profile(conf)
+    log(f"{iface}: waiting up to {conf['BOOT_WAIT']} s for a known network")
+
+    # after boot the access point comes after BOOT_WAIT, during operation after LOST_WAIT
+    down_since = time.monotonic() - conf["LOST_WAIT"] + conf["BOOT_WAIT"]
+    while not STOP.is_set():
+        try:
+            if wifi_connected(iface):
+                if down_since is not None:
+                    log(f"{iface}: connected ({device_state(iface)[1]})")
+                down_since = None
+            elif down_since is None:
+                down_since = time.monotonic()
+                log(f"{iface}: disconnected, access point in {conf['LOST_WAIT']} s unless it reconnects")
+            elif time.monotonic() - down_since >= conf["LOST_WAIT"]:
+                fallback_cycle(conf)
+                down_since = None
+        except Exception as e:
+            log(f"ERROR: {e}")
+        STOP.wait(5)
+    log("stopped")
+
+
+if __name__ == "__main__":
+    main()
