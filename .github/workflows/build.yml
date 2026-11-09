@@ -54,10 +54,20 @@ jobs:
       - name: Browser-free smoke tests
         run: |
           for test in setup-spine-smoke setup-radio-contract-smoke \
-                      state-json-budget-smoke config-backup-smoke; do
+                      state-json-budget-smoke config-backup-smoke \
+                      aud1-tx-ulaw-smoke; do
             echo "--- $test"
             node "tools/$test.js"
           done
+          g++ -std=c++17 -o /tmp/web-pacer-smoke tools/web-pacer-smoke.cpp && /tmp/web-pacer-smoke
+
+      # The firmware's AUD1 TX path lifted VERBATIM out of wifilt.ino and run
+      # against the real data/wspr-tx.js: 110 s of WSPR under main-loop stalls,
+      # on both TX wires (TX_PCM16, TX_ULAW). The extraction fails loudly when
+      # the sketch changes shape -- which is only worth anything if something
+      # runs it: unrun, it sat broken from 48a0ea6 to 2026-11-09.
+      - name: Firmware TX co-simulation (sketch code, WSPR pacing)
+        run: sh prototype/js8-core-prototype/build-wspr-tx-pacing-smoke.sh
 
       - uses: actions/upload-artifact@v4
         with:

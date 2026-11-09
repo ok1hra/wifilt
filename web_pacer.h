@@ -46,6 +46,8 @@ struct WebPaceInput {
   uint32_t pingRtt = 0;         // last CI-V ping RTT, ms; 0 = none yet
   uint32_t pongAgeMs = 0;       // since the last pong; 0 = none yet
   uint32_t wsBacklog = 0;       // bytes queued for the audio WebSocket
+  bool     quiet = false;       // an ARQ link holds the audio page (modem.busy):
+                                // the rate never grows past WEB_PACE_AUDIO_BPS
 };
 
 struct WebPacer {
@@ -79,6 +81,10 @@ inline uint32_t webPaceAllow(WebPacer &p, const WebPaceInput &in, uint32_t now) 
   }
   if (in.audio && !p.audioMode && p.rate > WEB_PACE_AUDIO_BPS) p.rate = WEB_PACE_AUDIO_BPS;
   p.audioMode = in.audio;
+  // An ARQ link times its replies in a few hundred ms; a page load beside it
+  // may load, but never at more than the rate a live audio stream starts at.
+  const uint32_t ceiling = in.quiet ? WEB_PACE_AUDIO_BPS : WEB_PACE_MAX_BPS;
+  if (p.rate > ceiling) p.rate = ceiling;
 
   // The floor follows the best RTT and creeps up 1 ms per clean step, so a
   // route that really got slower is relearned instead of reading as congestion.
@@ -97,7 +103,7 @@ inline uint32_t webPaceAllow(WebPacer &p, const WebPaceInput &in, uint32_t now) 
     p.lastGrow = now;
   } else if (now - p.lastGrow >= WEB_PACE_GROW_MS) {
     uint32_t step = p.rate / 8 > WEB_PACE_MIN_BPS / 2 ? p.rate / 8 : WEB_PACE_MIN_BPS / 2;
-    p.rate = p.rate + step < WEB_PACE_MAX_BPS ? p.rate + step : WEB_PACE_MAX_BPS;
+    p.rate = p.rate + step < ceiling ? p.rate + step : ceiling;
     if (p.rttFloor && in.pingRtt > p.rttFloor) p.rttFloor++;
     p.lastGrow = now;
   }

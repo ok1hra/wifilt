@@ -29,6 +29,12 @@ WANTED = [
     "static uint32_t aud1GetBE32(const uint8_t* p)",
     "static uint64_t aud1GetBE64(const uint8_t* p)",
     "static uint8_t aud1Pcm16ToUlaw(int16_t input)",
+    # The link rate, the ring and the per-transmission wire (TX_PCM16 at 48 kHz
+    # or TX_ULAW at the link's rate) are arithmetic the TX path depends on, so
+    # they are lifted too; the harness only supplies the LAN client behind them.
+    "static uint32_t lanLinkRate()",
+    "static uint32_t aud1TxWireMs(uint64_t samples)",
+    "static size_t aud1TxRingSize()",
     # Lifted, not stubbed, for the reason the whole harness exists: which ALC
     # source these pick is the difference between a working calibration and one
     # that reports "the radio never answered" about a radio that answered every
@@ -40,11 +46,12 @@ WANTED = [
     # aud1TxDiag() used to be lifted here for the same reason -- it was what the
     # operator read after a lost transmission. It no longer exists in the
     # sketch, and because nothing re-ran this harness after it went, the
-    # extraction has been failing ever since: the fragility did its job, but
-    # only into a terminal nobody was watching.
+    # extraction failed for months: the fragility did its job, but only into a
+    # terminal nobody was watching. It runs in CI now (.github/workflows/build.yml).
     "void aud1TxAbort(const String& reason, bool notify)",
     "void aud1TxTick(bool deferPrebufferMiss)",
     "static uint64_t aud1JsonU64(const String& json, const char* key)",
+    "static int32_t aud1JsonI32(const String& json, const char* key)",
     "static void aud1HandleControl(const String& json)",
     "static bool aud1AcceptTxPacket(const uint8_t* wire, size_t length)",
 ]
@@ -123,9 +130,12 @@ def main() -> None:
 
     # Cheap guards that the right code came across, so a future refactor that
     # keeps the signatures but guts the bodies still trips the build.
-    for anchor in ["AUD1_TX_RING_SIZE", "unattendedMayKey", "audioPttOn()",
-                   "aud1Pcm16ToUlaw(pcm)", "audioTxSnapshot",
-                   "startAudioTx", "queueAudioTx"]:
+    # (The fixed AUD1_TX_RING_SIZE went with the 16 kHz link, 48a0ea6: the ring
+    # is the LAN client's, aud1TxRingSize(). That anchor going missing is how
+    # this harness sat broken, unrun, until 2026-11-09.)
+    for anchor in ["aud1TxRingSize()", "unattendedMayKey", "audioPttOn()",
+                   "aud1Pcm16ToUlaw(pcm)", "audioTxSnapshot", "aud1TxWireDecim",
+                   "startAudioTx", "queueAudioTx", "extendAudioTx"]:
         if anchor not in generated:
             raise SystemExit(
                 f"ERROR: extracted text lacks {anchor!r}; the sketch's TX path "

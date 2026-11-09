@@ -159,6 +159,22 @@ int main() {
     assert(p.rate == WEB_PACE_MAX_BPS && p.holds == 0);
   }
 
+  // An ARQ link on the audio page (quiet): the rate is capped at the audio
+  // start rate however clean the link, and grows back once it ends.
+  {
+    WebPacer p;
+    WebPaceInput in = clean();
+    run(p, in, now, 300);
+    assert(p.rate == WEB_PACE_MAX_BPS);
+    in.quiet = true;
+    uint64_t s = run(p, in, now, 2000);
+    assert(p.rate == WEB_PACE_AUDIO_BPS);
+    assert(s <= 2 * WEB_PACE_AUDIO_BPS + 3 * WEB_PACE_CHUNK);
+    in.quiet = false;
+    run(p, in, now, 6000);   // +1/8 per 250 ms: 64 -> 512 kB/s in ~4.4 s
+    assert(p.rate == WEB_PACE_MAX_BPS);
+  }
+
   // millis() wrap inside a hold.
   {
     WebPacer p;

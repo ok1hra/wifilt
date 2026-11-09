@@ -25,6 +25,7 @@ const {spawn} = require("child_process");
 const path = require("path");
 const WsprCore = require("../data/wspr-core.js");
 const {WsprTx} = require("../data/wspr-tx.js");
+const Aud1 = require("../data/js8-aud1.js");
 
 const HARNESS = process.argv[2];
 if (!HARNESS) {
@@ -94,7 +95,11 @@ class Harness {
 // `stalls` is a list of {atMs, forMs} describing cooperative-loop freezes,
 // measured from the slot. During a stall no NOW command is issued, exactly as a
 // blocking flash write or DNS lookup would starve the sketch's loop.
-async function transmit({stalls = [], keepAlive = true, browserTickMs = 0, label}) {
+// `wire` is what the browser sends: "pcm16" (TX_PCM16 at 48 kHz, decimated by
+// the firmware) or "ulaw" (TX_ULAW at the 8 kHz link rate, which
+// Aud1WebSocketSession makes out of the same 48 kHz packets with the very
+// functions below -- docs/aud1-audio-websocket-protocol.md).
+async function transmit({stalls = [], keepAlive = true, browserTickMs = 0, label, wire = "pcm16"}) {
   const harness = new Harness(HARNESS);
   const [helloLine] = await harness.hello();
   const [, streamIdText] = helloLine.split(" ");
@@ -105,7 +110,7 @@ async function transmit({stalls = [], keepAlive = true, browserTickMs = 0, label
     pttEvents: [], aborts: [], levels: 0, preKeyLevels: 0, radioBytes: 0,
     ringMin: Infinity, ringMax: 0, ringMinWhileKeyed: Infinity,
     worstStarvationMs: 0, keyedAtUtc: null, drainedAtUtc: null,
-    lastRadioUtc: null, browserTicks: 0,
+    lastRadioUtc: null, browserTicks: 0, wireBytes: 0,
   };
   let pending = [];          // control messages parsed out of the child's output
 
@@ -141,18 +146,27 @@ async function transmit({stalls = [], keepAlive = true, browserTickMs = 0, label
   // A sink shaped like Aud1WebSocketSession, but every call crosses into the
   // real firmware code instead of a socket.
   const queue = [];
+  const txWire = Aud1.pickTxWire({tx: [{kind: "TX_PCM16", sampleRate: 48000},
+    {kind: "TX_ULAW", sampleRate: 8000}]}, wire === "ulaw" ? "auto" : "pcm16");
+  const ulaw = txWire.kind === 4;
   const sink = {
     bufferedAmount: 0,
     prepare(txId, metadata) {
+      // The same arithmetic as Aud1WebSocketSession.prepare.
+      if (ulaw && metadata.samples % txWire.decim) throw new Error("WSPR length not whole link samples");
       queue.push(["CTRL", JSON.stringify({
-        type: "tx.prepare", txId, sampleRate: 48000,
-        samples: metadata.samples, packets: metadata.packets,
+        type: "tx.prepare", txId, ...(ulaw ? {kind: "TX_ULAW"} : {}), sampleRate: txWire.sampleRate,
+        samples: ulaw ? metadata.samples / txWire.decim : metadata.samples, packets: metadata.packets,
         slotUtcMs: metadata.slotUtcMs, clientUtcMs: currentUtc,
-        prebufferSamples: metadata.prebufferSamples, packetMs: metadata.packetMs,
-        unattended: false})]);
+        prebufferSamples: ulaw ? Math.ceil(metadata.prebufferSamples / txWire.decim) : metadata.prebufferSamples,
+        packetMs: metadata.packetMs, unattended: false})]);
       return true;   // tx-ready is observed asynchronously, like the real socket
     },
-    write(wire) { queue.push(["PACKET", Buffer.from(wire).toString("hex")]); },
+    write(packet) {
+      const out = ulaw ? Aud1.transcodeTxWire(packet, txWire) : packet;
+      observed.wireBytes += out.length;
+      queue.push(["PACKET", Buffer.from(out).toString("hex")]);
+    },
     sendControl(message) {
       if (message.type === "wspr.ping" && !keepAlive) return;
       queue.push(["CTRL", JSON.stringify(message)]);
@@ -349,6 +363,30 @@ async function transmit({stalls = [], keepAlive = true, browserTickMs = 0, label
        result.observed.aborts.length === 0 &&
        result.observed.pttEvents.filter(Boolean).length === 1,
        result.observed.aborts.join("; ") || "keyed normally");
+  }
+
+  // 6. TX_ULAW: the same transmission sent at the link's rate. The firmware path
+  //    differs (no decimation, 160-byte packets, sample counts at 8 kHz, the
+  //    deadline and tx.extend arithmetic at the wire's rate), so the runs that
+  //    stress it -- clean, the worst stall and the starved background tab --
+  //    are repeated on that wire.
+  {
+    const pcm = await transmit({label: "pcm16 bytes"});
+    for (const [label, options] of [["ulaw clean", {}],
+        ["ulaw stall 400 ms", {stalls: Array.from({length: 5}, (_, i) => ({atMs: 5000 + i * 20000, forMs: 400}))}],
+        ["ulaw background 60 s", {browserTickMs: 60000}]]) {
+      const result = await transmit({...options, label, wire: "ulaw"});
+      report(label, result);
+      common(label, result);
+      ok(`${label}: keyed at the slot`, Math.abs(result.observed.keyedAtUtc - SLOT_UTC) <= LOOP_STEP_MS,
+         `${result.observed.keyedAtUtc - SLOT_UTC} ms off`);
+      ok(`${label}: audio delivery not stretched`, Math.abs(result.observed.finalDeliveryLagMs) <= 2 * LOOP_STEP_MS,
+         `${result.observed.finalDeliveryLagMs.toFixed(0)} ms`);
+      if (label === "ulaw clean")
+        ok("ulaw: ~10x fewer bytes on the socket than PCM16",
+           result.observed.wireBytes * 9 < pcm.observed.wireBytes,
+           `${result.observed.wireBytes} B vs ${pcm.observed.wireBytes} B`);
+    }
   }
 
   console.log(`\n${checks - failures}/${checks} checks passed`);

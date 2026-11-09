@@ -338,8 +338,11 @@
   function startWorker(role, peerCall, myCall) {
     stopWorker();
     // The worker passes this ?v= on to every script and blob it loads.
-    const MERCURY_WORKER_REV = "9b76afc2"; // stamped from /mercury-worker.js
-    worker = new Worker(`/mercury-worker.js?v=${MERCURY_WORKER_REV}`);
+    const MERCURY_WORKER_REV = "db66afdb"; // stamped from /mercury-worker.js
+    // ?aud1tx=pcm16 on the page reaches the worker's AUD1 session (data/js8-aud1.js):
+    // the old 48 kHz TX wire, for an A/B test against TX_ULAW.
+    const aud1tx = /[?&]aud1tx=pcm16\b/.test(location.search) ? "&aud1tx=pcm16" : "";
+    worker = new Worker(`/mercury-worker.js?v=${MERCURY_WORKER_REV}${aud1tx}`);
     workerRole = role;
     worker.onmessage = (e) => handleWorkerMessage(e.data);
     worker.onerror = (e) => handleWorkerMessage({ type: "error", reason: "worker crashed", detail: e.message });

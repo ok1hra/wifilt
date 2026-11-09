@@ -372,6 +372,8 @@ async function main(config) {
   const rxScratchPtr = m._malloc(65535 * 2);
   const deliverBufPtr = m._malloc(SESSION_BYTE_CAP);
   let lastConnState = -1;
+  // modem.busy lease (docs/aud1-audio-websocket-protocol.md): see onRxTick.
+  let busyOn = false, busySentMs = 0;
   let rxHeartbeatTickCount = 0; // diagnostic only -- see the heartbeat log in onRxTick
   let dispatched = false; // true once CALL/LISTEN has actually been dispatched to the FSM
 
@@ -957,6 +959,17 @@ async function main(config) {
     }
 
     const cs = connState(ep);
+    // "modem busy": CALLING, ACCEPTING, CONNECTED or DISCONNECTING -- a link
+    // whose replies are timed, so the firmware keeps its loop quiet between
+    // our bursts. Renewed every 5 s (a new socket has forgotten it by then at
+    // the latest), ended at once when the link is down or merely listening.
+    const busy = cs >= 2 && cs <= 5, busyNow = performance.now();
+    if (busy !== busyOn || (busy && busyNow - busySentMs >= 5000)) {
+      try {
+        session.sendControl({ type: "modem.busy", on: busy, mode: "mercury" });
+        busyOn = busy; busySentMs = busyNow;
+      } catch (_e) { /* socket down: the next tick retries */ }
+    }
     if (cs !== lastConnState) {
       const wasConnected = lastConnState === 4;
       lastConnState = cs;
