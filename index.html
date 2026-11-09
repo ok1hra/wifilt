@@ -241,7 +241,7 @@
     <div class="card">
       <h1>WIFILT<span class="tagline">Web interface for Icom LAN Transceivers</span></h1>
       <p class="subtitle">
-        Firmware installer &mdash; version <code>20261101</code> &nbsp;&bull;&nbsp;
+        Firmware installer &mdash; version <code>20261109</code> &nbsp;&bull;&nbsp;
         <a href="https://github.com/ok1hra/wifilt" target="_blank">GitHub</a>
       </p>
 
@@ -279,7 +279,7 @@
           <strong>A radio already on your network</strong> &mdash; an IC-705, IC-7610 or
           IC-7300&nbsp;MK2 with <strong>Network&nbsp;Control</strong> switched on &mdash; needs no
           hardware at all. The program on your computer reaches it over IP, and it is the same
-          software as the firmware, version <code>20261101</code>.
+          software as the firmware, version <code>20261109</code>.
         </p>
         <p>
           <strong>The interface board adds what a computer cannot do</strong>: the CI-V serial
@@ -312,7 +312,7 @@
           </div>
           <div class="hardware-item">
             <dt>Flash layout</dt>
-            <dd>No OTA: 1.375 MB application and 2.56 MB LittleFS web assets, plus a
+            <dd>No OTA: 1.25 MB application and 2.75 MB LittleFS web assets, plus a
                 separate 128 kB configuration partition the installer never writes.</dd>
           </div>
         </dl>
@@ -352,7 +352,7 @@
                 connections and credentials, LOG and JS8 settings,
                 <strong>every TX audio gain calibration</strong>, CW and frequency memories, MSG BOX
                 and band decoder rows all stay &mdash; they live in NVS and in the
-                configuration partition at <code>0x170000</code>, and the installer writes
+                configuration partition at <code>0x3E0000</code>, and the installer writes
                 neither.</dd>
             <dt>Tick it only to start clean</dt>
             <dd>It erases the <strong>whole chip</strong>: everything above goes, including the
@@ -364,13 +364,17 @@
                 so flashing cannot touch it.</dd>
           </dl>
           <p style="margin-top:0.7rem">
-            <strong>Coming from a release older than 20260808?</strong> Those builds kept the
-            configuration inside the web-asset filesystem that this flash replaces, so it is lost
-            whichever way you answer. Save a backup first and restore it afterwards:
-            <a href="http://wifilt.local/config/download">download it now</a>, or open your
-            device's address and use <strong>SETUP &rarr; Download config</strong>. This page
-            cannot fetch it for you &mdash; it is served over HTTPS and your device over HTTP, so the
-            browser blocks the request.
+            <strong>Coming from REV 20261101 or older? Then the configuration is lost
+            whichever way you answer &mdash; save a backup first.</strong> This release moved the
+            configuration partition to the end of the flash to make room for the web modems, and
+            the web pages now cover the place it used to be (releases older than 20260808 kept it
+            inside the web pages themselves). This installer cannot read the board, so it cannot
+            carry it over: <a href="http://wifilt.local/config/download">download the backup now</a>,
+            or open your device's address and use <strong>SETUP &rarr; Download config</strong>, and
+            restore it after flashing. This page cannot fetch it for you &mdash; it is served over
+            HTTPS and your device over HTTP, so the browser blocks the request. (Flashing from the
+            source tree with <code>tools/upload-firmware-spiffs.sh</code> carries the configuration
+            over by itself.)
           </p>
           <p style="margin-top:0.5rem">
             Two things a backup file never carries. The <strong>MSG BOX</strong>: stored messages
@@ -390,7 +394,7 @@
         </ul>
 
         <div class="cta gate" id="flashGate-esp32" data-locked="1">
-          <esp-web-install-button manifest="manifest.json?v=20261101" baudrate="9600"></esp-web-install-button>
+          <esp-web-install-button manifest="manifest.json?v=20261109" baudrate="9600"></esp-web-install-button>
         </div>
         <p class="gate-note" id="gateNote-esp32">Answer the question above to continue.</p>
 
@@ -418,8 +422,8 @@
           </li>
           <li><strong>Open <code>http://192.168.4.1</code>.</strong> The setup page appears;
               some phones open it by themselves.</li>
-          <li id="restoreStep-esp32" hidden><strong>Erased the device, or came from a release older
-              than 20260808? Restore your backup first</strong> &mdash; <strong>Upload config</strong> at
+          <li id="restoreStep-esp32" hidden><strong>Erased the device, or came from REV
+              20261101 or older? Restore your backup first</strong> &mdash; <strong>Upload config</strong> at
               the bottom of the setup page &mdash; before setting anything by hand. Anything you type
               before restoring will be overwritten by the file.</li>
           <li><strong>Enter your WiFi network and password</strong>, then save. The device joins
@@ -437,11 +441,11 @@
 
         <p class="muted">
           The button above flashes: bootloader, partition table, boot_app0, firmware, web assets.
-          It does <strong>not</strong> write the configuration partition at <code>0x170000</code>, which is what
+          It does <strong>not</strong> write the configuration partition at <code>0x3E0000</code>, which is what
           lets your settings survive an update.
         </p>
         <p class="muted">
-          For manual flashing there is <code>wifilt-20261101-full.bin</code> at offset <code>0x0</code>
+          For manual flashing there is <code>wifilt-20261109-full.bin</code> at offset <code>0x0</code>
           with <code>esptool.py</code>. <strong>That one erases everything</strong> &mdash; it is a whole-chip
           image, so it overwrites the WiFi credentials in NVS and the configuration partition
           as well. Use it to recover a board that will not boot, not to update a working one.
@@ -472,7 +476,7 @@
           </div>
           <div class="hardware-item">
             <dt>Flash layout</dt>
-            <dd>Identical to the box: No OTA, 1.375 MB application and 2.56 MB LittleFS web assets, plus a
+            <dd>Identical to the box: No OTA, 1.375 MB application and 2.75 MB LittleFS web assets, plus a
                 separate 128 kB configuration partition the installer never writes.</dd>
           </div>
         </dl>
@@ -516,7 +520,7 @@
                 connections and credentials, LOG and JS8 settings,
                 <strong>every TX audio gain calibration</strong>, CW and frequency memories and MSG
                 BOX all stay &mdash; they live in NVS and in the
-                configuration partition at <code>0x170000</code>, and the installer writes
+                configuration partition at <code>0x3E0000</code>, and the installer writes
                 neither.</dd>
             <dt>Tick it only to start clean</dt>
             <dd>It erases the <strong>whole chip</strong>: everything above goes, including the
@@ -528,13 +532,17 @@
                 so flashing cannot touch it.</dd>
           </dl>
           <p style="margin-top:0.7rem">
-            <strong>Coming from a release older than 20260808?</strong> Those builds kept the
-            configuration inside the web-asset filesystem that this flash replaces, so it is lost
-            whichever way you answer. Save a backup first and restore it afterwards:
-            <a href="http://wifilt.local/config/download">download it now</a>, or open your
-            device's address and use <strong>SETUP &rarr; Download config</strong>. This page
-            cannot fetch it for you &mdash; it is served over HTTPS and your device over HTTP, so the
-            browser blocks the request.
+            <strong>Coming from REV 20261101 or older? Then the configuration is lost
+            whichever way you answer &mdash; save a backup first.</strong> This release moved the
+            configuration partition to the end of the flash to make room for the web modems, and
+            the web pages now cover the place it used to be (releases older than 20260808 kept it
+            inside the web pages themselves). This installer cannot read the board, so it cannot
+            carry it over: <a href="http://wifilt.local/config/download">download the backup now</a>,
+            or open your device's address and use <strong>SETUP &rarr; Download config</strong>, and
+            restore it after flashing. This page cannot fetch it for you &mdash; it is served over
+            HTTPS and your device over HTTP, so the browser blocks the request. (Flashing from the
+            source tree with <code>tools/upload-firmware-spiffs.sh</code> carries the configuration
+            over by itself.)
           </p>
           <p style="margin-top:0.5rem">
             Two things a backup file never carries. The <strong>MSG BOX</strong>: stored messages
@@ -554,7 +562,7 @@
         </ul>
 
         <div class="cta gate" id="flashGate-m5atom" data-locked="1">
-          <esp-web-install-button manifest="manifest-m5atom.json?v=20261101" baudrate="9600"></esp-web-install-button>
+          <esp-web-install-button manifest="manifest-m5atom.json?v=20261109" baudrate="9600"></esp-web-install-button>
         </div>
         <p class="gate-note" id="gateNote-m5atom">Answer the question above to continue.</p>
 
@@ -578,8 +586,8 @@
           </li>
           <li><strong>Open <code>http://192.168.4.1</code>.</strong> The setup page appears;
               some phones open it by themselves.</li>
-          <li id="restoreStep-m5atom" hidden><strong>Erased the device, or came from a release older
-              than 20260808? Restore your backup first</strong> &mdash; <strong>Upload config</strong> at
+          <li id="restoreStep-m5atom" hidden><strong>Erased the device, or came from REV
+              20261101 or older? Restore your backup first</strong> &mdash; <strong>Upload config</strong> at
               the bottom of the setup page &mdash; before setting anything by hand. Anything you type
               before restoring will be overwritten by the file.</li>
           <li><strong>Enter your WiFi network and password</strong>, then save. The device joins
@@ -597,11 +605,11 @@
 
         <p class="muted">
           The button above flashes: bootloader, partition table, boot_app0, firmware, web assets.
-          It does <strong>not</strong> write the configuration partition at <code>0x170000</code>, which is what
+          It does <strong>not</strong> write the configuration partition at <code>0x3E0000</code>, which is what
           lets your settings survive an update.
         </p>
         <p class="muted">
-          For manual flashing there is <code>wifilt-20261101-m5atom-full.bin</code> at offset <code>0x0</code>
+          For manual flashing there is <code>wifilt-20261109-m5atom-full.bin</code> at offset <code>0x0</code>
           with <code>esptool.py</code>. <strong>That one erases everything</strong> &mdash; it is a whole-chip
           image, so it overwrites the WiFi credentials in NVS and the configuration partition
           as well. Use it to recover a board that will not boot, not to update a working one.
@@ -612,21 +620,21 @@
       <details class="platform" id="linux">
         <summary>
           <span class="platform-name">Linux PC</span>
-          <span class="platform-sub">radio on the network &bull; no hardware &bull; tar.gz, 3.7 MB</span>
+          <span class="platform-sub">radio on the network &bull; no hardware &bull; tar.gz, 3.8 MB</span>
         </summary>
         <div class="platform-body">
           <p class="dl-line">
-            <a href="wifilt-20261101-linux-x86_64.tar.gz"><strong>wifilt-20261101-linux-x86_64.tar.gz</strong></a>
-            &nbsp;&bull;&nbsp; Linux x86-64, 3.7 MB
+            <a href="wifilt-20261109-linux-x86_64.tar.gz"><strong>wifilt-20261109-linux-x86_64.tar.gz</strong></a>
+            &nbsp;&bull;&nbsp; Linux x86-64, 3.8 MB
             &nbsp;&bull;&nbsp; <a href="SHA256SUMS">SHA256SUMS</a>
           </p>
-          <pre><code>tar xzf wifilt-20261101-linux-x86_64.tar.gz
+          <pre><code>tar xzf wifilt-20261109-linux-x86_64.tar.gz
 cd wifilt-linux-x86_64
 sudo ./install.sh</code></pre>
           <p class="muted">
             The installer copies the program to <code>/opt/wifilt</code> and grants it permission to
             use port&nbsp;80. That permission is not optional: ports 80, 82 and 83 are all privileged,
-            and port&nbsp;83 carries the audio, so without it JS8, RTTY, WSPR and Mercury cannot work.
+            and port&nbsp;83 carries the audio, so without it JS8, RTTY, JTTY, WSPR and Mercury cannot work.
             It installs a service but deliberately does not enable it &mdash; starting a transmitter's
             control interface at boot should be your decision.
           </p>
@@ -638,6 +646,13 @@ sudo ./install.sh</code></pre>
             <code>sudo systemctl enable --now wifilt</code> for every boot. To run it without
             installing at all: <code>sudo ./wifilt</code> from the unpacked folder.
           </p>
+          <p class="muted">
+            This download also carries <strong>local-trx</strong> &mdash; the bridge that lets WIFILT
+            run a transceiver which is <em>not</em> a networked Icom (a Kenwood, a Yaesu, an older
+            Icom) from this computer's sound card and two USB serial adapters. It is installed
+            alongside and starts switched off, doing nothing at all until its own setup page is used.
+            See <a href="#anyrig">Not a networked Icom?</a> below.
+          </p>
         </div>
       </details>
       <details class="platform" id="raspberrypi">
@@ -647,7 +662,7 @@ sudo ./install.sh</code></pre>
         </summary>
         <div class="platform-body">
           <p class="dl-line">
-            <a href="wifilt-20261101-linux-arm64.tar.gz"><strong>wifilt-20261101-linux-arm64.tar.gz</strong></a>
+            <a href="wifilt-20261109-linux-arm64.tar.gz"><strong>wifilt-20261109-linux-arm64.tar.gz</strong></a>
             &nbsp;&bull;&nbsp; Linux ARM64 (aarch64), 9.7 MB
             &nbsp;&bull;&nbsp; <a href="SHA256SUMS">SHA256SUMS</a>
           </p>
@@ -655,13 +670,25 @@ sudo ./install.sh</code></pre>
             Needs a <strong>64-bit</strong> Raspberry Pi OS (aarch64) &mdash; Pi&nbsp;3, 4, 5 or
             newer. The 32-bit (armhf) Raspberry Pi OS cannot run this build.
           </p>
-          <pre><code>tar xzf wifilt-20261101-linux-arm64.tar.gz
+          <p><strong>Guided install</strong> &mdash; on a fresh Raspberry Pi OS Lite (64-bit) or an
+            existing installation, logged in over SSH:</p>
+          <pre><code>curl -fsSL https://ok1hra.github.io/wifilt/pi-setup | bash</code></pre>
+          <p class="muted">
+            It asks its questions first, then installs WIFILT and local-trx as services and, if you
+            want them: fixed names for the USB serial adapters, an Ethernet DHCP fallback, a Wi-Fi
+            setup access point with a captive portal, the Open Interface&nbsp;III firmware, and a
+            read-only system that survives pulling the plug (settings on a second card in a USB
+            reader). Run it again &mdash; or <code>wifilt-pi-setup</code> &mdash; to update; on a
+            locked system it unlocks, updates and locks again by itself.
+          </p>
+          <p>Or by hand:</p>
+          <pre><code>tar xzf wifilt-20261109-linux-arm64.tar.gz
 cd wifilt-linux-arm64
 sudo ./install.sh</code></pre>
           <p class="muted">
             The installer copies the program to <code>/opt/wifilt</code> and grants it permission to
             use port&nbsp;80. That permission is not optional: ports 80, 82 and 83 are all privileged,
-            and port&nbsp;83 carries the audio, so without it JS8, RTTY, WSPR and Mercury cannot work.
+            and port&nbsp;83 carries the audio, so without it JS8, RTTY, JTTY, WSPR and Mercury cannot work.
             It installs a service but deliberately does not enable it &mdash; starting a transmitter's
             control interface at boot should be your decision.
           </p>
@@ -673,6 +700,13 @@ sudo ./install.sh</code></pre>
             <code>sudo systemctl enable --now wifilt</code> for every boot. A Pi left running
             headless is exactly the case the service is for.
           </p>
+          <p class="muted">
+            This download also carries <strong>local-trx</strong> &mdash; the bridge that lets WIFILT
+            run a transceiver which is <em>not</em> a networked Icom (a Kenwood, a Yaesu, an older
+            Icom) from this computer's sound card and two USB serial adapters. It is installed
+            alongside and starts switched off, doing nothing at all until its own setup page is used.
+            See <a href="#anyrig">Not a networked Icom?</a> below.
+          </p>
         </div>
       </details>
       <details class="platform" id="windows">
@@ -682,7 +716,7 @@ sudo ./install.sh</code></pre>
         </summary>
         <div class="platform-body">
           <p class="dl-line">
-            <a href="wifilt-20261101-windows-x64.zip"><strong>wifilt-20261101-windows-x64.zip</strong></a>
+            <a href="wifilt-20261109-windows-x64.zip"><strong>wifilt-20261109-windows-x64.zip</strong></a>
             &nbsp;&bull;&nbsp; Windows x64, 10.9 MB
             &nbsp;&bull;&nbsp; <a href="SHA256SUMS">SHA256SUMS</a>
           </p>
@@ -780,7 +814,7 @@ sudo ./install.sh</code></pre>
         <p class="muted">
           What you give up is only what is reached by model-specific Icom commands &mdash; the
           network MOD-level gain calibration, GPS position, the radio's own waterfall. The logbook,
-          the DX cluster, JS8, RTTY, WSPR, Mercury and the ordinary transmit-gain calibration all
+          the DX cluster, JS8, RTTY, JTTY, WSPR, Mercury and the ordinary transmit-gain calibration all
           work. The full description is
           <a href="https://github.com/ok1hra/wifilt/blob/main/SOFTWARE.md#16-local-trx--any-radio-on-a-pc" target="_blank" rel="noopener">SOFTWARE.md&nbsp;&sect;&nbsp;1.6</a>.
         </p>
