@@ -6,6 +6,8 @@
 # and the release archives are all reproducible from source.
 /native/build/
 /native/build-win/
+/native/build-arm64-addons/
+/native/build-arm64/.addons
 /native/dist/
 /native/_run/
 

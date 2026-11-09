@@ -30,6 +30,7 @@
 #include <chrono>
 #include <fstream>
 #include <string>
+#include <vector>
 #include <thread>
 
 #include "Arduino.h"
@@ -104,7 +105,8 @@ void printUsage(const char *program) {
       "                    Without these, a port that cannot be bound (no\n"
       "                    privilege, or taken) moves to +8000: 80->8080,\n"
       "                    82->8082, 83->8083. An explicit port never moves.\n"
-      "  --data-dir PATH   web assets (default: data/ beside the executable)\n"
+      "  --data-dir PATH   web assets (default: data/ beside the executable);\n"
+      "                    given again, an add-on's pages served beside them\n"
       "  --config-dir PATH configuration (default: ~/.config/wifilt or %%APPDATA%%)\n"
       "  --bind-ip ADDR    bind HTTP/DXC-WS/AUD1-WS to this address instead of\n"
       "                    INADDR_ANY (default: all interfaces) -- lets two\n"
@@ -237,6 +239,9 @@ void checkAssets() {
            "WIFILT |         makes them\n");
 }
 
+static bool dataDirGiven = false;
+static std::vector<std::string> extraDataDirs;   // --data-dir after the first
+
 bool parseArguments(int argc, char **argv, uint16_t *port) {
   for (int i = 1; i < argc; i++) {
     const std::string flag = argv[i];
@@ -253,7 +258,11 @@ bool parseArguments(int argc, char **argv, uint16_t *port) {
     } else if (flag == "--audio-port" && hasValue) {
       nativeSetPortOverride(83, (uint16_t)atoi(argv[++i]));
     } else if (flag == "--data-dir" && hasValue) {
-      nativeSetDataDir(argv[++i]);
+      // The first is data/; every further one is an add-on's pages, read
+      // before it (LittleFSFS::nativeAddOverlay).
+      if (dataDirGiven) extraDataDirs.push_back(argv[++i]);
+      else nativeSetDataDir(argv[++i]);
+      dataDirGiven = true;
     } else if (flag == "--config-dir" && hasValue) {
       nativeSetConfigDir(argv[++i]);
     } else if (flag == "--bind-ip" && hasValue) {
@@ -312,6 +321,10 @@ int main(int argc, char **argv) {
   // assets for the same reason it is a separate partition there: reinstalling
   // must never touch calibrations.
   LittleFS.nativeSetRoot(nativeDataDir());
+  for (const std::string &dir : extraDataDirs) {
+    LittleFS.nativeAddOverlay(dir);
+    printf("WIFILT | add-on  %s\n", dir.c_str());
+  }
   cfgFS.nativeSetRoot(nativeConfigDir());
 
   if (port) nativeSetHttpPort(port);

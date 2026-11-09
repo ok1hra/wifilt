@@ -43,12 +43,12 @@ and the whole SETUP page. No custom board is required.
 |---|---|---|
 | `nvs` | 20 kB | WiFi credentials, callsign, locator, radio login — survives a firmware update |
 | `otadata` | 8 kB | boot selection |
-| `app0` | 1.375 MB | the firmware (~1.0 MB, leaving roughly 440 kB of headroom) |
+| `app0` | 1.19 MB | the firmware (~1.06 MB, leaving roughly 150 kB of headroom) |
+| `spiffs` | 2.63 MB | the web assets — pages, scripts, and the browser-side modems (JS8 as WebAssembly, Mercury) |
 | `cfg` | 128 kB | your configuration: radio slots, LOG and JS8 settings, TX gain calibrations, CW and frequency memories, MSG BOX |
-| `spiffs` | 2.5 MB | the web assets — pages, scripts, and the JS8 modem compiled to WebAssembly |
 
-`0x190000 + 0x270000 = 0x400000` exactly: the layout ends precisely at the end of a 4 MB
-chip. An 8 MB or 16 MB module works too — the extra flash simply goes unused — but a 2 MB
+`0x3E0000 + 0x20000 = 0x400000` exactly: `cfg` ends precisely at the end of a 4 MB chip,
+where moving the boundary between firmware and assets never touches it. An 8 MB or 16 MB module works too — the extra flash simply goes unused — but a 2 MB
 module cannot hold the assets.
 
 Any WROOM form factor will do: a dev board, or one of the USB-dongle style carriers, for
@@ -442,7 +442,13 @@ adapter are wired to (hamlib's full rig list). It is off until its own setup pag
 what it can and cannot do is [SOFTWARE.md § 1.6](SOFTWARE.md#16-local-trx--any-radio-on-a-pc),
 and building it is [BUILD.md § 5](BUILD.md#5-local-trx-a-hamlib-bridge-for-non-icom-radios).
 
-The Linux archive — Raspberry Pi included, it is the same `install.sh` — installs a `systemd`
+A Raspberry Pi has its own guided installer that sets up the whole station — WIFILT and
+local-trx as services, fixed names for the USB serial adapters, an Ethernet DHCP fallback, a
+Wi-Fi setup access point, the Open Interface III firmware and a read-only system that survives
+pulling the plug: `curl -fsSL https://ok1hra.github.io/wifilt/pi-setup | bash`, described in
+[SOFTWARE.md § 1.7](SOFTWARE.md#17-a-raspberry-pi-station).
+
+Installed by hand, the Linux archive — Raspberry Pi included, it is the same `install.sh` — installs a `systemd`
 unit that is not enabled by default and needs one privileged step redone on every upgrade
 (binding ports 80/82/83); the Windows build is a single static `.exe` with nothing to
 install. None of them runs unattended the way the ESP32 box does when nothing is plugged into

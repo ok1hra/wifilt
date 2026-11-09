@@ -1,8 +1,8 @@
 # WIFILT — Web interface for Icom LAN Transceivers
 
 Operate a transceiver from any browser on your network — logbook, DX cluster, JS8Call, RTTY,
-a WSPR beacon and Mercury file transfer — with nothing installed on the phone, tablet or PC,
-and no internet.
+JTTY, a WSPR beacon and Mercury file transfer — with nothing installed on the phone, tablet or
+PC, and no internet.
 
 **Runs on any ESP32 WROOM module with 4 MB of flash — or on a ready-cased M5Stack Atom Lite
 (built from source, see [BUILD.md](BUILD.md#1-firmware)) — or, if the radio is already on
@@ -58,11 +58,23 @@ Wiring, connectors, the Status LED and the case are [HARDWARE.md](HARDWARE.md).
 
 Download the archive for your system from the same page.
 
-**Linux and Raspberry Pi** (64-bit Raspberry Pi OS — a 32-bit one cannot run it):
+**Raspberry Pi, guided** (64-bit Raspberry Pi OS — a 32-bit one cannot run it). On a fresh
+Raspberry Pi OS Lite (64-bit) or an existing installation, over SSH:
+
+```sh
+curl -fsSL https://ok1hra.github.io/wifilt/pi-setup | bash
+```
+
+It asks everything first, then installs WIFILT and local-trx as services and, if wanted,
+fixed names for the USB serial adapters, an Ethernet DHCP fallback, a Wi-Fi setup access
+point, the Open Interface III firmware and a read-only system that survives pulling the plug.
+Running it again (or `wifilt-pi-setup`) updates the station.
+
+**Linux and Raspberry Pi, by hand:**
 
 ```sh
 tar xzf wifilt-<rev>-linux-x86_64.tar.gz     # or -linux-arm64
-cd wifilt-linux-x86_64
+cd wifilt-linux-x86_64                       # or wifilt-linux-arm64
 sudo ./install.sh
 ```
 
@@ -142,6 +154,18 @@ settings. Start at [SOFTWARE.md § 2](SOFTWARE.md#2-first-run).
 
 Building from source: [BUILD.md](BUILD.md) — the firmware in § 1, the native builds in § 4,
 `local-trx` in § 5.
+
+## Credits
+
+WIFILT stands on other people's work, and the modes on the DATA page most of all: the Icom
+network protocol as worked out by [wfview](https://gitlab.com/eliggett/wfview/) (W6EL, M0VSE);
+JS8 from [JS8Call](http://js8call.com/) (KN4CRD) and
+[JS8Call-improved](https://github.com/JS8Call-improved/JS8Call-improved); WSPR and JTTY from
+[WSJT-X](https://wsjt.sourceforge.io/) (K1JT, K9AN and the WSJT-X team), whose `lib/jtty` the
+JTTY tab ports; [Mercury](https://github.com/Rhizomatica/mercury) (Rafael Diniz, Rhizomatica)
+with the FreeDV modem (David Rowe). WIFILT began as
+[ESP32 BT CAT for IC-705](https://github.com/ok1cdj/IC705-BT-CIV) (OK1CDJ). The whole story is
+[SOFTWARE.md § 1.2](SOFTWARE.md#12-standing-on-other-peoples-work).
 
 ## License
 

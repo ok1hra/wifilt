@@ -26,10 +26,12 @@
 // Run BEFORE minify/gzip: this rewrites data.js (ASSET_REV) and every .html, and
 // those are the files the later steps compress.
 //
-//   node tools/stamp-asset-versions.js [data-dir] [--check]
+//   node tools/stamp-asset-versions.js [data-dir] [--check] [--lookup=DIR ...]
 //
 // --check writes nothing and exits non-zero if anything is out of date, which is
-// the form to put in front of a build.
+// the form to put in front of a build. --lookup names a further directory that
+// referenced assets may come from (an add-on's pages use the core's scripts);
+// only data-dir is rewritten.
 
 const crypto = require("crypto");
 const fs = require("fs");
@@ -39,6 +41,8 @@ const args = process.argv.slice(2);
 const checkOnly = args.includes("--check");
 const positional = args.filter(argument => !argument.startsWith("--"));
 const dataDir = path.resolve(positional[0] || path.join(__dirname, "..", "data"));
+const lookupDirs = args.filter(argument => argument.startsWith("--lookup="))
+  .map(argument => path.resolve(argument.slice("--lookup=".length)));
 
 if (!fs.existsSync(dataDir)) {
   console.error(`ERROR: data directory not found: ${dataDir}`);
@@ -75,12 +79,15 @@ function shortHash(buffer) {
 // source and it moves exactly when the payload does.
 function assetFile(assetPath) {
   const name = assetPath.replace(/^\//, "");
-  if (name.endsWith(".br")) {
-    const base = path.join(dataDir, name.slice(0, -3));
-    if (fs.existsSync(base)) return base;
+  for (const dir of [dataDir, ...lookupDirs]) {
+    if (name.endsWith(".br")) {
+      const base = path.join(dir, name.slice(0, -3));
+      if (fs.existsSync(base)) return base;
+    }
+    const direct = path.join(dir, name);
+    if (fs.existsSync(direct)) return direct;
   }
-  const direct = path.join(dataDir, name);
-  return fs.existsSync(direct) ? direct : null;
+  return null;
 }
 
 function versionOf(assetPath, referrer) {

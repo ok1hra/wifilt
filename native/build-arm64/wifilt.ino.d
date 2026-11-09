@@ -11,12 +11,12 @@ build-arm64/wifilt.ino.o: ../wifilt.ino arduino/Arduino.h \
  ../net_nonblocking.h ../wifi_link_probe.h net/ESPmDNS.h net/DNSServer.h \
  net/WiFiUdp.h net/Udp.h /home/dan/Arduino/libraries/TrxNet/src/TrxNet.h \
  net/Udp.h ../icomLanClient.h ../icom_lan_wire.h ../icom_lan_audio_tx.h \
- ../icom_lan_tx_history.h platform/freertos/FreeRTOS.h \
+ ../icom_lan_tx_history.h ../lan_jitter.h platform/freertos/FreeRTOS.h \
  platform/freertos_compat.h platform/freertos/task.h ../radio_transport.h \
  ../aud1_tx_state.h ../unattended_guard.h ../unattended_events.h \
  ../aud1_ws_parser.h ../js8_session.h ../rtty_stream.h ../jtty_stream.h \
  ../rkey_net.h ../rkey_server.h ../rkey_proto.h ../web_pacer.h \
- ../watch_hub.h ../trx_power.h ../icom_lan_discovery.h
+ ../watch_hub.h ../trx_power.h ../addon_hooks.h ../icom_lan_discovery.h
 arduino/Arduino.h:
 arduino/esp32-hal.h:
 arduino/esp32-hal-log.h:
@@ -61,6 +61,7 @@ net/Udp.h:
 ../icom_lan_wire.h:
 ../icom_lan_audio_tx.h:
 ../icom_lan_tx_history.h:
+../lan_jitter.h:
 platform/freertos/FreeRTOS.h:
 platform/freertos_compat.h:
 platform/freertos/task.h:
@@ -78,4 +79,5 @@ platform/freertos/task.h:
 ../web_pacer.h:
 ../watch_hub.h:
 ../trx_power.h:
+../addon_hooks.h:
 ../icom_lan_discovery.h:

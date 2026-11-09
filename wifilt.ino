@@ -142,7 +142,7 @@ volatile bool cwIpSendPending = false;
 #ifndef LOOP_WARN_MS
   #define LOOP_WARN_MS 200
 #endif
-#define REV 20261101
+#define REV 20261108
 #define WIFI
 #define FSK_KEYING  // RTTY by keying the FSK + PTT outputs (was UDP_TO_FSK, from when a UDP port fed it)
 #define WDT         // watchdog timer
@@ -462,6 +462,7 @@ char CwMsg[37] = "";
   #include "watch_hub.h"        // viewers follow the holder's data page (native only)
 #endif
 #include "trx_power.h"          // wake / standby / shutdown of the LAN radio from the web UI
+#include "addon_hooks.h"        // optional add-ons from addons/ (see the end of this file)
 // See radio_transport.h's own comment on radioLanLocalControlPort(): 0 means
 // "use the real default (50001)", exactly today's behavior on the real
 // device and on native/ unless --lan-port-base overrides it.
@@ -872,14 +873,29 @@ int incomingByte = 0;   // for incoming serial data
   uint64_t audioRxFirstSample = 0;
   bool audioRxFirst = true;
   bool audioRxDiscontinuity = false;
+  // AUD1 RX rate. The radio link runs at 8 kHz, or at 16 kHz when an add-on
+  // asks for the wide link (radioLinkSetWide); then every consumer still gets
+  // 8 kHz (aud1Half) unless the AUD1 client asked for 16 with rx.select.
+  uint32_t audioRxSelect = 8000;       // what the client asked for
+  uint32_t audioRxRate = 8000;         // what the stream carries right now
+  bool radioLink16k = false;           // radioLinkSetWide()
   bool audioRadioSequenceValid = false;
   uint16_t audioRadioExpectedSequence = 0;
 
   Aud1TxState aud1TxState = AUD1_TX_IDLE;
-  static const size_t AUD1_TX_RING_SIZE = IcomLanAudioTx::QUEUE_CAPACITY;
+  // The radio-side TX queue (IcomLanAudioTx): 1.536 s at the link rate --
+  // aud1TxRingSize(), since that rate is 8 or 16 kHz.
   // The longest one AUD1 transmission may grow to through tx.extend (JTTY live
-  // entry): 180 s at 48 kHz. A stuck page cannot hold the transmitter longer.
-  static const uint64_t AUD1_TX_EXTEND_CAP_SAMPLES = 180ULL * 48000ULL;
+  // entry): 180 s, at whatever rate the transmission is sent at. A stuck page
+  // cannot hold the transmitter longer.
+  static const uint64_t AUD1_TX_EXTEND_CAP_S = 180ULL;
+  // What the transmission in flight is sent as, fixed by its tx.prepare:
+  // TX_PCM16 (kind 3) at 48 kHz, which the firmware decimates to the link rate,
+  // or TX_ULAW (kind 4) already at the link rate (docs/aud1-audio-websocket-protocol.md).
+  // Every TX sample count (samples, prebuffer, firstSample, tx.extend) is in
+  // the wire's own samples; aud1TxWireDecim wire samples make one link sample.
+  uint8_t aud1TxWireKind = 3;
+  uint32_t aud1TxWireRate = 48000, aud1TxWireDecim = 6;
   size_t aud1TxUsed = 0;                    // atomic snapshot mirror for UI/state JSON
   uint32_t aud1TxId = 0, aud1TxExpectedSequence = 0, aud1TxExpectedPackets = 0;
   uint32_t aud1TxReceivedPackets = 0, aud1TxTargetMs = 0;
@@ -918,6 +934,15 @@ int incomingByte = 0;   // for incoming serial data
   static const size_t MSGBOX_MAX_BYTES = 24576;
   bool lanLinkWasUp = false;               // LAN link-up edge for the PTT safety un-key
   uint32_t aud1TxLevelNextMs = 0;          // B3: periodic TX buffer level while streaming
+  // "modem busy" (docs/aud1-audio-websocket-protocol.md): the page on the AUD1
+  // socket holds a link -- an ARQ session such as Mercury's -- whose replies are
+  // timed in a few hundred ms, so between its bursts the loop keeps quiet too,
+  // not only while keyed (linkQuietNow). The page renews it every few seconds;
+  // a page that dies cannot leave the loop throttled past the lease.
+  static const uint32_t MODEM_BUSY_LEASE_MS = 15000;
+  uint32_t modemBusyUntil = 0;
+  bool modemBusyOn = false;
+  char modemBusyMode[12] = "";
   // Survives a WDT/panic reset (not power loss) so a reset that happened with
   // the radio keyed is reportable instead of silent.
   RTC_NOINIT_ATTR uint32_t rtcPttWasKeyed;
@@ -1340,6 +1365,10 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void handlePostMercuryTxGain(void);
   void handleGetMercuryTuning(void);
   void handlePostMercuryTuning(void);
+  void lanTxBufferTick(void);
+  void lanTxBufferPrime(IcomLanClient* client, const String& ip);
+  uint32_t lanTxBufferLoad(const String& ip);
+  void lanTxBufferSave(const String& ip, uint32_t ms);
   void handleGetCivRead(void);
   uint16_t aprsisPasscode(const String &call);
   bool aprsisFieldSafe(const String &value);
@@ -1489,6 +1518,8 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   void unattendedLogFlush(void);
   bool txCriticalNow(void);
   bool txRealtimeNow(void);
+  bool modemBusyNow(void);
+  bool linkQuietNow(void);
   void handleUnattendedGet(void);
   void handleUnattendedPost(void);
   void handleUnattendedLog(void);
@@ -2657,6 +2688,7 @@ static const char* icomScanRefusal() {
   if (WiFi.status() != WL_CONNECTED) return "no_wifi";
   if (icomScanPhase != ISCAN_IDLE && icomScanPhase != ISCAN_DONE) return "busy";
   if (txRealtimeNow()) return "tx";
+  if (modemBusyNow()) return "link";
   return nullptr;
 }
 
@@ -2899,7 +2931,13 @@ void buildStateJson(char *buf, size_t bufSize, bool lanView){
                          : (radioLinked ? "TRXNET linked (limited)" : "TRXNET disconnected"));
   const char *wifiStat = APmode ? "WiFi AP" :
                          (WiFiStationReady() ? "WiFi STA" : "WiFi down");
+#if defined(WIFILT_NATIVE)
+  // No box radio on a PC: the native WiFi.RSSI() is a placeholder 0, which the
+  // topbar used to print as a real "0 dBm". The host's own link goes in hostFrag.
+  int rssi = -999;
+#else
   int rssi = (APmode || !WiFiStationReady()) ? -999 : (int)WiFi.RSSI();
+#endif
   // Finer LAN health than a single "connected": CAT stream actually delivering,
   // and audio sub-stream carrying fresh payload. Audio is false outside LAN.
   bool lanCatHealthy = client ? client->catHealthy()
@@ -2956,6 +2994,15 @@ void buildStateJson(char *buf, size_t bufSize, bool lanView){
              !pwrClient->connected() ? "off" : (pwrClient->radioPowered() ? "on" : "standby"),
              trxPowerOffMenu(radioSlots[pwrSlot].civAddr) ? "true" : "false", op);
   }
+  // The host machine's WiFi (native only): ,"hostRssi":-48,"hostName":"RPI".
+  // hostName present = the topbar is on a PC/Pi and labels the figure with it;
+  // hostRssi -999 = wired, AP mode or not associated, show nothing. Empty on the
+  // box, whose /state stays as it was.
+  char hostFrag[40] = "";
+#if defined(WIFILT_NATIVE)
+  snprintf(hostFrag, sizeof(hostFrag), ",\"hostRssi\":%d,\"hostName\":\"%s\"",
+           nativeHostWifiRssi(), nativeHostLabel());
+#endif
   // lanDrops/lanStalls/lanFilled are link health since boot, reported on every
   // view rather than only the LAN one: an operator watching an unattended beacon
   // should not have to know which slot carries LAN to see whether it has been
@@ -2977,8 +3024,9 @@ void buildStateJson(char *buf, size_t bufSize, bool lanView){
     "\"audioTxReplayMisses\":%u,\"audioTxSendFailures\":%u,\"audioTxMaxLateMs\":%u,"
     "\"audioRxDropped\":%u,\"audioMaxSendUs\":%u,"
     "\"pingRttCtrlMs\":%u,\"pingRttCivMs\":%u,\"pingRttAudioMs\":%u,"
-    "\"civRttLanMs\":%u,\"civRttSerialMs\":%u,\"txDefer\":%s,"
-    "\"dxcConnected\":%s%s%s}",
+    "\"rxJitterMs\":%u,\"txBufferMs\":%u,\"txBufferNextMs\":%u,"
+    "\"civRttLanMs\":%u,\"civRttSerialMs\":%u,\"txDefer\":%s,\"modemBusy\":%s,"
+    "\"dxcConnected\":%s%s%s%s}",
     radioLinked ? "true" : "false", lanCatHealthy ? "true" : "false",
     lanAudioReady ? "true" : "false", lanAudioTxReady ? "true" : "false",
     lanStatus, btStat, wifiStat,
@@ -3002,11 +3050,15 @@ void buildStateJson(char *buf, size_t bufSize, bool lanView){
     (unsigned)(client ? client->pingRttCtrlMs() : 0),
     (unsigned)(client ? client->pingRttCivMs() : 0),
     (unsigned)(client ? client->pingRttAudioMs() : 0),
+    (unsigned)(client ? client->audioRxJitterMs() : 0),
+    (unsigned)(client ? client->txBufferMs() : 0),
+    (unsigned)(client ? client->txBufferWantedMsValue() : 0),
     (unsigned)(client ? client->civReqRttMs() : 0),
     (unsigned)civRttMs,
     txRealtimeNow() ? "true" : "false",
+    modemBusyNow() ? "true" : "false",
     DxcTelnetStatus ? "true" : "false",
-    gpsFrag, pwrFrag
+    gpsFrag, pwrFrag, hostFrag
   );
 }
 
@@ -3092,6 +3144,7 @@ static WebPaceInput webPaceSnapshot(){
   in.pongAgeMs = client->pingReplyAgeCivMs();
   in.audio = AudioWsClient.connected();
   in.wsBacklog = wsOutLen;
+  in.quiet = modemBusyNow();
   return in;
 }
 
@@ -3108,6 +3161,7 @@ bool handleFileFromSPIFFS(const String &path){
   String contentType = "text/plain";
   bool isStatic = false;
   if (path.endsWith(".html")) contentType = "text/html";
+  else if (path.endsWith(".json")) contentType = "application/json";
   else if (path.endsWith(".css"))  { contentType = "text/css";                  isStatic = true; }
   else if (path.endsWith(".js"))   { contentType = "application/javascript";    isStatic = true; }
   else if (path.endsWith(".wasm")) { contentType = "application/wasm";          isStatic = true; }
@@ -3683,6 +3737,8 @@ bool beginRadioLanClient(uint8_t slot) {
   bool withAudio = slot == lanRadioSlotIndex();
   if (withAudio && slot != lanRadioSnap.slot) lanRadioSnap = LanRadioSnapshot{};
   if (withAudio) lanRadioSnap.slot = slot;
+  client->setAudioRate(withAudio && radioLink16k ? 16000 : 8000);
+  if (withAudio) lanTxBufferPrime(client, radioSlots[slot].lanIp);
   client->begin(radioIp, 50001,
                 radioSlots[slot].lanUser.c_str(), radioSlots[slot].lanPass.c_str(),
                 radioSlots[slot].civAddr, slot, localControlPort, withAudio);
@@ -4001,9 +4057,14 @@ void handleConfigDownload() {
   // The QRPlog CW/RTTY macro wording and the Mercury ARQ tuning are station
   // settings kept on the configuration partition like the blobs above, so
   // they travel with them. The GIT LOG SYNC file next to them does not: it
-  // holds a token that can write to the operator's repo (git-backup.json).
+  // holds a token that can write to the operator's repo (git-backup.json);
+  // an add-on blob without a backupKey stays out for the same kind of reason.
   configDownloadBlob("logMacros", LOG_MACROS_PATH);
   configDownloadBlob("mercuryTuning", MERCURY_TUNING_CONFIG_PATH);
+  for (size_t i = 0; i < addonBlobCount(); i++) {
+    const AddonBlob& b = addonBlobAt(i);
+    if (b.backupKey) configDownloadBlob(b.backupKey, b.path);
+  }
   if (bdEnabled) {
     String b = ",\"bd\":{\"source\":"; b += bdSource;
     b += ",\"rows\":[";
@@ -4304,6 +4365,28 @@ void handleConfigUpload() {
         return;
       }
       f.close();
+    }
+  }
+
+  for (size_t i = 0; i < addonBlobCount(); i++) {
+    const AddonBlob& b = addonBlobAt(i);
+    if (!b.backupKey) continue;
+    String blobCfg = extractJsonObject(body, b.backupKey);
+    if (blobCfg.length() > b.maxBytes) {
+      rejectOversize(b.backupKey, blobCfg.length(), b.maxBytes);
+      return;
+    }
+    if (blobCfg.length() > 0) {
+      File f = cfgFS.open(b.path, "w");
+      if (!f || f.print(blobCfg) != blobCfg.length()) {
+        if (f) f.close();
+        String j = "{\"ok\":false,\"error\":\"storage\",\"section\":\"";
+        j += b.backupKey; j += "\"}";
+        webServer.send(500, "application/json", j);
+        return;
+      }
+      f.close();
+      if (b.onSaved) b.onSaved();
     }
   }
 
@@ -5018,6 +5101,158 @@ void handlePostMercuryTuning() {
   webServer.send(200, "application/json", "{\"ok\":true}");
 }
 
+// An add-on's blob (AddonBlob): the same verbatim pair as the Mercury tuning
+// above, on the add-on's own file.
+static void addonBlobGet(const AddonBlob& b) {
+  webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  webServer.sendHeader("Connection", "close");
+  String json;
+  if (cfgFS.exists(b.path)) {
+    File f = cfgFS.open(b.path, "r");
+    if (f) { json = f.readString(); f.close(); json.trim(); }
+  }
+  if (json.length() < 2 || json[0] != '{') json = "{}";
+  webServer.send(200, "application/json", json);
+}
+
+static void addonBlobPost(const AddonBlob& b) {
+  webServer.sendHeader("Connection", "close");
+  String body = webServer.arg("plain");
+  body.trim();
+  if (body.length() < 2 || body.length() > b.maxBytes ||
+      body[0] != '{' || body[body.length()-1] != '}') {
+    webServer.send(400, "application/json", "{\"error\":\"bad_request\"}");
+    return;
+  }
+  File f = cfgFS.open(b.path, "w");
+  if (!f || f.print(body) != body.length()) {
+    if (f) f.close();
+    webServer.send(500, "application/json", "{\"error\":\"write\"}");
+    return;
+  }
+  f.close();
+  webServer.send(200, "application/json", "{\"ok\":true}");
+  if (b.onSaved) b.onSaved();
+}
+
+// The radio link at 16 kHz instead of 8 (an add-on's wideband modem asks for
+// it). The rate is part of the LAN stream request, so a change reconnects the
+// radio, and the audio socket is dropped so its page gets a hello that tells
+// the truth. With reconnect false it only sets what the first request asks for.
+void radioLinkSetWide(bool want, bool reconnect) {
+  if (want == radioLink16k) return;
+  radioLink16k = want;
+  uint32_t hz = want ? 16000 : 8000;
+  lanClient.setAudioRate(radioSlots[0].transport == RADIO_LAN && lanRadioSlotIndex() == 0 ? hz : 8000);
+  for (uint8_t i = 0; i < 2; i++)
+    if (secondaryLanClients[i]) secondaryLanClients[i]->setAudioRate(lanRadioSlotIndex() == i + 1 ? hz : 8000);
+  Serial.printf("AUD1 | radio link %s kHz%s\n", want ? "16" : "8", reconnect ? ", reconnecting" : "");
+  if (!reconnect) return;
+  if (lanRadioSlotIndex() != 0xFF) lanReconnectRequested = true;
+  if (AudioWsClient.connected()) AudioDisconnectWs();
+}
+
+// ---- the radio's TX buffer, adapted to the measured jitter --------------------
+//
+// The stream request tells the radio how much TX audio to buffer (icomLanClient.h
+// setTxBufferMs). A fixed 150 ms let an IC-705 on Wi-Fi run dry and drop ~1.2 s
+// of a 17 s JTTY message; 300 ms fixed it (on air, 2026-11-06), but on a wired
+// radio it is only latency, which an ARQ modem's peers do not forgive. So: the LAN
+// client measures how late RX audio arrives (lan_jitter.h, the same path the TX
+// audio takes), LanRxJitter::txBufferFor() turns that into a buffer with a
+// margin, and this applies it -- up as soon as it is needed, down only after
+// ten quiet minutes. A change takes a reconnect, so it waits until no page holds
+// the audio and the radio is not transmitting; what was learned is kept per
+// radio address in /lan-txbuffer.json, so the next start begins with it.
+//
+// Only for a radio that is itself on Wi-Fi (the IC-705, the one Icom with
+// nothing else). Measured live on 2026-11-07: a wired IC-7610 emits its RX
+// audio and answers its pings in clumps (p99 lateness 75-170 ms, audio-channel
+// RTT p95 90 ms, against an ICMP ping of 2-5 ms and 11 ms for the IC-705 on
+// the same PC) -- its own LAN timing, not the path -- and its TX at 150 ms
+// never slipped. Raising its buffer would only add latency an ARQ modem's
+// peers do not forgive. The jitter is still measured and shown for every radio.
+static const char* LAN_TXBUF_PATH = "/lan-txbuffer.json";
+static const uint32_t LAN_TXBUF_DOWN_AFTER_MS = 600000;
+static String lanTxBufIp;                 // the radio the client's value belongs to
+static uint32_t lanTxBufLowSince = 0;     // want has been well below the current value since
+static uint32_t lanTxBufLastTick = 0;
+
+// "ip ms" lines, at most four radios.
+uint32_t lanTxBufferLoad(const String& ip) {
+  if (ip.length() == 0 || !cfgFS.exists(LAN_TXBUF_PATH)) return LanRxJitter::BUFFER_MIN_MS;
+  File f = cfgFS.open(LAN_TXBUF_PATH, "r");
+  if (!f) return LanRxJitter::BUFFER_MIN_MS;
+  uint32_t ms = LanRxJitter::BUFFER_MIN_MS;
+  while (f.available()) {
+    String line = f.readStringUntil('\n');
+    line.trim();
+    int sp = line.indexOf(' ');
+    if (sp > 0 && line.substring(0, sp) == ip) ms = (uint32_t)line.substring(sp + 1).toInt();
+  }
+  f.close();
+  return ms;
+}
+void lanTxBufferSave(const String& ip, uint32_t ms) {
+  String keep[4]; uint8_t n = 0;
+  if (cfgFS.exists(LAN_TXBUF_PATH)) {
+    File f = cfgFS.open(LAN_TXBUF_PATH, "r");
+    while (f && f.available() && n < 3) {
+      String line = f.readStringUntil('\n');
+      line.trim();
+      int sp = line.indexOf(' ');
+      if (sp > 0 && line.substring(0, sp) != ip) keep[n++] = line;
+    }
+    if (f) f.close();
+  }
+  File f = cfgFS.open(LAN_TXBUF_PATH, "w");
+  if (!f) return;
+  f.printf("%s %u\n", ip.c_str(), (unsigned)ms);
+  for (uint8_t i = 0; i < n; i++) f.printf("%s\n", keep[i].c_str());
+  f.close();
+}
+// Before a client's begin(): the value learned for that radio.
+void lanTxBufferPrime(IcomLanClient* client, const String& ip) {
+  if (!client) return;
+  client->setTxBufferMs(lanTxBufferLoad(ip));
+}
+
+void lanTxBufferTick() {
+  uint32_t now = millis();
+  if (now - lanTxBufLastTick < 1000) return;
+  lanTxBufLastTick = now;
+  uint8_t slot = lanRadioSlotIndex();
+  IcomLanClient* client = lanRadioClient();
+  if (slot == 0xFF || !client || client->status() != IcomLanClient::LAN_CONNECTED) return;
+  const String& ip = radioSlots[slot].lanIp;
+  if (ip != lanTxBufIp) { lanTxBufIp = ip; lanTxBufLowSince = 0; }
+  uint32_t cur = client->txBufferWantedMsValue();
+  if (client->audioRxJitterWindows() >= 2) {
+    uint32_t jitter = client->audioRxJitterMs();
+    bool wifiRadio = strstr(radioNameForJson(client), "IC-705") != nullptr;
+    uint32_t want = wifiRadio ? LanRxJitter::txBufferFor(jitter) : LanRxJitter::BUFFER_MIN_MS;
+    uint32_t next = cur;
+    if (!wifiRadio && cur != want) { next = want; lanTxBufLowSince = 0; }   // a wired radio goes straight back
+    else if (want > cur) { next = want; lanTxBufLowSince = 0; }
+    else if (want + 100 <= cur) {
+      if (!lanTxBufLowSince) lanTxBufLowSince = now;
+      else if (now - lanTxBufLowSince >= LAN_TXBUF_DOWN_AFTER_MS) { next = want; lanTxBufLowSince = 0; }
+    } else lanTxBufLowSince = 0;
+    if (next != cur) {
+      Serial.printf("LAN | TX buffer %u -> %u ms (RX jitter %u ms)%s\n", (unsigned)cur, (unsigned)next, (unsigned)jitter,
+                    AudioWsClient.connected() ? ", applied when the audio page closes" : "");
+      client->setTxBufferMs(next);
+      lanTxBufferSave(ip, next);
+    }
+  }
+  // Apply: a reconnect, only with no page on the audio and the radio receiving.
+  bool tx = slot == 0 ? stateTx : lanRadioSnap.tx;
+  if (client->txBufferMs() != client->txBufferWantedMsValue() && !AudioWsClient.connected() && !tx) {
+    Serial.printf("LAN | TX buffer now %u ms, reconnecting the radio\n", (unsigned)client->txBufferWantedMsValue());
+    lanReconnectRequested = true;
+  }
+}
+
 // ---- the last CI-V reply a page asked for ------------------------------------
 //
 // Raw hex out, no interpretation. Unlike /txgain.json this must NOT invent an
@@ -5513,8 +5748,9 @@ void aprsisLoop() {
 
   if (aprsPhase != 1) return;
   // The two blocking calls in this function are guarded exactly as the DX
-  // cluster client guards its own: never while the transmitter is keyed.
-  if (txRealtimeNow()) return;
+  // cluster client guards its own: never while the transmitter is keyed, nor
+  // during an ARQ link on the AUD1 page (linkQuietNow).
+  if (linkQuietNow()) return;
   if (aprsisBackoffActive()) return;
   if (!WiFiStationReady()) return;
 
@@ -5833,6 +6069,11 @@ void setupWebServer(void){
   webServer.on("/mercury-txgain.json", HTTP_POST, handlePostMercuryTxGain);
   webServer.on("/mercury-tuning.json", HTTP_GET,  handleGetMercuryTuning);
   webServer.on("/mercury-tuning.json", HTTP_POST, handlePostMercuryTuning);
+  for (size_t i = 0; i < addonBlobCount(); i++) {
+    webServer.on(addonBlobAt(i).path, HTTP_GET,  [i](){ addonBlobGet(addonBlobAt(i)); });
+    webServer.on(addonBlobAt(i).path, HTTP_POST, [i](){ addonBlobPost(addonBlobAt(i)); });
+  }
+  addonRoutes();
   webServer.on("/aprsis/spot",   HTTP_POST, handleAprsisSpot);
   webServer.on("/aprsis/status", HTTP_GET,  handleAprsisStatus);
   webServer.on("/civread",     HTTP_GET,  handleGetCivRead);
@@ -6433,6 +6674,7 @@ void setup(){
       setupWebServer();
       dxcRawServer.begin();
       audioWsServer.begin();
+      addonNetworkUp();
       // Only what really bound. These lines used to print unconditionally, so a
       // PC build without the capability logged a healthy start while the audio
       // port answered nothing.
@@ -6474,6 +6716,7 @@ void setup(){
 
     // Start every configured LAN slot. Each instance owns a distinct local
     // 500x1/2/3 port triplet; only TRX1 advertises/opens network audio.
+    addonSetup();   // may ask for the wide link: the audio rate goes into the first stream request
     for (uint8_t slot = 0; slot < 3; slot++) {
       if (radioSlots[slot].enabled && radioSlots[slot].transport == RADIO_LAN)
         beginRadioLanClient(slot);
@@ -6588,13 +6831,47 @@ static void statusFlashTick(){
 
 //-------------------------------------------------------------------------------------------------------
 
+// Where the loop's time goes while an ARQ link holds the AUD1 page
+// (modemBusyNow): per _TIMED stage the worst and the mean pass, one log line a
+// minute while the link lasts -- so it shows whether the quiet mode silenced
+// what actually costs the link time, and what is left.
+struct LoopProfileStage { const char* name; uint32_t maxUs, n; uint64_t sumUs; };
+static LoopProfileStage loopProfile[24];
+static uint8_t loopProfileCount = 0;
+static uint32_t loopProfileSinceMs = 0;
+static void loopProfileNote(const char* name, uint32_t us){
+  if(!modemBusyOn) return;
+  LoopProfileStage *stage = nullptr;
+  for(uint8_t i = 0; i < loopProfileCount; i++) if(loopProfile[i].name == name){ stage = &loopProfile[i]; break; }
+  if(!stage){
+    if(loopProfileCount >= sizeof(loopProfile) / sizeof(loopProfile[0])) return;
+    stage = &loopProfile[loopProfileCount++];
+    *stage = {name, 0, 0, 0};
+  }
+  if(us > stage->maxUs) stage->maxUs = us;
+  stage->sumUs += us; stage->n++;
+}
+static void loopProfileReport(){
+  if(!modemBusyOn){ loopProfileCount = 0; loopProfileSinceMs = millis(); return; }
+  if(millis() - loopProfileSinceMs < 60000) return;
+  loopProfileSinceMs = millis();
+  Serial.print("LOOP| busy max/mean us:");
+  for(uint8_t i = 0; i < loopProfileCount; i++){
+    LoopProfileStage &stage = loopProfile[i];
+    Serial.printf(" %s=%lu/%lu", stage.name, (unsigned long)stage.maxUs,
+                  (unsigned long)(stage.n ? stage.sumUs / stage.n : 0));
+  }
+  Serial.println();
+  loopProfileCount = 0;
+}
+
 void loop(){
   static bool serialFlushed = false;
   if (!serialFlushed && millis() > 2000) {
     while (Serial.available()) Serial.read();
     serialFlushed = true;
   }
-  #define _TIMED(name, call) { unsigned long _t = millis(); call; unsigned long _d = millis()-_t; if(_d > LOOP_WARN_MS) { Serial.print("LOOP| slow: " name " "); Serial.print(_d); Serial.println("ms"); } }
+  #define _TIMED(name, call) { uint32_t _t = micros(); call; uint32_t _us = micros()-_t; loopProfileNote(name, _us); unsigned long _d = _us / 1000; if(_d > LOOP_WARN_MS) { Serial.print("LOOP| slow: " name " "); Serial.print(_d); Serial.println("ms"); } }
   _TIMED("Watchdog",        Watchdog())
   _TIMED("LanClient",       lanClientLoop())
   audioPttSafetyRetryTick();
@@ -6602,10 +6879,12 @@ void loop(){
   // dedicated audio owner advances playout independently; this early check
   // prevents unrelated CLI/web work from extending the keyed tail.
   if(aud1TxState == AUD1_TX_STREAM) aud1TxTick(false);
+  loopProfileReport();
   _TIMED("CLI",             serialPump())
   _TIMED("CIV",             civPollTick())
   _TIMED("GpsPoll",         gpsPollTick())
-  handleWebServerLoop();
+  // Profiled but not warned about: a paced page load legitimately takes seconds.
+  { uint32_t _t = micros(); handleWebServerLoop(); loopProfileNote("Web", micros() - _t); }
   _TIMED("NetIdentity",     NetworkIdentityLoop())
   _TIMED("RadioModel",      radioModelLearnTick())
   _TIMED("WifiTry",         wifiTryTick())
@@ -6617,9 +6896,12 @@ void loop(){
   _TIMED("dxcRaw",          dxcHandleRawClient())
   _TIMED("audioRaw",        audioHandleRawClient())
   _TIMED("audioWs",         AudioHandleWsClient())
+  _TIMED("addons",          addonTick())
   // Persist queued unattended-log events to flash only when no slot key is near,
   // so the append/rotate never stalls the loop across a JS8 slot boundary.
-  if(!txRealtimeNow()) unattendedLogFlush();
+  // During an ARQ link (modemBusyNow) only once the RAM ring is half full, and
+  // still never across a key: a link can last half an hour, the ring holds ~17 lines.
+  if(!txRealtimeNow() && (!modemBusyNow() || unaLogLen >= UNA_LOG_QUEUE_SIZE / 2)) unattendedLogFlush();
 
   // TrxNet: process pending /s-hz command (set TRX1 VFO via CI-V)
   if (trxFreqPending) {
@@ -6996,8 +7278,11 @@ void lanClientLoop(){
   // re-open it here would put two sockets on the same port (SO_REUSEADDR makes
   // that succeed) and the probe replies would go to the wrong one.
   if (icomScanSuspendLan) return;
+  // An ARQ link on the AUD1 page: the radio's CI-V rotation keeps to essentials.
+  if (IcomLanClient *audioRadio = lanRadioClient()) audioRadio->setQuiet(modemBusyNow());
   secondaryLanClientsLoop();
   trxPowerService();
+  lanTxBufferTick();
   if (radioSlots[0].transport != RADIO_LAN) return;
   if (lanReconnectRequested) {
     lanReconnectRequested = false;
@@ -7007,6 +7292,7 @@ void lanClientLoop(){
     IPAddress rip;
     if (rip.fromString(lanRadioIp) && lanUser.length() > 0 && lanPass.length() > 0) {
       Serial.println("LAN | manual reconnect requested");
+      lanTxBufferPrime(&lanClient, lanRadioIp);
       lanClient.begin(rip, 50001, lanUser.c_str(), lanPass.c_str(), configuredCivAddress,
                       0, radioLanLocalControlPort(0, rip[0] == 127), true);
     } else {
@@ -7079,9 +7365,11 @@ void lanClientLoop(){
     } else if (lanClient.status() == IcomLanClient::LAN_IDLE && lanRetryAt && millis() >= lanRetryAt) {
       lanRetryAt = 0;
       IPAddress rip;
-      if (rip.fromString(lanRadioIp))
+      if (rip.fromString(lanRadioIp)) {
+        lanTxBufferPrime(&lanClient, lanRadioIp);
         lanClient.begin(rip, 50001, lanUser.c_str(), lanPass.c_str(), configuredCivAddress,
                         0, radioLanLocalControlPort(0, rip[0] == 127), true);
+      }
     }
   }
 }
@@ -9180,7 +9468,9 @@ void civPollTick() {
   civState   = CIV_WAIT;
 
   civSeq = (civSeq + 1) % 6;
-  if (roundEnd) civNextRun = now + CIV_POLL_INTERVAL_MS;  // pace whole round
+  // pace whole round; an ARQ link on the AUD1 page (modemBusyNow) asks for
+  // the other radios four times less often while it lasts
+  if (roundEnd) civNextRun = now + (modemBusyNow() ? 4 * CIV_POLL_INTERVAL_MS : CIV_POLL_INTERVAL_MS);
 }
 
 //-------------------------------------------------------------------------------------------------------
@@ -9334,6 +9624,9 @@ void gpsPollTick(void) {
   }
   if (!gpsWasLinked) { gpsReset(); gpsWasLinked = true; }  // fresh probe per link-up
   if (gpsSupport == GPS_UNSUPPORTED) return;
+  // An ARQ link on the AUD1 page (modemBusyNow): the station does not move
+  // during it, and its CI-V and WiFi go to the link. The fix only ages.
+  if (modemBusyNow()) return;
   if (radioSlots[slot].transport == RADIO_CIV && civState != CIV_IDLE) return;
 
   if (gpsSupport == GPS_UNKNOWN) {
@@ -11005,10 +11298,17 @@ void DxcHandleTelnetClient(){
     DxcTelnetLoginPending = false;
   }
   static uint8_t telnetBuffer[1024];
+  // While the radio link must stay quiet (keyed, or an ARQ link on the AUD1
+  // page) spots trickle: one chunk per 250 ms, the rest waits in TCP. The
+  // connection stays up -- a cluster drops a client that stops reading.
+  static uint32_t lastQuietRead = 0;
+  bool quiet = linkQuietNow();
+  if(quiet && millis() - lastQuietRead < 250) return;
   while(DxcTelnetClient.available()){
     int chunk = DxcTelnetClient.read(telnetBuffer, sizeof(telnetBuffer));
     if(chunk <= 0) break;
     if(!DxcSendWebSocketFrame(0x1, telnetBuffer, size_t(chunk))) return;
+    if(quiet){ lastQuietRead = millis(); break; }
   }
 }
 
@@ -11019,7 +11319,7 @@ void DxcLoop(){
   // Never start it while a slot key is imminent; an established connection keeps
   // being read below.
   if(!DxcTelnetClient.connected() && DxcConfigReady() && millis() >= DxcReconnectTimer &&
-     !txRealtimeNow()) DxcConnectTelnet();
+     !linkQuietNow()) DxcConnectTelnet();
   DxcHandleTelnetClient();
 }
 
@@ -11176,6 +11476,63 @@ static uint8_t aud1Pcm16ToUlaw(int16_t input){
   return uint8_t(~(sign | (exponent << 4) | mantissa));
 }
 
+static int16_t aud1UlawToPcm16(uint8_t u){
+  u = ~u;
+  int32_t t = ((int32_t(u & 0x0F) << 3) + 0x84) << ((u & 0x70) >> 4);
+  return int16_t((u & 0x80) ? (0x84 - t) : (t - 0x84));
+}
+
+// 16 kHz -> 8 kHz for everything that does not ask for 16 (AUD1 at 8 kHz, the
+// watch viewers): a 63-tap half-band low-pass (Kaiser-windowed sinc, beta 8),
+// so only the centre and the odd taps around it are non-zero, then every
+// second sample. Flat to 0.01 dB over the 3.4 kHz the 8 kHz modes use, 58 dB
+// down from 4.6 kHz on (what would fold back in band) -- under uLaw's own floor.
+struct Aud1Half {
+  static const int TAPS = 63, MID = 31, SIDE = 16;
+  float hist[TAPS] = {};
+  uint8_t at = 0;
+  bool odd = false;
+  // n input samples (uLaw) -> n/2 output samples (uLaw); returns the count.
+  size_t run(const uint8_t* in, size_t n, uint8_t* out){
+    static const float CENTRE = 4.999999672e-01f;
+    static const float SIDE_TAPS[SIDE] = {   // h[MID +- (2k+1)]
+      3.170728721e-01f, -1.024425088e-01f, 5.772404439e-02f, -3.748938157e-02f,
+      2.563768528e-02f, -1.780470021e-02f, 1.231558303e-02f, -8.376210429e-03f,
+      5.543647017e-03f, -3.534414302e-03f, 2.145908571e-03f, -1.222076003e-03f,
+      6.381063754e-04f, -2.935600810e-04f, 1.090362306e-04f, -2.401525244e-05f};
+    size_t m = 0;
+    for(size_t i = 0; i < n; i++){
+      at = at ? at - 1 : TAPS - 1;
+      hist[at] = aud1UlawToPcm16(in[i]);
+      odd = !odd;
+      if(!odd) continue;
+      float y = CENTRE * hist[(at + MID) % TAPS];
+      for(int k = 0; k < SIDE; k++){
+        int d = 2 * k + 1;
+        y += SIDE_TAPS[k] * (hist[(at + MID - d) % TAPS] + hist[(at + MID + d) % TAPS]);
+      }
+      int32_t v = int32_t(lrintf(y));
+      out[m++] = aud1Pcm16ToUlaw(int16_t(v > 32767 ? 32767 : v < -32768 ? -32768 : v));
+    }
+    return m;
+  }
+};
+static Aud1Half aud1Half;
+
+// The radio link's rate (8000, or 16000 on the wide link). AUD1 TX
+// reaches it from 48 kHz PCM by decimation, or arrives at it already as
+// TX_ULAW (aud1TxWireDecim, fixed per transmission by tx.prepare).
+static uint32_t lanLinkRate(){
+  IcomLanClient *client = lanRadioClient();
+  return client ? client->audioSampleRate() : 8000;
+}
+// Wire samples of the transmission in flight -> milliseconds.
+static uint32_t aud1TxWireMs(uint64_t samples){ return uint32_t(samples * 1000 / aud1TxWireRate); }
+static size_t aud1TxRingSize(){
+  IcomLanClient *client = lanRadioClient();
+  return client ? client->audioTxSnapshot().capacity : 0;
+}
+
 // Flush the coalesced audio buffer as one WS frame.
 void audioFlush(){
   if(audioTxLen == 0) return;
@@ -11184,7 +11541,7 @@ void audioFlush(){
   uint16_t flags = (audioRxFirst ? 0x0001 : 0) | (audioRxDiscontinuity ? 0x0004 : 0);
   aud1PutBE16(wire+6, flags); aud1PutBE16(wire+8, 40); aud1PutBE16(wire+10, 0);
   aud1PutBE32(wire+12, audioStreamId); aud1PutBE32(wire+16, audioRxSequence);
-  aud1PutBE32(wire+20, 8000); aud1PutBE64(wire+24, audioRxFirstSample);
+  aud1PutBE32(wire+20, audioRxRate); aud1PutBE64(wire+24, audioRxFirstSample);
   aud1PutBE32(wire+32, 0); aud1PutBE32(wire+36, audioTxLen);
   memcpy(wire+40, audioTxBuf, audioTxLen);
   bool sent = AudioSendBinary(wire, 40 + audioTxLen);
@@ -11467,7 +11824,7 @@ void handleUnattendedGet(){
   json += ",\"ptt\":" + String(audioTxKeyed ? "true" : "false");
   json += ",\"txState\":" + String((int)aud1TxState);
   json += ",\"txUsed\":" + String((unsigned long)aud1TxUsed);
-  json += ",\"txCapacity\":" + String((unsigned long)AUD1_TX_RING_SIZE);
+  json += ",\"txCapacity\":" + String((unsigned long)aud1TxRingSize());
   json += ",\"txPackets\":" + String((unsigned long)audioTx.sentPackets);
   json += ",\"txReplays\":" + String((unsigned long)audioTx.replayedPackets);
   json += ",\"txReplayMisses\":" + String((unsigned long)audioTx.replayMisses);
@@ -11644,6 +12001,24 @@ bool txRealtimeNow(){
   return aud1TxState == AUD1_TX_STREAM || txCriticalNow();
 }
 
+// An ARQ link is up on the AUD1 page (modem.busy): only for as long as that
+// page's socket lives and it keeps renewing the lease.
+bool modemBusyNow(){
+  if(!modemBusyOn) return false;
+  if(!AudioWsClient.connected() || (int32_t)(millis() - modemBusyUntil) >= 0){
+    modemBusyOn = false; modemBusyMode[0] = 0;
+    Serial.println("AUD1 | modem busy lapsed");
+    return false;
+  }
+  return true;
+}
+
+// Keyed or about to key, or an ARQ link that may key any moment: no work that
+// can stall the loop (DNS, connect, flash) and only the essential radio polls.
+bool linkQuietNow(){
+  return txRealtimeNow() || modemBusyNow();
+}
+
 void aud1TxTick(bool deferPrebufferMiss){
   uint32_t now = millis();
   IcomLanClient *txClient = lanRadioClient();
@@ -11669,7 +12044,7 @@ void aud1TxTick(bool deferPrebufferMiss){
         aud1TxLevelNextMs = now + 200;   // ~5/s until PTT
         AudioSendText("{\"type\":\"tx-level\",\"txId\":" + String(aud1TxId) +
                       ",\"used\":" + String((unsigned long)aud1TxUsed) +
-                      ",\"capacity\":" + String((unsigned long)AUD1_TX_RING_SIZE) +
+                      ",\"capacity\":" + String((unsigned long)aud1TxRingSize()) +
                       ",\"consumed\":" + String((unsigned long long)aud1TxConsumedUlaw) +
                       ",\"udpPackets\":" + String((unsigned long)txSnapshot.sentPackets) +
                       ",\"maxLateMs\":" + String((unsigned long)txSnapshot.maxLatenessMs) +
@@ -11682,7 +12057,7 @@ void aud1TxTick(bool deferPrebufferMiss){
       }
       return;
     }
-    size_t required = (aud1TxPrebufferSamples + 5) / 6;
+    size_t required = (aud1TxPrebufferSamples + aud1TxWireDecim - 1) / aud1TxWireDecim;
     if(aud1TxExpectedSample < aud1TxPrebufferSamples || aud1TxUsed < required){
       // A complete packet may already be queued behind a fragmented TCP read.
       // Give the non-blocking parser a short, bounded chance to consume only
@@ -11703,7 +12078,7 @@ void aud1TxTick(bool deferPrebufferMiss){
     }
     audioPttOn();
     if(!audioTxKeyed){ aud1TxAbort("PTT command failed"); return; }
-    uint64_t totalUlaw = (aud1TxTotalSamples + 5) / 6;
+    uint64_t totalUlaw = (aud1TxTotalSamples + aud1TxWireDecim - 1) / aud1TxWireDecim;
     if(!txClient->startAudioTx(totalUlaw, now)){
       aud1TxAbort("audio scheduler did not start"); return;
     }
@@ -11731,7 +12106,7 @@ void aud1TxTick(bool deferPrebufferMiss){
     aud1TxLevelNextMs = now + 200;   // ~5/s
     AudioSendText("{\"type\":\"tx-level\",\"txId\":" + String(aud1TxId) +
                   ",\"used\":" + String((unsigned long)aud1TxUsed) +
-                  ",\"capacity\":" + String((unsigned long)AUD1_TX_RING_SIZE) +
+                  ",\"capacity\":" + String((unsigned long)aud1TxRingSize()) +
                   ",\"consumed\":" + String((unsigned long long)aud1TxConsumedUlaw) +
                   ",\"udpPackets\":" + String((unsigned long)txSnapshot.sentPackets) +
                   ",\"maxLateMs\":" + String((unsigned long)txSnapshot.maxLatenessMs) +
@@ -11759,14 +12134,8 @@ void AudioDisconnectWs(){
     if(IcomLanClient *client = lanRadioClient()) client->stopRxAudio();
 }
 
-// Called by the LAN client for every RX audio datagram payload (~160 B / 20 ms).
-// Coalesce a few packets into one WS frame to cut the frame rate (~50/s -> ~10/s)
-// and keep the single-threaded loop responsive to the port-80 /state polls.
-void lanAudioHandler(const uint8_t *data, size_t len, uint16_t radioSequence){
-#if CAP_WATCH
-  watchHubOnRxAudio(data, len, radioSequence);   // the viewers' own stream, holder or not
-#endif
-  if(len == 0 || !AudioWsClient.connected()) return;
+// One RX packet into the AUD1 stream at the rate the stream carries.
+static void aud1RxForward(const uint8_t *data, size_t len, uint16_t radioSequence){
   if(audioRadioSequenceValid){
     int16_t delta = int16_t(radioSequence - audioRadioExpectedSequence);
     if(delta < 0) return; // duplicate or stale radio datagram
@@ -11792,6 +12161,38 @@ void lanAudioHandler(const uint8_t *data, size_t len, uint16_t radioSequence){
   if(audioTxLen >= 512) audioFlush();                                   // keep frames < 1 MSS
 }
 
+// Called by the LAN client for every RX audio datagram payload (~160 B / 20 ms,
+// 320 B on the 16 kHz link). Coalesce a few packets into one WS frame to cut
+// the frame rate (~50/s -> ~10/s) and keep the single-threaded loop responsive
+// to the port-80 /state polls.
+void lanAudioHandler(const uint8_t *data, size_t len, uint16_t radioSequence){
+  const uint8_t *rx8 = data;
+  size_t len8 = len;
+  uint8_t half[160] = {};            // 20 ms at 8 kHz
+  bool wide = lanLinkRate() == 16000;
+  if(wide){
+    if(len > 2 * sizeof(half)) return;
+    len8 = aud1Half.run(data, len, half);
+    rx8 = half;
+  }
+#if CAP_WATCH
+  watchHubOnRxAudio(rx8, len8, radioSequence);   // the viewers' own stream, holder or not
+#endif
+  if(len == 0 || !AudioWsClient.connected()) return;
+  // The stream's rate follows the client's rx.select and the link. A change
+  // is a new media epoch: flushed, firstSample from 0, FIRST set.
+  uint32_t rate = wide && audioRxSelect == 16000 ? 16000 : 8000;
+  if(rate != audioRxRate){
+    audioFlush();
+    audioRxRate = rate;
+    audioRxFirstSample = 0; audioRxFirst = true; audioRxDiscontinuity = false;
+    audioRadioSequenceValid = false;
+    Serial.printf("AUD1 | rx stream now %u Hz\n", (unsigned)rate);
+  }
+  if(rate == 16000) aud1RxForward(data, len, radioSequence);
+  else aud1RxForward(rx8, len8, radioSequence);
+}
+
 static uint64_t aud1JsonU64(const String& json, const char* key){
   String value = extractJsonString(json, key);
   return value.length() ? strtoull(value.c_str(), nullptr, 10) : 0;
@@ -11804,6 +12205,28 @@ static int32_t aud1JsonI32(const String& json, const char* key){
 static void aud1HandleControl(const String& json){
   String type = extractJsonString(json, "type");
   uint32_t txId = (uint32_t)aud1JsonU64(json, "txId");
+  if(addonFromPage(type, json)) return;
+  // {"type":"modem.busy","on":true,"mode":"mercury"}: see modemBusyNow().
+  if(type == "modem.busy"){
+    bool on = extractJsonBool(json, "on", false);
+    if(on){
+      String mode = extractJsonString(json, "mode");
+      if(!modemBusyOn || strcmp(modemBusyMode, mode.c_str()) != 0){
+        Serial.print("AUD1 | modem busy on: "); Serial.println(mode);
+      }
+      strncpy(modemBusyMode, mode.c_str(), sizeof(modemBusyMode) - 1);
+      modemBusyMode[sizeof(modemBusyMode) - 1] = 0;
+      modemBusyUntil = millis() + MODEM_BUSY_LEASE_MS;
+      modemBusyOn = true;
+    }else if(modemBusyOn){
+      modemBusyOn = false; modemBusyMode[0] = 0;
+      Serial.println("AUD1 | modem busy off");
+    }
+    return;
+  }
+  // RX stream rate (16 kHz on the wide link). Takes effect with the next radio packet
+  // once the link really runs at 16 kHz -- lanAudioHandler.
+  if(type == "rx.select"){ audioRxSelect = aud1JsonU64(json, "sampleRate") == 16000 ? 16000 : 8000; return; }
   if(type == "tx.abort"){
     if((aud1TxState == AUD1_TX_READY || aud1TxState == AUD1_TX_PREBUFFER ||
         aud1TxState == AUD1_TX_STREAM) && (!txId || txId == aud1TxId)){
@@ -11865,18 +12288,20 @@ static void aud1HandleControl(const String& json){
       return;
     uint64_t more = aud1JsonU64(json, "samples");
     uint32_t morePackets = (uint32_t)aud1JsonU64(json, "packets");
-    if(more == 0 || (more % 6) != 0 || morePackets > (more + 959) / 960 + 1){
+    const uint32_t packetSamples = aud1TxWireRate / 50;   // 20 ms on the wire
+    if(more == 0 || (aud1TxWireKind == 3 && (more % 6) != 0) ||
+       morePackets > (more + packetSamples - 1) / packetSamples + 1){
       aud1TxAbort("invalid tx.extend"); return;
     }
-    if(aud1TxTotalSamples + more > AUD1_TX_EXTEND_CAP_SAMPLES){
+    if(aud1TxTotalSamples + more > AUD1_TX_EXTEND_CAP_S * aud1TxWireRate){
       aud1TxAbort("tx.extend over the 180 s cap"); return;
     }
     if(aud1TxState == AUD1_TX_STREAM){
       IcomLanClient *client = lanRadioClient();
-      if(!client || !client->extendAudioTx(more / 6)){ aud1TxAbort("audio scheduler refused tx.extend"); return; }
+      if(!client || !client->extendAudioTx(more / aud1TxWireDecim)){ aud1TxAbort("audio scheduler refused tx.extend"); return; }
     }
     aud1TxTotalSamples += more; aud1TxExpectedPackets += morePackets;
-    aud1TxDeadlineMs += uint32_t(more / 48);
+    aud1TxDeadlineMs += aud1TxWireMs(more);
     String jttyText = extractJsonString(json, "jttyText");
     if(jttyText.length()){ aud1TxJtty = true; jttyStreamTx(jttyStream, jttyText.c_str(), jttyText.length(), millis()); }
 #if CAP_WATCH
@@ -11893,6 +12318,11 @@ static void aud1HandleControl(const String& json){
   uint32_t prebuffer = (uint32_t)aud1JsonU64(json, "prebufferSamples");
   uint32_t sampleRate = (uint32_t)aud1JsonU64(json, "sampleRate");
   uint32_t packetMs = (uint32_t)aud1JsonU64(json, "packetMs");
+  // TX_ULAW: the page already sends the link's rate and coding (one uLaw byte
+  // per sample); without "kind" it is the original TX_PCM16 at 48 kHz.
+  bool ulaw = extractJsonString(json, "kind") == "TX_ULAW";
+  uint32_t linkRate = lanLinkRate();
+  uint32_t wireDecim = ulaw ? 1 : 48000 / linkRate;
   // Refuse a transmission the browser itself marked unattended once arming has
   // lapsed. Liveness is NOT tested here: this very frame just refreshed the
   // dead-man, so the test could never fail. It is applied at keying time
@@ -11908,15 +12338,19 @@ static void aud1HandleControl(const String& json){
   }
 
   int64_t delayMs = int64_t(slotUtcMs) - int64_t(clientUtcMs);
-  if(txId == 0 || sampleRate != 48000 || packetMs != 20 || totalSamples == 0 ||
+  if(ulaw && sampleRate != linkRate){
+    aud1TxId = txId; aud1TxAbort("TX rate mismatch"); return;
+  }
+  if(txId == 0 || sampleRate != (ulaw ? linkRate : 48000) || packetMs != 20 || totalSamples == 0 ||
      packets == 0 || prebuffer == 0 || prebuffer > totalSamples ||
-     prebuffer > AUD1_TX_RING_SIZE * 6 || delayMs < 100 || delayMs > 35000 ||
+     prebuffer > aud1TxRingSize() * wireDecim || delayMs < 100 || delayMs > 35000 ||
      !lanRadioConnected() || !lanRadioClient() || !lanRadioClient()->audioTxReady()){
     aud1TxId = txId; aud1TxAbort("invalid tx.prepare"); return;
   }
   if(aud1TxState != AUD1_TX_IDLE && aud1TxState != AUD1_TX_DRAINED && aud1TxState != AUD1_TX_FAULT)
     aud1TxAbort("new TX replaced active TX", false);
   aud1TxResetState(AUD1_TX_READY);
+  aud1TxWireKind = ulaw ? 4 : 3; aud1TxWireRate = sampleRate; aud1TxWireDecim = wireDecim;
   if(!lanRadioClient()->prepareAudioTx()){
     aud1TxId = txId; aud1TxAbort("audio channel not ready"); return;
   }
@@ -11947,9 +12381,10 @@ static void aud1HandleControl(const String& json){
 #endif
   aud1TxId = txId; aud1TxTotalSamples = totalSamples; aud1TxExpectedPackets = packets;
   aud1TxPrebufferSamples = prebuffer; aud1TxTargetMs = millis() + uint32_t(delayMs);
-  aud1TxDeadlineMs = aud1TxTargetMs + uint32_t(totalSamples / 48) + 2500;
+  aud1TxDeadlineMs = aud1TxTargetMs + aud1TxWireMs(totalSamples) + 2500;
   AudioSendText("{\"type\":\"tx-ready\",\"txId\":" + String(aud1TxId) + ",\"ptt\":false}");
   Serial.print("AUD1 | TX ready id="); Serial.print(aud1TxId);
+  Serial.print(ulaw ? " wire=TX_ULAW/" : " wire=TX_PCM16/"); Serial.print(sampleRate);
   Serial.print(" slot in ms="); Serial.println((long)delayMs);
 }
 
@@ -11957,27 +12392,36 @@ static bool aud1AcceptTxPacket(const uint8_t* wire, size_t length){
   // TCP may still contain frames which were queued before a tx-error reached
   // the browser. Drop those frames quietly; repeatedly faulting and replying
   // here used to monopolize the single-threaded audio WebSocket loop.
-  if(length >= 40 && memcmp(wire, "AUD1", 4) == 0 && wire[4] == 1 && wire[5] == 3 &&
+  if(length >= 40 && memcmp(wire, "AUD1", 4) == 0 && wire[4] == 1 && (wire[5] == 3 || wire[5] == 4) &&
      (aud1TxState == AUD1_TX_IDLE || aud1TxState == AUD1_TX_DRAINED ||
       aud1TxState == AUD1_TX_FAULT) && aud1GetBE32(wire+32) == aud1TxId)
     return false;
-  if(length < 40 || memcmp(wire, "AUD1", 4) != 0 || wire[4] != 1 || wire[5] != 3 ||
+  // The kind and rate are the ones this transmission's tx.prepare named: a
+  // TX_PCM16 packet is a whole number of 6-sample groups (12 bytes), so the
+  // decimation phase carries over; a TX_ULAW packet is the link's own samples.
+  const bool ulaw = aud1TxWireKind == 4;
+  if(length < 40 || memcmp(wire, "AUD1", 4) != 0 || wire[4] != 1 || wire[5] != aud1TxWireKind ||
      aud1GetBE16(wire+8) != 40 || aud1GetBE16(wire+10) != 0 ||
      aud1GetBE32(wire+12) != audioStreamId || aud1GetBE32(wire+16) != aud1TxExpectedSequence ||
-     aud1GetBE32(wire+20) != 48000 || aud1GetBE64(wire+24) != aud1TxExpectedSample ||
+     aud1GetBE32(wire+20) != aud1TxWireRate || aud1GetBE64(wire+24) != aud1TxExpectedSample ||
      aud1GetBE32(wire+32) != aud1TxId || aud1GetBE32(wire+36) != length-40 ||
-     (length-40) == 0 || ((length-40) % 12) != 0 ||
+     (length-40) == 0 || (!ulaw && ((length-40) % 12) != 0) ||
      !(aud1TxState == AUD1_TX_READY || aud1TxState == AUD1_TX_PREBUFFER || aud1TxState == AUD1_TX_STREAM)){
     aud1TxAbort("TX packet identity/continuity failure"); return false;
   }
   uint16_t flags = aud1GetBE16(wire+6);
   bool first = (flags & 0x0001) != 0, last = (flags & 0x0002) != 0;
-  size_t samples = (length-40)/2, ulawSamples = samples/6;
+  // TX_PCM16: 48 kHz -> the link rate by plain decimation (every 6th sample at
+  // 8 kHz, every 3rd at 16): the pages already band-limit what they send.
+  // TX_ULAW: the page did exactly that itself (data/js8-aud1.js), so the bytes
+  // go to the radio as they are -- the same bytes either way.
+  const uint32_t decim = aud1TxWireDecim;
+  size_t samples = ulaw ? (length-40) : (length-40)/2, ulawSamples = samples/decim;
   IcomLanClient *txClient = lanRadioClient();
   if(!txClient){ aud1TxAbort("LAN radio gone"); return false; }
   IcomLanAudioTx::Snapshot snapshot = txClient->audioTxSnapshot();
   aud1TxUsed = snapshot.queued;
-  if(aud1TxUsed + ulawSamples > AUD1_TX_RING_SIZE || ulawSamples > 192){
+  if(aud1TxUsed + ulawSamples > snapshot.capacity || ulawSamples > 320){
     aud1TxAbort("TX ring overflow before write"); return false;
   }
   if((aud1TxExpectedSequence == 0) != first || (flags & ~0x0003) != 0 ||
@@ -11988,14 +12432,19 @@ static bool aud1AcceptTxPacket(const uint8_t* wire, size_t length){
      (!last && aud1TxReceivedPackets + 1 == aud1TxExpectedPackets)){
     aud1TxAbort("TX FIRST/LAST/length/buffer failure"); return false;
   }
-  uint8_t converted[192];
-  size_t convertedLength = 0;
-  for(size_t i=0; i<samples; i+=6){
-    size_t at = 40 + i*2;
-    int16_t pcm = int16_t(uint16_t(wire[at]) | (uint16_t(wire[at+1]) << 8));
-    converted[convertedLength++] = aud1Pcm16ToUlaw(pcm);
+  uint8_t converted[320];
+  const uint8_t *radioBytes = wire + 40;
+  size_t convertedLength = samples;
+  if(!ulaw){
+    convertedLength = 0;
+    for(size_t i=0; i<samples; i+=decim){
+      size_t at = 40 + i*2;
+      int16_t pcm = int16_t(uint16_t(wire[at]) | (uint16_t(wire[at+1]) << 8));
+      converted[convertedLength++] = aud1Pcm16ToUlaw(pcm);
+    }
+    radioBytes = converted;
   }
-  if(!txClient->queueAudioTx(converted, convertedLength)){
+  if(!txClient->queueAudioTx(radioBytes, convertedLength)){
     aud1TxAbort("TX ring overflow"); return false;
   }
   aud1TxUsed = txClient->audioTxSnapshot().queued;
@@ -12041,11 +12490,23 @@ bool AudioHandleWsUpgrade(WiFiClient& webClient, const String& request, const St
   audioStreamId = esp_random(); if(audioStreamId == 0) audioStreamId = 1;
   audioRxSequence = 0; audioRxFirstSample = 0; audioRxFirst = true; audioRxDiscontinuity = false;
   audioRadioSequenceValid = false; audioRadioExpectedSequence = 0;
+  audioRxSelect = 8000; audioRxRate = 8000;
   aud1WsParser.reset();
   aud1TxResetState(); aud1TxId = 0;
+  // 16 kHz is offered only on the 16 kHz radio link (radioLinkSetWide); the stream
+  // starts at 8 kHz either way and switches on the client's rx.select.
+  IcomLanClient *helloClient = lanRadioClient();
+  bool offer16k = helloClient && helloClient->audioSampleRateWanted() == 16000;
   String hello = "{\"type\":\"hello\",\"protocol\":\"AUD1\",\"version\":1,\"streamId\":" +
-                 String(audioStreamId) + ",\"rx\":[{\"kind\":\"RX_ULAW\",\"sampleRate\":8000}]," +
-                 "\"tx\":[{\"kind\":\"TX_PCM16\",\"sampleRate\":48000}],\"maxPayloadBytes\":1920}";
+                 String(audioStreamId) + ",\"rx\":[{\"kind\":\"RX_ULAW\",\"sampleRate\":8000}" +
+                 (offer16k ? ",{\"kind\":\"RX_ULAW\",\"sampleRate\":16000}" : "") + "]," +
+                 // TX_ULAW at the link's rate saves the WiFi 6-12x what PCM16 at
+                 // 48 kHz costs; a page that does not know it sends PCM16
+                 "\"tx\":[{\"kind\":\"TX_PCM16\",\"sampleRate\":48000},{\"kind\":\"TX_ULAW\",\"sampleRate\":" +
+                 String(helloClient ? helloClient->audioSampleRateWanted() : 8000) + "}],\"maxPayloadBytes\":1920," +
+                 // the radio's TX buffer (lan_jitter.h): TX latency a modem that times
+                 // its replies has to count on top of its round trip setting
+                 "\"radioTxBufferMs\":" + String(helloClient ? helloClient->txBufferMs() : 150) + "}";
   if(!AudioSendText(hello)){ AudioDisconnectWs(); return false; }
   if(IcomLanClient *client = lanRadioClient()) client->startRxAudio();   // opens the LAN audio channel
   Serial.print("AUD1 | WS client connected, stream="); Serial.println(audioStreamId);
@@ -12100,7 +12561,7 @@ void AudioHandleWsClient(){
         // Once keyed, drain according to elapsed monotonic time between every
         // received packet. Before keying, start as soon as the full prebuffer
         // is present but do not fault while queued bytes remain to be parsed.
-        size_t required = (aud1TxPrebufferSamples + 5) / 6;
+        size_t required = (aud1TxPrebufferSamples + aud1TxWireDecim - 1) / aud1TxWireDecim;
         if(aud1TxState == AUD1_TX_STREAM ||
            ((aud1TxState == AUD1_TX_READY || aud1TxState == AUD1_TX_PREBUFFER) &&
             aud1TxExpectedSample >= aud1TxPrebufferSamples && aud1TxUsed >= required))
@@ -12138,10 +12599,29 @@ void AudioHandleWsClient(){
       Serial.print(" wsDrop="); Serial.print(audioWsDropFrames);
       Serial.print(" rtx asked="); Serial.print(healthClient ? healthClient->audioRtxRequested() : 0);
       Serial.print(" got="); Serial.print(healthClient ? healthClient->audioRtxRecovered() : 0);
-      Serial.print(" gaveup="); Serial.println(healthClient ? healthClient->audioRtxAbandoned() : 0);
+      Serial.print(" gaveup="); Serial.print(healthClient ? healthClient->audioRtxAbandoned() : 0);
+#if !defined(WIFILT_NATIVE)
+      // Free heap / largest block: what the WiFi stack and the audio task need
+      // a contiguous few kB of. Below ~10 kB largest, expect WiFi send errors.
+      Serial.print(" heap="); Serial.print(ESP.getFreeHeap());
+      Serial.print("/"); Serial.print(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+#endif
+      Serial.println();
     }
   }
 }
+
+// One text frame to the AUD1 client, queued behind the audio (add-ons talk to
+// their page this way); false when no client or the frame does not fit.
+bool aud1SendTextFrame(const char* json, size_t n){
+  if(!AudioWsClient.connected() || n > 0xFFFF) return false;
+  uint8_t header[4]; size_t headerLen = 0;
+  header[headerLen++] = 0x80 | 0x1;
+  if(n < 126){ header[headerLen++] = uint8_t(n); }
+  else{ header[headerLen++] = 126; header[headerLen++] = uint8_t(n >> 8); header[headerLen++] = uint8_t(n); }
+  return wsEnqueueFrame(header, headerLen, (const uint8_t*)json, n);
+}
+size_t aud1SendRoom(){ return wsOut ? WS_OUT_SIZE - wsOutLen : 0; }
 
 void audioHandleRawClient(){
   WiFiClient client = audioWsServer.available();
@@ -12407,4 +12887,11 @@ String watchHealthJson(){
   json += "}";
   return json;
 }
+#endif
+
+// ── Add-ons (addon_hooks.h) ─────────────────────────────────────────────────
+// Included last, so an add-on sees every definition above. Without addons/
+// the empty hooks come from addon_hooks.h instead.
+#if WIFILT_HAS_ADDONS
+  #include "addons/addon.h"
 #endif

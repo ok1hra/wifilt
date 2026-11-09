@@ -105,13 +105,23 @@ $(FLAGS_STAMP): FORCE
 .PHONY: FORCE
 FORCE:
 
+# The same for add-ons: whether addons/ is there decides what the sketch
+# includes (addon_hooks.h), and a header that is not there leaves no trace in a
+# .d file. The stamp lists the add-on headers, so putting the folder in or
+# taking it out rebuilds the sketch. Their contents are tracked by the .d file.
+ADDONS_STAMP := $(BUILD_DIR)/.addons
+ADDONS_LINE  := $(sort $(wildcard $(SKETCH_DIR)/addons/*.h $(SKETCH_DIR)/addons/*/*.h))
+$(ADDONS_STAMP): FORCE
+	@mkdir -p $(dir $@)
+	@echo '$(ADDONS_LINE)' | cmp -s - $@ || echo '$(ADDONS_LINE)' > $@
+
 # .ino is C++ that relies on the Arduino builder inserting forward declarations.
 # 154 of them are already written by hand (wifilt.ino:786 onward); any the
 # compiler still misses get added to the sketch rather than generated, so both
 # targets keep compiling from one identical file.
 # -include Arduino.h reproduces what the Arduino builder does: the sketch uses
 # String and byte at line 91, long before its first #include.
-$(BUILD_DIR)/wifilt.ino.o: $(SKETCH) $(FLAGS_STAMP)
+$(BUILD_DIR)/wifilt.ino.o: $(SKETCH) $(FLAGS_STAMP) $(ADDONS_STAMP)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -x c++ -include Arduino.h -c $< -o $@
 
@@ -144,18 +154,24 @@ win:
 # host -- same shape as `win` above, same aarch64-linux-gnu-g++ major version as
 # the host gcc (both are Debian 12 packages). NOT fully static: same NSS trap as
 # the plain Linux target above, since this still links glibc.
+# build-arm64/ is kept in git (the Raspberry Pi binary); a build with add-ons
+# goes to build-arm64-addons/ instead, which is not, so it cannot be committed.
+ARM64_DIR = build-arm64$(if $(ADDONS_LINE),-addons)
 arm64:
 	$(MAKE) \
 	  CXX=aarch64-linux-gnu-g++ \
 	  CC=aarch64-linux-gnu-gcc \
-	  BUILD_DIR=build-arm64 \
+	  BUILD_DIR=$(ARM64_DIR) \
 	  TARGET=wifilt \
 	  LDFLAGS="-static-libstdc++ -static-libgcc" \
 	  LDLIBS="-lpthread"
 
+# Add-on pages (addons/<name>/data, see "Add-ons" in wifilt.ino) are served
+# beside data/ as further --data-dir overlays.
 run: all
 	@mkdir -p _run
-	./$(BUILD_DIR)/$(TARGET) --port 8080 --data-dir $(SKETCH_DIR)/data --config-dir _run
+	./$(BUILD_DIR)/$(TARGET) --port 8080 --data-dir $(SKETCH_DIR)/data \
+	  $(foreach d,$(wildcard $(SKETCH_DIR)/addons/*/data),--data-dir $(d)) --config-dir _run
 
 # --- distribution ----------------------------------------------------------
 #
@@ -199,6 +215,7 @@ dist-linux: all dist-assets
 	cp install.sh             $(DIST)/wifilt-linux-x86_64/
 	cp start-wifilt.sh        $(DIST)/wifilt-linux-x86_64/
 	cp -r $(ASSETS)           $(DIST)/wifilt-linux-x86_64/data
+	echo $(VERSION)         > $(DIST)/wifilt-linux-x86_64/VERSION
 	@cd $(DIST) && tar czf wifilt-$(VERSION)-linux-x86_64.tar.gz wifilt-linux-x86_64
 	@rm -rf $(DIST)/wifilt-linux-x86_64
 
@@ -212,10 +229,15 @@ dist-windows: win dist-assets
 
 dist-arm64: arm64 dist-assets
 	@rm -rf $(DIST)/wifilt-linux-arm64 && mkdir -p $(DIST)/wifilt-linux-arm64
-	cp build-arm64/wifilt $(DIST)/wifilt-linux-arm64/wifilt
+	cp $(ARM64_DIR)/wifilt $(DIST)/wifilt-linux-arm64/wifilt
 	cp install.sh          $(DIST)/wifilt-linux-arm64/
 	cp start-wifilt.sh     $(DIST)/wifilt-linux-arm64/
 	cp -r $(ASSETS)        $(DIST)/wifilt-linux-arm64/data
+	echo $(VERSION)      > $(DIST)/wifilt-linux-arm64/VERSION
+	@# the guided Raspberry Pi installer (pi/pi-setup.sh, SOFTWARE.md section 1.7)
+	cp pi/pi-setup.sh      $(DIST)/wifilt-linux-arm64/
+	mkdir -p               $(DIST)/wifilt-linux-arm64/pi
+	cp -r pi/lib pi/files pi/pi-bootstrap.sh $(DIST)/wifilt-linux-arm64/pi/
 	@cd $(DIST) && tar czf wifilt-$(VERSION)-linux-arm64.tar.gz wifilt-linux-arm64
 	@rm -rf $(DIST)/wifilt-linux-arm64
 

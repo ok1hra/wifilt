@@ -22,6 +22,7 @@
     if (code === "no_wifi") return "No network connection.";
     if (code === "busy") return "A scan or test is already running.";
     if (code === "tx") return "Not while the radio is transmitting.";
+    if (code === "link") return "Not during a data modem connection.";
     return "Device refused the request.";
   }
 

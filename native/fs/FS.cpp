@@ -152,10 +152,28 @@ void LittleFSFS::end() { mounted = false; }
 
 void LittleFSFS::nativeSetRoot(const std::string &path) { root = path; }
 
+void LittleFSFS::nativeAddOverlay(const std::string &path) { overlays.push_back(path); }
+
+// The overlay that holds `path` as a regular file, or "" when none does.
+std::string LittleFSFS::overlayFile(const char *path) const {
+  for (const std::string &dir : overlays) {
+    const std::string full = nativeJoinPath(dir, path);
+    struct stat info;
+#ifdef _WIN32
+    if (stat(full.c_str(), &info) == 0 && !(info.st_mode & S_IFDIR)) return full;
+#else
+    if (stat(full.c_str(), &info) == 0 && S_ISREG(info.st_mode)) return full;
+#endif
+  }
+  return std::string();
+}
+
 File LittleFSFS::open(const char *path, const char *mode) {
   if (!path || root.empty()) return File();
 
-  const std::string full = nativeJoinPath(root, path);
+  const bool readOnly = !mode || std::string(mode).find_first_of("wa+") == std::string::npos;
+  const std::string overlay = readOnly ? overlayFile(path) : std::string();
+  const std::string full = overlay.empty() ? nativeJoinPath(root, path) : overlay;
 
   struct stat info;
   if (stat(full.c_str(), &info) == 0) {
@@ -188,7 +206,7 @@ File LittleFSFS::open(const String &path, const char *mode) {
 bool LittleFSFS::exists(const char *path) {
   if (!path || root.empty()) return false;
   struct stat info;
-  return stat(nativeJoinPath(root, path).c_str(), &info) == 0;
+  return stat(nativeJoinPath(root, path).c_str(), &info) == 0 || !overlayFile(path).empty();
 }
 
 bool LittleFSFS::exists(const String &path) { return exists(path.c_str()); }

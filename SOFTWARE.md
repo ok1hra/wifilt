@@ -18,6 +18,7 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
  · [1.4 The navigation bar](#14-the-navigation-bar)
  · [1.5 Where it runs](#15-where-it-runs)
  · [1.6 local-trx — any radio, on a PC](#16-local-trx--any-radio-on-a-pc)
+ · [1.7 A Raspberry Pi station](#17-a-raspberry-pi-station)
 
 **[2. First run](#2-first-run)**
  · [2.1 AP mode](#21-ap-mode)
@@ -186,6 +187,10 @@ pocket and the laptop on the table hold the same log, with no server in between.
 **A DX cluster client with a band map**, wired straight into the logbook and the radio: one
 click on a spot puts the radio on frequency, and worked stations grey out.
 
+**JTTY, the keyboard mode of WSJT-X 3.2/3.3.** RTTY-style operating, with no time slots,
+but 4-tone GFSK with strong error correction that copies around −14 dB, with live entry while
+you type and a palette in the logbook — see [section 6b](#6b-data--jtty).
+
 **RTTY for contesting, inside the log.** Two decoders side by side over the radio's LAN audio,
 in a palette that floats over the logbook: click a callsign in the decoded text and it is in
 *Call*; the macros send it back over real FSK or as audio — see
@@ -204,7 +209,7 @@ setup guidance follow whatever is actually connected.
 
 ### 1.2 Standing on other people's work
 
-WIFILT would not exist without five open-source projects, and the debt is worth stating
+WIFILT would not exist without six open-source projects, and the debt is worth stating
 plainly.
 
 **[ESP32 BT CAT for IC-705](https://github.com/ok1cdj/IC705-BT-CIV)** — Ondrej "OK1CDJ". WIFILT
@@ -229,9 +234,12 @@ compression tables all come from there. WIFILT's modem is that DSP code compiled
 WebAssembly so it can run in a phone browser; the mode, and the community that uses it, are
 Jordan's.
 
-**[WSJT-X](https://wsjt.sourceforge.io/)** — Joe Taylor (K1JT) and the WSJT-X team. WSPR is
-theirs, and so is the FT8/JS8 modulation heritage underneath everything on the DATA page.
-The beacon's encoder is checked against WSJT-X's own golden vectors on every build.
+**[WSJT-X](https://wsjt.sourceforge.io/)** — Joe Taylor (K1JT), Steven Franke (K9AN) and the
+WSJT-X team. WSPR is theirs, and so is JTTY: the JTTY tab
+([section 6b](#6b-data--jtty)) runs a JavaScript port of WSJT-X's own `lib/jtty` modem, from
+the message grammar to the decoder, so it copies and is copied by WSJT-X 3.2/3.3 on the air.
+So is the FT8/JS8 modulation heritage underneath everything on the DATA page. The beacon's
+encoder and the JTTY codec are checked against WSJT-X's own golden vectors.
 
 **[Mercury](https://github.com/Rhizomatica/mercury)** — Rafael Diniz and Rhizomatica. Mercury
 is a wire-compatible ARQ file-transfer modem built for the same constraint WIFILT itself is
@@ -279,7 +287,7 @@ Every page carries the same bar:
 | *(logo)* | — | opens a small About panel with links to the project and to RemoteQTH |
 | **QRPLog** | `/log` | the logbook |
 | **DXC** | `/dxc.html` | the DX cluster client — splits the QRPLog page in two; its own 600×750 window from anywhere else |
-| **DATA** | `/data` | four modes over the radio's LAN audio, chosen in the page's own sub-navigation: **JS8Call-ICOM**, **RTTY-ICOM**, **WSPR** and **Mercury**. Only one of them can run at a time — see [section 12](#12-transmit-safety). |
+| **DATA** | `/data` | the modes over the radio's LAN audio, chosen in the page's own sub-navigation: **JS8Call-ICOM**, **RTTY-ICOM**, **JTTY**, **WSPR** and **Mercury**. Only one of them can run at a time — see [section 12](#12-transmit-safety). |
 | **SETUP** | `/setup` | configuration |
 | **LOGSYNC** | `/datasync` | log synchronisation, backup, import |
 | **BD** | `/bd` | band decoder — hidden unless the hardware has it |
@@ -288,6 +296,12 @@ The right end of the bar carries the firmware revision, the **WiFi signal streng
 — which turns red at −70 dBm or worse — and, when a newer firmware has been published, an
 amber `→ <revision> ▲` link to the web installer. That check is the one part of the interface
 that reaches the internet; without a connection it simply does not appear.
+
+The desktop build has no WiFi radio of its own, so it shows the WiFi link of the computer
+it runs on instead, labelled to keep it apart from the box's figure: `RPI -48 dBm` on a
+Raspberry Pi, `PC -48 dBm` elsewhere (Linux only for now), with the same red at −70 dBm. It
+is left out when the computer is on a cable, is itself the hotspot (WiFi in AP mode), or
+is not connected.
 
 On a radio that reports a GPS position over CI-V (the IC-705), the same corner starts with
 the station's locator — `GPS JO60WC`. It is dimmed to `GPS --` while the receiver waits for
@@ -348,8 +362,9 @@ than the one this installation first used, SETUP and QRPLog show an amber banner
 the log is and the command that brings port 80 back. `--port`, `--dxc-port` and
 `--audio-port` pick the ports explicitly.
 
-Building either native binary from source, and what `install.sh` does on Linux (including the
-Raspberry Pi build), is in
+A Raspberry Pi meant to stay by the radio has its own guided installer for the whole station,
+[section 1.7](#17-a-raspberry-pi-station). Building either native binary from source, and what
+`install.sh` does on Linux (including the Raspberry Pi build), is in
 [BUILD.md § 4](BUILD.md#4-native-build-linux-windows-and-raspberry-pi-arm64).
 
 
@@ -405,12 +420,77 @@ CI-V — the network MOD-level TX-gain calibration, GPS position, the radio's wa
 themselves off rather than misbehave. The transmit gain is still calibrated, just through the
 ordinary audio path.
 
-On Linux and Raspberry Pi, `install.sh` copies it to `/opt/wifilt` beside WIFILT but installs
-no service for it. A **`start-wifilt.sh`** (and `start-wifilt.bat` on Windows) starts both
+On Linux and Raspberry Pi, `install.sh` copies it to `/opt/wifilt` beside WIFILT and installs
+a `local-trx` systemd service next to WIFILT's, written but not enabled (the Raspberry Pi
+guided installer, `curl -fsSL https://ok1hra.github.io/wifilt/pi-setup | bash`, asks and
+enables both). A **`start-wifilt.sh`** (and `start-wifilt.bat` on Windows) starts both
 programs and opens both pages, because an operator has no other way to discover that there
 are two. Building it from source is [BUILD.md § 5](BUILD.md#5-local-trx-a-hamlib-bridge-for-non-icom-radios).
 
 Pointing WIFILT at it is one checkbox in [SETUP → Radio](#93-radio).
+
+### 1.7 A Raspberry Pi station
+
+A Raspberry Pi that sits next to the radio, with no screen and no keyboard, is the most
+common PC for WIFILT and local-trx. For it there is a guided installer that sets up the whole
+station, not just the two programs. It needs **Raspberry Pi OS Lite (64-bit)** — write it to
+the card with Raspberry Pi Imager, set the host name, your user, SSH and Wi-Fi there — and is
+run over SSH, as your own user (it asks for `sudo` itself):
+
+```sh
+curl -fsSL https://ok1hra.github.io/wifilt/pi-setup | bash
+```
+
+It downloads the newest Raspberry Pi archive from the
+[web installer page](https://ok1hra.github.io/wifilt/), checks it against `SHA256SUMS` and
+starts the `pi-setup.sh` inside it. **Every question comes first**; then it shows the plan
+and, after `Start?`, does all the work without needing you — the Open Interface III firmware
+build alone takes several minutes. What it offers, in this order:
+
+| Step | Default | What it does |
+|---|---|---|
+| System packages | always | installs the missing tools, puts your user into the `audio` and `dialout` groups; optionally `apt full-upgrade` (default yes on a new installation) |
+| WIFILT + local-trx | yes | installs both to `/opt/wifilt` with the port 80 permission and asks whether the services start **at every boot** — on a headless Pi the answer is normally yes |
+| Serial port aliases | yes | lists the USB serial adapters and lets you name them `/dev/ttyUSB.cat` (CAT to the radio), `/dev/ttyUSB.cw` (Open Interface III) and `/dev/ttyUSB.panel`, matched by the adapter's serial number, so the names survive reboots and replugging. Use these names in local-trx's setup |
+| Network | yes | **Ethernet:** DHCP client; when nothing answers within 20 s the Pi becomes the DHCP server itself (`192.168.50.1/24` by default), so TrxNet devices on a bare cable still get addresses; optional fixed addresses by MAC. **Wi-Fi:** when no known network is in range, the Pi opens a setup access point `WIFILT-setup-xxxx` with a password you choose; a phone that joins it gets a page where Wi-Fi networks can be added, and WIFILT itself stays reachable at `http://192.168.4.1/`. Wi-Fi set in Raspberry Pi Imager is moved from netplan to an ordinary NetworkManager profile |
+| Open Interface III firmware | **no** | builds the firmware from the `ok1hra/oi3` sources (and the TrxNet library) and uploads it over the board's USB; only when the sources changed since the last upload from this Pi |
+| Power-loss protection (fslock) | no | makes the SD card read-only, so pulling the plug cannot damage it — see below |
+
+The answers are remembered in `/etc/wifilt-pi/setup.conf` and offered as defaults next time,
+so **updating is running the same thing again**, or simply `wifilt-pi-setup`, which the first
+run installs. WIFILT is reinstalled only when the downloaded files differ from the installed
+ones; `--force` reinstalls anyway, `--only wifilt,serial` limits the run to some steps,
+`--yes` takes every default without asking and `--dry-run` asks the questions and stops at the
+plan. Everything it prints also goes to `/var/log/wifilt-pi-setup.log`. A Pi set up by hand
+before the installer existed is recognised from what is on it, and nothing gets duplicated.
+
+**Power-loss protection.** A Pi switched off by pulling the plug can corrupt its SD card. With
+fslock the root file system is an overlay in RAM — changes vanish at reboot — and the
+settings that must survive (WIFILT, local-trx and the network profiles) live on a **second
+card in a USB reader**, mounted on `/data` and written synchronously. The installer formats
+that card only after you type `FORMAT /dev/sdX`; a card already labelled `RPIDATA` is used as
+it is. A copy of the settings also stays on the SD card, so the station still starts without
+the data card. Day to day:
+
+```sh
+sudo fslock status      # locked or not, data card, last backup
+sudo fslock lock        # back up the settings, lock, reboot
+sudo fslock unlock      # unlock (offers to restore a backup), reboot
+sudo fslock list        # backups of the settings, newest first
+sudo fslock restore 2   # put backup number 2 back
+```
+
+The first lock is yours to do — reboot once after the installation, check that `fslock
+status` shows the data card and every path *on card*, then `sudo fslock lock`. Each login
+says in colour whether the system is locked.
+
+**Updating a locked Pi** needs no extra steps: `wifilt-pi-setup` asks its questions, unlocks,
+reboots, finishes the update by itself after the reboot and then **locks again** after a delay
+you choose (10 minutes by default), so the Pi ends the way it started. During that delay the
+login message counts down; `wifilt-pi-setup --keep-unlocked` cancels the lock,
+`sudo fslock lock` brings it forward. Follow the unattended part with
+`journalctl -fu wifilt-pi-resume`. If the update fails, the Pi stays unlocked and the login
+message says so.
 
 ---
 
@@ -1889,6 +1969,22 @@ filling as the slot runs — and the quick controls:
 **TUNE turns into STOP** while the carrier is up, and **GPS glows red** while position
 tracking is armed.
 
+**Setting the RX level.** The JS8 and WSPR pages show it beside *Audio*. Judge it on
+an empty stretch of band, with only noise: about **−40 dBFS** is the target, and green runs
+from −60 to −20. A strong station lifts the reading, briefly into amber or red, and that is
+fine as long as the noise between signals sits near −40. The radio's network audio has no
+level control of its own: the IC-705's *WLAN AF/IF Output* and the IC-7610/IC-9700 *LAN AF/IF
+Output* offer only Output Select and AF SQL, unlike *USB AF/IF Output*, which has an AF
+Output Level. WIFILT passes the radio's µ-law audio through unchanged, so the level is set in
+the receiver:
+
+- **RF Gain** down, the first thing to turn when the noise alone reads above −20 dBFS;
+- **P.AMP off**, or **ATT** on, on a band with strong signals;
+- **AGC on**, FAST or MID, never OFF: with AGC off a strong station clips the audio.
+
+If the reading stays in the red on an empty band, lower RF Gain until it comes back to
+around −40.
+
 When *Enable radio TX* is the **only** thing in the way, the buttons are not greyed out but
 dimmed, and they still answer a tap: nothing is transmitted, and a notice says *Nothing was
 sent: radio TX is not enabled in SETTINGS* with a **GO TO SETTING** button that opens the
@@ -3224,6 +3320,11 @@ The receiver searches the RX offset ± F Tol first and then the **search band** 
 1200–1800 Hz by default, as WSJT-X does), takes overlapping signals apart by subtracting each
 decoded one, and goes back over the last second when it does.
 
+A radio packet lost on the way — on Wi-Fi that happens — is filled with 20 ms of silence where
+it belongs instead of being skipped. Skipped, it would shift every later symbol and cost the
+frame it falls in; filled, it is a short dropout the error correction rides over (holes up to
+about 100 ms, in testing).
+
 ### 6b.5 TX — sending
 
 **DX call** and **Exch** fill `%H` and `%E`; your call (`%M`) comes from SETUP → Identity.
@@ -3541,10 +3642,27 @@ band-and-power pair.
 - Each **band is a row**, each **power a column**. **ADD BAND** and **ADD POWER** build the
   matrix; a power is a whole percentage of the radio's scale, and **four powers per band is
   the limit** — every column is another carrier on the air.
-- Cells show their state: `EMPTY`, `NOT CALIBRATED`, `NOT FOR THIS BAND`, or the measured
-  value. Under each power the labels say which mode transmits at it, and a line above the
-  grid lists the powers your modes use that the plan does not have yet, each with an
-  **ADD** button — one run then covers JS8, WSPR and RTTY together.
+- Cells show their state: `measure` (ticked, nothing stored), the measured value (green),
+  `no knee 0.600` (amber: a value stored without a measured knee — a ceiling, or set by hand;
+  usable on the air, but RUN measures it), `stale …` (measured at another MOD level),
+  `↻ 0.491` (you asked for it to be measured again), `·` or `(0.491)` (left out of the plan,
+  with or without a stored value). Under each power the labels say which mode transmits at
+  it, and a line above the grid lists the powers your modes use that the plan does not have
+  yet, each with an **ADD** button — one run then covers JS8, WSPR and RTTY together.
+- **A click on a cell opens its menu**:
+
+  | Action | What it does |
+  |---|---|
+  | **MEASURE NOW** | keys this one cell at once: tunes, asks about the antenna, measures, puts the radio back. No other band, and no change to the MOD level. |
+  | **RE-MEASURE AT RUN** | keeps the value for now and has the next RUN measure it again (`↻`); **KEEP THE VALUE** takes that back. Remembered until the page is reloaded. |
+  | **LEAVE OUT OF THE PLAN** / **PUT IN THE PLAN** | whether RUN deals with this cell at all. Leaving a cell out does not delete its value. |
+  | **DELETE THE VALUE** | removes the stored value; that band and power then transmit at the manual level until measured again. |
+
+- **Under the grid, before you press anything, the panel lists exactly what RUN will key and
+  why**, in order — `20m @ 100 % — stored without a knee (ceiling or hand-set)`,
+  `40m @ 10 % — re-measure asked` — or says that there is nothing to key. If the first
+  carriers move the MOD level, every ticked cell is measured again after them, and the list
+  says so.
 - **RUN** starts. **RE-MEASURE ALL** discards what is stored and does it again. **STOP** ends
   the run.
 - **Before every retune to a new band the tool stops and asks whether the right antenna is
@@ -3556,7 +3674,8 @@ band-and-power pair.
 - **Only what is missing is keyed.** A band already calibrated at the radio's current MOD
   level costs no carrier and no antenna question — its stored result still takes part in
   choosing the MOD level. A new band is measured top power first, then straight on to its
-  lower powers without retuning; the run only moves on once that band is done.
+  lower powers without retuning; the run only moves on once that band is done. **The band
+  the radio is on goes first** when it has something to measure.
 - The calibration is **shared by JS8, WSPR and RTTY in USB-D/LSB-D**: the mode does not
   matter, only the band and the power setting do, because the point where the ALC starts to
   act moves with the RF power the radio is set to. Mercury keeps its own table — its data
@@ -3578,6 +3697,7 @@ all, a correction written to the radio's **MOD level** over CI-V.
 | `radio did not confirm the power` | the power change was not acknowledged; check the CI-V link |
 | `carrier ran out before search finished` | the carrier ended before the knee was found; retry |
 | `no knee found — ALC never acted, even at the maximum level` | check that the radio's MOD input is the LAN one, that its MOD level is not too low, and that RF power is not set higher than the audio path can drive |
+| `the radio's DATA1 MOD input is set to 0, not 5 (LAN)` (IC-7610), `the radio's data-mode MOD input is set to …` (IC-705) | the modulator in the data mode does not listen to the network. Set the menu the message names (IC-7610: `MENU → SET → Connectors → MOD Input → DATA1 MOD → LAN`). Checked before anything is keyed. |
 | `not calibrated for 20m @10% - using the manual 0.25` | that pair was never measured; the manual gain is used instead |
 | **Continue** seems not to react on the first press | the PTT frame is still lit although PTT is already released. It does no harm — wait for the frame to go out. |
 
@@ -3914,6 +4034,22 @@ property of the slot, so loading a configuration onto a switched-off slot does n
 > **ICOM-LAN may be used by only one slot.** The audio path and the single-operator lock
 > belong to one radio. The form enforces it: once a slot is on ICOM-LAN, the option
 > disappears from the others, and saving anyway is refused.
+
+**The radio's TX buffer follows the network.** On ICOM-LAN the radio holds a little TX audio
+before it plays it, to ride out late packets; how much is asked for when the interface
+connects. A wired radio needs very little, a radio on Wi-Fi (the IC-705 has nothing else) a
+good deal more: with the fixed 150 ms every client used, an IC-705 on Wi-Fi ran dry and cut
+pieces out of its transmissions. For an IC-705 the interface now measures how late the radio's
+RX audio arrives (the same path, the other way), and asks for 1.5× that plus 60 ms, 150–500 ms
+in 50 ms steps. It goes up as soon as the path needs it and comes down only after ten quiet
+minutes. A wired radio keeps 150 ms: an IC-7610 hands out its audio and answers its pings in
+clumps of its own (up to ~170 ms late on a 2 ms network), which is not a path a bigger buffer
+would help with, only added latency — its transmissions at 150 ms do not slip.
+A change takes a reconnect, so it waits until no DATA page holds the audio and the radio is
+receiving; the value is remembered per radio address (`/lan-txbuffer.json` on the interface),
+so the next start begins with it. The buffer is TX latency, which a modem that times its
+replies adds to its round trip by itself. `/state` shows `rxJitterMs`, `txBufferMs` and the value the next connection will use,
+`txBufferNextMs`; nothing needs setting.
 
 **Announce WiFi IP via CW on first connect** — when the interface first links to a full-CAT
 radio, it reads its own IP address to you in Morse. This is **sidetone only, by design**: it
@@ -4330,7 +4466,7 @@ at that moment. They are gathered here so nothing is a surprise.
 | **PA — TUNE** | starts the amplifier's own tuning cycle ([section 3.14](#314-pa--the-linear-amplifier)) |
 
 **One radio, one operator.** The interface has exactly one audio link to the transceiver, so
-**JS8Call-ICOM, RTTY-ICOM, WSPR and Mercury cannot run at the same time** — and neither
+**JS8Call-ICOM, RTTY-ICOM, JTTY, WSPR and Mercury cannot run at the same time** — and neither
 can the RTTY palette in QRPLog, which is a full holder of that same session. Opening a second
 one shows *The radio is driven from somewhere else*, says where, and offers **TAKE THE SESSION
 OVER HERE**. Nothing ever takes the session on its own, not even a page restoring itself after
@@ -4338,8 +4474,8 @@ a reload: a running beacon is never silently stolen by a browser refresh.
 
 Three things govern all of it:
 
-1. **Enable radio TX** is the master switch, shared by the JS8 and WSPR pages and settable
-   from either. With it off, none of the above can transmit and their indicators go grey. The
+1. **Enable radio TX** is the master switch, shared by the JS8 and WSPR pages and
+   settable from any of them. With it off, none of the above can transmit and their indicators go grey. The
    tickbox carries the pledge *"I will use safe RF power and a suitable load/antenna."*
 2. **Unattended operation needs a live browser.** There is no hard air-time cap — an
    automatic station has to be able to send a long message without being cut off — so instead

@@ -47,6 +47,7 @@
   <nav class="subtabs" aria-label="DATA mode">
     <a class="subtab" href="/data">JS8Call-ICOM</a><a class="subtab subtab-active" href="/rtty.html">RTTY-ICOM</a><a class="subtab" href="/jtty.html">JTTY</a><a class="subtab" href="/wspr.html">WSPR</a><a class="subtab" href="/mercury.html">Mercury</a>
   </nav>
+    <script src="/addon-tabs.js?v=3c795dcb" defer></script>
 </header>
 
 <header class="radio-bar">
@@ -369,7 +370,7 @@
 <script src="/ports.js"></script>
 <script src="/lan-gate.js?v=75f2464b"></script>
 <script src="/watch-link.js?v=19dc6845"></script>
-<script src="/fw-version.js?v=45bfdba6"></script>
+<script src="/fw-version.js?v=d098bc7f"></script>
 <script src="/rtty-codec.js?v=f902ad99"></script>
 <script src="/rtty-afc.js?v=ec376292"></script>
 <script src="/trxnet-peers.js?v=9a2bd921"></script>
@@ -388,14 +389,14 @@
      (JS8's own periodic-slot shape, kap.3 explicitly wants immediate PTT
      instead) -- only Js8Tx.packetizeTxPcm48k is called. -->
 <script src="/audio-health.js?v=9efe092e"></script>
-<script src="/js8-aud1.js?v=378855b1"></script>
+<script src="/js8-aud1.js?v=f1390df5"></script>
 <script src="/js8-tx.js?v=26bed715"></script>
 <!-- CAL PLAN (kap.9): the same TxGainCalUi/TxGainPlanUi tools JS8/WSPR mount,
      unchanged -- the calibration carrier is WsprTx's own tone (wspr-core.js/
      wspr-tx.js), reused as a generic ALC-knee probe regardless of which page
      mounts it (data.js/wspr.js do exactly this too; only Mercury's own
      much-higher-PAPR DATAC1 burst needed a different carrier). -->
-<script src="/icom-models.js?v=543117c2"></script>
+<script src="/icom-models.js?v=8bf2cfa5"></script>
 <script src="/trx-supply.js?v=121671a1"></script>
 <script src="/js8-presets.js?v=7131988f"></script>
 <script src="/wspr-core.js?v=981ff9bf"></script>
@@ -406,11 +407,11 @@
 <script src="/rf-power-auto.js?v=1a8b8766"></script>
 <script src="/tx-gain-cal.js?v=8664a2ed"></script>
 <script src="/tx-gain-cal-ui.js?v=cc5fb2b6"></script>
-<script src="/tx-gain-mod-level.js?v=97525416"></script>
-<script src="/tx-gain-plan.js?v=6df74d9e"></script>
+<script src="/tx-gain-mod-level.js?v=2113125d"></script>
+<script src="/tx-gain-plan.js?v=7846c688"></script>
 <script src="/tx-gain-plan-store.js?v=6d5a572b"></script>
 <script src="/tx-mode-powers.js?v=840b843a"></script>
-<script src="/tx-gain-plan-ui.js?v=70907036"></script>
+<script src="/tx-gain-plan-ui.js?v=1200f156"></script>
 <!-- Extracted from rtty.js 2026-09-07 so QRPlog's own RTTY palette
      (log-rtty-panel.js) draws the same scope, shows the same RX log and
      transmits through the same AFSK path instead of carrying second,

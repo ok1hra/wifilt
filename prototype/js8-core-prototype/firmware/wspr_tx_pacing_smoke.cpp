@@ -166,6 +166,9 @@ struct LanClientStub {
     bool startAudioTx(std::uint64_t total, std::uint32_t startMs) {
         return g_lanUp && tx.arm(total, startMs);
     }
+    bool extendAudioTx(std::uint64_t moreBytes) { return g_lanUp && tx.extend(moreBytes); }
+    // The 8 kHz radio link: what the WSPR page runs on.
+    std::uint32_t audioSampleRate() const { return 8000; }
     void cancelAudioTx(IcomLanAudioTx::Fault fault = IcomLanAudioTx::FAULT_NONE) {
         if (fault == IcomLanAudioTx::FAULT_NONE) tx.clearTx();
         else tx.fail(fault);
@@ -234,10 +237,36 @@ void unattendedLogEvent(UnattendedEventType, const char *) {}
 const std::uint32_t AUD1_WS_SLOT_BACKLOG_GRACE_MS = 100;
 const std::uint32_t TX_GUARD_LEAD_MS = 3000;
 
+// ---- what the extracted control handler reaches that WSPR never uses -------
+// RTTY/JTTY text streams, the add-on hook and the RX rate switch: real
+// code in the sketch, inert here. A WSPR transmission carries none of them.
+struct RttyStream {};
+struct JttyStream {};
+enum { RTTY_STREAM_RX1, RTTY_STREAM_RX2, RTTY_STREAM_TX };
+RttyStream rttyStream;
+JttyStream jttyStream;
+void rttyStreamAppend(RttyStream &, int, const char *, std::size_t, std::uint32_t) {}
+void rttyStreamAbortTx(RttyStream &, std::uint32_t) {}
+void jttyStreamTx(JttyStream &, const char *, std::size_t, std::uint32_t) {}
+void jttyStreamRx(JttyStream &, std::uint8_t, bool, std::uint16_t, std::int8_t, const char *, std::size_t, std::uint32_t) {}
+void jttyStreamAbortTx(JttyStream &, std::uint32_t) {}
+bool addonFromPage(const String &, const String &) { return false; }
+bool aud1TxRtty = false, aud1TxJtty = false;
+std::uint32_t audioRxSelect = 8000;
+// modem.busy (wifilt.ino): the handler only records the lease.
+const std::uint32_t MODEM_BUSY_LEASE_MS = 15000;
+std::uint32_t modemBusyUntil = 0;
+bool modemBusyOn = false;
+char modemBusyMode[12] = "";
+
 // ---- sketch globals --------------------------------------------------------
 // Same declarations as IC-705_Interface.ino around line 451.
 Aud1TxState aud1TxState = AUD1_TX_IDLE;
-const std::size_t AUD1_TX_RING_SIZE = 12288;
+const std::size_t AUD1_TX_RING_SIZE = 12288;   // reported in HELLO; the ring itself is the LAN client's
+// The wire of the transmission in flight, set by tx.prepare (TX_PCM16 / TX_ULAW).
+const std::uint64_t AUD1_TX_EXTEND_CAP_S = 180;
+std::uint8_t aud1TxWireKind = 3;
+std::uint32_t aud1TxWireRate = 48000, aud1TxWireDecim = 6;
 std::size_t aud1TxUsed = 0;
 std::uint32_t aud1TxId = 0, aud1TxExpectedSequence = 0, aud1TxExpectedPackets = 0;
 std::uint32_t aud1TxReceivedPackets = 0, aud1TxTargetMs = 0;
@@ -248,11 +277,6 @@ std::uint32_t aud1TxLevelNextMs = 0;
 std::uint32_t audioStreamId = 0;
 std::uint32_t audioTxLastMs = 0;
 bool audioTxKeyed = false;
-// Per-transmission health counters for the browser->firmware leg.
-std::uint32_t aud1TxLastPacketMs = 0;
-std::uint32_t aud1TxMaxGapMs = 0;
-std::size_t aud1TxMinQueued = (std::size_t)-1;
-std::uint32_t audioRxHeld = 0;
 
 // PTT transitions are the single most important observable, so they are surfaced
 // rather than merely recorded.

@@ -11,6 +11,243 @@ published.
 
 ## Working tree — not committed
 
+**Add-ons: optional features built in from a folder beside the sketch.**
+
+* **What.** When `addons/addon.h` exists next to `wifilt.ino` it is included at the end of the
+  sketch (`__has_include`), and its pages in `addons/<name>/data/` go into the filesystem image.
+  Without the folder every hook is empty and the build is exactly the public one.
+* **Hooks.** `addonSetup()` (before the first radio stream request), `addonNetworkUp()`,
+  `addonRoutes()`, `addonTick()` and `addonFromPage()` for AUD1 control frames the core does not
+  know; `aud1SendTextFrame()`/`aud1SendRoom()` the other way. An add-on's JSON settings are
+  `AddonBlob`s: stored verbatim on `cfg`, served at their own path, optionally in the
+  configuration backup and restore, with an `onSaved` callback.
+* **Pages.** `tools/prepare-spiffs-tree.sh` stamps, minifies and compresses `addons/*/data/`
+  like `data/` (`stamp-asset-versions.js --lookup` lets a page reference the core's scripts) and
+  copies it in after the core (`WIFILT_NO_ADDONS=1` leaves it out). The native build serves the
+  pages as further `--data-dir` overlays (`make -C native run` adds them). DATA pages load
+  `addon-tabs.js`, which adds the sub-tabs an add-on lists in its `addon-tabs.json` (the core's
+  is empty).
+* **Public releases stay clean.** A binary built with add-ons prints a `WIFILT-ADDONS` mark at
+  start-up; `tools/gh-pages.sh` refuses a firmware or desktop archive that contains it and builds
+  the filesystem image with `WIFILT_NO_ADDONS=1`.
+* **Shared pieces.** The radio lease is `WifiltLease` (`mercury-session.js`), of which Mercury's
+  is one instance; the TX gain plan store keeps a calibration per profile; Mercury's calibration
+  adapter (`mercury-gain-cal.js`) takes a `workerUrl`/`startExtra`, so another modem page can
+  mount it with its own carrier.
+
+**AUD1 TX at the link's rate (TX_ULAW) and a quiet loop during ARQ links.**
+
+* **TX_ULAW.** The AUD1 hello offers a second TX kind, `TX_ULAW` (kind 4) at the radio link's
+  rate. Every DATA page (Mercury, JS8, WSPR, RTTY, JTTY and both TX calibrations) now sends its
+  transmission as the link's µ-law instead of PCM16 at 48 kHz: ~10 kB/s on the WiFi instead of
+  ~98 kB/s at 8 kHz (~18 kB/s on the 16 kHz link). The conversion moved into the browser's
+  `Aud1WebSocketSession` and is the firmware's own, bit for bit, so the radio receives exactly the
+  same bytes. Old pages and old firmware fall back to PCM16; `?aud1tx=pcm16` forces it for an A/B
+  test. The firmware logs `wire=TX_ULAW/8000` on every `TX ready`.
+* **Modem busy.** Mercury tells the firmware when a link is up (`modem.busy`, a 15 s lease
+  renewed every 5 s). Meanwhile the CI-V rotation drops from 100 ms to 500 ms with only frequency,
+  mode and PTT, other CI-V radios are polled 4x less, GPS polling pauses, the DX cluster neither
+  reconnects nor floods, APRS-IS does not connect, the unattended log stays in RAM unless half full,
+  page loads are paced at 64 kB/s and a network scan is refused. `/state` gains `modemBusy`; a
+  `LOOP| busy max/mean us:` line a minute shows where the loop's time goes during a link.
+* **Tests.** `tools/aud1-tx-ulaw-smoke.js` (encoder vs. the firmware's function over all 65536
+  inputs, packet transcoding, session); `tools/web-pacer-smoke.cpp` the 64 kB/s cap.
+  `tools/icom-lan-fake-radio.py` gains `--tx-dump` and `--civ-stats`.
+* **WSPR TX co-simulation repaired and in CI.** `prototype/js8-core-prototype/build-wspr-tx-pacing-smoke.sh`
+  (the firmware's AUD1 TX path lifted verbatim from `wifilt.ino`, run against the real
+  `data/wspr-tx.js` for 110 s under main-loop stalls) had not built since the 16 kHz link. Its
+  shim follows the sketch again, it repeats the clean, 400 ms stall and 60 s background runs on
+  TX_ULAW (87/87), and `.github/workflows/build.yml` now runs it together with
+  `aud1-tx-ulaw-smoke` and `web-pacer-smoke`.
+
+**TX buffer: the jitter tracker ignores reconnects and this station's own TX.**
+
+* **Found live** on the IC-705 (FM-D, squelch on): the firmware raised its TX buffer to 450 ms on
+  a measured 231 ms, then to 500 ms on "65535 ms". The same radio showed 10 ms on SSB that day.
+  Two faults in `lan_jitter.h`: after a reconnect (here the switch to the 16 kHz link) the new
+  stream's sequence numbers landed just below the old ones, so its packets counted as minutes
+  late; and the radio's RX stream stutters around its own PTT on FM, which is not path jitter.
+* **Fix.** `restart()` on every audio channel open; a packet behind the newest one after a pause,
+  or more than 2 s late, starts a new anchor instead of counting; `hold()` while this station's
+  TX audio is active (`IcomLanAudioTx::active()`) and 1.5 s after it, then re-anchor.
+  `lan-jitter-smoke` 19/19 (reconnect with nearby numbers, the PTT stutter), both native checks
+  pass. On air afterwards the IC-705 stayed at 150 ms on the 16 kHz link.
+
+**Verified on air (2026-11-07): JTTY and the TX buffer.**
+
+IC-705 (Wi-Fi, 100 %) ↔ IC-7610 (wired, 30 %), 14.085 MHz USB-D, both on 3.6 kHz filters,
+dummy loads, two native instances, the real pages in headless Chrome.
+
+* **JTTY: 23/23** at the first attempt (whole messages both ways, F1, live entry, Roundup and
+  Field Day), with the IC-705 on 150 ms: the Wi-Fi was quiet that day (RX jitter ~10 ms), and
+  the firmware rightly left the buffer there.
+* **TX buffer:** the IC-705 stayed at 150 ms (jitter 10 ms); the IC-7610 (jitter 105–170 ms of
+  its own) stayed at 150 ms after the Wi-Fi-only fix, where the version before had raised it to
+  350 ms.
+
+**TX buffer: adapted only for a radio on Wi-Fi.**
+
+* **Found live** (2026-11-07, both radios on the PC, nothing transmitting): the wired IC-7610
+  showed RX lateness p99 75–170 ms and audio-channel ping RTT p50 39 / p95 90 / max 169 ms,
+  against an ICMP ping of 2–5 ms and 11 ms RTT for the IC-705 through the same PC; an
+  independent capture with the LAN test tool (wifilt stopped) agreed. It is the IC-7610's own
+  LAN timing, not the path, and its TX at 150 ms has never slipped. The firmware had raised it
+  to 350 ms — 200 ms of latency for nothing, which an ARQ modem pays for.
+* `lanTxBufferTick` now raises the buffer only when the radio is an IC-705 (the one Icom with
+  nothing but Wi-Fi); any other radio goes straight back to 150 ms. The jitter is still
+  measured and shown in `/state` for all.
+* `tools/lan-txbuffer-native-check.sh` gained `RADIO_NAME=IC-7610` (jitter measured, stays 150,
+  no reconnect). Both variants pass.
+* Open: an ESP32 box on Wi-Fi in front of a wired radio has the same exposure as the IC-705, but
+  its own jitter cannot be told apart from the IC-7610's clumping from RX timing alone.
+
+**Manual and credits: JTTY everywhere it belongs.**
+
+* `README.md`: JTTY in the opening line; a new *Credits* section (wfview, JS8Call, WSJT-X for
+  WSPR and JTTY, Mercury/FreeDV, OK1CDJ).
+* `SOFTWARE.md`: §1.1 highlights for JTTY; §1.2 WSJT-X credited for JTTY; §6b.4 the JTTY
+  receiver's hole filling.
+* Installer page (`tools/gh-pages.sh`): JTTY in the port-83 and local-trx lists.
+
+**ICOM-LAN: the radio's TX buffer adapts to the measured jitter.**
+
+* **Found on air** (2026-11-06): the stream request's fixed `txbuffer` of 150 ms (wfview's
+  default) let an IC-705 on Wi-Fi run dry; a 17 s JTTY message lost ~1.2 s, frame after frame.
+  300 ms removed it. On a wired radio more buffer is only latency, which an ARQ modem's peers do
+  not forgive, so one fixed value would be wrong for one of them.
+* **Measured** (`lan_jitter.h`, ~120 B, no allocation): every RX audio packet's lateness against
+  the radio's 20 ms clock, in the audio task (a stalled ESP32 main loop does not count, as a ping
+  RTT taken there would). p99 above the window's floor per 20 s window, worst of the last six.
+  Re-anchors on a radio pause or a new stream; out-of-order packets and replays count with
+  their real lateness; clock skew is re-floored every window.
+* **Applied** (`lanTxBufferTick`): buffer = 1.5 × jitter + 60 ms, 150–500 ms in 50 ms steps; up
+  as soon as needed, down after ten quiet minutes. A change takes a reconnect, so it waits until
+  no page holds AUD1 and the radio is receiving; remembered per radio address in
+  `/lan-txbuffer.json` and primed before every `begin()`.
+* **Reported:** `/state` `rxJitterMs`, `txBufferMs`, `txBufferNextMs`; AUD1 hello
+  `radioTxBufferMs`, which a modem that times its replies adds to its round trip.
+* Tests: `tools/lan-jitter-smoke.cpp` (16: wired, Wi-Fi tail, stall bursts, holes, pauses,
+  skew, replays, recovery), `tools/lan-txbuffer-native-check.sh` (15, end to end with
+  `icom-lan-fake-radio.py --rx-stall 200`: jitter 202 ms → 400 ms decided, not applied under
+  the page, one reconnect after it, stored, hello says it). Regressions: JTTY, RTTY stream,
+  trx-power native checks PASS; `state-json-budget` 68/68 (121 B headroom).
+* Not tested end to end: the ten-minute way down (unit-tested in the smoke test only).
+
+**JTTY: a radio packet lost on the way no longer costs a frame.**
+
+* **Found on air** (IC-705 on WiFi ↔ IC-7610 wired, dummy loads, both through `/jtty.html`):
+  messages at +12 dB SNR came out as `OK1HRA DE OK4DC T ... R CALL`. The audio the decoder had
+  been given was clean (+40 dB), but 60 ms of it was missing: a lost RX packet reaches the page
+  only as a jump in AUD1 `firstSample`, and `onSamples()` ignored it, so every sample after the
+  hole arrived early and the frame straddling it lost symbol timing.
+* **Fix.** `jtty.js` tracks `firstSample` and fills a hole of up to 2 s with silence (`gap()`
+  during own TX); a jump back or a longer one is a new epoch and is followed, not filled.
+  Offline: zero-filled holes up to 100 ms decode in every position tried, skipped ones lose the
+  frame from 40 ms.
+* **Live after the fix:** 23/23 — whole messages both ways, F1 CQ, live entry, RTTY Roundup and
+  Field Day profiles. The remaining losses in the run before were TX-side: with the stream
+  request's 150 ms `txbuffer` the IC-705 ran dry over WiFi and dropped ~1.2 s of a 17 s message;
+  300 ms removed it. That value is **not** changed here (it adds TX latency).
+* `jtty-page-smoke` 53/53 (also minified), `jtty-page-native-check` PASS.
+
+**CAL PLAN palette: a menu on every cell, and RUN says what it will key.**
+
+* **Reported on an IC-705.** The radio sat on 40 m; clicking the 40 m value, expecting it to
+  be measured again, only unticked the cell (the value stayed), and RUN went to 20 m. It went
+  there because 20 m @ 100 % was stored with knee 0 — shown green in the grid, but re-keyed
+  by the survey, while a knee-0 cell below a band's top power was never re-keyed at all.
+* **Cell menu.** A click opens: **MEASURE NOW** (one cell, at once, no survey and no MOD
+  write — `TxGainPlanRun({single})`), **RE-MEASURE AT RUN** / **KEEP THE VALUE**
+  (`force`), **LEAVE OUT OF / PUT IN THE PLAN**, **DELETE THE VALUE**. A cell left out
+  shows its stored value in brackets instead of hiding it behind `·`.
+* **What RUN will key.** `TxGainPlanRun.preview()` lists the carriers in order with the reason
+  for each (not measured, stale, stored without a knee, re-measure asked); the panel shows it
+  under the grid, and the *Your turn* line counts from it instead of from every ticked cell.
+* **One rule for knee 0.** An entry without a knee counts as not measured everywhere (amber
+  `no knee …` in the grid, measured by RUN at any power), not only at a band's top power.
+* **Current band first.** With work on the band the radio is on, the run starts there
+  (`startBand`), whole band, still ascending — one retune and antenna question fewer.
+* **Verified on the IC-7610** (DATA1 MOD set to LAN for the test and put back): MEASURE NOW
+  on 20 m @ 10 % keyed one carrier, stored 0.491 and left the MOD level at 26.
+  `tx-gain-plan-smoke` covers preview, force, startBand and single (145 checks).
+
+**CAL PLAN checks the IC-7610's DATA MOD input before it keys.**
+
+* **Found live on an IC-7610.** With DATA1 MOD on MIC, LAN audio never reached the
+  modulator: the search keyed, saw neither ALC nor RF power, climbed to its ceiling and
+  then wrote the LAN MOD level up to 255, trying to drive a modulator that was not
+  listening. The IC-7610 row had no input check because the MOD input is chosen per DATA
+  profile (00 91~94) and the active profile was believed unreadable. It is readable:
+  `1A 06` answers `<data 00~03><filter>` (IC-7610 CI-V reference, "Data mode with filter
+  width settings"; live: `1A 06 01 01`).
+* **Fix.** `icom-models.js` gives the IC-7610 `dataModeCmd` 1A06, `modInputByData`
+  00 91~94 and `modInputNet` 5 (LAN). `ModLevelClient.readInput()` reads the active profile
+  (data off counts as DATA1, the one USB-D selects), then that profile's input. CAL PLAN
+  refuses before keying with *the radio's DATA1 MOD input is set to 0, not 5 (LAN) … Set
+  MENU → SET → Connectors → MOD Input → DATA1 MOD → LAN*.
+* **Verified on the IC-7610.** With DATA1 MOD on MIC the plan refuses and keys nothing;
+  switched to LAN, 20 m @ 10 % found its knee (0.476) and stored it. The radio was put back
+  as found (DATA1 MOD MIC, LAN MOD level 26). `tx-gain-mod-level-smoke` covers the
+  profile read (DATA1 on MIC, DATA3 on LAN, data off, no answer).
+
+**Fix: about 5 kB of heap the 16 kHz link took from every ESP32, used or not.**
+
+* **Symptom.** On an ESP32 the JS8 page kept going OFFLINE: `LAN | audio task allocation
+  failed`, `ping_sock: send error`, WiFi reconnects and `LOOP| slow: webServer 10001ms
+  uri=/state` stalls, the RX ring overflowing behind them. The heap was too short for the WiFi
+  stack and the audio task's 6 kB stack.
+* **Cause.** The TX replay history was sized for the 16 kHz link at every rate: 32 × 344 B
+  instead of 32 × 184 B.
+* **Fix.** The replay history lives on the heap at the link's packet size, next to the TX queue,
+  so an 8 kHz link costs what it did before the 16 kHz link.
+* **Seen on the device.** The `AUD | health` line now ends with `heap=<free>/<largest
+  block>`, and `audio task allocation failed` says both.
+* **Checks.** `build-icom-lan-audio-tx-smoke.sh`, `jtty-stream-smoke`; the ESP32 build's static
+  RAM is unchanged at 107 496 B. Not yet seen on a real ESP32.
+
+**RX level on ICOM LAN; the fake radio tunes.**
+
+* **Manual.** SOFTWARE.md §5.3 now says how to set the RX level on ICOM LAN: the network audio
+  has no level control of its own (WLAN/LAN AF/IF Output offers only Output Select and AF SQL),
+  so it is RF Gain, P.AMP/ATT and AGC.
+* **Fake radio.** `tools/icom-lan-fake-radio.py` now sets frequency (CI-V 00/05/25) and mode
+  (26) instead of only acknowledging them, and keeps a level written with `14 xx` and reads it
+  back (it answered 0 to every read).
+
+**The 16 kHz radio link.**
+
+* **What.** The LAN audio can run at 16 kHz instead of 8 in both directions, with twice the
+  Wi-Fi traffic, for a wideband data modem; `radioLinkSetWide()` switches it (an add-on asks
+  for it) and the switch reconnects the radio.
+* **How.** The firmware puts the rate into the radio's stream request
+  (`IcomLanClient::setAudioRate`). It sizes the RX packet pool and TX queue to the rate on
+  the heap, and decimates 48 kHz TX by 3 instead of 6. Over AUD1 it offers a 16 kHz RX
+  stream next to the 8 kHz one; a page switches to it with `rx.select`. Everything else,
+  JS8 to Mercury and the watch viewers, keeps getting 8 kHz through a half-band decimator
+  (docs/aud1-audio-websocket-protocol.md). The fake radio streams at the rate the stream
+  request asks for and logs the size of the TX packets it receives.
+* **Not yet on a real radio.** That the IC-705 streams 16 kHz µ-law in 320-byte packets is
+  assumed from RS-BA1/wfview, not measured.
+
+**Flash layout: `cfg` moved to the end of the flash, +192 kB for the web assets.**
+
+* **What.** `app0` 0x160000 → 0x130000 (firmware ~1.06 MB, ~150 kB headroom), `spiffs`
+  0x190000 + 0x270000 → 0x140000 + 0x2A0000, `cfg` 0x170000 → 0x3E0000 (same 128 kB). The
+  asset gate grows from 2 228 224 to 2 424 832 B, room for more browser-side modems.
+  With `cfg` at the very end, the next move of the firmware/asset boundary leaves it alone.
+* **Migration.** `tools/upload-firmware-spiffs.sh` recognises the previous table, reads
+  `cfg` off the device (copy kept in `build/release-upload/cfg-backup-*.bin`), writes it at
+  the new offset first and then the new partition table, firmware and assets. Repeatable
+  after an interruption. The decision lives in `tools/flash-layout.py` (with `selftest`).
+  `tools/upload-spiffs.sh` now checks the device table too, so it cannot write the assets
+  over an old device's firmware and `cfg`.
+* **Web installer.** It cannot read the flash, so upgrading from REV 20261101 or older
+  through it loses the configuration: the page asks for a backup first and says that the
+  upload script carries it over instead.
+* **Checks.** `tools/fs-partition-audit.js` asserts the new order (`app0`, `spiffs`, `cfg`
+  ending at 4 MB), that both upload scripts verify the device table, and that the only
+  write of `cfg` is the image just read off the same device.
+
 **WATCH: other browsers follow the data page of whoever holds the radio (PC build only).**
 
 * **What.** `/watch.html` shows what the operator's JS8, WSPR, RTTY, JTTY or Mercury page

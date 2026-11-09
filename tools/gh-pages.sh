@@ -244,6 +244,19 @@ check_export_fresh() {  # check_export_fresh BIN LABEL
 check_export_fresh "$FIRMWARE_BIN" "box firmware"
 [[ "$HAVE_M5ATOM" -eq 1 ]] && check_export_fresh "$FIRMWARE_BIN_M5ATOM" "M5Atom firmware"
 
+# A public release never carries add-ons ("Add-ons" in wifilt.ino): a binary
+# built with addons/ beside the sketch prints the WIFILT-ADDONS mark at start-up,
+# so it is in the file. Export again with addons/ moved away.
+refuse_addon_build() {  # refuse_addon_build FILE LABEL
+  if LC_ALL=C grep -a -c 'WIFILT-ADDONS' "$1" >/dev/null; then
+    echo "ERROR: ${2} was built with add-ons (WIFILT-ADDONS mark in $1)" >&2
+    echo "       Move addons/ away, rebuild, and run this again." >&2
+    exit 1
+  fi
+}
+refuse_addon_build "$FIRMWARE_BIN" "box firmware"
+[[ "$HAVE_M5ATOM" -eq 1 ]] && refuse_addon_build "$FIRMWARE_BIN_M5ATOM" "M5Atom firmware"
+
 # A Pages release must always contain the complete DATA/JS8 runtime.
 for asset in data.html data.css data.js dxcc.js js8-adapter.js js8-aud1.js \
   js8-audio.js js8-brotli.js js8-brotli.wasm js8-core.js js8-core.wasm \
@@ -308,6 +321,13 @@ SPIFFS_SIZE_DEC=$((SPIFFS_SIZE_HEX))
 # Rounded to two decimals in integer arithmetic: +5000 is half of the 10 000 the
 # division discards.
 SPIFFS_SIZE_MB="$(( (SPIFFS_SIZE_DEC + 5000) / 1000000 )).$(printf '%02d' "$(( ((SPIFFS_SIZE_DEC + 5000) / 10000) % 100 ))")"
+APP_SIZE_DEC=$(( $(partition_field app0 5) ))
+APP_SIZE_MB="$(( (APP_SIZE_DEC + 5000) / 1000000 )).$(printf '%02d' "$(( ((APP_SIZE_DEC + 5000) / 10000) % 100 ))")"
+# The last release whose cfg partition sat between app0 and spiffs (0x170000).
+# The installer writes the assets over that spot, so an upgrade from it or from
+# anything older loses the configuration unless the operator restores a backup;
+# tools/upload-firmware-spiffs.sh migrates it instead (tools/flash-layout.py).
+CFG_MOVED_AFTER_REV=20261101
 
 # The image is written at SPIFFS_OFFSET and is exactly SPIFFS_SIZE_DEC long, so
 # an offset and a size that disagree with the flash chip do not fail loudly --
@@ -371,7 +391,7 @@ if [[ ! -x "${ROOT_DIR}/tools/prepare-spiffs-tree.sh" ]]; then
   echo "ERROR: filesystem staging helper not found" >&2
   exit 1
 fi
-"${ROOT_DIR}/tools/prepare-spiffs-tree.sh" "$DATA_DIR" "$SPIFFS_DATA_DIR"
+WIFILT_NO_ADDONS=1 "${ROOT_DIR}/tools/prepare-spiffs-tree.sh" "$DATA_DIR" "$SPIFFS_DATA_DIR"
 staging_bytes="$(du -sb "$SPIFFS_DATA_DIR" | awk '{print $1}')"
 runtime_reserve_bytes=$((256 * 1024))
 metadata_budget_bytes=$((64 * 1024))
@@ -486,13 +506,37 @@ DESKTOP_ARM64_LTX=0
 archive_has_local_trx() {
   local archive="$1" staging="$2" kind="$3"
   [[ -f "$archive" ]] || return 1
+  # grep without -q: -q quits at the first match, tar then dies of SIGPIPE and
+  # under pipefail the whole test reads "no" (the arm64/x86_64 archives were
+  # listed as having no local-trx although they carried it)
   if [[ "$kind" == "tar" ]]; then
-    tar tzf "$archive" 2>/dev/null | grep -qx "${staging}/local-trx"
+    tar tzf "$archive" 2>/dev/null | grep -x "${staging}/local-trx" >/dev/null
   else
     command -v unzip >/dev/null 2>&1 || return 1
-    unzip -Z1 "$archive" 2>/dev/null | grep -qx "${staging}/local-trx.exe"
+    unzip -Z1 "$archive" 2>/dev/null | grep -x "${staging}/local-trx.exe" >/dev/null
   fi
 }
+
+# The same mark, anywhere in a desktop archive (binary or pages): refused.
+# Whole-stream grep without -q, for the SIGPIPE reason above.
+refuse_addon_archive() {  # refuse_addon_archive ARCHIVE tar|zip
+  [[ -f "$1" ]] || return 0
+  local hits
+  if [[ "$2" == "tar" ]]; then
+    hits="$(tar xzOf "$1" 2>/dev/null | LC_ALL=C grep -a -c 'WIFILT-ADDONS' || true)"
+  else
+    command -v unzip >/dev/null 2>&1 || { echo "ERROR: unzip needed to check $1" >&2; exit 1; }
+    hits="$(unzip -p "$1" 2>/dev/null | LC_ALL=C grep -a -c 'WIFILT-ADDONS' || true)"
+  fi
+  if [[ "${hits:-0}" != 0 ]]; then
+    echo "ERROR: $(basename "$1") was built with add-ons (WIFILT-ADDONS mark)" >&2
+    echo "       Move addons/ away, run make -C native dist again, then this." >&2
+    exit 1
+  fi
+}
+refuse_addon_archive "$DESKTOP_LINUX" tar
+refuse_addon_archive "$DESKTOP_WIN" zip
+refuse_addon_archive "$DESKTOP_ARM64" tar
 
 if [[ -f "$DESKTOP_LINUX" ]]; then
   DESKTOP_LINUX_NAME="$(basename "$DESKTOP_LINUX")"
@@ -514,6 +558,17 @@ if [[ -f "$DESKTOP_ARM64" ]]; then
   cp "$DESKTOP_ARM64" "${OUTPUT_DIR}/${DESKTOP_ARM64_NAME}"
   if archive_has_local_trx "$DESKTOP_ARM64" "wifilt-linux-arm64" tar; then DESKTOP_ARM64_LTX=1; fi
   echo "==> Desktop archive: ${DESKTOP_ARM64_NAME} (${DESKTOP_ARM64_SIZE}$([[ $DESKTOP_ARM64_LTX -eq 1 ]] && echo ", with local-trx"))"
+fi
+# The guided Raspberry Pi installer (native/pi/, docs/pi-setup-implementace.md):
+# `curl -fsSL .../pi-setup | bash` downloads the newest arm64 archive from this
+# very page, checks it against SHA256SUMS and runs the pi-setup.sh inside it.
+# Published only next to an arm64 archive that actually carries pi-setup.sh.
+DESKTOP_PI_SETUP=0
+if [[ -n "$DESKTOP_ARM64_NAME" ]] \
+   && tar tzf "$DESKTOP_ARM64" 2>/dev/null | grep -x "wifilt-linux-arm64/pi-setup.sh" >/dev/null; then
+  cp "${ROOT_DIR}/native/pi/pi-bootstrap.sh" "${OUTPUT_DIR}/pi-setup"
+  DESKTOP_PI_SETUP=1
+  echo "==> Raspberry Pi installer: pi-setup"
 fi
 # The page tells people to check the download against this, so it has to travel
 # with the downloads rather than being left behind in native/dist.
@@ -544,6 +599,23 @@ LOCAL_TRX_NOTE_WIN=""
 if [[ $DESKTOP_LINUX_LTX -eq 1 ]]; then LOCAL_TRX_NOTE_LINUX="$(local_trx_note)"; fi
 if [[ $DESKTOP_ARM64_LTX -eq 1 ]]; then LOCAL_TRX_NOTE_ARM64="$(local_trx_note)"; fi
 if [[ $DESKTOP_WIN_LTX   -eq 1 ]]; then LOCAL_TRX_NOTE_WIN="$(local_trx_note)"; fi
+# The one-line guided install, shown above the manual steps when published.
+PI_SETUP_NOTE=""
+if [[ $DESKTOP_PI_SETUP -eq 1 ]]; then
+  PI_SETUP_NOTE='
+          <p><strong>Guided install</strong> &mdash; on a fresh Raspberry Pi OS Lite (64-bit) or an
+            existing installation, logged in over SSH:</p>
+          <pre><code>curl -fsSL https://ok1hra.github.io/wifilt/pi-setup | bash</code></pre>
+          <p class="muted">
+            It asks its questions first, then installs WIFILT and local-trx as services and, if you
+            want them: fixed names for the USB serial adapters, an Ethernet DHCP fallback, a Wi-Fi
+            setup access point with a captive portal, the Open Interface&nbsp;III firmware, and a
+            read-only system that survives pulling the plug (settings on a second card in a USB
+            reader). Run it again &mdash; or <code>wifilt-pi-setup</code> &mdash; to update; on a
+            locked system it unlocks, updates and locks again by itself.
+          </p>
+          <p>Or by hand:</p>'
+fi
 ANY_LOCAL_TRX=0
 if [[ $DESKTOP_LINUX_LTX -eq 1 || $DESKTOP_ARM64_LTX -eq 1 || $DESKTOP_WIN_LTX -eq 1 ]]; then ANY_LOCAL_TRX=1; fi
 
@@ -951,7 +1023,7 @@ cat > "${OUTPUT_DIR}/index.html" <<EOF
           </div>
           <div class="hardware-item">
             <dt>Flash layout</dt>
-            <dd>No OTA: 1.375 MB application and ${SPIFFS_SIZE_MB} MB LittleFS web assets$(if [[ -n "$CFG_OFFSET" ]]; then echo ", plus a
+            <dd>No OTA: ${APP_SIZE_MB} MB application and ${SPIFFS_SIZE_MB} MB LittleFS web assets$(if [[ -n "$CFG_OFFSET" ]]; then echo ", plus a
                 separate ${CFG_SIZE_KB} kB configuration partition the installer never writes"; fi).</dd>
           </div>
         </dl>
@@ -1003,13 +1075,17 @@ cat > "${OUTPUT_DIR}/index.html" <<EOF
                 so flashing cannot touch it.</dd>
           </dl>
           <p style="margin-top:0.7rem">
-            <strong>Coming from a release older than 20260808?</strong> Those builds kept the
-            configuration inside the web-asset filesystem that this flash replaces, so it is lost
-            whichever way you answer. Save a backup first and restore it afterwards:
-            <a href="http://wifilt.local/config/download">download it now</a>, or open your
-            device's address and use <strong>SETUP &rarr; Download config</strong>. This page
-            cannot fetch it for you &mdash; it is served over HTTPS and your device over HTTP, so the
-            browser blocks the request.
+            <strong>Coming from REV ${CFG_MOVED_AFTER_REV} or older? Then the configuration is lost
+            whichever way you answer &mdash; save a backup first.</strong> This release moved the
+            configuration partition to the end of the flash to make room for the web modems, and
+            the web pages now cover the place it used to be (releases older than 20260808 kept it
+            inside the web pages themselves). This installer cannot read the board, so it cannot
+            carry it over: <a href="http://wifilt.local/config/download">download the backup now</a>,
+            or open your device's address and use <strong>SETUP &rarr; Download config</strong>, and
+            restore it after flashing. This page cannot fetch it for you &mdash; it is served over
+            HTTPS and your device over HTTP, so the browser blocks the request. (Flashing from the
+            source tree with <code>tools/upload-firmware-spiffs.sh</code> carries the configuration
+            over by itself.)
           </p>
           <p style="margin-top:0.5rem">
             Two things a backup file never carries. The <strong>MSG BOX</strong>: stored messages
@@ -1057,8 +1133,8 @@ cat > "${OUTPUT_DIR}/index.html" <<EOF
           </li>
           <li><strong>Open <code>http://192.168.4.1</code>.</strong> The setup page appears;
               some phones open it by themselves.</li>
-          <li id="restoreStep-esp32" hidden><strong>Erased the device, or came from a release older
-              than 20260808? Restore your backup first</strong> &mdash; <strong>Upload config</strong> at
+          <li id="restoreStep-esp32" hidden><strong>Erased the device, or came from REV
+              ${CFG_MOVED_AFTER_REV} or older? Restore your backup first</strong> &mdash; <strong>Upload config</strong> at
               the bottom of the setup page &mdash; before setting anything by hand. Anything you type
               before restoring will be overwritten by the file.</li>
           <li><strong>Enter your WiFi network and password</strong>, then save. The device joins
@@ -1168,13 +1244,17 @@ $(if [[ "$HAVE_M5ATOM" -eq 1 ]]; then cat <<M5ATOM
                 so flashing cannot touch it.</dd>
           </dl>
           <p style="margin-top:0.7rem">
-            <strong>Coming from a release older than 20260808?</strong> Those builds kept the
-            configuration inside the web-asset filesystem that this flash replaces, so it is lost
-            whichever way you answer. Save a backup first and restore it afterwards:
-            <a href="http://wifilt.local/config/download">download it now</a>, or open your
-            device's address and use <strong>SETUP &rarr; Download config</strong>. This page
-            cannot fetch it for you &mdash; it is served over HTTPS and your device over HTTP, so the
-            browser blocks the request.
+            <strong>Coming from REV ${CFG_MOVED_AFTER_REV} or older? Then the configuration is lost
+            whichever way you answer &mdash; save a backup first.</strong> This release moved the
+            configuration partition to the end of the flash to make room for the web modems, and
+            the web pages now cover the place it used to be (releases older than 20260808 kept it
+            inside the web pages themselves). This installer cannot read the board, so it cannot
+            carry it over: <a href="http://wifilt.local/config/download">download the backup now</a>,
+            or open your device's address and use <strong>SETUP &rarr; Download config</strong>, and
+            restore it after flashing. This page cannot fetch it for you &mdash; it is served over
+            HTTPS and your device over HTTP, so the browser blocks the request. (Flashing from the
+            source tree with <code>tools/upload-firmware-spiffs.sh</code> carries the configuration
+            over by itself.)
           </p>
           <p style="margin-top:0.5rem">
             Two things a backup file never carries. The <strong>MSG BOX</strong>: stored messages
@@ -1218,8 +1298,8 @@ $(if [[ "$HAVE_M5ATOM" -eq 1 ]]; then cat <<M5ATOM
           </li>
           <li><strong>Open <code>http://192.168.4.1</code>.</strong> The setup page appears;
               some phones open it by themselves.</li>
-          <li id="restoreStep-m5atom" hidden><strong>Erased the device, or came from a release older
-              than 20260808? Restore your backup first</strong> &mdash; <strong>Upload config</strong> at
+          <li id="restoreStep-m5atom" hidden><strong>Erased the device, or came from REV
+              ${CFG_MOVED_AFTER_REV} or older? Restore your backup first</strong> &mdash; <strong>Upload config</strong> at
               the bottom of the setup page &mdash; before setting anything by hand. Anything you type
               before restoring will be overwritten by the file.</li>
           <li><strong>Enter your WiFi network and password</strong>, then save. The device joins
@@ -1269,7 +1349,7 @@ sudo ./install.sh</code></pre>
           <p class="muted">
             The installer copies the program to <code>/opt/wifilt</code> and grants it permission to
             use port&nbsp;80. That permission is not optional: ports 80, 82 and 83 are all privileged,
-            and port&nbsp;83 carries the audio, so without it JS8, RTTY, WSPR and Mercury cannot work.
+            and port&nbsp;83 carries the audio, so without it JS8, RTTY, JTTY, WSPR and Mercury cannot work.
             It installs a service but deliberately does not enable it &mdash; starting a transmitter's
             control interface at boot should be your decision.
           </p>
@@ -1300,14 +1380,14 @@ $(if [[ -n "$DESKTOP_ARM64_NAME" ]]; then cat <<RASPBERRYPI
           <p class="muted">
             Needs a <strong>64-bit</strong> Raspberry Pi OS (aarch64) &mdash; Pi&nbsp;3, 4, 5 or
             newer. The 32-bit (armhf) Raspberry Pi OS cannot run this build.
-          </p>
+          </p>${PI_SETUP_NOTE}
           <pre><code>tar xzf ${DESKTOP_ARM64_NAME}
 cd wifilt-linux-arm64
 sudo ./install.sh</code></pre>
           <p class="muted">
             The installer copies the program to <code>/opt/wifilt</code> and grants it permission to
             use port&nbsp;80. That permission is not optional: ports 80, 82 and 83 are all privileged,
-            and port&nbsp;83 carries the audio, so without it JS8, RTTY, WSPR and Mercury cannot work.
+            and port&nbsp;83 carries the audio, so without it JS8, RTTY, JTTY, WSPR and Mercury cannot work.
             It installs a service but deliberately does not enable it &mdash; starting a transmitter's
             control interface at boot should be your decision.
           </p>
@@ -1425,7 +1505,7 @@ $(if [[ $ANY_LOCAL_TRX -eq 1 ]]; then cat <<'ANYRIG'
         <p class="muted">
           What you give up is only what is reached by model-specific Icom commands &mdash; the
           network MOD-level gain calibration, GPS position, the radio's own waterfall. The logbook,
-          the DX cluster, JS8, RTTY, WSPR, Mercury and the ordinary transmit-gain calibration all
+          the DX cluster, JS8, RTTY, JTTY, WSPR, Mercury and the ordinary transmit-gain calibration all
           work. The full description is
           <a href="https://github.com/ok1hra/wifilt/blob/main/SOFTWARE.md#16-local-trx--any-radio-on-a-pc" target="_blank" rel="noopener">SOFTWARE.md&nbsp;&sect;&nbsp;1.6</a>.
         </p>

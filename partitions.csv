@@ -1,17 +1,20 @@
 # Name,   Type, SubType, Offset,   Size,     Flags
 # Custom layout for the WIFILT interface (4 MB flash, No OTA).
-# Bluetooth removed -> firmware ~1.0 MB, so app0 is shrunk from 2 MB to 1.375 MB
-# (still ~440 kB headroom) and the reclaimed space plus the dropped coredump
-# partition are handed to LittleFS.
+# Bluetooth removed -> firmware ~1.06 MB, so app0 is shrunk from 2 MB to 1.19 MB
+# (~150 kB headroom) and the reclaimed space plus the dropped coredump partition
+# are handed to LittleFS, which carries the browser-side modems (JS8, Mercury).
 #
 # TWO LittleFS partitions, not one, and the split is the whole point:
 #
 #   cfg     the operator's configuration -- radio slots and the model the radio
 #           reported, LOG/JS8 settings, the TX gain calibrations, CW and
-#           frequency memories, MSG BOX. NO TOOL EVER WRITES HERE. The installer
-#           and tools/upload-firmware-spiffs.sh write app0 and spiffs only, so a
-#           firmware update stops costing the operator every calibration they
-#           ever measured -- each one a 20 s carrier on the air to get back.
+#           frequency memories, MSG BOX. NO RELEASE EVER WRITES HERE. The
+#           installer and tools/upload-firmware-spiffs.sh write app0 and spiffs
+#           only, so a firmware update stops costing the operator every
+#           calibration they ever measured -- each one a 20 s carrier on the air
+#           to get back. The one exception is a layout change: the upload script
+#           then reads cfg off the device and writes the same bytes back at the
+#           new offset (tools/flash-layout.py).
 #
 #   spiffs  the web assets, rebuilt from data/ on every release and replaced
 #           wholesale on every flash. Nothing here is worth keeping.
@@ -20,10 +23,16 @@
 # upload scripts and gh-pages.sh all look the partition up by that name, and the
 # assets are the one that has to keep moving in step with the firmware.
 #
-# 0x190000 + 0x270000 = 0x400000 exactly. Anything that changes these two lines
-# has to be re-checked against the end of a 4 MB flash.
+# cfg sits at the END of the flash so that moving the app0/spiffs boundary never
+# moves it again. Until REV 20261101 it sat between the two (app0 0x160000, cfg
+# at 0x170000, spiffs 0x190000 + 0x270000); upload-firmware-spiffs.sh migrates
+# such a device, the web installer cannot (it has no way to read the flash).
+#
+# 0x140000 + 0x2A0000 = 0x3E0000 = cfg, and 0x3E0000 + 0x20000 = 0x400000
+# exactly. Anything that changes these lines has to be re-checked against the
+# end of a 4 MB flash (tools/fs-partition-audit.js does).
 nvs,      data, nvs,     0x9000,   0x5000,
 otadata,  data, ota,     0xe000,   0x2000,
-app0,     app,  ota_0,   0x10000,  0x160000,
-cfg,      data, spiffs,  0x170000, 0x20000,
-spiffs,   data, spiffs,  0x190000, 0x270000,
+app0,     app,  ota_0,   0x10000,  0x130000,
+spiffs,   data, spiffs,  0x140000, 0x2A0000,
+cfg,      data, spiffs,  0x3E0000, 0x20000,

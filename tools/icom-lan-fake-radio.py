@@ -68,6 +68,15 @@ def hexdump(data, limit=32):
     return text + (" ..." if len(data) > limit else "")
 
 
+def hz_from_bcd(data):
+    """The inverse of bcd_from_hz."""
+    hz, scale = 0, 1
+    for byte in data[:5]:
+        hz += ((byte & 0x0F) + 10 * (byte >> 4)) * scale
+        scale *= 100
+    return hz
+
+
 def bcd_from_hz(hz):
     """5-byte little-endian BCD as ICOM sends frequencies."""
     digits = f"{hz:010d}"[::-1]          # least significant digit first
@@ -193,6 +202,7 @@ class ControlChannel(Channel):
         self.tok_request = 0
         self.logged_in = False
         self.streaming = False
+        self.rx_rate = 8000
 
     def handle(self, data):
         if self.handle_common(data):
@@ -275,7 +285,13 @@ class ControlChannel(Channel):
         self.log("-> AUTH 0x05 acknowledged (stream request unblocked)")
 
     def on_stream_request(self, data):
-        self.log("<- STREAM REQUEST")
+        # rxsample at 0x74 (BE32): 8000, or 16000 on the wide link.
+        if len(data) >= 0x78:
+            rate = struct.unpack_from(">I", data, 0x74)[0]
+            self.rx_rate = rate if rate in (8000, 16000) else 8000
+        # txbuffer at 0x84 (BE32): the radio's TX jitter buffer, ms (lan_jitter.h adapts it)
+        self.tx_buffer = struct.unpack_from(">I", data, 0x84)[0] if len(data) >= 0x88 else 0
+        self.log(f"<- STREAM REQUEST (rx {self.rx_rate} Hz, txbuffer {self.tx_buffer} ms)")
         p = self.long_header(0x50, 0x40)
         p[0x14] = 0x02
         p[0x15] = 0x03
@@ -299,6 +315,7 @@ class CivChannel(Channel):
         self.freq_hz = freq_hz
         self.mode = mode
         self.seq_b = 0
+        self.levels = {}                     # 14 xx sub-command -> 2 BCD bytes
         self.opened = False
         self.answered = 0
         # "Power OFF (for Remote Control) = Standby": the LAN unit stays logged
@@ -394,6 +411,18 @@ class CivChannel(Channel):
                 reply(b"\xFB")
             else:
                 reply(bytes([0x1A, 0x05]) + self.power_menu + bytes([self.power_off_setting]))
+        elif cmd in (0x00, 0x05) and len(body) == 5:   # set operating frequency
+            self.freq_hz = hz_from_bcd(body)
+            self.log(f"-- frequency set to {self.freq_hz} Hz")
+            if cmd == 0x05:
+                reply(b"\xFB")
+        elif cmd == 0x25 and len(body) == 6 and body[0] == 0x00:   # set selected VFO
+            self.freq_hz = hz_from_bcd(body[1:])
+            self.log(f"-- frequency set to {self.freq_hz} Hz")
+            reply(b"\xFB")
+        elif cmd == 0x26 and len(body) >= 2 and body[0] == 0x00:   # set selected VFO mode
+            self.mode = body[1]
+            reply(b"\xFB")
         elif cmd == 0x03:                    # read operating frequency
             reply(bytes([0x03]) + bcd_from_hz(self.freq_hz))
             if self.answered == 1:
@@ -402,8 +431,11 @@ class CivChannel(Channel):
             reply(bytes([0x04, self.mode, 0x01]))
         elif cmd == 0x15:                    # meters (S-meter, SWR, power...)
             reply(bytes([0x15]) + bytes(body[:1]) + b"\x00\x00")
-        elif cmd == 0x14:                    # levels
-            reply(bytes([0x14]) + bytes(body[:1]) + b"\x00\x00")
+        elif cmd == 0x14 and len(body) == 3:  # set a level (14 0A = RF power): kept
+            self.levels[body[0]] = bytes(body[1:3])
+            reply(b"\xFB")
+        elif cmd == 0x14:                    # levels: what was set, else 0
+            reply(bytes([0x14]) + bytes(body[:1]) + self.levels.get(body[0] if body else 0, b"\x00\x00"))
         elif cmd == 0x1C:                    # TX state / tuner
             reply(bytes([0x1C]) + bytes(body[:1]) + b"\x00")
         else:
@@ -438,26 +470,55 @@ def ulaw_encode(sample):
 class AudioChannel(Channel):
     """Handshake plus a continuous RX stream, so the whole audio path can run.
 
-    A real IC-705 sends 8 kHz mu-law in small packets. This sends a steady tone
-    at the same rate: enough to drive the browser's waterfall and, more to the
+    A real IC-705 sends 8 kHz mu-law in small packets (16 kHz when the stream
+    request asks for it). This sends a steady tone at the requested rate: enough to drive the browser's waterfall and, more to the
     point, to keep the firmware's dedicated audio thread actually busy -- which
     is the only thing that exercises the FreeRTOS shim under load.
     """
 
-    SAMPLE_RATE = 8000
-    SAMPLES_PER_PACKET = 160          # 20 ms
     TONE_HZ = 1000
 
-    def __init__(self, ip, verbose, tone=True):
+    def __init__(self, ip, verbose, tone=True, rx_stall_ms=0, tx_dump=None):
         super().__init__(ip, AUDIO_PORT, "aud", verbose)
         self.tone = tone
+        # --tx-dump: every TX audio payload byte, appended in arrival order, so
+        # a check can compare what reached the radio byte for byte.
+        self.tx_dump = open(tx_dump, "ab", buffering=0) if tx_dump else None
+        # --rx-stall: now and then (3 % of packets) the path stalls for this
+        # long and what queued up meanwhile arrives in one burst -- the way
+        # Wi-Fi delays a stream, head of line, in order.
+        self.rx_stall_ms = rx_stall_ms
+        self.stall_until = 0.0
+        self.stalled = []
+        self.rng = __import__("random").Random(7)
         self.audio_seq = 0
         self.next_send = 0.0
         self.phase = 0
         self.packets_sent = 0
+        self.tx_sizes = {}
+        self.rate = 8000                  # set from the stream request
+
+    @property
+    def SAMPLE_RATE(self):
+        return self.rate
+
+    @property
+    def SAMPLES_PER_PACKET(self):
+        return self.rate // 50            # 20 ms
 
     def handle(self, data):
         if self.handle_common(data):
+            return
+        # TX audio from the client: 0x18-byte header, uLaw payload. Logged once
+        # per payload size, so a check can see the rate the client sends at
+        # (160 B per 20 ms at 8 kHz, 320 B at 16 kHz).
+        if len(data) > 0x18:
+            size = len(data) - 0x18
+            if size not in self.tx_sizes:
+                self.log(f"<- TX audio packets of {size} B")
+            self.tx_sizes[size] = self.tx_sizes.get(size, 0) + 1
+            if self.tx_dump:
+                self.tx_dump.write(data[0x18:])
             return
         self.vlog(f"<- audio len={len(data)}: {hexdump(data)}")
 
@@ -496,6 +557,17 @@ class AudioChannel(Channel):
 
         self.audio_seq = (self.audio_seq + 1) & 0xFFFF
         self.send_seq = (self.send_seq + 1) & 0xFFFF
+        if self.rx_stall_ms:
+            if now >= self.stall_until and self.stalled:
+                for q in self.stalled:
+                    self.send(q, "audio")
+                self.stalled = []
+            if now < self.stall_until:
+                self.stalled.append(bytes(p))
+                self.packets_sent += 1
+                return
+            if self.rng.random() < 0.03:
+                self.stall_until = now + self.rx_stall_ms / 1000.0
         self.send(bytes(p), "audio")
         self.packets_sent += 1
         if self.packets_sent == 1:
@@ -522,6 +594,12 @@ def main():
                         help="leave standby again after this many seconds")
     parser.add_argument("--seconds", type=float, default=0,
                         help="exit after this many seconds (0 = run forever)")
+    parser.add_argument("--rx-stall", type=float, default=0,
+                        help="ms: stall 3 %% of RX audio packets this long, then burst (Wi-Fi jitter)")
+    parser.add_argument("--civ-stats", action="store_true",
+                        help="print the count of answered CI-V requests every second")
+    parser.add_argument("--tx-dump", default=None,
+                        help="append every TX audio payload (uLaw) to this file")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -529,7 +607,7 @@ def main():
         control = ControlChannel(args.ip, args.verbose, args.name, args.civ,
                                  args.user, args.password)
         civ = CivChannel(args.ip, args.verbose, args.civ, args.freq, args.mode)
-        audio = AudioChannel(args.ip, args.verbose)
+        audio = AudioChannel(args.ip, args.verbose, rx_stall_ms=args.rx_stall, tx_dump=args.tx_dump)
     except OSError as error:
         print(f"cannot bind on {args.ip}: {error}", file=sys.stderr)
         print("hint: ports 50001-50003 may already be taken by a real client",
@@ -544,6 +622,7 @@ def main():
           f"civ=0x{args.civ:02x}, freq={args.freq} Hz", flush=True)
 
     announced = False
+    civ_stats_at = 0.0
     standby_fired = wake_fired = False
     started = time.monotonic()
     while True:
@@ -560,6 +639,11 @@ def main():
             wake_fired = True
             civ.set_standby(False)
         civ.tick(time.monotonic())
+        # --civ-stats: the running count of answered CI-V requests, so a check
+        # can measure the client's poll rate (the quiet rotation of modem.busy).
+        if args.civ_stats and time.monotonic() - civ_stats_at >= 1.0:
+            civ_stats_at = time.monotonic()
+            print(f"civ answered {civ.answered}", flush=True)
 
         # Short timeout: the audio stream has to be paced at 20 ms, so the loop
         # cannot sit in select() waiting for a packet that may not come.
@@ -574,6 +658,7 @@ def main():
                     channel.handle(data)
 
         if not civ.shutdown:
+            audio.rate = control.rx_rate
             audio.tick(time.monotonic())
 
         if not announced and control.streaming and civ.opened:

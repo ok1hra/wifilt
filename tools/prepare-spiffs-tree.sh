@@ -20,6 +20,22 @@ fi
 node "${ROOT_DIR}/tools/stamp-asset-versions.js" "$SOURCE_DIR"
 "${ROOT_DIR}/tools/minify-spiffs-js.sh" "$SOURCE_DIR"
 "${ROOT_DIR}/tools/gzip-assets.sh" "$SOURCE_DIR"
+
+# Add-ons (addons/<name>/data/ -- an optional checkout beside the sketch, see
+# "Add-ons" in wifilt.ino): their pages go through the same three steps, may
+# reference the core's scripts, and are copied in after the core's files, so an
+# add-on file of the same name (addon-tabs.json) replaces the core's.
+# WIFILT_NO_ADDONS=1 builds the image without them.
+ADDON_DIRS=()
+if [[ "${WIFILT_NO_ADDONS:-0}" != 1 ]]; then
+  for addon_data in "${ROOT_DIR}"/addons/*/data; do
+    [[ -d "$addon_data" ]] || continue
+    ADDON_DIRS+=("$addon_data")
+    node "${ROOT_DIR}/tools/stamp-asset-versions.js" "$addon_data" "--lookup=${SOURCE_DIR}"
+    "${ROOT_DIR}/tools/minify-spiffs-js.sh" "$addon_data"
+    "${ROOT_DIR}/tools/gzip-assets.sh" "$addon_data"
+  done
+fi
 mkdir -p "$TARGET_DIR"
 
 # TARGET_DIR is a build directory. Remove only its previous files after both
@@ -32,6 +48,8 @@ if [[ "$target_real" == "$source_real" || "$target_real" == "/" ]]; then
 fi
 find "$TARGET_DIR" -mindepth 1 -depth -delete
 
+copy_tree() {
+local SOURCE_DIR="$1"
 while IFS= read -r -d '' file; do
   relative="${file#${SOURCE_DIR}/}"
   # The WATCH viewer page (watch_hub.h) talks to /watchws, which only the PC
@@ -65,6 +83,12 @@ while IFS= read -r -d '' file; do
   mkdir -p "$TARGET_DIR/$(dirname "$relative")"
   cp "$file" "$TARGET_DIR/$relative"
 done < <(find "$SOURCE_DIR" -type f -print0 | sort -z)
+}
+copy_tree "$SOURCE_DIR"
+for addon_data in ${ADDON_DIRS[@]+"${ADDON_DIRS[@]}"}; do
+  copy_tree "$addon_data"
+  echo "==> Add-on pages: ${addon_data#${ROOT_DIR}/}"
+done
 
 bytes="$(du -sb "$TARGET_DIR" | awk '{print $1}')"
 echo "==> Filesystem deployment tree: $TARGET_DIR ($bytes bytes)"

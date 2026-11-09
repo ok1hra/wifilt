@@ -12,6 +12,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "Arduino.h"
 
@@ -83,9 +84,15 @@ public:
   // Native-only: assigns the host directory this instance maps onto.
   void nativeSetRoot(const std::string &path);
   const std::string &nativeRoot() const { return root; }
+  // Native-only: a further read-only directory looked at before the root when
+  // a file is read or tested -- an add-on's pages (addons/<name>/data) served
+  // beside data/ without merging them first. Writes still go to the root.
+  void nativeAddOverlay(const std::string &path);
 
 private:
+  std::string overlayFile(const char *path) const;
   std::string root;
+  std::vector<std::string> overlays;
   bool        mounted = false;
 };
 
