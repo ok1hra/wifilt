@@ -27,6 +27,9 @@ def build_audio_packet(my_id, remote_id, outer_seq, inner_seq, payload):
     struct.pack_into("<I", p, 0x08, my_id)
     struct.pack_into("<I", p, 0x0C, remote_id)
     struct.pack_into(">H", p, 0x12, inner_seq)
-    struct.pack_into("<H", p, 0x14, len(payload))
+    # datalen: BE16 at 0x16, exactly as wifilt's icom_lan_audio_tx.h writes it
+    # (0x14-0x15 stay 0). An LE16 at 0x14 here once hid a local-trx that
+    # dropped every real TX packet.
+    struct.pack_into(">H", p, 0x16, len(payload))
     p[0x18:] = payload
     return bytes(p)

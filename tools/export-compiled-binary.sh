@@ -13,19 +13,26 @@ set -euo pipefail
 #
 # Two things it deliberately does NOT share with the IDE:
 #
-#   * its own settings folder (build/arduino-settings). "--preferences-file"
+#   * its own settings folder (build/.arduino-settings). "--preferences-file"
 #     also moves Arduino's settings folder to that file's directory, so the
 #     folder gets a "packages" symlink back to the real core installation. The
 #     point is that nothing here can rewrite the preferences of an open IDE --
 #     and an open IDE cannot change what this builds.
 #
-#   * its own build path (build/arduino), kept between runs so a rebuild is
+#   * its own build path (build/.arduino), kept between runs so a rebuild is
 #     incremental. --clean throws it away.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ARDUINO15_DIR="${ARDUINO15_DIR:-$HOME/.arduino15}"
-BUILD_DIR="${ROOT_DIR}/build/arduino"
-SETTINGS_DIR="${ROOT_DIR}/build/arduino-settings"
+# Both HIDDEN, and that is load-bearing. Arduino 1.8 copies every source file
+# under the sketch folder -- recursively, skipping only dot-directories and its
+# own build.path -- into <build.path>/sketch. build/ is inside the sketch, so a
+# visible build/arduino-public was copied into build/arduino-addons/sketch, which
+# the next public build copied again, and so on, together with the settings
+# folder's "packages" symlink into every installed core: 15 GB of copies and then
+# "Filesystem bottom is too deep" (2026-11-10, two editions side by side).
+BUILD_DIR="${ROOT_DIR}/build/.arduino"
+SETTINGS_DIR="${ROOT_DIR}/build/.arduino-settings"
 
 # The same FQBN the CI job compiles (.github/workflows/build.yml). Every menu
 # option left out here takes the board default, and for ESP32 Dev Module those

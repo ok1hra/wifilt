@@ -161,10 +161,13 @@ path. The code is identical.
 
 Three things it does that the IDE does not:
 
-* it builds in `build/arduino/` with its own settings folder in `build/arduino-settings/`,
-  so an open IDE cannot change what is built and the script cannot rewrite the IDE's
-  preferences. (`--preferences-file` moves Arduino's whole settings folder next to that
-  file, hence the `packages` symlink back to `~/.arduino15`.)
+* it builds in `build/.arduino/` (`.arduino-public/`, `.arduino-addons/` per edition) with
+  its own settings folder in `build/.arduino-settings/`, so an open IDE cannot change what
+  is built and the script cannot rewrite the IDE's preferences. (`--preferences-file` moves
+  Arduino's whole settings folder next to that file, hence the `packages` symlink back to
+  `~/.arduino15`.) The folders are hidden on purpose: Arduino copies every visible folder of
+  the sketch into the build, `build/` included, and visible build folders copied each other
+  until the path got "too deep".
 * it fails if the image is not DIO. The flash mode is one word of the FQBN and a QIO image
   bricks the boards silently — see above.
 * it reports the size against `app0` of the sketch-local `partitions.csv`, not against the

@@ -140,7 +140,7 @@ def main():
         outer_seq, = struct.unpack_from("<H", data, 6)
         my_id_field, remote_id_field = struct.unpack_from("<II", data, 8)
         inner_seq, = struct.unpack_from(">H", data, 0x12)
-        paylen, = struct.unpack_from("<H", data, 0x14)
+        paylen, = struct.unpack_from(">H", data, 0x16)   # BE16 datalen, as a real radio
         payload = data[0x18:]
 
         ok = (total == len(data) and ptype == 0 and my_id_field == remote_id

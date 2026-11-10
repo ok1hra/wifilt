@@ -460,10 +460,18 @@ void AudioChannel::handle(const uint8_t *data, size_t len) {
 void AudioChannel::onTxAudio(const uint8_t *data, size_t len) {
   uint16_t outerSeq = IcomWire::getLE16(data + 0x06);
   uint16_t innerSeq = IcomWire::getBE16(data + 0x12);
-  uint16_t paylen = IcomWire::getLE16(data + 0x14);
-  if ((size_t)0x18 + paylen > len) {
-    vlog("<- malformed audio packet, paylen=" + std::to_string(paylen) + " len=" + std::to_string(len));
-    return;
+  // The payload is whatever follows the 0x18-byte header: the datagram's own
+  // length, the way wfview (icomudpaudio.cpp) and wifilt's own RX path read
+  // it. The client's datalen field is a BE16 at 0x16 (icom_lan_audio_tx.h);
+  // this used to read an LE16 at 0x14 instead, which wifilt leaves 0 -- so
+  // every TX packet was dropped as empty, the radio keyed over CAT and sent a
+  // carrier with no modulation (TS-480, 2026-11-10: ALC 0, PO 0 at MOD 255).
+  // tools/local_trx_wire.py had copied the same layout, so the tests agreed.
+  const size_t paylen = len - 0x18;   // len >= 0x18 checked by handle()
+  const uint16_t declared = IcomWire::getBE16(data + 0x16);
+  if (declared != 0 && declared != paylen) {
+    vlog("<- audio packet datalen " + std::to_string(declared) + " != payload " +
+         std::to_string(paylen) + ", playing the payload");
   }
 
   if (haveLastRx_) {
@@ -549,8 +557,10 @@ void AudioChannel::sendAudioPacket() {
   IcomWire::putLE32(packet.data() + 0x0C, remoteId_);
   // 0x10-0x12 stays 0 (client-TX-only field, unused for server RX)
   IcomWire::putBE16(packet.data() + 0x12, audioSequence_++);
-  IcomWire::putLE16(packet.data() + 0x14, (uint16_t)got);
-  // 0x16-0x18 stays 0 (reserved)
+  // 0x14-0x16 stays 0; datalen is a BE16 at 0x16, as a real radio and
+  // wifilt's own TX (icom_lan_audio_tx.h) write it. wifilt reads the length
+  // off the datagram either way.
+  IcomWire::putBE16(packet.data() + 0x16, (uint16_t)got);
   std::copy(payload, payload + got, packet.begin() + 0x18);
   sendRaw(packet.data(), packet.size(), "audio");
 }
