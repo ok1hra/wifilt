@@ -55,6 +55,12 @@ class HamlibRigBackend : public RigBackend {
   int baud_;
   RIG *rig_ = nullptr;
   std::string lastError_;
+  // Data-input PTT on a rig that picks the TX audio source with a menu item
+  // (hamlib ext func TX_AUDIO_FROM_DATA_INPUT -- TS-480 menu 60) rather than
+  // with the PTT command: switched on once per open, then keyed as plain TX0.
+  enum class DataSource { Unknown, PttCommand, MenuSet };
+  DataSource dataSource_ = DataSource::Unknown;
+  bool prepareDataInput();
 };
 
 // CI-V mode byte + DATA flag <-> hamlib rmode_t (bod 11 "Mode translace").

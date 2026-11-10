@@ -108,6 +108,7 @@ bool HamlibRigBackend::open(std::string *error) {
     return false;
   }
 
+  dataSource_ = DataSource::Unknown;   // a reopened rig may have been reset
   int rc = rig_open(rig_);
   if (rc != RIG_OK) {
     lastError_ = std::string("rig_open failed: ") + rigerror2(rc);
@@ -321,8 +322,35 @@ bool HamlibRigBackend::setPtt(bool on, bool dataInput) {
     lastError_ = std::string("hamlib has no CAT PTT for ") + rig_->caps->model_name;
     return false;
   }
-  const ptt_t ptt = !on ? RIG_PTT_OFF : dataInput ? RIG_PTT_ON_DATA : RIG_PTT_ON_MIC;
+  ptt_t ptt = !on ? RIG_PTT_OFF : dataInput ? RIG_PTT_ON_DATA : RIG_PTT_ON_MIC;
+  if (on && dataInput && prepareDataInput()) ptt = RIG_PTT_ON_MIC;
   return check(rig_set_ptt(rig_, RIG_VFO_CURR, ptt), on ? "set_ptt on" : "set_ptt off");
+}
+
+// The TS-480 keys on TX1 ("data send") but takes no audio from the data
+// input that way: measured 2026-11-10 with local-trx stopped, a tone straight
+// into ACC2 -- TX1 gave ALC 0 and no power, TX0 with menu 60 ("TX audio from
+// data input") ON gave ALC and power. hamlib names that menu item
+// TX_AUDIO_FROM_DATA_INPUT; a rig that has it gets it switched on here and is
+// keyed with TX0, every other rig keeps hamlib's own data PTT. Looked up by
+// name, so any backend exposing the same item is covered.
+bool HamlibRigBackend::prepareDataInput() {
+  if (dataSource_ == DataSource::PttCommand) return false;
+  if (dataSource_ == DataSource::MenuSet) return true;
+  dataSource_ = DataSource::PttCommand;
+  const struct confparams *item = rig_ext_lookup(rig_, "TX_AUDIO_FROM_DATA_INPUT");
+  if (!item || !rig_->caps->set_ext_func) return false;
+  const int rc = rig_set_ext_func(rig_, RIG_VFO_CURR, item->token, 1);
+  if (rc != RIG_OK) {
+    std::fprintf(stderr, "CAT: cannot switch the TX audio to the data input (%s) -- "
+                         "keying with the data PTT command instead\n", rigerror2(rc));
+    return false;
+  }
+  std::printf("CAT: TX audio from the data input switched on (%s), data PTT keys as TX0\n",
+              rig_->caps->model_name);
+  std::fflush(stdout);
+  dataSource_ = DataSource::MenuSet;
+  return true;
 }
 
 }  // namespace LocalTrx
