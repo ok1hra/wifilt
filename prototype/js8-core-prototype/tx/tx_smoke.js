@@ -162,7 +162,8 @@ async function main() {
     encoder:()=>new Int16Array(48000), sink:tuneSink});
   tuneTx.queue({kind:"tune", immediate:true, mode:0, toneHz:1750},1000);
   tuneTx.prepare(1000);
-  if(tuneTx.snapshot().nextSlotUtcMs<1350 || tuneTx.snapshot().nextSlotUtcMs>=1400 ||
+  // 250 ms prebuffer + 200 ms stream lead + 100 ms margin: keyed ~0.55 s after the press.
+  if(tuneTx.snapshot().nextSlotUtcMs<1550 || tuneTx.snapshot().nextSlotUtcMs>=1600 ||
      !tuneTx.snapshot().immediate)
     throw new Error("TUNE was not scheduled immediately");
   driveUntil(tuneTx,state=>state.ptt,1000);

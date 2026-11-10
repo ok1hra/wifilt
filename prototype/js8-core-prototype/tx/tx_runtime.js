@@ -14,6 +14,8 @@
   // Before keying nothing drains it, so the pre-key stream span must stay under
   // that (with margin) or the firmware aborts with "TX ring overflow before write".
   const TX_RING_LIMIT_MS = 1400;
+  // How far ahead of its prebuffer an immediate transmission (TUNE) starts streaming.
+  const IMMEDIATE_STREAM_LEAD_MS = 200;
 
   function planSlot(nowUtcMs, mode, correctionMs = 0, leadMs = 800) {
     const period = MODES[mode].periodMs;
@@ -208,15 +210,21 @@
       this.txId = this.nextTxId++;
       this.packets = packetizeTxPcm48k(pcm, {streamId: this.streamId, txId: this.txId});
       this.packetIndex = 0;
-      this.nextSlotUtcMs = this.immediate
-        ? scheduledAtUtcMs + Math.max(this.activePrebufferMs + 100, 350)
-        : planSlot(scheduledAtUtcMs, this.mode, this.clockCorrectionMs, this.leadMs);
       // Front-load: begin streaming earlier than the firmware's required prebuffer
       // (metadata.prebufferSamples below is unchanged) so the ring is full ~streamLeadMs
       // before the slot. That absorbs a loop stall during delivery without shifting the
-      // key. Immediate/tune keeps the tight span. Capped to the firmware ring capacity.
-      const streamSpanMs = this.immediate ? this.activePrebufferMs
-        : Math.min(this.activePrebufferMs + this.streamLeadMs, TX_RING_LIMIT_MS);
+      // key. Capped to the firmware ring capacity.
+      //
+      // Immediate/tune gets a lead too, just a shorter one. It used to stream exactly
+      // its prebuffer span, so the last packet the firmware needed left ~10 ms before
+      // the slot: a 20 ms page timer running a little late on a busy page was enough
+      // for "TX prebuffer missed slot" (seen on a native build with a TS-480 behind
+      // local-trx, every TUNE press).
+      const streamSpanMs = Math.min(this.activePrebufferMs +
+        (this.immediate ? IMMEDIATE_STREAM_LEAD_MS : this.streamLeadMs), TX_RING_LIMIT_MS);
+      this.nextSlotUtcMs = this.immediate
+        ? scheduledAtUtcMs + Math.max(streamSpanMs + 100, 350)
+        : planSlot(scheduledAtUtcMs, this.mode, this.clockCorrectionMs, this.leadMs);
       this.prebufferStartUtcMs = this.nextSlotUtcMs - streamSpanMs;
       this.endUtcMs = this.nextSlotUtcMs + pcm.length / 48;
       this.watchdogUtcMs = this.endUtcMs + 2000;

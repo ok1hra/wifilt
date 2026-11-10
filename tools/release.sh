@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# One release, nine phases, and a question before each of them.
+# One release, nine phases: every question first, then the whole chain at once.
 #
-# Everything built here is the public edition, also when addons/ is beside the
-# sketch (-DWIFILT_NO_ADDONS, NO_ADDONS=1, --edition public; addon_hooks.h).
+# Everything is built without addons/, also when it is beside the sketch
+# (-DWIFILT_NO_ADDONS, NO_ADDONS=1, --edition public; addon_hooks.h).
 # Phase 9 publishes the page only when the source changed since the last
 # publication.
 #
@@ -31,10 +31,12 @@
 #     build of source that exists nowhere. Publishing therefore comes AFTER the
 #     push, and refuses to run until HEAD is what origin/main holds.
 #
-# All questions come FIRST: after the tool check the script walks every phase
-# and asks what to do (y/n, commit messages, edition, serial port, sudo
-# password), prints the plan, asks once more, and then runs the whole chain
-# without another question. Enter takes the capitalised default. Nothing here
+# All choices come FIRST, on one screen: after the tool check every phase and
+# its options are listed at once (↑/↓ to move, space to switch or edit, r to
+# look for serial ports again, Enter to run, q to leave). The sudo password,
+# when the plan needs it, is asked right after Enter; then the whole chain runs
+# without another question, and ends with the ESP32 flash map and a list of
+# what was written where. Nothing here
 # writes to the device, to this computer, to git or to the web unless the plan
 # says so. What only the run itself can know (a failed build, a guard in front
 # of phase 9) is decided by the plan's answers or by the guard, never by a
@@ -75,8 +77,8 @@ usage() {
   cat <<'EOF'
 Usage: tools/release.sh [--force]
 
-Asks about all nine phases first (plan), then runs them in one go without
-further questions. Enter accepts the capitalised default. addons/release-ext.sh,
+Lists all nine phases and their options on one screen (arrows, space, Enter),
+then runs them in one go without further questions. Enter accepts the capitalised default. addons/release-ext.sh,
 when present, extends it.
 
   1  REV -> today's date                     (y/N)
@@ -177,6 +179,7 @@ abort() {
   say ""
   fail "Release přerušen ve fázi $2."
   print_summary
+  print_written
   exit 1
 }
 
@@ -186,18 +189,6 @@ abort() {
 declare -A PLAN=()
 declare -A PLAN_NOTE=()
 want() { [[ "${PLAN[$1]:-no}" == yes ]]; }
-
-# plan_ask N QUESTION DEFAULT  -> PLAN[N]
-plan_ask() {
-  if ask "  $1) $2" "$3"; then PLAN["$1"]=yes; else PLAN["$1"]=no; fi
-}
-
-# plan_choose QUESTION DEFAULT -- a sub-question of the plan, answer in
-# PLAN_ANSWER as yes / no.
-PLAN_ANSWER=no
-plan_choose() {
-  if ask "     $1" "$2"; then PLAN_ANSWER=yes; else PLAN_ANSWER=no; fi
-}
 
 print_plan() {
   say ""
@@ -219,6 +210,391 @@ print_plan() {
   done
 }
 
+# ================================================================= menu ======
+# The plan is one screen: every choice of the release at once, ↑/↓ to move,
+# space to switch, Enter to run. It is drawn on the terminal itself (fd 4, the
+# alternate screen), so a log taken with tee gets the plan summary printed
+# after it and not a hundred redraws, and the tool check stays on screen.
+#
+# Items are added in order with menu_add; an extension adds its own at the
+# ext_hook points plan_install, plan_flash, plan_commit and plan.
+if [[ -z "${NO_COLOR:-}" ]]; then
+  T_OFF=$'\033[0m'; T_BOLD=$'\033[1m'; T_DIM=$'\033[2m'; T_REV=$'\033[7m'
+  T_GREEN=$'\033[32m'; T_YELLOW=$'\033[33m'; T_CYAN=$'\033[36m'
+else
+  T_OFF=""; T_BOLD=""; T_DIM=""; T_REV=""; T_GREEN=""; T_YELLOW=""; T_CYAN=""
+fi
+
+MENU_KEYS=()
+MENU_VIS=()
+MENU_CUR=0
+MENU_TOP=0
+MENU_ACTIVE=false
+declare -A M_TYPE=() M_LEVEL=() M_LABEL=() M_VAL=() M_SHOW=() M_OFF=() M_NOTE=() \
+           M_CHOICES=() M_DISPLAY=() M_HINT=()
+
+# menu_add KEY TYPE LEVEL LABEL VALUE [SHOW]
+#   TYPE   bool (VALUE yes|no) · choice (VALUE one of M_CHOICES, space cycles)
+#          · text (space edits; empty shows M_HINT) · head (a heading)
+#   SHOW   a command; the item is shown, and counts, only while it succeeds
+#   M_OFF[KEY]   non-empty = unavailable, and why (counts as switched off)
+#   M_NOTE[KEY]  shown dimmed after the item
+menu_add() {
+  local k="$1"
+  MENU_KEYS+=("$k")
+  M_TYPE[$k]="$2"; M_LEVEL[$k]="$3"; M_LABEL[$k]="$4"; M_VAL[$k]="${5:-}"; M_SHOW[$k]="${6:-true}"
+  M_OFF[$k]=""; M_NOTE[$k]=""
+}
+# menu_phase N LABEL Y|N  -- the item of one phase, key pN; PLAN[N] follows it.
+menu_phase() {
+  local def=no
+  [[ "$3" == Y ]] && def=yes
+  menu_add "p$1" bool 0 "$1) $2" "$def"
+  [[ -n "${BLOCKED[$1]:-}" ]] && M_OFF["p$1"]="${BLOCKED[$1]}"
+  return 0
+}
+# menu_set_choices KEY "v1|v2" ["shown1|shown2"]
+menu_set_choices() { M_CHOICES[$1]="$2"; M_DISPLAY[$1]="${3:-$2}"; }
+
+menu_visible() { eval "${M_SHOW[$1]}"; }
+# on KEY  -- the item is shown, available and switched on
+on() { [[ "${M_VAL[$1]:-}" == yes && -z "${M_OFF[$1]:-}" ]] && menu_visible "$1"; }
+
+menu_choice_shown() {
+  local k="$1" i
+  local -a vals shown
+  IFS='|' read -r -a vals <<< "${M_CHOICES[$k]:-}"
+  IFS='|' read -r -a shown <<< "${M_DISPLAY[$k]:-}"
+  for i in "${!vals[@]}"; do
+    if [[ "${vals[$i]}" == "${M_VAL[$k]}" ]]; then printf '%s' "${shown[$i]:-${vals[$i]}}"; return; fi
+  done
+  printf '%s' "${M_VAL[$k]:-—}"
+}
+
+menu_cycle() {
+  local k="$1" i n
+  local -a vals
+  IFS='|' read -r -a vals <<< "${M_CHOICES[$k]:-}"
+  n=${#vals[@]}
+  (( n == 0 )) && return
+  for i in "${!vals[@]}"; do
+    if [[ "${vals[$i]}" == "${M_VAL[$k]}" ]]; then M_VAL[$k]="${vals[$(( (i + 1) % n ))]}"; return; fi
+  done
+  M_VAL[$k]="${vals[0]}"
+}
+
+# menu_line KEY SELECTED COLS
+menu_line() {
+  local k="$1" sel="$2" cols="$3" ind box="   " colour="" label value="" note plain room
+  ind="$(printf '%*s' $(( ${M_LEVEL[$k]} * 4 )) '')"
+  label="${M_LABEL[$k]}"
+  note="${M_NOTE[$k]}"
+  if [[ "${M_TYPE[$k]}" == head ]]; then
+    printf '\n %s%s── %s%s\n' "$T_BOLD" "$T_CYAN" "$label" "$T_OFF"
+    return
+  fi
+  case "${M_TYPE[$k]}" in
+    bool)
+      if [[ "${M_VAL[$k]}" == yes ]]; then box="[x]"; colour="$T_GREEN"; else box="[ ]"; fi ;;
+    choice)
+      box=" ▸ "; value=": ‹$(menu_choice_shown "$k")›" ;;
+    text)
+      box=" ✎ "
+      if [[ -n "${M_VAL[$k]}" ]]; then value=": «${M_VAL[$k]}»"; else value=": «${M_HINT[$k]:-}»"; fi ;;
+  esac
+  if [[ -n "${M_OFF[$k]}" ]]; then
+    box="[-]"; colour="$T_DIM"; note="${M_OFF[$k]}"
+  fi
+  # Cut the note, then the value, to the width: a wrapped line would shift
+  # every line below it and the redraw with it.
+  plain="  ${ind}${box} ${label}${value}"
+  room=$(( cols - ${#plain} - 3 ))
+  if (( room < 4 )); then
+    note=""
+    (( ${#plain} > cols - 1 )) && value="${value:0:$(( ${#value} - ${#plain} + cols - 2 ))}…"
+  elif (( ${#note} > room )); then
+    note="${note:0:$(( room - 1 ))}…"
+  fi
+  local nc="$T_DIM"
+  [[ -z "${M_OFF[$k]}" && ( "$note" == POZOR* || "$note" == *porty* ) ]] && nc="$T_YELLOW"
+  if (( sel )); then
+    printf '%s▶%s %s%s%s%s %s%s%s%s  %s%s%s\n' "$T_BOLD$T_CYAN" "$T_OFF" "$ind" "$colour" "$box" "$T_OFF" \
+      "$T_REV" "$label" "$value" "$T_OFF" "$nc" "$note" "$T_OFF"
+  else
+    printf '  %s%s%s%s %s%s%s  %s%s%s\n' "$ind" "$colour" "$box" "$T_OFF" \
+      "$( [[ -n "${M_OFF[$k]}" ]] && printf '%s' "$T_DIM")" "$label" "$value$T_OFF" "$nc" "$note" "$T_OFF"
+  fi
+}
+
+menu_render() {
+  menu_refresh
+  local rows=24 cols=80 k i body summary=()
+  read -r rows cols < <(stty size <&3 2>/dev/null)
+  [[ "$rows" =~ ^[0-9]+$ ]] || rows=24
+  [[ "$cols" =~ ^[0-9]+$ ]] || cols=80
+  MENU_VIS=()
+  for k in "${MENU_KEYS[@]}"; do menu_visible "$k" && MENU_VIS+=("$k"); done
+  (( MENU_CUR >= ${#MENU_VIS[@]} )) && MENU_CUR=$(( ${#MENU_VIS[@]} - 1 ))
+  while [[ "${M_TYPE[${MENU_VIS[$MENU_CUR]}]}" == head ]] && (( MENU_CUR < ${#MENU_VIS[@]} - 1 )); do
+    MENU_CUR=$(( MENU_CUR + 1 ))
+  done
+  # A heading takes two lines; the window is counted in items and kept short
+  # enough for that.
+  body=$(( (rows - 6) * 3 / 4 )); (( body < 3 )) && body=3
+  (( MENU_CUR < MENU_TOP )) && MENU_TOP=$MENU_CUR
+  (( MENU_CUR >= MENU_TOP + body )) && MENU_TOP=$(( MENU_CUR - body + 1 ))
+  # Headings stay with the first item under them.
+  (( MENU_TOP > 0 )) && [[ "${M_TYPE[${MENU_VIS[$((MENU_TOP - 1))]}]}" == head ]] && MENU_TOP=$(( MENU_TOP - 1 ))
+  for k in "${MENU_KEYS[@]}"; do
+    [[ "$k" =~ ^p([0-9]+)$ ]] && on "$k" && summary+=("${BASH_REMATCH[1]}")
+  done
+  {
+    printf '\033[H\033[2J'
+    printf '%s%s WIFILT release%s  REV %s · větev %s\n' "$T_BOLD" "$T_CYAN" "$T_OFF" "$REV" "$BRANCH"
+    printf '%s ↑↓ pohyb · mezerník přepnout/upravit · r porty znovu · Enter SPUSTIT · q konec%s\n' "$T_DIM" "$T_OFF"
+    (( MENU_TOP > 0 )) && printf '%s   ↑ další nahoře%s\n' "$T_DIM" "$T_OFF" || printf '\n'
+    for (( i = MENU_TOP; i < ${#MENU_VIS[@]} && i < MENU_TOP + body; i++ )); do
+      menu_line "${MENU_VIS[$i]}" $(( i == MENU_CUR )) "$cols"
+    done
+    (( i < ${#MENU_VIS[@]} )) && printf '%s   ↓ další dole%s\n' "$T_DIM" "$T_OFF" || printf '\n'
+    printf '\n %sproběhne:%s %s\n' "$T_BOLD" "$T_OFF" "${summary[*]:-nic}"
+  } >&4
+}
+
+menu_move() {   # menu_move +1|-1
+  local i=$MENU_CUR n=${#MENU_VIS[@]}
+  while :; do
+    i=$(( i + $1 ))
+    (( i < 0 || i >= n )) && return
+    if [[ "${M_TYPE[${MENU_VIS[$i]}]}" != head ]]; then MENU_CUR=$i; return; fi
+  done
+}
+
+menu_edit() {   # menu_edit KEY  -- one line, readline, at the bottom
+  local k="$1" rows=24 cols new
+  read -r rows cols < <(stty size <&3 2>/dev/null)
+  [[ "$rows" =~ ^[0-9]+$ ]] || rows=24
+  printf '\033[%d;1H\033[K' "$rows" >&4
+  tput cnorm >&4 2>/dev/null
+  IFS= read -r -e -i "${M_VAL[$k]}" -p "  ${M_LABEL[$k]}: " new <&3 >&4 2>&4 || new="${M_VAL[$k]}"
+  tput civis >&4 2>/dev/null
+  M_VAL[$k]="$new"
+}
+
+menu_toggle() {
+  local k="$1"
+  [[ -n "${M_OFF[$k]}" ]] && return
+  case "${M_TYPE[$k]}" in
+    bool)   if [[ "${M_VAL[$k]}" == yes ]]; then M_VAL[$k]=no; else M_VAL[$k]=yes; fi ;;
+    choice) menu_cycle "$k" ;;
+    text)   menu_edit "$k" ;;
+  esac
+}
+
+menu_enter() {
+  exec 4>/dev/tty
+  MENU_ACTIVE=true
+  tput smcup >&4 2>/dev/null
+  tput civis >&4 2>/dev/null
+}
+menu_leave() {
+  $MENU_ACTIVE || return 0
+  MENU_ACTIVE=false
+  tput cnorm >&4 2>/dev/null
+  tput rmcup >&4 2>/dev/null
+  stty echo icanon <&3 2>/dev/null || true
+}
+
+# menu_run -- returns when Enter is pressed; q leaves the script.
+menu_run() {
+  local key c k
+  menu_enter
+  while true; do
+    menu_render
+    IFS= read -rsn1 -u 3 key || { menu_leave; fail "vstup uzavřen -- končím"; exit 1; }
+    if [[ "$key" == $'\e' ]]; then
+      while IFS= read -rsn1 -t 0.03 -u 3 c; do key+="$c"; done
+    fi
+    k="${MENU_VIS[$MENU_CUR]}"
+    case "$key" in
+      $'\e[A'|$'\eOA'|k)  menu_move -1 ;;
+      $'\e[B'|$'\eOB'|j)  menu_move 1 ;;
+      $'\e[5~')  for _ in 1 2 3 4 5 6 7 8; do menu_move -1; done ;;
+      $'\e[6~')  for _ in 1 2 3 4 5 6 7 8; do menu_move 1; done ;;
+      $'\e[H'|$'\e[1~')  MENU_CUR=0 ;;
+      $'\e[F'|$'\e[4~')  MENU_CUR=$(( ${#MENU_VIS[@]} - 1 )) ;;
+      " ")       menu_toggle "$k" ;;
+      "")        break ;;
+      r|R)       detect_ports ;;
+      q|Q|$'\e') menu_leave; info "Nic se neprovedlo."; exit 0 ;;
+    esac
+  done
+  menu_leave
+}
+
+# Serial ports, found when the menu is built and again on r. The by-id path is
+# what gets flashed: /dev/ttyUSB0 is whichever cable enumerated first, and an
+# IC-705 alone shows up as two ttyACM ports.
+PORT_VALS=()
+detect_ports() {
+  local link dev best="" shown=() i
+  local -A lbl=()
+  if [[ -d /dev/serial/by-id ]]; then
+    for link in /dev/serial/by-id/*; do
+      [[ -e "$link" ]] && lbl["$(readlink -f "$link")"]="$link"
+    done
+  fi
+  PORT_VALS=()
+  while IFS= read -r dev; do
+    [[ -n "$dev" ]] || continue
+    PORT_VALS+=("${lbl[$dev]:-$dev}")
+    shown+=("${dev}${lbl[$dev]:+  $(basename "${lbl[$dev]}")}")
+    # USB-UART bridges of ESP32 boards, as opposed to a radio's own ports.
+    [[ -z "$best" && "${lbl[$dev]:-}" =~ CP210|Silicon_Labs|CH34|1a86|FTDI|wch ]] && best="${lbl[$dev]}"
+  done < <(ls -1 /dev/ttyUSB* /dev/ttyACM* 2>/dev/null | sort)
+  M_CHOICES[port]="$(IFS='|'; printf '%s' "${PORT_VALS[*]}")"
+  M_DISPLAY[port]="$(IFS='|'; printf '%s' "${shown[*]}")"
+  local keep=false
+  for i in "${PORT_VALS[@]}"; do [[ "$i" == "${M_VAL[port]:-}" ]] && keep=true; done
+  $keep || M_VAL[port]="${best:-${PORT_VALS[0]:-}}"
+  if (( ${#PORT_VALS[@]} > 1 )); then
+    M_NOTE[port]="${#PORT_VALS[@]} porty -- mezerníkem vyber ten s ESP32"
+  else
+    M_NOTE[port]=""
+  fi
+}
+
+# ======================================================= what went where ====
+# wrote SCOPE WHAT WHERE -- one line of the list printed at the end, grouped by
+# SCOPE (the repository the output belongs to) in the order first seen.
+WRITTEN=()
+INSTALL_SCOPE="wifilt"
+FLASH_SCOPE="wifilt"
+wrote() { WRITTEN+=("$1|$2|$3"); }
+
+fmt_num() { printf '%s' "$1" | rev | sed -E 's/([0-9]{3})/\1 /g' | rev | sed 's/^ *//'; }
+
+# wrote_dist SCOPE DIR -- the archives of REV in DIR, and their sums.
+wrote_dist() {
+  local f
+  for f in "$2"/wifilt-"$REV"-*.tar.gz "$2"/wifilt-"$REV"-*.zip "$2"/SHA256SUMS; do
+    [[ -f "$f" ]] && wrote "$1" "PC balík" "${f#"${ROOT_DIR}"/} ($(fmt_num "$(stat -c %s "$f")") B)"
+  done
+  return 0
+}
+
+print_written() {
+  say ""
+  printf '%s%s-- co se kam zapsalo --------------------------------------%s\n' "$C_BOLD" "$C_CYAN" "$C_OFF"
+  if [[ ${#WRITTEN[@]} -eq 0 ]]; then
+    info "  nic"
+    return
+  fi
+  local scopes=() e s scope what where pad
+  for e in "${WRITTEN[@]}"; do
+    scope="${e%%|*}"
+    [[ " ${scopes[*]} " == *" $scope "* ]] || scopes+=("$scope")
+  done
+  for s in "${scopes[@]}"; do
+    say "  ${C_BOLD}${s}${C_OFF}"
+    for e in "${WRITTEN[@]}"; do
+      IFS='|' read -r scope what where <<< "$e"
+      [[ "$scope" == "$s" ]] || continue
+      pad=$(( 12 - ${#what} )); (( pad < 1 )) && pad=1
+      printf '    %s%*s%s\n' "$what" "$pad" "" "$where"
+    done
+  done
+}
+
+# ========================================================= ESP32 flash map ===
+# Rows of the table: firmware images against app0, asset trees against the
+# spiffs partition (--edition VALUE|label). An extension appends its own.
+ESP_APP_ROWS=("box|${FIRMWARE_BIN}" "M5Atom|${FIRMWARE_BIN_M5ATOM}")
+ESP_FS_ROWS=("public|assets")
+declare -A FS_MEASURED=()     # --edition value -> "bytes files"
+RUN_START="$(date +%s)"
+PARTITION_CSV="${ROOT_DIR}/partitions.csv"
+
+part_field() {   # part_field NAME COLUMN(4=offset, 5=size)
+  awk -F, -v wanted="$1" -v column="$2" '
+    $1 ~ "^[[:space:]]*" wanted "[[:space:]]*$" { gsub(/[[:space:]]/, "", $column); print $column; exit }' \
+    "$PARTITION_CSV"
+}
+
+# fs_record EDITION DIR -- an asset tree already staged by this run
+fs_record() {
+  [[ -d "$2" ]] || return 1
+  FS_MEASURED[$1]="$(du -sb "$2" | awk '{print $1}') $(find "$2" -type f | wc -l)"
+}
+
+# fs_measure EDITION -- stage the tree only to measure it (about a minute: every
+# asset is compressed the way the device gets it).
+fs_measure() {
+  local dir="${ROOT_DIR}/build/release-usage/$1" noaddons=1
+  [[ "$1" == public ]] || noaddons=0
+  rm -rf "$dir"; mkdir -p "$(dirname "$dir")"
+  WIFILT_NO_ADDONS=$noaddons "${ROOT_DIR}/tools/prepare-spiffs-tree.sh" "${ROOT_DIR}/data" "$dir" >/dev/null 2>&1 \
+    || { rm -rf "$dir"; return 1; }
+  fs_record "$1" "$dir"
+  rm -rf "$dir"
+  rmdir "$(dirname "$dir")" 2>/dev/null || true
+}
+
+usage_row() {   # usage_row LABEL USED TOTAL EXTRA
+  local pct filled colour bar="" i width=24
+  pct="$(awk -v u="$2" -v t="$3" 'BEGIN { printf "%.1f", (t > 0 ? u * 100 / t : 0) }')"
+  filled=$(awk -v p="$pct" -v w="$width" 'BEGIN { f = int(p * w / 100); if (f > w) f = w; print f }')
+  if   awk -v p="$pct" 'BEGIN { exit !(p >= 90) }'; then colour="$C_RED"
+  elif awk -v p="$pct" 'BEGIN { exit !(p >= 75) }'; then colour="$C_YELLOW"
+  else colour="$C_GREEN"; fi
+  for (( i = 0; i < width; i++ )); do (( i < filled )) && bar+="#" || bar+="."; done
+  local pad=$(( 16 - ${#1} )); (( pad < 1 )) && pad=1
+  printf '      %s%*s%11s B %s%5s %%%s %s%s%s volno %9s B  %s%s%s\n' "$1" "$pad" "" "$(fmt_num "$2")" \
+    "$colour" "$pct" "$C_OFF" "$colour" "$bar" "$C_OFF" "$(fmt_num $(( $3 - $2 )))" "$C_DIM" "$4" "$C_OFF"
+}
+
+print_esp_usage() {
+  say ""
+  printf '%s%s-- obsazenost ESP32 (partitions.csv, 4 MB flash) ----------%s\n' "$C_BOLD" "$C_CYAN" "$C_OFF"
+  local name off size row label file age
+  for name in nvs otadata app0 spiffs cfg; do
+    off="$(part_field "$name" 4)"; size="$(part_field "$name" 5)"
+    [[ -n "$off" && -n "$size" ]] || continue
+    printf '  %s%-8s%s %-9s %11s B  ' "$C_BOLD" "$name" "$C_OFF" "$off" "$(fmt_num $(( size )))"
+    case "$name" in
+      app0)
+        say "${C_DIM}program${C_OFF}"
+        for row in "${ESP_APP_ROWS[@]}"; do
+          label="${row%%|*}"; file="${row#*|}"
+          if [[ ! -f "$file" ]]; then
+            printf '      %s%*s%s chybí %s%s\n' "$label" $(( 17 - ${#label} )) "" "$C_DIM" "$(basename "$file")" "$C_OFF"
+            continue
+          fi
+          if (( $(stat -c %Y "$file") >= RUN_START )); then age="tento běh"
+          else age="starší, $(date -r "$file" '+%-d.%-m. %H:%M')"; fi
+          usage_row "$label" "$(stat -c %s "$file")" $(( size )) "$age"
+        done ;;
+      spiffs)
+        # The gate, not the partition: 256 KiB stay free for what the device
+        # writes, 64 KiB for LittleFS metadata (upload-firmware-spiffs.sh).
+        local gate=$(( size - 256 * 1024 - 64 * 1024 ))
+        say "${C_DIM}web assets; limit $(fmt_num $gate) B = oddíl − 256 KiB rezerva − 64 KiB metadata${C_OFF}"
+        for row in "${ESP_FS_ROWS[@]}"; do
+          local ed="${row%%|*}" m
+          label="${row#*|}"
+          m="${FS_MEASURED[$ed]:-}"
+          if [[ -n "$m" ]]; then
+            usage_row "$label" "${m%% *}" "$gate" "${m##* } souborů"
+          else
+            printf '      %s%*s%s neměřeno%s\n' "$label" $(( 17 - ${#label} )) "" "$C_DIM" "$C_OFF"
+          fi
+        done ;;
+      cfg)     say "${C_DIM}konfigurace operátora -- release nezapisuje${C_OFF}" ;;
+      *)       say "${C_DIM}systém${C_OFF}" ;;
+    esac
+  done
+}
+
 # sudo once, before the run, and kept fresh while it lasts: phases 4 to 6 need
 # it after builds that can take longer than sudo's own timeout.
 SUDO_KEEPALIVE_PID=""
@@ -227,9 +603,14 @@ sudo_prime() {
   sudo -v || return 1
   ( while sleep 50; do sudo -n -v 2>/dev/null || exit 0; done ) &
   SUDO_KEEPALIVE_PID=$!
-  trap '[[ -n "$SUDO_KEEPALIVE_PID" ]] && kill "$SUDO_KEEPALIVE_PID" 2>/dev/null' EXIT
   return 0
 }
+
+cleanup() {
+  [[ -n "$SUDO_KEEPALIVE_PID" ]] && kill "$SUDO_KEEPALIVE_PID" 2>/dev/null
+  menu_leave
+}
+trap cleanup EXIT
 
 PHASES=(
   "1 REV"
@@ -377,13 +758,15 @@ bundle_local_trx_into() {
 # ext_hook POINT  -- calls ext_POINT when an extension defined it. The points,
 # in the order they come:
 #   preflight      phase 0, after the tools are reported (may set BLOCKED,
-#                  NATIVE_BIN, NATIVE_MAKE_ARGS, NATIVE_RUN_ARGS)
-#   plan_install   plan, phase 6, before the archive is looked for (may set
-#                  INSTALL_ARCHIVE; asking is allowed here)
-#   plan_flash     plan, phase 7, after the yes (may set FLASH_ARGS)
-#   plan_commit    plan, phase 8, after this repository (plan_commit_repo)
-#   plan           end of the plan, before it is printed (its own phases:
-#                  plan_ask N ...). The last point where asking is allowed.
+#                  NATIVE_BIN, NATIVE_MAKE_ARGS, NATIVE_RUN_ARGS, and append
+#                  to ESP_APP_ROWS / ESP_FS_ROWS)
+#   plan_install   menu, after the phase 6 item (menu_add its own items)
+#   plan_flash     menu, after the phase 7 port item
+#   plan_commit    menu, after this repository (plan_commit_repo)
+#   plan           menu, after phase 9 (its own phases: menu_phase N ...)
+#   menu_refresh   before every redraw (may set INSTALL_ARCHIVE, M_OFF, M_NOTE)
+#   plan_resolve   after Enter, choices -> plan (may set FLASH_ARGS,
+#                  INSTALL_SCOPE, FLASH_SCOPE, PLAN_NOTE)
 #   firmware       phase 2, after the export succeeded
 #   dist           phase 3, after the archives were built (dist_targets,
 #                  want_ltx and dist_build are there to reuse)
@@ -391,8 +774,10 @@ bundle_local_trx_into() {
 #   flash          phase 7, before flashing
 #   stamp         phase 8, after data/*.html got its ?v=
 #   commit         phase 8, after this repository (commit_repo is there)
-#   end            after phase 9, before the summary
-# An extension shares this shell: its failures go through abort like ours.
+#   end            after phase 9, before the summary and the tables
+# An extension shares this shell: its failures go through abort like ours, and
+# what it writes goes into the list at the end through wrote SCOPE WHAT WHERE.
+# Nothing after the menu asks: ask() then takes its default.
 ext_hook() {
   declare -F "ext_$1" >/dev/null || return 0
   "ext_$1"
@@ -421,34 +806,31 @@ dist_build() {
   return 0
 }
 
-# plan_commit_repo DIR LABEL  -- the plan for one repository: commit (with its
-# message) and push, keyed by LABEL. The tree is asked about as it is now; by
-# the time phase 8 runs, phases 1 and 8 itself may have changed it, so the
-# answer means "commit whatever is there then".
+# plan_commit_repo DIR LABEL  -- the menu items of one repository under phase 8:
+# commit (with its message) and push, keyed by its index in REPO_LABELS. The
+# tree is shown as it is now; by the time phase 8 runs, phases 1 and 8 itself
+# may have changed it, so the answer means "commit whatever is there then".
 declare -A COMMIT_PLAN=() COMMIT_MSG=() PUSH_PLAN=()
+REPO_LABELS=()
 plan_commit_repo() {
-  local dir="$1" label="$2" branch dirty msg
+  local dir="$1" label="$2" branch dirty i=${#REPO_LABELS[@]}
+  REPO_LABELS+=("$label")
   branch="$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "?")"
   dirty="$(git -C "$dir" status --porcelain | wc -l)"
-  info "     ${label} (${branch}): ${dirty} změněných souborů teď"
-  [[ "$dirty" -gt 0 ]] && git -C "$dir" status --short | head -15 | sed 's/^/       /'
-  plan_choose "git add -A a commit ($label), bude-li co?" N
-  COMMIT_PLAN["$label"]="$PLAN_ANSWER"
-  if [[ "${COMMIT_PLAN[$label]}" == yes ]]; then
-    printf '     %sZpráva commitu%s [REV %s]: ' "$C_BOLD" "$C_OFF" "$REV_PLAN"
-    IFS= read -r msg <&3 || { printf '\n'; fail "vstup uzavřen -- končím"; exit 1; }
-    COMMIT_MSG["$label"]="${msg:-REV $REV_PLAN}"
-  fi
-  plan_choose "git push ${label} na origin/${branch}, bude-li co?" N
-  PUSH_PLAN["$label"]="$PLAN_ANSWER"
+  menu_add "c$i" bool 1 "commit ${label} (${branch})" yes "on p8"
+  M_NOTE["c$i"]="teď ${dirty} změněných souborů; git add -A"
+  menu_add "m$i" text 2 "zpráva" "" "on c$i"
+  M_HINT["m$i"]="prázdná = REV <rev>"
+  menu_add "u$i" bool 1 "push ${label} -> origin/${branch}" yes "on p8"
 }
 
-# commit_repo DIR LABEL PHASE  -- status, commit, push for one repository, as
-# planned by plan_commit_repo; PHASE is the one that needs the push. Appends
-# hotovo / beze změny / přeskočeno to REPO_RESULTS.
+# commit_repo DIR LABEL PHASE [SCOPE]  -- status, commit, push for one
+# repository, as planned by plan_commit_repo; PHASE is the one that needs the
+# push, SCOPE the group in the list of what went where (default wifilt).
+# Appends hotovo / beze změny / přeskočeno to REPO_RESULTS.
 REPO_RESULTS=()
 commit_repo() {
-  local dir="$1" label="$2" needs="$3" branch msg result
+  local dir="$1" label="$2" needs="$3" scope="${4:-wifilt}" branch msg result
   branch="$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "?")"
   say ""
   say "${C_BOLD}-- ${label} (${branch})${C_OFF}"
@@ -464,6 +846,7 @@ commit_repo() {
       info "  commit: $msg"
       git -C "$dir" add -A || abort "git add ($label) selhal" 8
       git -C "$dir" commit -m "$msg" || { mark 8 "selhalo"; abort "git commit ($label) selhal." 8; }
+      wrote "$scope" "commit" "${label} ${branch} $(git -C "$dir" rev-parse --short HEAD) \"${msg}\""
       result="hotovo"
     else
       info "  commit nebyl v plánu"
@@ -478,6 +861,7 @@ commit_repo() {
     if [[ "${PUSH_PLAN[$label]:-no}" == yes ]]; then
       info "  git push ${label} na origin/${branch} (${ahead} commitů)"
       git -C "$dir" push origin "$branch" || { mark 8 "selhalo"; abort "git push ($label) selhal." 8; }
+      wrote "$scope" "push" "${label} -> $(git -C "$dir" remote get-url origin 2>/dev/null) ${branch} (${ahead} commitů)"
       ok "  pushnuto"
     else
       info "  nepushnuto -- fáze ${needs} to bude vyžadovat"
@@ -640,26 +1024,197 @@ REV="$(read_rev)"
 say ""
 info "  REV $REV, větev $BRANCH"
 
+# ================================================================== plán ====
+# Every choice of the release on one screen (menu_run above). Nothing between
+# here and the Enter writes anything anywhere.
+TODAY="$(date +%Y%m%d)"
+REV_PLAN="$REV"
+
+# dist-linux always; dist-windows/dist-arm64 only when their cross-toolchain
+# was found in phase 0. Built as an explicit target list (not the Makefile's
+# `dist` aggregate) so a missing toolchain degrades one archive at a time
+# instead of failing the whole phase.
+dist_targets=(dist-linux)
+[[ -z "$DEGRADED_WINDOWS" ]] && dist_targets+=(dist-windows)
+[[ -z "$DEGRADED_ARM64"   ]] && dist_targets+=(dist-arm64)
+want_ltx=false
+
+menu_add h_build head 0 "sestavení"
+# ---- 1 REV
+menu_phase 1 "REV -> dnešní datum ($TODAY)" N
+if [[ "$REV" == "$TODAY" ]]; then
+  M_OFF[p1]="REV $REV už odpovídá dnešku"
+elif [[ "$REV" -gt "$TODAY" ]]; then
+  M_OFF[p1]="REV $REV je v budoucnosti -- nechává se"
+else
+  M_NOTE[p1]="teď $REV"
+fi
+
+# ---- 2 firmware
+menu_phase 2 "export firmware (box + M5Atom Lite)" Y
+
+# ---- 3 native dist
+dist_default=Y
+[[ -n "$DEGRADED_WINDOWS" || -n "$DEGRADED_ARM64" ]] && dist_default=N
+menu_phase 3 "PC balíky (make -C native dist)" "$dist_default"
+_degraded="${DEGRADED_WINDOWS:+bez Windows ($DEGRADED_WINDOWS) }${DEGRADED_ARM64:+bez Raspberry Pi ($DEGRADED_ARM64)}"
+M_NOTE[p3]="${dist_targets[*]}${_degraded:+ -- $_degraded}"
+menu_add ltx bool 1 "přibalit local-trx (PC bridge pro libovolný rig)" yes "on p3"
+[[ -n "$LOCAL_TRX_UNAVAILABLE" ]] && M_OFF[ltx]="$LOCAL_TRX_UNAVAILABLE"
+# Cross-compiled hamlib+libserialport (Windows/ARM64) is a one-off job of
+# minutes whose result build-cross-libs.sh keeps for next time.
+for _t in win arm64; do
+  _gate="dist-windows"; [[ "$_t" == arm64 ]] && _gate="dist-arm64"
+  [[ " ${dist_targets[*]} " == *" $_gate "* ]] || continue
+  cross_libs_missing "$_t" || continue
+  menu_add "ltx_$_t" bool 2 "zkompilovat chybějící cross hamlib/libserialport ($_t)" yes "on ltx"
+  M_NOTE["ltx_$_t"]="řádově minuty, jednorázově"
+done
+
+menu_add h_test head 0 "ověření na tomto počítači"
+# ---- 4 integration test
+menu_phase 4 "integrační test proti falešnému rádiu" N
+# ---- 5 run the binary
+menu_phase 5 "spustit ./${NATIVE_BIN#"${ROOT_DIR}"/} --data-dir data" N
+M_NOTE[p5]="běží do Ctrl-C"
+menu_add setcap bool 1 "chybí-li CAP_NET_BIND_SERVICE, udělit přes sudo" no "on p4 || on p5"
+menu_add contfail bool 1 "pokračovat i po selhání testu / běhu binárky" no "on p4 || on p5"
+
+menu_add h_deploy head 0 "nasazení"
+# ---- 6 install on this computer
+menu_phase 6 "instalace na tento počítač (sudo, /opt/wifilt)" Y
+ext_hook plan_install
+_running=()
+for _svc in wifilt local-trx; do
+  systemctl is-active --quiet "$_svc" 2>/dev/null && _running+=("$_svc")
+done
+if [[ ${#_running[@]} -gt 0 ]]; then
+  # install(1) cannot write over a binary that is being executed: the install
+  # would fail with "Text file busy" halfway, having already replaced data/.
+  menu_add stopsvc bool 1 "zastavit běžící ${_running[*]} na dobu instalace" yes "on p6"
+fi
+
+# ---- 7 flash the device
+menu_phase 7 "flash firmware + assets do zařízení" Y
+menu_add port choice 1 "port" "" "on p7"
+ext_hook plan_flash
+detect_ports
+
+menu_add h_pub head 0 "zveřejnění"
+# ---- 8 git
+menu_phase 8 "git commit / push" N
+M_NOTE[p8]="před commitem se přerazí ?v= v data/*.html"
+plan_commit_repo "$ROOT_DIR" "wifilt"
+ext_hook plan_commit
+
+# ---- 9 publish
+menu_phase 9 "publikace instalační stránky (gh-pages)" Y
+M_NOTE[p9]="jen změnil-li se zdroj a projdou-li závory"
+
+ext_hook plan
+
+menu_add h_end head 0 "na konci"
+menu_add fsm bool 0 "obsazenost ESP32: přeměřit LittleFS, které běh nezměřil" yes
+M_NOTE[fsm]="~1 min na edici"
+
+# menu_refresh -- what changes with the other choices; before every redraw.
+menu_refresh() {
+  REV_PLAN="$REV"
+  on p1 && REV_PLAN="$TODAY"
+  INSTALL_ARCHIVE="${DIST_DIR}/wifilt-${REV_PLAN}-linux-x86_64.tar.gz"
+  # An extension may point INSTALL_ARCHIVE elsewhere, or mark its items here.
+  ext_hook menu_refresh
+  if [[ -z "${BLOCKED[5]:-}" ]]; then
+    if [[ -x "$NATIVE_BIN" ]] || on p3; then M_OFF[p5]=""
+    else M_OFF[p5]="${NATIVE_BIN#"${ROOT_DIR}"/} neexistuje a fáze 3 je vypnutá"; fi
+  fi
+  if [[ -z "${BLOCKED[6]:-}" ]]; then
+    if on p3; then
+      M_OFF[p6]=""; M_NOTE[p6]="${INSTALL_ARCHIVE#"${ROOT_DIR}"/}"
+    elif [[ -f "$INSTALL_ARCHIVE" ]]; then
+      # The archive exists by NAME (wifilt-$REV-...) -- that alone does not
+      # mean THIS run rebuilt it. Found live: phase 3 declined ("the archive is
+      # already there"), then the install quietly deployed an hours-old archive
+      # without a fix made to start-wifilt.sh in the meantime.
+      M_OFF[p6]=""; M_NOTE[p6]="POZOR: $(basename "$INSTALL_ARCHIVE") nebude přebudován -- může být starší než zdroj"
+    else
+      M_OFF[p6]="chybí $(basename "$INSTALL_ARCHIVE") a fáze 3 je vypnutá"
+    fi
+  fi
+  if [[ -z "${BLOCKED[7]:-}" ]]; then
+    if [[ ${#PORT_VALS[@]} -gt 0 ]]; then M_OFF[p7]=""
+    else M_OFF[p7]="žádný sériový port (r = hledat znovu)"; fi
+  fi
+}
+
+menu_run
+
+# ---- the choices -> the plan
+menu_refresh
+for _k in "${MENU_KEYS[@]}"; do
+  [[ "$_k" =~ ^p([0-9]+)$ ]] || continue
+  _n="${BASH_REMATCH[1]}"
+  if on "$_k"; then PLAN[$_n]=yes; else PLAN[$_n]=no; fi
+  if [[ -n "${M_OFF[$_k]}" ]]; then PLAN_NOTE[$_n]="${M_OFF[$_k]}"
+  elif [[ -n "${M_NOTE[$_k]}" ]]; then PLAN_NOTE[$_n]="${M_NOTE[$_k]}"; fi
+done
+want 1 && PLAN_NOTE[1]="$REV -> $TODAY"
+on ltx && want_ltx=true
+want 3 && $want_ltx && PLAN_NOTE[3]+=" + local-trx"
+for _t in win arm64; do on "ltx_$_t" && PLAN_LTX_CROSS[$_t]=yes; done
+on setcap && PLAN_SETCAP=yes
+on contfail && PLAN_CONTINUE_ON_FAIL=yes
+if [[ -n "${M_TYPE[stopsvc]:-}" ]] && ! on stopsvc; then PLAN_STOP_SERVICES=no; fi
+PLAN_PORT="${M_VAL[port]:-}"
+FLASH_ARGS=(--edition public)
+# Phase 8 runs (and stamps ?v=) only when it is to commit or push something:
+# stamping alone would leave the tree dirty in front of phase 9.
+_notes=()
+for _i in "${!REPO_LABELS[@]}"; do
+  _label="${REPO_LABELS[$_i]}"
+  COMMIT_PLAN[$_label]=no; PUSH_PLAN[$_label]=no
+  on "c$_i" && COMMIT_PLAN[$_label]=yes
+  on "u$_i" && PUSH_PLAN[$_label]=yes
+  COMMIT_MSG[$_label]="${M_VAL[m$_i]:-}"
+  _n=""
+  [[ "${COMMIT_PLAN[$_label]}" == yes ]] && _n="commit"
+  [[ "${PUSH_PLAN[$_label]}" == yes ]] && _n="${_n:+$_n+}push"
+  [[ -n "$_n" ]] && _notes+=("$_label: $_n")
+done
+if want 8; then
+  if [[ ${#_notes[@]} -gt 0 ]]; then PLAN_NOTE[8]="$(IFS=,; echo "${_notes[*]}")"
+  else PLAN[8]=no; PLAN_NOTE[8]="ani commit, ani push"; fi
+fi
+# An extension turns its own items into FLASH_ARGS, INSTALL_SCOPE, ...
+ext_hook plan_resolve
+want 7 && PLAN_NOTE[7]="$(basename "$PLAN_PORT") ${FLASH_ARGS[*]}"
+
+print_plan
+
+# sudo goes first, while someone is still at the keyboard.
+if want 6 || [[ "$PLAN_SETCAP" == yes ]]; then
+  sudo_prime || { fail "sudo selhalo -- nic se neprovedlo."; exit 1; }
+fi
+PLAN_LOCKED=true
+
 # ---------------------------------------------------------------- phase 1 ----
 phase_banner 1 "REV podle dnešního data"
-TODAY="$(date +%Y%m%d)"
 if [[ "$REV" == "$TODAY" ]]; then
-  info "  REV $REV už odpovídá dnešku -- neptám se."
+  info "  REV $REV už odpovídá dnešku."
   mark 1 "beze změny"
 elif [[ "$REV" -gt "$TODAY" ]]; then
   warn "  REV $REV je v budoucnosti (dnes $TODAY) -- nechávám být."
   mark 1 "beze změny"
+elif want 1; then
+  sed -i "s/^\(#define[[:space:]]\+REV[[:space:]]\+\)[0-9]\+/\1$TODAY/" "$SKETCH"
+  REV="$(read_rev)"
+  [[ "$REV" == "$TODAY" ]] || abort "REV se nepodařilo přepsat" 1
+  ok "  REV $REV"
+  wrote "wifilt" "REV" "wifilt.ino: #define REV $REV"
+  mark 1 "hotovo"
 else
-  if ask "Zvýšit REV $REV -> $TODAY v wifilt.ino?" N; then
-    sed -i "s/^\(#define[[:space:]]\+REV[[:space:]]\+\)[0-9]\+/\1$TODAY/" "$SKETCH"
-    REV="$(read_rev)"
-    [[ "$REV" == "$TODAY" ]] || abort "REV se nepodařilo přepsat" 1
-    ok "  REV $REV"
-    mark 1 "hotovo"
-  else
-    info "  REV zůstává $REV"
-    mark 1 "přeskočeno"
-  fi
+  info "  REV zůstává $REV"
+  mark 1 "přeskočeno"
 fi
 
 # REV is final after phase 1 (it only ever changes there) -- defined here,
@@ -673,9 +1228,9 @@ LINUX_ARCHIVE="${DIST_DIR}/wifilt-${REV}-linux-x86_64.tar.gz"
 # ---------------------------------------------------------------- phase 2 ----
 phase_banner 2 "export compiled binary"
 if ! skip_if_blocked 2; then
-  info "  ESP32 Dev Module | No OTA (2MB APP/2MB SPIFFS) | DIO"
-  info "  + M5Stack Atom Lite | same partitions.csv | DIO (board default)"
-  if ask "Přeložit a vyexportovat firmware (box + M5Atom Lite)?" Y; then
+  if want 2; then
+    info "  ESP32 Dev Module | No OTA (2MB APP/2MB SPIFFS) | DIO"
+    info "  + M5Stack Atom Lite | same partitions.csv | DIO (board default)"
     # export-compiled-binary.sh names the output after the board's build.variant
     # (m5stack-atom -> m5stack_atom), which is exactly what FIRMWARE_BIN* above
     # expect.
@@ -686,6 +1241,9 @@ if ! skip_if_blocked 2; then
     ARDUINO_IDE="$ARDUINO_BIN" "${ROOT_DIR}/tools/export-compiled-binary.sh" --edition public \
         --fqbn "esp32:esp32:m5stack-atom" \
       || { mark 2 "selhalo"; abort "Překlad M5Atom Lite selhal." 2; }
+    for _f in "$FIRMWARE_BIN" "$FIRMWARE_BIN_M5ATOM"; do
+      wrote "wifilt" "firmware" "$(basename "$_f") ($(fmt_num "$(stat -c %s "$_f")") B)"
+    done
     ext_hook firmware
     mark 2 "hotovo"
   else
@@ -696,29 +1254,12 @@ fi
 # ---------------------------------------------------------------- phase 3 ----
 phase_banner 3 "make -C native dist"
 if ! skip_if_blocked 3; then
-  # dist-linux always; dist-windows/dist-arm64 only when their cross-toolchain
-  # was found in phase 0. Built as an explicit target list (not the Makefile's
-  # `dist` aggregate) so a missing toolchain degrades one archive at a time
-  # instead of failing the whole phase.
-  dist_targets=(dist-linux)
-  [[ -z "$DEGRADED_WINDOWS" ]] && dist_targets+=(dist-windows)
-  [[ -z "$DEGRADED_ARM64"   ]] && dist_targets+=(dist-arm64)
-  dist_default=Y
-  if [[ -n "$DEGRADED_WINDOWS" || -n "$DEGRADED_ARM64" ]]; then
-    [[ -n "$DEGRADED_WINDOWS" ]] && warn "  $DEGRADED_WINDOWS -- stránka bude bez Windows odkazu."
-    [[ -n "$DEGRADED_ARM64"   ]] && warn "  $DEGRADED_ARM64 -- stránka bude bez Raspberry Pi odkazu."
-    dist_default=N
-  fi
-  if ask "Sestavit PC balíky pro REV $REV (${dist_targets[*]})?" "$dist_default"; then
-    want_ltx=false
-    if [[ -n "$LOCAL_TRX_UNAVAILABLE" ]]; then
-      info "  local-trx: $LOCAL_TRX_UNAVAILABLE -- balíčky bez něj."
-    elif ask "Zahrnout do balíků i local-trx (PC bridge pro libovolný rig, ve výchozím stavu vypnutý)?" Y; then
-      want_ltx=true
-    fi
-    # NO_ADDONS=1: native/dist holds the public edition whatever is beside the
+  if want 3; then
+    info "  REV $REV: ${dist_targets[*]}$($want_ltx && echo " + local-trx")"
+    # NO_ADDONS=1: native/dist is built without addons/ whatever is beside the
     # sketch -- it is what phase 9 publishes.
     dist_build "$DIST_DIR" NO_ADDONS=1 || { mark 3 "selhalo"; abort "make -C native dist selhal." 3; }
+    wrote_dist "wifilt" "$DIST_DIR"
     ext_hook dist
     mark 3 "hotovo"
   else
@@ -728,7 +1269,7 @@ fi
 
 # ---------------------------------------------------------------- phase 4 ----
 phase_banner 4 "integrační test proti falešnému rádiu"
-if ask "Spustit tools/native-integration-test.sh?" N; then
+if want 4; then
   # The test builds and runs native/build (plain make), not NATIVE_BIN.
   ensure_setcap "audio půlka testu se přeskočí (port 83)" "${ROOT_DIR}/native/build/wifilt" || true
   if "${ROOT_DIR}/tools/native-integration-test.sh"; then
@@ -736,7 +1277,8 @@ if ask "Spustit tools/native-integration-test.sh?" N; then
   else
     mark 4 "selhalo"
     fail "  Integrační test skončil chybou."
-    ask "Přesto pokračovat?" N || abort "Zastaveno po selhaném testu." 4
+    [[ "$PLAN_CONTINUE_ON_FAIL" == yes ]] || abort "Zastaveno po selhaném testu (plán: nepokračovat)." 4
+    warn "  pokračuji (plán: pokračovat i po selhání)"
   fi
 else
   mark 4 "přeskočeno"
@@ -744,10 +1286,12 @@ fi
 
 # ---------------------------------------------------------------- phase 5 ----
 phase_banner 5 "spuštění linuxové binárky"
-if [[ ! -x "$NATIVE_BIN" ]]; then
+if ! want 5; then
+  mark 5 "přeskočeno"
+elif [[ ! -x "$NATIVE_BIN" ]]; then
   info "  ${NATIVE_BIN#"${ROOT_DIR}"/} neexistuje -- fáze 3 neproběhla."
   mark 5 "nedostupné"
-elif ask "Spustit ./${NATIVE_BIN#"${ROOT_DIR}"/} --data-dir data?" N; then
+else
   ensure_setcap "porty 80, 82 a 83 nepůjde otevřít" || true
   say ""
   local_ips="$(hostname -I 2>/dev/null) 127.0.0.1"
@@ -786,78 +1330,59 @@ elif ask "Spustit ./${NATIVE_BIN#"${ROOT_DIR}"/} --data-dir data?" N; then
     # Ctrl-C prints "shutting down" and then dies on `terminate called without
     # an active exception` -- a thread going out of scope unjoined in the
     # shutdown path. It is a defect of the native build, not a reason to stop a
-    # release the operator ended themselves, so it is reported and not asked
-    # about. The yellow line in the summary is what keeps it from being forgotten.
+    # release the operator ended themselves, so it is reported and not acted
+    # on. The yellow line in the summary is what keeps it from being forgotten.
     warn "  Binárka po SIGINT spadla na SIGABRT (terminate without active exception)"
     warn "  -- vada úklidové cesty native buildu, ne tohoto kroku."
     mark 5 "ukončena s SIGABRT"
   else
     mark 5 "selhalo"
     fail "  Binárka skončila se stavem $run_status."
-    ask "Přesto pokračovat?" N || abort "Zastaveno po selhaném běhu." 5
+    [[ "$PLAN_CONTINUE_ON_FAIL" == yes ]] || abort "Zastaveno po selhaném běhu (plán: nepokračovat)." 5
+    warn "  pokračuji (plán: pokračovat i po selhání)"
   fi
-else
-  mark 5 "přeskočeno"
 fi
 
 # ---------------------------------------------------------------- phase 6 ----
 phase_banner 6 "instalace na tento počítač"
-INSTALL_ARCHIVE="$LINUX_ARCHIVE"
-ext_hook install
-INSTALL_DIST="$(dirname "$INSTALL_ARCHIVE")"
-info "  ${INSTALL_ARCHIVE#"${ROOT_DIR}"/}"
-if [[ ! -f "$INSTALL_ARCHIVE" ]]; then
-  info "  chybí $(basename "$INSTALL_ARCHIVE") -- fáze 3 neproběhla."
-  mark 6 "nedostupné"
+if ! want 6; then
+  mark 6 "přeskočeno"
 else
-  # $LINUX_ARCHIVE existuje jen podle JMÉNA (wifilt-$REV-...) -- to samo o
-  # sobě neznamená, že ho TENHLE běh skriptu doopravdy přebudoval. Fáze 3
-  # přeskočená ("Sestavit PC balíky?" -> N) nechá ležet archiv ze STARŠÍHO
-  # běhu se stejným REV beze změny, a tahle fáze by ho tiše nainstalovala,
-  # i kdyby mezitím zdroj (třeba start-wifilt.sh) doznal opravu, co do něj
-  # ještě nestihla. Nalezeno živě: operátor spustil release.sh, fáze 3
-  # odmítnuta (archiv "už přece existuje"), instalace pak potichu nasadila
-  # hodiny starý archiv bez čerstvé opravy.
-  install_ok_to_proceed=1
-  if [[ "${RESULT[3]:-}" != "hotovo" ]]; then
-    warn "  $(basename "$INSTALL_ARCHIVE") NEBYL přebudován v tomhle běhu (fáze 3: ${RESULT[3]:-neproběhla}) --"
-    warn "  může být starší, než aktuální zdrojový strom."
-    ask "Přesto nainstalovat tenhle existující archiv?" N || install_ok_to_proceed=0
-  fi
-  if [[ $install_ok_to_proceed -eq 0 ]]; then
-    mark 6 "přeskočeno"
+  # The plan named the archive after REV_PLAN, which phase 1 made REV.
+  ext_hook install
+  INSTALL_DIST="$(dirname "$INSTALL_ARCHIVE")"
+  info "  ${INSTALL_ARCHIVE#"${ROOT_DIR}"/}"
+  if [[ ! -f "$INSTALL_ARCHIVE" ]]; then
+    info "  chybí $(basename "$INSTALL_ARCHIVE") -- fáze 3 neproběhla."
+    mark 6 "nedostupné"
   else
     info "  /opt/wifilt + systemd jednotka (neaktivovaná); ~/.config/wifilt zůstává"
-    if ask "Nainstalovat wifilt-${REV} na tento počítač (sudo)?" Y; then
-      # install(1) cannot write over a binary that is currently being executed, so
-      # a running service has to go down first -- otherwise the install fails with
-      # "Text file busy" halfway through, having already replaced data/.
-      # local-trx.service the same: install.sh overwrites its binary too.
-      stopped_services=()
-      for svc in wifilt local-trx; do
-        if systemctl is-active --quiet "$svc" 2>/dev/null; then
-          warn "  Služba $svc běží, instalace by přepisovala běžící binárku."
-          if ask "Zastavit ji na dobu instalace?" Y; then
-            sudo systemctl stop "$svc" && stopped_services+=("$svc")
-          fi
+    # local-trx.service the same as wifilt: install.sh overwrites its binary too.
+    stopped_services=()
+    for svc in wifilt local-trx; do
+      if systemctl is-active --quiet "$svc" 2>/dev/null; then
+        if [[ "$PLAN_STOP_SERVICES" == yes ]]; then
+          info "  zastavuji $svc na dobu instalace"
+          sudo systemctl stop "$svc" && stopped_services+=("$svc")
+        else
+          warn "  Služba $svc běží a podle plánu se nezastavuje -- instalace může selhat."
         fi
-      done
-      ( cd "$INSTALL_DIST" \
-        && tar xzf "$(basename "$INSTALL_ARCHIVE")" \
-        && cd wifilt-linux-x86_64 \
-        && sudo ./install.sh )
-      install_status=$?
-      if [[ $install_status -eq 0 ]]; then
-        # The extracted tree is a by-product of installing, not of building; make
-        # removes its own copy at the end of `dist` and this removes ours.
-        rm -rf "${INSTALL_DIST}/wifilt-linux-x86_64"
-        mark 6 "hotovo"
-        [[ ${#stopped_services[@]} -gt 0 ]] && warn "  Služby jsi zastavil: sudo systemctl start ${stopped_services[*]}"
-      else
-        mark 6 "selhalo"; abort "Instalace selhala." 6
       fi
+    done
+    ( cd "$INSTALL_DIST" \
+      && tar xzf "$(basename "$INSTALL_ARCHIVE")" \
+      && cd wifilt-linux-x86_64 \
+      && sudo ./install.sh )
+    install_status=$?
+    if [[ $install_status -eq 0 ]]; then
+      # The extracted tree is a by-product of installing, not of building; make
+      # removes its own copy at the end of `dist` and this removes ours.
+      rm -rf "${INSTALL_DIST}/wifilt-linux-x86_64"
+      wrote "$INSTALL_SCOPE" "instalace" "/opt/wifilt + systemd jednotka <- ${INSTALL_ARCHIVE#"${ROOT_DIR}"/}"
+      mark 6 "hotovo"
+      [[ ${#stopped_services[@]} -gt 0 ]] && warn "  Služby jsi zastavil: sudo systemctl start ${stopped_services[*]}"
     else
-      mark 6 "přeskočeno"
+      mark 6 "selhalo"; abort "Instalace selhala." 6
     fi
   fi
 fi
@@ -865,93 +1390,75 @@ fi
 # ---------------------------------------------------------------- phase 7 ----
 phase_banner 7 "flash firmware + assets do zařízení"
 if ! skip_if_blocked 7; then
-  declare -A PORT_LABEL=()
-  if [[ -d /dev/serial/by-id ]]; then
-    for link in /dev/serial/by-id/*; do
-      [[ -e "$link" ]] || continue
-      PORT_LABEL["$(readlink -f "$link")"]="$link"
-    done
-  fi
-  mapfile -t PORTS < <(ls -1 /dev/ttyUSB* /dev/ttyACM* 2>/dev/null | sort)
-
-  if [[ ${#PORTS[@]} -eq 0 ]]; then
-    info "  Není připojený žádný sériový port -- fáze se přeskakuje."
+  if ! want 7; then
     mark 7 "přeskočeno"
-  elif ask "Nahrát do zařízení?" Y; then
-    FLASH_ARGS=(--edition public)
+  elif [[ ! -e "$PLAN_PORT" ]]; then
+    mark 7 "selhalo"; abort "Port $PLAN_PORT z plánu už neexistuje (odpojeno?)." 7
+  else
     ext_hook flash
-    say ""
-    for i in "${!PORTS[@]}"; do
-      dev="${PORTS[$i]}"
-      label="${PORT_LABEL[$dev]:-}"
-      printf '    %d) %-14s %s%s%s\n' "$((i + 1))" "$dev" "$C_DIM" \
-        "${label:+$(basename "$label")}" "$C_OFF"
-    done
-    # IC-705 itself shows up as two ttyACM ports, which is exactly why the by-id
-    # name is printed beside every device and why the by-id path is what gets
-    # flashed: /dev/ttyUSB0 is whichever cable enumerated first.
-    choice=1
-    if [[ ${#PORTS[@]} -gt 1 ]]; then
-      while true; do
-        printf '%sPort [1-%d]:%s ' "$C_BOLD" "${#PORTS[@]}" "$C_OFF"
-        IFS= read -r choice <&3 || abort "vstup uzavřen" 7
-        [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#PORTS[@]} )) && break
-        say "  zadej číslo 1 až ${#PORTS[@]}"
+    info "  ${PLAN_PORT} ${FLASH_ARGS[*]}"
+    if "${ROOT_DIR}/tools/upload-firmware-spiffs.sh" --port "$PLAN_PORT" "${FLASH_ARGS[@]}"; then
+      _ed=public
+      for (( _i = 0; _i < ${#FLASH_ARGS[@]}; _i++ )); do
+        [[ "${FLASH_ARGS[$_i]}" == --edition ]] && _ed="${FLASH_ARGS[$((_i + 1))]}"
       done
-    else
-      info "  jediný port -- ${PORTS[0]}"
-    fi
-    dev="${PORTS[$((choice - 1))]}"
-    port="${PORT_LABEL[$dev]:-$dev}"
-    say ""
-    if "${ROOT_DIR}/tools/upload-firmware-spiffs.sh" --port "$port" "${FLASH_ARGS[@]}"; then
+      # upload-firmware-spiffs.sh leaves the tree it staged; measured for the
+      # table at the end.
+      fs_record "$_ed" "${ROOT_DIR}/build/release-upload/data" || true
+      wrote "$FLASH_SCOPE" "zařízení" "$(basename "$PLAN_PORT"): app0 @$(part_field app0 4) + spiffs @$(part_field spiffs 4) (${_ed}); cfg beze změny"
       mark 7 "hotovo"
     else
       mark 7 "selhalo"; abort "Zápis do zařízení selhal." 7
     fi
-  else
-    mark 7 "přeskočeno"
   fi
 fi
 
 # ---------------------------------------------------------------- phase 8 ----
 phase_banner 8 "git commit / git push"
 if ! skip_if_blocked 8; then
-  # Stamping before the commit, not after: gh-pages.sh runs prepare-spiffs-tree.sh
-  # inside itself, and that rewrites the ?v= in the TRACKED data/*.html. Left for
-  # phase 9 it would dirty the tree immediately after the commit that was meant
-  # to capture it.
-  if ! node "${ROOT_DIR}/tools/stamp-asset-versions.js" >/dev/null; then
-    abort "stamp-asset-versions.js selhal." 8
-  fi
-  info "  ?v= v data/*.html přeraženy podle obsahu"
-
-  changelog_rev="$(sed -n '/^## Working tree/,/^## REV/p' "${ROOT_DIR}/Changelog.md" \
-                   | grep -o '\*\*REV [0-9]\+\.\*\*' | head -1 | grep -o '[0-9]\+' || true)"
-  if [[ -z "$changelog_rev" ]]; then
-    warn "  V sekci 'Working tree — not committed' není žádné **REV NNNNNNNN.**"
-  elif [[ "$changelog_rev" != "$REV" ]]; then
-    warn "  Changelog mluví o REV $changelog_rev, firmware nese REV $REV."
-  else
-    info "  Changelog a firmware se shodují na REV $REV"
-  fi
-
-  ext_hook stamp
-
-  commit_repo "$ROOT_DIR" "wifilt" 9
-  ext_hook commit
-  if [[ " ${REPO_RESULTS[*]} " == *" hotovo "* ]]; then
-    mark 8 "hotovo"
-  elif [[ " ${REPO_RESULTS[*]} " != *" přeskočeno "* ]]; then
-    mark 8 "beze změny"
-  else
+  if ! want 8; then
     mark 8 "přeskočeno"
+  else
+    # Stamping before the commit, not after: gh-pages.sh runs prepare-spiffs-tree.sh
+    # inside itself, and that rewrites the ?v= in the TRACKED data/*.html. Left for
+    # phase 9 it would dirty the tree immediately after the commit that was meant
+    # to capture it.
+    if ! node "${ROOT_DIR}/tools/stamp-asset-versions.js" >/dev/null; then
+      abort "stamp-asset-versions.js selhal." 8
+    fi
+    info "  ?v= v data/*.html přeraženy podle obsahu"
+
+    changelog_rev="$(sed -n '/^## Working tree/,/^## REV/p' "${ROOT_DIR}/Changelog.md" \
+                     | grep -o '\*\*REV [0-9]\+\.\*\*' | head -1 | grep -o '[0-9]\+' || true)"
+    if [[ -z "$changelog_rev" ]]; then
+      warn "  V sekci 'Working tree — not committed' není žádné **REV NNNNNNNN.**"
+    elif [[ "$changelog_rev" != "$REV" ]]; then
+      warn "  Changelog mluví o REV $changelog_rev, firmware nese REV $REV."
+    else
+      info "  Changelog a firmware se shodují na REV $REV"
+    fi
+
+    ext_hook stamp
+
+    commit_repo "$ROOT_DIR" "wifilt" 9
+    ext_hook commit
+    if [[ " ${REPO_RESULTS[*]} " == *" hotovo "* ]]; then
+      mark 8 "hotovo"
+    elif [[ " ${REPO_RESULTS[*]} " != *" přeskočeno "* ]]; then
+      mark 8 "beze změny"
+    else
+      mark 8 "přeskočeno"
+    fi
   fi
 fi
 
 # ---------------------------------------------------------------- phase 9 ----
 phase_banner 9 "publikace instalační stránky"
-if ! skip_if_blocked 9; then
+if skip_if_blocked 9; then
+  :
+elif ! want 9; then
+  mark 9 "přeskočeno"
+else
   gate_ok=true
   gate() { fail "  ✗ $1"; gate_ok=false; }
 
@@ -1014,27 +1521,38 @@ if ! skip_if_blocked 9; then
   fi
 
   if ! $public_changed && ! $FORCE; then
-    info "  Zdroj se od poslední publikace (${published_sha}) nezměnila -- stránka zůstává."
+    info "  Zdroj se od poslední publikace (${published_sha}) nezměnil -- stránka zůstává."
     mark 9 "beze změny"
   elif ! $gate_ok; then
-    info "  fáze se nenabízí; obejít lze jen přes --force"
+    info "  publikace zastavena závorami; obejít lze jen přes --force"
     mark 9 "nedostupné"
-  elif ask "Zdroj se změnil (stránka: ${published_sha:-žádná}). Publikovat stránku na origin/gh-pages?" Y; then
+  else
+    info "  Zdroj se změnil (stránka: ${published_sha:-žádná}) -- publikuji na origin/gh-pages"
     short="$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || echo "?")"
     if "${ROOT_DIR}/tools/gh-pages.sh" --publish --message "WIFILT REV ${REV} (${short})"; then
       mark 9 "hotovo"
+      wrote "wifilt" "stránka" "origin/gh-pages \"WIFILT REV ${REV} (${short})\" -> $PAGE_URL"
       ok "  $PAGE_URL"
     else
       mark 9 "selhalo"; abort "Publikace selhala." 9
     fi
-  else
-    mark 9 "přeskočeno"
   fi
 fi
 
 ext_hook end
 
+if on fsm; then
+  for _row in "${ESP_FS_ROWS[@]}"; do
+    _ed="${_row%%|*}"
+    [[ -n "${FS_MEASURED[$_ed]:-}" ]] && continue
+    info "  měřím LittleFS ($_ed) pro tabulku obsazenosti..."
+    fs_measure "$_ed" || warn "  měření LittleFS ($_ed) selhalo"
+  done
+fi
+
 print_summary
+print_esp_usage
+print_written
 say ""
 info "REV $REV | větev $BRANCH"
 [[ "${RESULT[9]:-}" == "hotovo" ]] && ok "Stránka: $PAGE_URL"
