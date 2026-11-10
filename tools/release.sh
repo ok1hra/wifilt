@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 #
-# One release, ten phases, and a question before each of them.
+# One release, nine phases, and a question before each of them.
 #
-# Two editions from one tree: the PUBLIC one (what ok1hra/wifilt and its page
-# carry) and, when the private add-on repository is checked out as addons/,
-# the one WITH ADD-ONS (addon_hooks.h, -DWIFILT_NO_ADDONS for the public one).
-# Phases 2 and 3 build both; 6 and 7 ask which one to install or flash
-# (default: with add-ons); 8 commits each repository that has changes; 9
-# publishes the page only when the public source changed since the last
-# publication; 10 uploads the add-on edition as a release of the private
-# repository, with nothing in it that points at the public commit.
+# Everything built here is the public edition, also when addons/ is beside the
+# sketch (-DWIFILT_NO_ADDONS, NO_ADDONS=1, --edition public; addon_hooks.h).
+# Phase 9 publishes the page only when the source changed since the last
+# publication.
+#
+# Extensions: when addons/release-ext.sh exists it is sourced before phase 0
+# and its ext_<point> functions are called at fixed points (see ext_hook below).
+# It may append phases of its own to PHASES. Without it this is the whole
+# release.
 #
 # Everything this script does can be done by hand -- and was, for a long time.
 # What it adds is not automation but ORDER: the phases depend on each other in
@@ -46,14 +47,14 @@ FIRMWARE_BIN="${ROOT_DIR}/wifilt.ino.esp32.bin"
 # phase 9. Same first-class treatment as the box: a failed Atom export aborts
 # the release the same way a failed box export does, see phase 2 below.
 FIRMWARE_BIN_M5ATOM="${ROOT_DIR}/wifilt.ino.m5stack_atom.bin"
-# The edition with add-ons (tools/export-compiled-binary.sh --edition addons).
-FIRMWARE_BIN_ADDONS="${ROOT_DIR}/wifilt.ino.esp32.addons.bin"
-FIRMWARE_BIN_M5ATOM_ADDONS="${ROOT_DIR}/wifilt.ino.m5stack_atom.addons.bin"
-ADDONS_DIR="${ROOT_DIR}/addons"
-ADDON_REPO="ok1hra/wifilt-addon"
-DIST_DIR="${ROOT_DIR}/native/dist"                  # public: what gh-pages.sh publishes
-DIST_DIR_ADDONS="${ROOT_DIR}/native/dist-addons"    # with add-ons: phase 10 uploads it
-NATIVE_BIN="${ROOT_DIR}/native/build/wifilt"
+DIST_DIR="${ROOT_DIR}/native/dist"                  # what gh-pages.sh publishes
+# The binary phases 4 and 5 grant the capability to and phase 5 runs, the make
+# variables that build it (NO_ADDONS=1 -> build-public/) and any further
+# arguments it is run with. An extension may point all three elsewhere.
+NATIVE_BIN="${ROOT_DIR}/native/build-public/wifilt"
+NATIVE_MAKE_ARGS=(NO_ADDONS=1)
+NATIVE_RUN_ARGS=()
+RELEASE_EXT="${ROOT_DIR}/addons/release-ext.sh"
 # getcap lives in /sbin, which is not on a normal user's PATH on Debian. Looking
 # it up by name alone therefore reports "no capability" for a binary that has
 # one, and asks for a sudo password that changes nothing.
@@ -69,20 +70,18 @@ usage() {
   cat <<'EOF'
 Usage: tools/release.sh [--force]
 
-Walks the release in ten phases, asking before each one. Enter accepts the
-capitalised default. With addons/ present (the private wifilt-addon checkout)
-it builds the public edition and the one with add-ons side by side.
+Walks the release in nine phases, asking before each one. Enter accepts the
+capitalised default. addons/release-ext.sh, when present, extends it.
 
   1  REV -> today's date                     (y/N)
-  2  Export compiled binary, both editions   (Y/n)
-  3  make -C native dist, both editions      (Y/n, Y/n)
+  2  Export compiled binary                  (Y/n)
+  3  make -C native NO_ADDONS=1 dist         (Y/n, Y/n)
   4  tools/native-integration-test.sh        (y/N)
-  5  run ./native/build/wifilt --data-dir data   (y/N)
-  6  install this build on this computer     (Y/n, edition)
-  7  tools/upload-firmware-spiffs.sh         (Y/n, edition)
-  8  git commit / git push, both repos       (y/N, twice each)
-  9  tools/gh-pages.sh --publish             (Y/n, only if the public source changed)
- 10  private release on wifilt-addon         (Y/n, only if anything changed)
+  5  run the native build --data-dir data    (y/N)
+  6  install this build on this computer     (Y/n)
+  7  tools/upload-firmware-spiffs.sh         (Y/n)
+  8  git commit / git push                   (y/N, twice)
+  9  tools/gh-pages.sh --publish             (Y/n, only if the source changed)
 
 Options:
   --force   Skip the guards in front of phase 9 and allow phases 8 and 9 on a
@@ -124,7 +123,7 @@ fail() { printf '%s%s%s\n' "$C_RED" "$*" "$C_OFF" >&2; }
 ok()   { printf '%s%s%s\n' "$C_GREEN" "$*" "$C_OFF"; }
 
 phase_banner() {
-  printf '\n%s%s== %s/10  %s%s\n' "$C_BOLD" "$C_CYAN" "$1" "$2" "$C_OFF"
+  printf '\n%s%s== %s/%s  %s%s\n' "$C_BOLD" "$C_CYAN" "$1" "${#PHASES[@]}" "$2" "$C_OFF"
 }
 
 # ask QUESTION DEFAULT   DEFAULT is Y or N; Enter takes it. Anything that is not
@@ -174,7 +173,6 @@ PHASES=(
   "7 flash do zařízení"
   "8 git commit/push"
   "9 publikace stránky"
-  "10 soukromé vydání"
 )
 
 print_summary() {
@@ -201,10 +199,13 @@ print_summary() {
 # One capability, three privileged ports, one inode that forgets it on every
 # relink. Both the integration test and running the binary by hand need it, so
 # the question lives in one place.
-ensure_setcap() {   # ensure_setcap WHAT-BREAKS-WITHOUT-IT
-  [[ -x "$NATIVE_BIN" ]] || return 1
+# Without BIN it is NATIVE_BIN, built with NATIVE_MAKE_ARGS.
+ensure_setcap() {   # ensure_setcap WHAT-BREAKS-WITHOUT-IT [BIN MAKE-VARIABLE...]
+  local bin="$NATIVE_BIN" margs=("${NATIVE_MAKE_ARGS[@]}")
+  if [[ $# -gt 1 ]]; then bin="$2"; margs=("${@:3}"); fi
+  [[ -x "$bin" ]] || return 1
   if [[ -n "$GETCAP" ]]; then
-    if "$GETCAP" "$NATIVE_BIN" 2>/dev/null | grep -q cap_net_bind_service; then
+    if "$GETCAP" "$bin" 2>/dev/null | grep -q cap_net_bind_service; then
       return 0
     fi
     warn "  Binárka nemá CAP_NET_BIND_SERVICE -- $1"
@@ -212,7 +213,7 @@ ensure_setcap() {   # ensure_setcap WHAT-BREAKS-WITHOUT-IT
     warn "  getcap nenalezen, capability nelze ověřit -- $1"
   fi
   if ask "Udělit ji přes sudo (vyžádá heslo)?" N; then
-    make -C "${ROOT_DIR}/native" setcap && return 0
+    make -C "${ROOT_DIR}/native" "${margs[@]}" setcap && return 0
     warn "  setcap se nepovedl"
   fi
   return 1
@@ -292,26 +293,91 @@ bundle_local_trx_into() {
   return 0
 }
 
-# choose_edition PHASE  -> sets EDITION to addons or public. Asked only when
-# both exist; Enter takes the edition with add-ons.
-choose_edition() {
-  EDITION=public
-  $HAVE_ADDONS || return 0
-  local answer
-  while true; do
-    printf '%sKterá edice? [S]oukromá s doplňky / [v]eřejná:%s ' "$C_BOLD" "$C_OFF"
-    IFS= read -r answer <&3 || abort "vstup uzavřen" "$1"
-    case "$answer" in
-      ""|s|S) EDITION=addons; return 0 ;;
-      v|V)    EDITION=public; return 0 ;;
-      *) say "  s nebo v (Enter = soukromá)" ;;
-    esac
-  done
+# ext_hook POINT  -- calls ext_POINT when an extension defined it. The points,
+# in the order they come:
+#   preflight      phase 0, after the tools are reported (may set BLOCKED,
+#                  NATIVE_BIN, NATIVE_MAKE_ARGS, NATIVE_RUN_ARGS)
+#   firmware       phase 2, after the export succeeded
+#   dist           phase 3, after the archives were built (dist_targets,
+#                  want_ltx and dist_build are there to reuse)
+#   install        phase 6, before the archive is checked (may set
+#                  INSTALL_ARCHIVE)
+#   flash          phase 7, after the yes (may set FLASH_ARGS)
+#   stamp          phase 8, after data/*.html got its ?v=
+#   commit         phase 8, after this repository (commit_repo is there)
+#   end            after phase 9, before the summary
+# An extension shares this shell: its failures go through abort like ours.
+ext_hook() {
+  declare -F "ext_$1" >/dev/null || return 0
+  "ext_$1"
 }
 
-# bundle_local_trx_set DIST  -- local-trx into the three archives of one
-# edition (dist_targets decides which exist). local-trx itself is the same for
-# both editions; make builds it once and finds nothing to do the second time.
+# dist_build DIR [MAKE-VARIABLE...]  -- the archives of REV into DIR: stale
+# revisions out, make, local-trx in (when wanted), SHA256SUMS last.
+dist_build() {
+  local dir="$1"; shift
+  # Archives of other revisions go before make runs: SHA256SUMS would otherwise
+  # describe releases that are not published. native/dist* is in .gitignore.
+  if [[ -d "$dir" ]]; then
+    local stale
+    while IFS= read -r -d '' stale; do
+      info "  mažu $(basename "$stale")"
+      rm -rf "$stale"
+    done < <(find "$dir" -mindepth 1 -maxdepth 1 \
+               \( -type d -o -name '*.tar.gz' -o -name '*.zip' \) \
+               ! -name "*-${REV}-*" -print0)
+  fi
+  make -C "${ROOT_DIR}/native" "$@" "${dist_targets[@]}" || return 1
+  rm -rf "${dir}/assets"
+  $want_ltx && bundle_local_trx_set "$dir"
+  # After local-trx: the sums must describe what is actually published.
+  ( cd "$dir" && sha256sum ./*.tar.gz ./*.zip >SHA256SUMS 2>/dev/null || true )
+  return 0
+}
+
+# commit_repo DIR LABEL PHASE  -- status, commit, push for one repository;
+# PHASE is the one that needs the push. Appends hotovo / beze změny /
+# přeskočeno to REPO_RESULTS.
+REPO_RESULTS=()
+commit_repo() {
+  local dir="$1" label="$2" needs="$3" branch msg result
+  branch="$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "?")"
+  say ""
+  say "${C_BOLD}-- ${label} (${branch})${C_OFF}"
+  result="přeskočeno"
+  if [[ -z "$(git -C "$dir" status --porcelain)" ]]; then
+    info "  Není co commitovat."
+    result="beze změny"
+  else
+    git -C "$dir" status --short
+    git -C "$dir" diff --stat | tail -20
+    if ask "git add -A a commit ($label)?" N; then
+      printf '%sZpráva commitu%s [REV %s]: ' "$C_BOLD" "$C_OFF" "$REV"
+      IFS= read -r msg <&3 || abort "vstup uzavřen" 8
+      [[ -n "$msg" ]] || msg="REV $REV"
+      git -C "$dir" add -A || abort "git add ($label) selhal" 8
+      git -C "$dir" commit -m "$msg" || { mark 8 "selhalo"; abort "git commit ($label) selhal." 8; }
+      result="hotovo"
+    fi
+  fi
+  REPO_RESULTS+=("$result")
+  # Push whatever is ahead of the remote, committed now or earlier.
+  git -C "$dir" fetch --quiet origin "$branch" 2>/dev/null || true
+  local ahead
+  ahead="$(git -C "$dir" rev-list --count "origin/${branch}..HEAD" 2>/dev/null || echo 0)"
+  if [[ "$ahead" != 0 ]]; then
+    if ask "git push ${label} na origin/${branch} (${ahead} commitů)?" N; then
+      git -C "$dir" push origin "$branch" || { mark 8 "selhalo"; abort "git push ($label) selhal." 8; }
+      ok "  pushnuto"
+    else
+      info "  nepushnuto -- fáze ${needs} to bude vyžadovat"
+    fi
+  fi
+}
+
+# bundle_local_trx_set DIST  -- local-trx into the three archives in DIST
+# (dist_targets decides which exist). Called again for another DIST, make
+# finds local-trx already built.
 bundle_local_trx_set() {
   local dir="$1" entry target gate archive staging bin kind label
   LOCAL_TRX_BUNDLED=()
@@ -348,6 +414,9 @@ bundle_local_trx_set() {
     warn "  local-trx se nepodařilo přibalit do žádného balíku"
   fi
 }
+
+# shellcheck source=/dev/null
+[[ -f "$RELEASE_EXT" ]] && source "$RELEASE_EXT"
 
 # ---------------------------------------------------------------- phase 0 ----
 # Preflight. A missing tool disables ONE phase, never the run: flashing a board
@@ -432,17 +501,7 @@ else
   BLOCKED[8]="git remote origin chybí"; BLOCKED[9]="git remote origin chybí"
 fi
 
-# The add-on edition exists only with the private checkout beside the sketch.
-HAVE_ADDONS=false
-if [[ -f "${ADDONS_DIR}/addon.h" ]] && git -C "$ADDONS_DIR" rev-parse --git-dir >/dev/null 2>&1; then
-  HAVE_ADDONS=true
-  report_tool "addons/" 1 "$(git -C "$ADDONS_DIR" remote get-url origin 2>/dev/null) @ $(git -C "$ADDONS_DIR" rev-parse --short HEAD)"
-  have gh && report_tool "gh" 1 "$(command -v gh)" \
-    || { report_tool "gh" 0 "chybí -- bez soukromého vydání"; BLOCKED[10]="gh chybí"; }
-else
-  report_tool "addons/" 0 "není -- jen veřejná edice"
-  BLOCKED[10]="addons/ není"
-fi
+ext_hook preflight
 
 BRANCH="$(git -C "$ROOT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "?")"
 if [[ "$BRANCH" != "$RELEASE_BRANCH" ]]; then
@@ -500,28 +559,24 @@ fi
 # using it before it was ever set at all (found by code review: a bare
 # reference under `set -u` aborted the whole script mid-phase-3).
 LINUX_ARCHIVE="${DIST_DIR}/wifilt-${REV}-linux-x86_64.tar.gz"
-LINUX_ARCHIVE_ADDONS="${DIST_DIR_ADDONS}/wifilt-${REV}-linux-x86_64.tar.gz"
-editions=(public); $HAVE_ADDONS && editions+=(addons)
 
 # ---------------------------------------------------------------- phase 2 ----
 phase_banner 2 "export compiled binary"
 if ! skip_if_blocked 2; then
   info "  ESP32 Dev Module | No OTA (2MB APP/2MB SPIFFS) | DIO"
   info "  + M5Stack Atom Lite | same partitions.csv | DIO (board default)"
-  info "  edice: ${editions[*]}"
-  if ask "Přeložit a vyexportovat firmware (box + M5Atom Lite, ${#editions[@]}x)?" Y; then
+  if ask "Přeložit a vyexportovat firmware (box + M5Atom Lite)?" Y; then
     # export-compiled-binary.sh names the output after the board's build.variant
-    # (m5stack-atom -> m5stack_atom) plus .addons for that edition, which is
-    # exactly what FIRMWARE_BIN* above expect.
-    for edition in "${editions[@]}"; do
-      info "  -- $edition: box"
-      ARDUINO_IDE="$ARDUINO_BIN" "${ROOT_DIR}/tools/export-compiled-binary.sh" --edition "$edition" \
-        || { mark 2 "selhalo"; abort "Překlad ($edition) selhal." 2; }
-      info "  -- $edition: M5Atom Lite"
-      ARDUINO_IDE="$ARDUINO_BIN" "${ROOT_DIR}/tools/export-compiled-binary.sh" --edition "$edition" \
-          --fqbn "esp32:esp32:m5stack-atom" \
-        || { mark 2 "selhalo"; abort "Překlad M5Atom Lite ($edition) selhal." 2; }
-    done
+    # (m5stack-atom -> m5stack_atom), which is exactly what FIRMWARE_BIN* above
+    # expect.
+    info "  -- box"
+    ARDUINO_IDE="$ARDUINO_BIN" "${ROOT_DIR}/tools/export-compiled-binary.sh" --edition public \
+      || { mark 2 "selhalo"; abort "Překlad selhal." 2; }
+    info "  -- M5Atom Lite"
+    ARDUINO_IDE="$ARDUINO_BIN" "${ROOT_DIR}/tools/export-compiled-binary.sh" --edition public \
+        --fqbn "esp32:esp32:m5stack-atom" \
+      || { mark 2 "selhalo"; abort "Překlad M5Atom Lite selhal." 2; }
+    ext_hook firmware
     mark 2 "hotovo"
   else
     mark 2 "přeskočeno"
@@ -544,39 +599,18 @@ if ! skip_if_blocked 3; then
     [[ -n "$DEGRADED_ARM64"   ]] && warn "  $DEGRADED_ARM64 -- stránka bude bez Raspberry Pi odkazu."
     dist_default=N
   fi
-  if ask "Sestavit PC balíky pro REV $REV (${dist_targets[*]}, ${#editions[@]}x)?" "$dist_default"; then
+  if ask "Sestavit PC balíky pro REV $REV (${dist_targets[*]})?" "$dist_default"; then
     want_ltx=false
     if [[ -n "$LOCAL_TRX_UNAVAILABLE" ]]; then
       info "  local-trx: $LOCAL_TRX_UNAVAILABLE -- balíčky bez něj."
     elif ask "Zahrnout do balíků i local-trx (PC bridge pro libovolný rig, ve výchozím stavu vypnutý)?" Y; then
       want_ltx=true
     fi
-    dist_status=0
-    for edition in "${editions[@]}"; do
-      if [[ "$edition" == public ]]; then dir="$DIST_DIR"; make_args=(NO_ADDONS=1); else dir="$DIST_DIR_ADDONS"; make_args=(); fi
-      info "  -- $edition -> ${dir#"${ROOT_DIR}"/}"
-      # Archives of other revisions go before make runs: SHA256SUMS would
-      # otherwise describe releases that are not published. Both dist folders
-      # are in .gitignore.
-      if [[ -d "$dir" ]]; then
-        while IFS= read -r -d '' stale; do
-          info "  mažu $(basename "$stale")"
-          rm -rf "$stale"
-        done < <(find "$dir" -mindepth 1 -maxdepth 1 \
-                   \( -type d -o -name '*.tar.gz' -o -name '*.zip' \) \
-                   ! -name "*-${REV}-*" -print0)
-      fi
-      make -C "${ROOT_DIR}/native" "${make_args[@]}" "${dist_targets[@]}" || { dist_status=1; break; }
-      rm -rf "${dir}/assets"
-      $want_ltx && bundle_local_trx_set "$dir"
-      # After local-trx: the sums must describe what is actually published.
-      ( cd "$dir" && sha256sum ./*.tar.gz ./*.zip >SHA256SUMS 2>/dev/null || true )
-    done
-    if [[ $dist_status -eq 0 ]]; then
-      mark 3 "hotovo"
-    else
-      mark 3 "selhalo"; abort "make -C native dist selhal." 3
-    fi
+    # NO_ADDONS=1: native/dist holds the public edition whatever is beside the
+    # sketch -- it is what phase 9 publishes.
+    dist_build "$DIST_DIR" NO_ADDONS=1 || { mark 3 "selhalo"; abort "make -C native dist selhal." 3; }
+    ext_hook dist
+    mark 3 "hotovo"
   else
     mark 3 "přeskočeno"
   fi
@@ -585,7 +619,8 @@ fi
 # ---------------------------------------------------------------- phase 4 ----
 phase_banner 4 "integrační test proti falešnému rádiu"
 if ask "Spustit tools/native-integration-test.sh?" N; then
-  ensure_setcap "audio půlka testu se přeskočí (port 83)" || true
+  # The test builds and runs native/build (plain make), not NATIVE_BIN.
+  ensure_setcap "audio půlka testu se přeskočí (port 83)" "${ROOT_DIR}/native/build/wifilt" || true
   if "${ROOT_DIR}/tools/native-integration-test.sh"; then
     mark 4 "hotovo"
   else
@@ -600,9 +635,9 @@ fi
 # ---------------------------------------------------------------- phase 5 ----
 phase_banner 5 "spuštění linuxové binárky"
 if [[ ! -x "$NATIVE_BIN" ]]; then
-  info "  native/build/wifilt neexistuje -- fáze 3 neproběhla."
+  info "  ${NATIVE_BIN#"${ROOT_DIR}"/} neexistuje -- fáze 3 neproběhla."
   mark 5 "nedostupné"
-elif ask "Spustit ./native/build/wifilt --data-dir data?" N; then
+elif ask "Spustit ./${NATIVE_BIN#"${ROOT_DIR}"/} --data-dir data?" N; then
   ensure_setcap "porty 80, 82 a 83 nepůjde otevřít" || true
   say ""
   local_ips="$(hostname -I 2>/dev/null) 127.0.0.1"
@@ -630,13 +665,7 @@ elif ask "Spustit ./native/build/wifilt --data-dir data?" N; then
   # release run with it. With it the binary gets its own group and the terminal,
   # and the signal reaches only the app.
   set -m
-  # native/build is the edition with add-ons when addons/ is there (the
-  # Makefile's default); its pages come in as further --data-dir overlays.
-  overlay_args=()
-  if $HAVE_ADDONS; then
-    for d in "$ADDONS_DIR"/*/data; do [[ -d "$d" ]] && overlay_args+=(--data-dir "$d"); done
-  fi
-  ( cd "$ROOT_DIR" && ./native/build/wifilt --data-dir data "${overlay_args[@]}" )
+  ( cd "$ROOT_DIR" && "$NATIVE_BIN" --data-dir data "${NATIVE_RUN_ARGS[@]}" )
   run_status=$?
   set +m
   say ""
@@ -663,10 +692,10 @@ fi
 
 # ---------------------------------------------------------------- phase 6 ----
 phase_banner 6 "instalace na tento počítač"
-choose_edition 6
-if [[ "$EDITION" == addons ]]; then INSTALL_ARCHIVE="$LINUX_ARCHIVE_ADDONS"; else INSTALL_ARCHIVE="$LINUX_ARCHIVE"; fi
+INSTALL_ARCHIVE="$LINUX_ARCHIVE"
+ext_hook install
 INSTALL_DIST="$(dirname "$INSTALL_ARCHIVE")"
-info "  edice: $EDITION -- ${INSTALL_ARCHIVE#"${ROOT_DIR}"/}"
+info "  ${INSTALL_ARCHIVE#"${ROOT_DIR}"/}"
 if [[ ! -f "$INSTALL_ARCHIVE" ]]; then
   info "  chybí $(basename "$INSTALL_ARCHIVE") -- fáze 3 neproběhla."
   mark 6 "nedostupné"
@@ -739,8 +768,8 @@ if ! skip_if_blocked 7; then
     info "  Není připojený žádný sériový port -- fáze se přeskakuje."
     mark 7 "přeskočeno"
   elif ask "Nahrát do zařízení?" Y; then
-    choose_edition 7
-    info "  edice: $EDITION"
+    FLASH_ARGS=(--edition public)
+    ext_hook flash
     say ""
     for i in "${!PORTS[@]}"; do
       dev="${PORTS[$i]}"
@@ -765,7 +794,7 @@ if ! skip_if_blocked 7; then
     dev="${PORTS[$((choice - 1))]}"
     port="${PORT_LABEL[$dev]:-$dev}"
     say ""
-    if "${ROOT_DIR}/tools/upload-firmware-spiffs.sh" --port "$port" --edition "$EDITION"; then
+    if "${ROOT_DIR}/tools/upload-firmware-spiffs.sh" --port "$port" "${FLASH_ARGS[@]}"; then
       mark 7 "hotovo"
     else
       mark 7 "selhalo"; abort "Zápis do zařízení selhal." 7
@@ -797,62 +826,13 @@ if ! skip_if_blocked 8; then
     info "  Changelog a firmware se shodují na REV $REV"
   fi
 
-  # The add-on pages get their ?v= the same way, against the core's scripts.
-  if $HAVE_ADDONS; then
-    for d in "$ADDONS_DIR"/*/data; do
-      [[ -d "$d" ]] || continue
-      node "${ROOT_DIR}/tools/stamp-asset-versions.js" "$d" "--lookup=${ROOT_DIR}/data" >/dev/null \
-        || abort "stamp-asset-versions.js ($d) selhal." 8
-    done
-  fi
+  ext_hook stamp
 
-  # commit_repo DIR LABEL -- status, commit, push for one repository; sets
-  # REPO_RESULT to hotovo / beze změny / přeskočeno.
-  commit_repo() {
-    local dir="$1" label="$2" branch msg
-    branch="$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "?")"
-    say ""
-    say "${C_BOLD}-- ${label} (${branch})${C_OFF}"
-    REPO_RESULT="přeskočeno"
-    if [[ -z "$(git -C "$dir" status --porcelain)" ]]; then
-      info "  Není co commitovat."
-      REPO_RESULT="beze změny"
-    else
-      git -C "$dir" status --short
-      git -C "$dir" diff --stat | tail -20
-      if ask "git add -A a commit ($label)?" N; then
-        printf '%sZpráva commitu%s [REV %s]: ' "$C_BOLD" "$C_OFF" "$REV"
-        IFS= read -r msg <&3 || abort "vstup uzavřen" 8
-        [[ -n "$msg" ]] || msg="REV $REV"
-        git -C "$dir" add -A || abort "git add ($label) selhal" 8
-        git -C "$dir" commit -m "$msg" || { mark 8 "selhalo"; abort "git commit ($label) selhal." 8; }
-        REPO_RESULT="hotovo"
-      fi
-    fi
-    # Push whatever is ahead of the remote, committed now or earlier.
-    git -C "$dir" fetch --quiet origin "$branch" 2>/dev/null || true
-    local ahead
-    ahead="$(git -C "$dir" rev-list --count "origin/${branch}..HEAD" 2>/dev/null || echo 0)"
-    if [[ "$ahead" != 0 ]]; then
-      if ask "git push ${label} na origin/${branch} (${ahead} commitů)?" N; then
-        git -C "$dir" push origin "$branch" || { mark 8 "selhalo"; abort "git push ($label) selhal." 8; }
-        ok "  pushnuto"
-      else
-        info "  nepushnuto -- fáze ${3} to bude vyžadovat"
-      fi
-    fi
-  }
-
-  commit_repo "$ROOT_DIR" "wifilt (veřejné)" 9
-  result_public="$REPO_RESULT"
-  result_addons="beze změny"
-  if $HAVE_ADDONS; then
-    commit_repo "$ADDONS_DIR" "addons (soukromé)" 10
-    result_addons="$REPO_RESULT"
-  fi
-  if [[ "$result_public" == hotovo || "$result_addons" == hotovo ]]; then
+  commit_repo "$ROOT_DIR" "wifilt" 9
+  ext_hook commit
+  if [[ " ${REPO_RESULTS[*]} " == *" hotovo "* ]]; then
     mark 8 "hotovo"
-  elif [[ "$result_public" == "beze změny" && "$result_addons" == "beze změny" ]]; then
+  elif [[ " ${REPO_RESULTS[*]} " != *" přeskočeno "* ]]; then
     mark 8 "beze změny"
   else
     mark 8 "přeskočeno"
@@ -905,7 +885,7 @@ if ! skip_if_blocked 9; then
     gate "HEAD není origin/$RELEASE_BRANCH -- zdroj té stránky by na GitHubu nebyl"
   fi
 
-  # Published only when the public source changed: every page commit is
+  # Published only when the source changed: every page commit is
   # "WIFILT REV <rev> (<sha>)", the sha of the source it was built from.
   published_sha=""
   if git -C "$ROOT_DIR" fetch --quiet origin gh-pages 2>/dev/null; then
@@ -924,12 +904,12 @@ if ! skip_if_blocked 9; then
   fi
 
   if ! $public_changed && ! $FORCE; then
-    info "  Veřejná verze se od poslední publikace (${published_sha}) nezměnila -- stránka zůstává."
+    info "  Zdroj se od poslední publikace (${published_sha}) nezměnila -- stránka zůstává."
     mark 9 "beze změny"
   elif ! $gate_ok; then
     info "  fáze se nenabízí; obejít lze jen přes --force"
     mark 9 "nedostupné"
-  elif ask "Veřejná verze se změnila (stránka: ${published_sha:-žádná}). Publikovat stránku na origin/gh-pages?" Y; then
+  elif ask "Zdroj se změnil (stránka: ${published_sha:-žádná}). Publikovat stránku na origin/gh-pages?" Y; then
     short="$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || echo "?")"
     if "${ROOT_DIR}/tools/gh-pages.sh" --publish --message "WIFILT REV ${REV} (${short})"; then
       mark 9 "hotovo"
@@ -942,84 +922,7 @@ if ! skip_if_blocked 9; then
   fi
 fi
 
-# ---------------------------------------------------------------- phase 10 ---
-# The edition with add-ons as a release of the private repository. Nothing in
-# it points at the public source: the tag carries an opaque fingerprint of the
-# two commits (so an unchanged build is not uploaded twice), the notes name
-# only the add-on commit, and every file -- also inside the archives -- is
-# dated midnight UTC of the REV day, not the build time the public page shows.
-phase_banner 10 "soukromé vydání (${ADDON_REPO})"
-if ! skip_if_blocked 10; then
-  gate_ok=true
-  gate() { fail "  ✗ $1"; gate_ok=false; }
-  for f in "$FIRMWARE_BIN_ADDONS" "$FIRMWARE_BIN_M5ATOM_ADDONS"; do
-    [[ -f "$f" ]] || gate "chybí $(basename "$f") -- fáze 2 neproběhla"
-  done
-  ls "$DIST_DIR_ADDONS"/wifilt-"$REV"-* >/dev/null 2>&1 || gate "v native/dist-addons není nic pro REV $REV -- fáze 3 neproběhla"
-  [[ -z "$(git -C "$ADDONS_DIR" status --porcelain)" ]] || gate "addons/ není čistý"
-  [[ -z "$(git -C "$ROOT_DIR" status --porcelain)" ]] || gate "wifilt není čistý"
-  addon_branch="$(git -C "$ADDONS_DIR" rev-parse --abbrev-ref HEAD)"
-  git -C "$ADDONS_DIR" fetch --quiet origin "$addon_branch" 2>/dev/null || true
-  [[ "$(git -C "$ADDONS_DIR" rev-parse HEAD)" == "$(git -C "$ADDONS_DIR" rev-parse "origin/${addon_branch}" 2>/dev/null)" ]] \
-    || gate "addons/ HEAD není na origin/${addon_branch} -- vydání by odkazovalo na nepushnutý stav"
-
-  addon_sha="$(git -C "$ADDONS_DIR" rev-parse HEAD)"
-  fingerprint="$(printf '%s %s' "$(git -C "$ROOT_DIR" rev-parse HEAD)" "$addon_sha" | sha256sum | cut -c1-10)"
-  tag="rev-${REV}-${fingerprint}"
-  last_tag="$(gh release list -R "$ADDON_REPO" --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)"
-  [[ "$last_tag" == null ]] && last_tag=""
-
-  if [[ "$last_tag" == "$tag" ]]; then
-    info "  Od posledního vydání ($last_tag) se nic nezměnilo."
-    mark 10 "beze změny"
-  elif ! $gate_ok; then
-    mark 10 "nedostupné"
-  elif ask "Nahrát vydání $tag do ${ADDON_REPO} (poslední: ${last_tag:-žádné})?" Y; then
-    stamp_date="${REV:0:4}-${REV:4:2}-${REV:6:2} 00:00:00 UTC"
-    stage="$(mktemp -d)"
-    # The filesystem image of this edition, the same one phase 7 flashes.
-    "${ROOT_DIR}/tools/upload-firmware-spiffs.sh" --dry-run --edition addons >/dev/null \
-      || { rm -rf "$stage"; mark 10 "selhalo"; abort "Obraz LittleFS (addons) selhal." 10; }
-    cp "$FIRMWARE_BIN_ADDONS"        "$stage/wifilt-${REV}-firmware.bin"
-    cp "$FIRMWARE_BIN_M5ATOM_ADDONS" "$stage/wifilt-${REV}-m5atom-firmware.bin"
-    cp "${ROOT_DIR}/build/release-upload/spiffs.bin" "$stage/wifilt-${REV}-spiffs.bin"
-    # Re-pack every archive with neutral dates, owners and order.
-    for archive in "$DIST_DIR_ADDONS"/wifilt-"$REV"-*.tar.gz "$DIST_DIR_ADDONS"/wifilt-"$REV"-*.zip; do
-      [[ -f "$archive" ]] || continue
-      work="$(mktemp -d)"
-      if [[ "$archive" == *.zip ]]; then
-        ( cd "$work" && unzip -q "$archive" )
-        find "$work" -exec touch -h -d "$stamp_date" {} +
-        ( cd "$work" && TZ=UTC zip -qrX "$stage/$(basename "$archive")" . )
-      else
-        tar xzf "$archive" -C "$work"
-        ( cd "$work" && tar --sort=name --mtime="$stamp_date" --owner=0 --group=0 --numeric-owner -cf - . \
-            | gzip -9n > "$stage/$(basename "$archive")" )
-      fi
-      rm -rf "$work"
-    done
-    ( cd "$stage" && sha256sum ./* > SHA256SUMS )
-    find "$stage" -type f -exec touch -d "$stamp_date" {} +
-    notes="WIFILT s doplňky, REV ${REV}.
-
-Doplňky: wifilt-addon @ ${addon_sha:0:12}
-
-- wifilt-${REV}-firmware.bin, wifilt-${REV}-spiffs.bin: ESP32 box (tools/upload-firmware-spiffs.sh --edition addons --firmware ...)
-- wifilt-${REV}-m5atom-firmware.bin: M5Stack Atom Lite
-- archivy: Linux, Windows, Raspberry Pi (s local-trx, je-li přibalen)
-- SHA256SUMS"
-    if gh release create "$tag" -R "$ADDON_REPO" --target "$addon_sha" \
-         --title "WIFILT+ REV ${REV}" --notes "$notes" "$stage"/*; then
-      ok "  https://github.com/${ADDON_REPO}/releases/tag/${tag}"
-      mark 10 "hotovo"
-    else
-      mark 10 "selhalo"
-    fi
-    rm -rf "$stage"
-  else
-    mark 10 "přeskočeno"
-  fi
-fi
+ext_hook end
 
 print_summary
 say ""

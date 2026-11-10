@@ -18,7 +18,7 @@ SKETCH_DIR  := ..
 TRXNET_DIR  ?= $(HOME)/Arduino/libraries/TrxNet/src
 # NO_ADDONS=1 builds the public edition even with addons/ beside the sketch
 # (-DWIFILT_NO_ADDONS, addon_hooks.h): in its own build directories, so the
-# two editions never overwrite each other's objects. tools/release.sh builds both.
+# two editions never overwrite each other's objects. tools/release.sh builds this one.
 NO_ADDONS   ?=
 BUILD_DIR   ?= build$(if $(NO_ADDONS),-public)
 TARGET      ?= wifilt

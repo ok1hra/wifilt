@@ -11,15 +11,18 @@ published.
 
 ## Working tree — not committed
 
-**Release: both editions from one tree.**
+**Release: always the public edition, and a point to extend it.**
 
-* `tools/release.sh` (now 10 phases) builds the public edition and, with `addons/` beside the
-  sketch, the one with add-ons: firmware for the box and the M5Atom Lite, Linux, Windows and
-  Raspberry Pi archives. Installing on this PC (6) and flashing a device (7) ask which edition
-  (Enter: with add-ons). Phase 8 commits and pushes each repository that has changes. Phase 9
-  publishes the page only when the public source changed since the last publication (the sha
-  in the newest gh-pages commit). Phase 10 uploads the add-on edition as a release of the
-  private add-on repository: an opaque tag, files dated midnight UTC of the REV day.
+* `tools/release.sh` builds the public edition also with `addons/` beside the sketch
+  (`--edition public`, `NO_ADDONS=1`). Phase 5 runs that build (`native/build-public/wifilt`),
+  not whatever `native/build/` last held; the phase 4 capability check stays on `native/build/`,
+  which the integration test builds. Phase 9 publishes the page only when the source changed
+  since the last publication (the sha in the newest gh-pages commit).
+* **Extensions.** When `addons/release-ext.sh` exists, `release.sh` sources it and calls its
+  `ext_<point>` functions at fixed points (preflight, firmware, dist, install, flash, stamp,
+  commit, end; listed at `ext_hook`). It may add phases of its own, reuse `dist_build` and
+  `commit_repo`, and point phase 5 at another binary. Without it the release is the nine
+  phases above.
 * `WIFILT_NO_ADDONS` (`addon_hooks.h`) builds the public edition with `addons/` present.
   `tools/export-compiled-binary.sh --edition public|addons` (own build folders; the add-on
   image is exported as `*.addons.bin`; the mark is checked both ways),

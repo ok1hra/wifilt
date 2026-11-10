@@ -40,7 +40,7 @@ bool aud1SendTextFrame(const char* json, size_t n);      // text frame to the AU
 size_t aud1SendRoom(void);                               // free bytes in its send queue
 
 // -DWIFILT_NO_ADDONS builds the public edition with addons/ present
-// (tools/release.sh builds both editions from one tree).
+// (what tools/release.sh always builds).
 #if !defined(WIFILT_NO_ADDONS) && __has_include("addons/addon.h")
   #define WIFILT_HAS_ADDONS 1
 #else
