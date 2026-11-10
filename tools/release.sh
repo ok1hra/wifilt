@@ -31,11 +31,16 @@
 #     build of source that exists nowhere. Publishing therefore comes AFTER the
 #     push, and refuses to run until HEAD is what origin/main holds.
 #
-# Every phase is a question. Enter takes the capitalised default. Nothing here
-# writes to the device, to this computer, to git or to the web without being
-# asked first.
+# All questions come FIRST: after the tool check the script walks every phase
+# and asks what to do (y/n, commit messages, edition, serial port, sudo
+# password), prints the plan, asks once more, and then runs the whole chain
+# without another question. Enter takes the capitalised default. Nothing here
+# writes to the device, to this computer, to git or to the web unless the plan
+# says so. What only the run itself can know (a failed build, a guard in front
+# of phase 9) is decided by the plan's answers or by the guard, never by a
+# question in the middle of the run.
 #
-#   tools/release.sh            interactive, the whole chain
+#   tools/release.sh            plan interactively, then the whole chain
 #   tools/release.sh --force    bypass the pre-publish guards (see phase 9)
 
 set -uo pipefail
@@ -70,8 +75,9 @@ usage() {
   cat <<'EOF'
 Usage: tools/release.sh [--force]
 
-Walks the release in nine phases, asking before each one. Enter accepts the
-capitalised default. addons/release-ext.sh, when present, extends it.
+Asks about all nine phases first (plan), then runs them in one go without
+further questions. Enter accepts the capitalised default. addons/release-ext.sh,
+when present, extends it.
 
   1  REV -> today's date                     (y/N)
   2  Export compiled binary                  (Y/n)
@@ -129,6 +135,12 @@ phase_banner() {
 # ask QUESTION DEFAULT   DEFAULT is Y or N; Enter takes it. Anything that is not
 # y/Y/n/N asks again rather than guessing, because several of these phases are
 # irreversible.
+#
+# Once the plan is confirmed (PLAN_LOCKED) nothing asks any more: a question
+# that still reaches ask() -- an extension not yet moved to the plan -- takes
+# its default and says so, rather than stopping a run the operator has walked
+# away from.
+PLAN_LOCKED=false
 ask() {
   local question="$1" default="$2" prompt answer
   case "$default" in
@@ -136,6 +148,11 @@ ask() {
     N) prompt="(y/N)" ;;
     *) fail "internal: bad default '$default'"; exit 1 ;;
   esac
+  if $PLAN_LOCKED; then
+    warn "  (bez dotazu) $question -> $default"
+    [[ "$default" == Y ]]
+    return
+  fi
   while true; do
     printf '%s%s%s %s ' "$C_BOLD" "$question" "$C_OFF" "$prompt"
     if ! IFS= read -r answer <&3; then
@@ -161,6 +178,57 @@ abort() {
   fail "Release přerušen ve fázi $2."
   print_summary
   exit 1
+}
+
+# The plan: what each phase will do, decided before any of them runs.
+#   PLAN[n]       yes | no
+#   PLAN_NOTE[n]  one line shown beside it in the plan summary
+declare -A PLAN=()
+declare -A PLAN_NOTE=()
+want() { [[ "${PLAN[$1]:-no}" == yes ]]; }
+
+# plan_ask N QUESTION DEFAULT  -> PLAN[N]
+plan_ask() {
+  if ask "  $1) $2" "$3"; then PLAN["$1"]=yes; else PLAN["$1"]=no; fi
+}
+
+# plan_choose QUESTION DEFAULT -- a sub-question of the plan, answer in
+# PLAN_ANSWER as yes / no.
+PLAN_ANSWER=no
+plan_choose() {
+  if ask "     $1" "$2"; then PLAN_ANSWER=yes; else PLAN_ANSWER=no; fi
+}
+
+print_plan() {
+  say ""
+  printf '%s%s-- plán --------------------------------------------------%s\n' "$C_BOLD" "$C_CYAN" "$C_OFF"
+  local entry n label state colour note pad
+  for entry in "${PHASES[@]}"; do
+    n="${entry%% *}"; label="${entry#* }"
+    note="${PLAN_NOTE[$n]:-}"
+    if [[ -n "${BLOCKED[$n]:-}" ]]; then
+      state="nedostupné"; colour="$C_DIM"; note="${BLOCKED[$n]}"
+    elif want "$n"; then
+      state="ANO"; colour="$C_GREEN"
+    else
+      state="ne"; colour="$C_DIM"
+    fi
+    pad=$(( 24 - ${#label} )); (( pad < 1 )) && pad=1
+    printf '  %2s  %s%*s%s%-4s%s %s%s%s\n' "$n" "$label" "$pad" "" "$colour" "$state" "$C_OFF" \
+      "$C_DIM" "$note" "$C_OFF"
+  done
+}
+
+# sudo once, before the run, and kept fresh while it lasts: phases 4 to 6 need
+# it after builds that can take longer than sudo's own timeout.
+SUDO_KEEPALIVE_PID=""
+sudo_prime() {
+  info "  sudo: heslo teď, ať se release během běhu na nic neptá"
+  sudo -v || return 1
+  ( while sleep 50; do sudo -n -v 2>/dev/null || exit 0; done ) &
+  SUDO_KEEPALIVE_PID=$!
+  trap '[[ -n "$SUDO_KEEPALIVE_PID" ]] && kill "$SUDO_KEEPALIVE_PID" 2>/dev/null' EXIT
+  return 0
 }
 
 PHASES=(
@@ -212,12 +280,19 @@ ensure_setcap() {   # ensure_setcap WHAT-BREAKS-WITHOUT-IT [BIN MAKE-VARIABLE...
   else
     warn "  getcap nenalezen, capability nelze ověřit -- $1"
   fi
-  if ask "Udělit ji přes sudo (vyžádá heslo)?" N; then
+  if [[ "$PLAN_SETCAP" == yes ]]; then
     make -C "${ROOT_DIR}/native" "${margs[@]}" setcap && return 0
     warn "  setcap se nepovedl"
+  else
+    info "  setcap nebyl v plánu"
   fi
   return 1
 }
+PLAN_SETCAP=no          # grant the capability via sudo where it is missing
+PLAN_CONTINUE_ON_FAIL=no  # phases 4/5: go on after a failed test or run
+PLAN_STOP_SERVICES=yes  # phase 6: stop wifilt/local-trx while installing
+PLAN_PORT=""            # phase 7: the port to flash, by-id path when there is one
+declare -A PLAN_LTX_CROSS=()  # phase 3: win|arm64 -> yes/no, build cross libs
 
 # local-trx bundling (fáze 3, docs/local-trx-implementace.md bod 1/12: local-trx/
 # Makefile zůstává mimo native/Makefile's all/dist cíle, takže tohle žije tady,
@@ -232,11 +307,17 @@ ensure_local_trx_cross_libs() {   # ensure_local_trx_cross_libs win|arm64
   local serial_lib="${ROOT_DIR}/local-trx/third_party/cross/libserialport-${target}/lib/libserialport.a"
   [[ -f "$hamlib_lib" && -f "$serial_lib" ]] && return 0
   warn "  local-trx's cross-zkompilovaný hamlib/libserialport pro $target chybí."
-  if ask "  Zkompilovat teď (řádově minuty, jednorázově -- příště se přeskočí)?" Y; then
+  if [[ "${PLAN_LTX_CROSS[$target]:-no}" == yes ]]; then
     "${ROOT_DIR}/local-trx/third_party/build-cross-libs.sh" "$target" && return 0
     warn "  build-cross-libs.sh $target selhal"
+  else
+    info "  jejich kompilace nebyla v plánu"
   fi
   return 1
+}
+cross_libs_missing() {   # cross_libs_missing win|arm64
+  [[ ! -f "${ROOT_DIR}/local-trx/third_party/cross/hamlib-$1/lib/libhamlib.a" \
+  || ! -f "${ROOT_DIR}/local-trx/third_party/cross/libserialport-$1/lib/libserialport.a" ]]
 }
 
 # bundle_local_trx_into ARCHIVE STAGING_DIR_NAME LOCAL_TRX_BIN KIND(tar|zip)
@@ -297,13 +378,18 @@ bundle_local_trx_into() {
 # in the order they come:
 #   preflight      phase 0, after the tools are reported (may set BLOCKED,
 #                  NATIVE_BIN, NATIVE_MAKE_ARGS, NATIVE_RUN_ARGS)
+#   plan_install   plan, phase 6, before the archive is looked for (may set
+#                  INSTALL_ARCHIVE; asking is allowed here)
+#   plan_flash     plan, phase 7, after the yes (may set FLASH_ARGS)
+#   plan_commit    plan, phase 8, after this repository (plan_commit_repo)
+#   plan           end of the plan, before it is printed (its own phases:
+#                  plan_ask N ...). The last point where asking is allowed.
 #   firmware       phase 2, after the export succeeded
 #   dist           phase 3, after the archives were built (dist_targets,
 #                  want_ltx and dist_build are there to reuse)
-#   install        phase 6, before the archive is checked (may set
-#                  INSTALL_ARCHIVE)
-#   flash          phase 7, after the yes (may set FLASH_ARGS)
-#   stamp          phase 8, after data/*.html got its ?v=
+#   install        phase 6, before the archive is checked
+#   flash          phase 7, before flashing
+#   stamp         phase 8, after data/*.html got its ?v=
 #   commit         phase 8, after this repository (commit_repo is there)
 #   end            after phase 9, before the summary
 # An extension shares this shell: its failures go through abort like ours.
@@ -335,9 +421,31 @@ dist_build() {
   return 0
 }
 
-# commit_repo DIR LABEL PHASE  -- status, commit, push for one repository;
-# PHASE is the one that needs the push. Appends hotovo / beze změny /
-# přeskočeno to REPO_RESULTS.
+# plan_commit_repo DIR LABEL  -- the plan for one repository: commit (with its
+# message) and push, keyed by LABEL. The tree is asked about as it is now; by
+# the time phase 8 runs, phases 1 and 8 itself may have changed it, so the
+# answer means "commit whatever is there then".
+declare -A COMMIT_PLAN=() COMMIT_MSG=() PUSH_PLAN=()
+plan_commit_repo() {
+  local dir="$1" label="$2" branch dirty msg
+  branch="$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "?")"
+  dirty="$(git -C "$dir" status --porcelain | wc -l)"
+  info "     ${label} (${branch}): ${dirty} změněných souborů teď"
+  [[ "$dirty" -gt 0 ]] && git -C "$dir" status --short | head -15 | sed 's/^/       /'
+  plan_choose "git add -A a commit ($label), bude-li co?" N
+  COMMIT_PLAN["$label"]="$PLAN_ANSWER"
+  if [[ "${COMMIT_PLAN[$label]}" == yes ]]; then
+    printf '     %sZpráva commitu%s [REV %s]: ' "$C_BOLD" "$C_OFF" "$REV_PLAN"
+    IFS= read -r msg <&3 || { printf '\n'; fail "vstup uzavřen -- končím"; exit 1; }
+    COMMIT_MSG["$label"]="${msg:-REV $REV_PLAN}"
+  fi
+  plan_choose "git push ${label} na origin/${branch}, bude-li co?" N
+  PUSH_PLAN["$label"]="$PLAN_ANSWER"
+}
+
+# commit_repo DIR LABEL PHASE  -- status, commit, push for one repository, as
+# planned by plan_commit_repo; PHASE is the one that needs the push. Appends
+# hotovo / beze změny / přeskočeno to REPO_RESULTS.
 REPO_RESULTS=()
 commit_repo() {
   local dir="$1" label="$2" needs="$3" branch msg result
@@ -351,13 +459,14 @@ commit_repo() {
   else
     git -C "$dir" status --short
     git -C "$dir" diff --stat | tail -20
-    if ask "git add -A a commit ($label)?" N; then
-      printf '%sZpráva commitu%s [REV %s]: ' "$C_BOLD" "$C_OFF" "$REV"
-      IFS= read -r msg <&3 || abort "vstup uzavřen" 8
-      [[ -n "$msg" ]] || msg="REV $REV"
+    if [[ "${COMMIT_PLAN[$label]:-no}" == yes ]]; then
+      msg="${COMMIT_MSG[$label]:-REV $REV}"
+      info "  commit: $msg"
       git -C "$dir" add -A || abort "git add ($label) selhal" 8
       git -C "$dir" commit -m "$msg" || { mark 8 "selhalo"; abort "git commit ($label) selhal." 8; }
       result="hotovo"
+    else
+      info "  commit nebyl v plánu"
     fi
   fi
   REPO_RESULTS+=("$result")
@@ -366,7 +475,8 @@ commit_repo() {
   local ahead
   ahead="$(git -C "$dir" rev-list --count "origin/${branch}..HEAD" 2>/dev/null || echo 0)"
   if [[ "$ahead" != 0 ]]; then
-    if ask "git push ${label} na origin/${branch} (${ahead} commitů)?" N; then
+    if [[ "${PUSH_PLAN[$label]:-no}" == yes ]]; then
+      info "  git push ${label} na origin/${branch} (${ahead} commitů)"
       git -C "$dir" push origin "$branch" || { mark 8 "selhalo"; abort "git push ($label) selhal." 8; }
       ok "  pushnuto"
     else
