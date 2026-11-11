@@ -8,13 +8,17 @@
      native/platform/update.cpp, SOFTWARE.md). wifilt relays; the root
      updater does the work and reports into status.json, which this page
      polls -- across the restart of wifilt and, on a locked Pi, across reboots. -->
-<link rel="stylesheet" href="/update.css?v=d9a4109e">
+<link rel="stylesheet" href="/update.css?v=14a7c25b">
 </head>
 <body>
 
 <header class="upd-top">
   <a class="upd-brand" href="/" title="WIFILT">WIFILT</a>
   <b class="upd-title">UPDATE</b>
+  <!-- The manual on GitHub follows main, i.e. describes the newest version --
+       the one being installed. -->
+  <a class="upd-help" href="https://github.com/ok1hra/wifilt/blob/main/SOFTWARE.md#18-updating-from-the-web-pc-and-raspberry-pi"
+     target="_blank" rel="noopener" title="Manual: updating from the web">Manual</a>
   <span id="link" class="pill">connecting…</span>
 </header>
 
@@ -28,6 +32,10 @@
       <div><span class="label">Newest</span><b id="revNewest">—</b></div>
     </div>
     <p id="overviewState" class="state-line"></p>
+    <p id="newsLine" class="small" hidden>
+      <a href="https://github.com/ok1hra/wifilt/blob/main/Changelog.md" target="_blank" rel="noopener">What's new</a>
+      · <a href="https://github.com/ok1hra/wifilt/blob/main/SOFTWARE.md" target="_blank" rel="noopener">Manual</a>
+    </p>
     <p id="checkedAt" class="muted small"></p>
 
     <div id="tokenBox" class="token" hidden>
@@ -97,6 +105,6 @@
 
 </main>
 
-<script src="/update.js?v=ee4c76e9"></script>
+<script src="/update.js?v=19a2e2b9"></script>
 </body>
 </html>

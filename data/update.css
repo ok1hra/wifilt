@@ -23,7 +23,10 @@ button, input { font: inherit; }
   border-bottom: 1px solid var(--line); background: var(--panel); }
 .upd-brand { color: var(--text); font-weight: 800; letter-spacing: .14em; text-decoration: none; }
 .upd-title { color: var(--cyan); letter-spacing: .1em; }
-.pill { margin-left: auto; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px;
+.upd-help { margin-left: auto; color: var(--muted); font-size: 12px; text-decoration: none; }
+.upd-help:hover { color: var(--cyan); text-decoration: underline; }
+.card a { color: var(--cyan); }
+.pill { padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px;
   color: var(--muted); font-size: 12px; }
 .pill.ok { color: var(--green); border-color: var(--green); }
 .pill.bad { color: var(--amber); border-color: var(--amber); }

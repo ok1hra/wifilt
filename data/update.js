@@ -130,6 +130,7 @@
     else if (hasNew) line = 'A new version is available.';
     else line = 'You have the newest version.';
     $('overviewState').textContent = line;
+    $('newsLine').hidden = !hasNew;
 
     $('tokenBox').hidden = !(c && (c.error === 'token-missing' || c.tokenNeeded));
     $('manualBox').hidden = mode !== 'manual';
