@@ -60,7 +60,7 @@ CXX_SOURCES := \
   main.cpp \
   arduino/Arduino.cpp arduino/WString.cpp arduino/Print.cpp \
   arduino/Stream.cpp arduino/IPAddress.cpp \
-  platform/paths.cpp platform/process_args.cpp \
+  platform/paths.cpp platform/process_args.cpp platform/update.cpp \
   platform/esp_compat.cpp platform/freertos_compat.cpp \
   fs/EEPROM.cpp fs/FS.cpp \
   net/WiFi.cpp net/WiFiUdp.cpp net/WebServer.cpp net/ESPmDNS.cpp \
@@ -224,6 +224,7 @@ dist-linux: all dist-assets
 	cp start-wifilt.sh        $(DIST)/wifilt-linux-x86_64/
 	cp -r $(ASSETS)           $(DIST)/wifilt-linux-x86_64/data
 	echo $(VERSION)         > $(DIST)/wifilt-linux-x86_64/VERSION
+	cp update/wifilt-update.sh update/update-channel.conf $(DIST)/wifilt-linux-x86_64/
 	@cd $(DIST) && tar czf wifilt-$(VERSION)-linux-x86_64.tar.gz wifilt-linux-x86_64
 	@rm -rf $(DIST)/wifilt-linux-x86_64
 
@@ -232,6 +233,8 @@ dist-windows: win dist-assets
 	cp $(WIN_DIR)/wifilt.exe $(DIST)/wifilt-windows-x64/
 	cp start-wifilt.bat     $(DIST)/wifilt-windows-x64/
 	cp -r $(ASSETS)         $(DIST)/wifilt-windows-x64/data
+	echo $(VERSION)       > $(DIST)/wifilt-windows-x64/VERSION
+	cp update/wifilt-update.ps1 update/update-channel.conf $(DIST)/wifilt-windows-x64/
 	@cd $(DIST) && zip -qr wifilt-$(VERSION)-windows-x64.zip wifilt-windows-x64
 	@rm -rf $(DIST)/wifilt-windows-x64
 
@@ -242,6 +245,7 @@ dist-arm64: arm64 dist-assets
 	cp start-wifilt.sh     $(DIST)/wifilt-linux-arm64/
 	cp -r $(ASSETS)        $(DIST)/wifilt-linux-arm64/data
 	echo $(VERSION)      > $(DIST)/wifilt-linux-arm64/VERSION
+	cp update/wifilt-update.sh update/update-channel.conf $(DIST)/wifilt-linux-arm64/
 	@# the guided Raspberry Pi installer (pi/pi-setup.sh, SOFTWARE.md section 1.7)
 	cp pi/pi-setup.sh      $(DIST)/wifilt-linux-arm64/
 	mkdir -p               $(DIST)/wifilt-linux-arm64/pi

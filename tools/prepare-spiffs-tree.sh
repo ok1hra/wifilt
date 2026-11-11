@@ -54,8 +54,9 @@ while IFS= read -r -d '' file; do
   relative="${file#${SOURCE_DIR}/}"
   # The WATCH viewer page (watch_hub.h) talks to /watchws, which only the PC
   # build has; on the box it would only cost flash. native/Makefile asks for it.
+  # Same for the update wizard: the box has no OTA (native/update/).
   case "$(basename "$file")" in
-    watch.html*|watch.js*|watch.css*)
+    watch.html*|watch.js*|watch.css*|update.html*|update.js*|update.css*)
       [[ "${WIFILT_NATIVE_ASSETS:-0}" == 1 ]] || continue ;;
   esac
   case "$file" in

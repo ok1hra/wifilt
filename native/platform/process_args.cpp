@@ -21,6 +21,10 @@ char **savedArgv = nullptr;
 
 void nativeProcessArgvSet(int, char **argv) { savedArgv = argv; }
 
+#ifndef _WIN32
+bool nativeSpawnDetached(const char *const *) { return false; }
+#endif
+
 char **nativeProcessArgv(void) { return savedArgv; }
 
 #ifdef _WIN32
@@ -102,3 +106,30 @@ bool nativeReexecSelf(void) {
 
   return false;   // only reached if the re-exec call itself failed
 }
+
+#ifdef _WIN32
+bool nativeSpawnDetached(const char *const *argv) {
+  if (!argv || !argv[0]) return false;
+  std::string commandLine;
+  for (int i = 0; argv[i]; ++i) {
+    if (i) commandLine += ' ';
+    appendQuoted(commandLine, argv[i]);
+  }
+  STARTUPINFOA si;
+  PROCESS_INFORMATION pi;
+  ZeroMemory(&si, sizeof(si));
+  si.cb = sizeof(si);
+  ZeroMemory(&pi, sizeof(pi));
+  DWORD flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW;
+  // Out of our job if allowed, so closing wifilt's console cannot take the
+  // updater with it; some job objects forbid that, then without.
+  BOOL ok = CreateProcessA(nullptr, &commandLine[0], nullptr, nullptr, FALSE,
+                           flags | CREATE_BREAKAWAY_FROM_JOB, nullptr, nullptr, &si, &pi);
+  if (!ok) ok = CreateProcessA(nullptr, &commandLine[0], nullptr, nullptr, FALSE,
+                               flags, nullptr, nullptr, &si, &pi);
+  if (!ok) return false;
+  CloseHandle(pi.hThread);
+  CloseHandle(pi.hProcess);
+  return true;
+}
+#endif

@@ -41,10 +41,15 @@ fi
 
 UNIT=/etc/systemd/system/wifilt.service
 LOCAL_TRX_UNIT=/etc/systemd/system/local-trx.service
+UPD_UNITS=(wifilt-update.path wifilt-update.service wifilt-update-check.timer wifilt-update-check.service)
+UPD_STATE=/var/lib/wifilt-update
+UPD_CONF=/etc/wifilt-update.conf
 
 if [[ $UNINSTALL -eq 1 ]]; then
-  systemctl disable --now wifilt local-trx 2>/dev/null || true
-  rm -f "$UNIT" "$LOCAL_TRX_UNIT"
+  systemctl disable --now wifilt local-trx wifilt-update.path wifilt-update-check.timer 2>/dev/null || true
+  rm -f "$UNIT" "$LOCAL_TRX_UNIT" "$UPD_CONF"
+  for u in "${UPD_UNITS[@]}"; do rm -f "/etc/systemd/system/$u"; done
+  rm -rf "$UPD_STATE" "$PREFIX.prev"
   systemctl daemon-reload 2>/dev/null || true
   rm -rf "$PREFIX"
   echo "removed $PREFIX and the service."
@@ -71,6 +76,15 @@ cp -r "$ASSETS" "$PREFIX/data"
 
 # The release (firmware REV) this came from -- pi-setup and fslock show it.
 [[ -f "$HERE/VERSION" ]] && install -m 0644 "$HERE/VERSION" "$PREFIX/VERSION"
+
+# The web updater (native/update/, SOFTWARE.md "Updating from the web") and the
+# channel it reads. Its units are written further down.
+HAVE_UPDATER=0
+if [[ -f "$HERE/wifilt-update.sh" ]]; then
+  install -m 0755 "$HERE/wifilt-update.sh" "$PREFIX/wifilt-update"
+  [[ -f "$HERE/update-channel.conf" ]] && install -m 0644 "$HERE/update-channel.conf" "$PREFIX/update-channel.conf"
+  HAVE_UPDATER=1
+fi
 
 # The one privileged step. It is a property of the file, so it has to be redone
 # after every upgrade -- which is why upgrading means re-running this script.
@@ -159,7 +173,71 @@ else
   rm -f "$LOCAL_TRX_UNIT"
 fi
 
+# The web updater. wifilt runs as $RUN_USER and cannot install anything; it
+# drops req/request.json into a directory it owns, the path unit sees it and
+# starts wifilt-update as root. The script takes only an action name from the
+# request -- never a URL, a version or a path -- so the most a web user can ask
+# for is "the newest official build of this edition, SHA256-checked".
+# Enabled on purpose, unlike wifilt.service: both units are passive (a path
+# watch and a 12-hour check), neither touches the radio.
+if [[ $HAVE_UPDATER -eq 1 ]]; then
+  install -d -m 0755 "$UPD_STATE"
+  install -d -m 0755 -o "$RUN_USER" "$UPD_STATE/req"
+  printf 'PREFIX=%q\nRUN_USER=%q\n' "$PREFIX" "$RUN_USER" > "$UPD_CONF"
+  chmod 0644 "$UPD_CONF"
+  cat > /etc/systemd/system/wifilt-update.path <<EOF
+[Unit]
+Description=WIFILT web updater - request watch
+
+[Path]
+PathExists=$UPD_STATE/req/request.json
+Unit=wifilt-update.service
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  cat > /etc/systemd/system/wifilt-update.service <<EOF
+[Unit]
+Description=WIFILT web updater
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=$PREFIX/wifilt-update --from-request
+# Must outlive the wifilt.service it stops and restarts.
+KillMode=process
+TimeoutStartSec=30min
+EOF
+  cat > /etc/systemd/system/wifilt-update-check.service <<EOF
+[Unit]
+Description=WIFILT web updater - look for a new build
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=$PREFIX/wifilt-update check
+EOF
+  cat > /etc/systemd/system/wifilt-update-check.timer <<EOF
+[Unit]
+Description=WIFILT web updater - look for a new build twice a day
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=12h
+RandomizedDelaySec=15min
+
+[Install]
+WantedBy=timers.target
+EOF
+fi
+
 systemctl daemon-reload
+if [[ $HAVE_UPDATER -eq 1 ]]; then
+  systemctl enable --now wifilt-update.path wifilt-update-check.timer >/dev/null 2>&1 \
+    || echo "WARNING: could not enable the web updater units" >&2
+fi
 
 # start-wifilt.sh (copied above, if this archive has it) starts wifilt AND
 # local-trx (if also installed) and opens both web interfaces -- the

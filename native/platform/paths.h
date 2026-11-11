@@ -18,6 +18,9 @@ const std::string &nativeDataDir();
 // overridable with --config-dir.
 const std::string &nativeConfigDir();
 
+// Directory of the running executable (no trailing separator).
+std::string nativeExecutableDir();
+
 void nativeSetDataDir(const std::string &path);
 void nativeSetConfigDir(const std::string &path);
 

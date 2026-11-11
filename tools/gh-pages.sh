@@ -577,6 +577,14 @@ if [[ -n "$DESKTOP_LINUX_NAME" || -n "$DESKTOP_WIN_NAME" || -n "$DESKTOP_ARM64_N
   DESKTOP_SUMS_NAME="SHA256SUMS"
   cp "${ROOT_DIR}/native/dist/SHA256SUMS" "${OUTPUT_DIR}/${DESKTOP_SUMS_NAME}"
 fi
+# latest.json: what the native updater (native/update/) reads to find the newest
+# desktop build, its size (progress bar) and SHA256. Written from the very
+# archives copied above, so it can never describe a file that is not published.
+DESKTOP_LATEST_NAME=""
+if [[ -n "$DESKTOP_LINUX_NAME" || -n "$DESKTOP_WIN_NAME" || -n "$DESKTOP_ARM64_NAME" ]]; then
+  "${ROOT_DIR}/tools/update-manifest.sh" "$OUTPUT_DIR" "$FW_REV" "${OUTPUT_DIR}/latest.json"
+  DESKTOP_LATEST_NAME="latest.json"
+fi
 # The "this archive also carries local-trx" paragraph, per platform. Built here
 # rather than inline in the page heredoc below: an `if` inside a $( ) inside
 # that heredoc would be a third level of nesting, and the empty string is
@@ -1656,7 +1664,8 @@ done
 # on a copy into OUTPUT_DIR: this loop is an allowlist, and anything not named
 # in it never reaches the branch -- which is how the download links 404'd while
 # the files sat happily in build/gh-pages.
-for optional_file in "$DESKTOP_LINUX_NAME" "$DESKTOP_WIN_NAME" "$DESKTOP_ARM64_NAME" "$DESKTOP_SUMS_NAME"; do
+for optional_file in "$DESKTOP_LINUX_NAME" "$DESKTOP_WIN_NAME" "$DESKTOP_ARM64_NAME" "$DESKTOP_SUMS_NAME" \
+                     "$DESKTOP_LATEST_NAME"; do
   [[ -n "$optional_file" ]] || continue
   require_file "${OUTPUT_DIR}/${optional_file}" "desktop artifact ${optional_file}"
   cp "${OUTPUT_DIR}/${optional_file}" "$TMP_DIR/${optional_file}"

@@ -463,6 +463,9 @@ char CwMsg[37] = "";
 #endif
 #include "trx_power.h"          // wake / standby / shutdown of the LAN radio from the web UI
 #include "addon_hooks.h"        // optional add-ons from addons/ (see the end of this file)
+#if defined(WIFILT_NATIVE)
+#include "update.h"             // native: update from the web (native/update/, SOFTWARE.md)
+#endif
 // See radio_transport.h's own comment on radioLanLocalControlPort(): 0 means
 // "use the real default (50001)", exactly today's behavior on the real
 // device and on native/ unless --lan-port-base overrides it.
@@ -5980,7 +5983,9 @@ void setupWebServer(void){
   webServer.on("/health.json", HTTP_GET, [](){
     const uint16_t ports[] = {80, 82, 83};
     const char *names[] = {"web", "dxc", "audio"};
-    String out = "{\"platform\":\"" CAP_PLATFORM_NAME "\",\"homeHttp\":";
+    String out = "{\"platform\":\"" CAP_PLATFORM_NAME "\",\"rev\":\"";
+    out += String((unsigned)REV);
+    out += "\",\"homeHttp\":";
     out += PLATFORM_HOME_HTTP_PORT();
     out += ",\"listeners\":[";
     for (int i = 0; i < 3; i++) {
@@ -6139,6 +6144,78 @@ void setupWebServer(void){
     delay(500);
     ESP.restart();
   });
+#if defined(WIFILT_NATIVE)
+  // Update from the web (native/platform/update.cpp, native/update/). wifilt
+  // only relays: an action goes to the root updater as a request file, its
+  // progress file comes back as /update/status. The ESP32 has no OTA and
+  // keeps the web installer link.
+  webServer.on("/update.html", HTTP_GET, [](){ handleFileFromSPIFFS("/update.html"); });
+  webServer.on("/update/info", HTTP_GET, [](){
+    String out = "{\"rev\":\"" + String((unsigned)REV) + "\",\"platform\":\"" CAP_PLATFORM_NAME "\",\"host\":\"";
+    out += nativeHostLabel();
+    out += "\",\"busy\":";
+    // What would make stopping wifilt now a bad idea; the page shows it and
+    // /update/start refuses the same.
+    bool armed = unattendedArmActive(unattendedGuard, millis());
+    out += (stateTx || armed) ? "true" : "false";
+    out += ",\"tx\":"; out += stateTx ? "true" : "false";
+    out += ",\"unattended\":"; out += armed ? "true" : "false";
+    out += ",\"updater\":";
+    out += nativeUpdateInfoJson().c_str();
+    out += "}";
+    webServer.sendHeader("Cache-Control", "no-store");
+    webServer.send(200, "application/json", out);
+  });
+  webServer.on("/update/status", HTTP_GET, [](){
+    webServer.sendHeader("Cache-Control", "no-store");
+    webServer.send(200, "application/json", nativeUpdateStatusJson().c_str());
+  });
+  webServer.on("/update/start", HTTP_POST, [](){
+    String body = webServer.arg("plain");
+    bool check = extractJsonString(body, "action") == "check" || webServer.arg("action") == "check";
+    bool dry = extractJsonBool(body, "dry", false) || webServer.arg("dry") == "1";
+    if (!check && (stateTx || unattendedArmActive(unattendedGuard, millis()))) {
+      webServer.send(409, "application/json",
+        "{\"ok\":false,\"error\":\"the radio is transmitting or unattended operation is armed\"}");
+      return;
+    }
+    std::string id;
+    std::string err = nativeUpdateRequest(check ? "check" : "update", dry, &id);
+    if (!err.empty()) {
+      String e = err.c_str(); e.replace("\"", "'");
+      webServer.send(409, "application/json", "{\"ok\":false,\"error\":\"" + e + "\"}");
+      return;
+    }
+    webServer.send(200, "application/json", String("{\"ok\":true,\"id\":\"") + id.c_str() + "\"}");
+  });
+  webServer.on("/update/cancel", HTTP_POST, [](){
+    std::string err = nativeUpdateCancel();
+    webServer.send(err.empty() ? 200 : 409, "application/json",
+                   err.empty() ? "{\"ok\":true}" : "{\"ok\":false}");
+  });
+#if defined(_WIN32)
+  // Only the updater script on this machine may ask; it replaces wifilt.exe
+  // next, which Windows refuses while the file is running.
+  webServer.on("/update/quit", HTTP_POST, [](){
+    if (webServer.client().remoteIP() != IPAddress(127, 0, 0, 1)) {
+      webServer.send(403, "application/json", "{\"ok\":false}");
+      return;
+    }
+    webServer.sendHeader("Connection", "close");
+    webServer.send(200, "application/json", "{\"ok\":true}");
+    nativeRequestStop();
+  });
+#endif
+  webServer.on("/update/token", HTTP_POST, [](){
+    std::string err = nativeUpdateSaveToken(extractJsonString(webServer.arg("plain"), "token").c_str());
+    if (!err.empty()) {
+      String e = err.c_str(); e.replace("\"", "'");
+      webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"" + e + "\"}");
+      return;
+    }
+    webServer.send(200, "application/json", "{\"ok\":true}");
+  });
+#endif
   webServer.on("/log",      HTTP_GET,  [](){ handleFileFromSPIFFS("/log.html"); });
   webServer.on("/datasync", HTTP_GET,  [](){ handleFileFromSPIFFS("/datasync.html"); });
   webServer.on("/data",     HTTP_GET,  [](){ handleFileFromSPIFFS("/data.html"); });

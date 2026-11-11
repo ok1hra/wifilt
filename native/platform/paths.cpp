@@ -72,6 +72,8 @@ const std::string &nativeConfigDir() {
   return configDir;
 }
 
+std::string nativeExecutableDir() { return executableDir(); }
+
 void nativeSetDataDir(const std::string &path) { dataDir = path; }
 void nativeSetConfigDir(const std::string &path) { configDir = path; }
 

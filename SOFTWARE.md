@@ -19,6 +19,7 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
  · [1.5 Where it runs](#15-where-it-runs)
  · [1.6 local-trx — any radio, on a PC](#16-local-trx--any-radio-on-a-pc)
  · [1.7 A Raspberry Pi station](#17-a-raspberry-pi-station)
+ · [1.8 Updating from the web (PC and Raspberry Pi)](#18-updating-from-the-web-pc-and-raspberry-pi)
 
 **[2. First run](#2-first-run)**
  · [2.1 AP mode](#21-ap-mode)
@@ -295,7 +296,9 @@ Every page carries the same bar:
 The right end of the bar carries the firmware revision, the **WiFi signal strength in dBm**
 — which turns red at −70 dBm or worse — and, when a newer firmware has been published, an
 amber `→ <revision> ▲` link to the web installer. That check is the one part of the interface
-that reaches the internet; without a connection it simply does not appear.
+that reaches the internet; without a connection it simply does not appear. On an installed PC
+or Raspberry Pi the computer itself does the check and the link opens the update page instead,
+see [section 1.8](#18-updating-from-the-web-pc-and-raspberry-pi).
 
 The desktop build has no WiFi radio of its own, so it shows the WiFi link of the computer
 it runs on instead, labelled to keep it apart from the box's figure: `RPI -48 dBm` on a
@@ -490,7 +493,56 @@ you choose (10 minutes by default), so the Pi ends the way it started. During th
 login message counts down; `wifilt-pi-setup --keep-unlocked` cancels the lock,
 `sudo fslock lock` brings it forward. Follow the unattended part with
 `journalctl -fu wifilt-pi-resume`. If the update fails, the Pi stays unlocked and the login
-message says so.
+message says so. The same update can also be started from the web interface; that path
+locks again right away, see [section 1.8](#18-updating-from-the-web-pc-and-raspberry-pi).
+
+### 1.8 Updating from the web (PC and Raspberry Pi)
+
+An installed desktop build updates itself from its own web interface. The machine looks for a
+new build after every boot and then twice a day. When it finds one, the revision at the right
+end of the navigation bar gets the amber `→ <revision> ▲`. Once for each new revision, a note
+also appears at the bottom of the page: **Update…** opens the update page (`/update.html`),
+and **Later** hides the note until the next revision.
+
+The page shows the installed and the newest revision and lists what will happen. **Update now**
+then runs everything, with a progress bar, the list of steps and the log:
+
+1. download the archive for this computer and check its SHA256 against `latest.json`;
+2. keep a copy of the current installation (`/opt/wifilt.prev`; on Windows `.prev\` next to `wifilt.exe`);
+3. stop WIFILT, and local-trx if it was running, install, and start both again;
+4. wait until the new version answers. If it does not, the copy from step 2 is put back and
+   started, and the page says the update failed and the old version is running.
+
+The page loses WIFILT for the few seconds of the restart, shows how long it has been waiting
+and picks up by itself. It can be closed, reloaded or opened in another browser at any time;
+the progress is kept by the computer, not by the page. The radio sessions are logged out
+cleanly before the restart. While the radio transmits, or unattended operation is armed, the
+update is refused.
+
+**A locked Raspberry Pi** (fslock, [section 1.7](#17-a-raspberry-pi-station)) needs two
+reboots, which the page waits through. The archive is downloaded and checked first. Then the
+Pi unlocks and reboots, installs the update, checks that it answers, and **locks again
+straight away**, rebooting once more. It ends locked even when the update fails, and in that
+case the previous version is the one running. The whole run takes 3–5 minutes.
+
+What can update itself:
+
+| Installation | From the web |
+|---|---|
+| Linux / Raspberry Pi, installed with `install.sh` or `pi-setup`, running as the `wifilt` service | yes |
+| Windows, unpacked to a folder you can write to | yes — PowerShell does the work |
+| started by hand (`start-wifilt.sh`), run from an unpacked archive or a checkout, Windows under Program Files | no — the page links to the download page |
+| an installation older than this feature | once by hand (`sudo ./install.sh` or `wifilt-pi-setup`), then from the web |
+
+How it works, for those who want to check: WIFILT runs as an ordinary user and installs
+nothing itself. On Linux it leaves a request in `/var/lib/wifilt-update/req/`, and
+`wifilt-update.path` starts `/opt/wifilt/wifilt-update` as root. The request carries only the
+word *check* or *update*. The version and the download address come from the channel file
+`update-channel.conf` that came with the archive, so the web interface cannot install anything
+other than the newest official build of the same edition. Progress goes to
+`/var/lib/wifilt-update/status.json` (Windows: `%APPDATA%\wifilt\update\`), and the log of the
+last run to `update.log` next to it. To run it by hand: `sudo /opt/wifilt/wifilt-update check`
+or `… update`. `… update --dry-run` goes through every step without changing anything.
 
 ---
 

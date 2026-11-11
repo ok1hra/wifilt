@@ -18,3 +18,9 @@ char **nativeProcessArgv(void);
 // failed -- the caller decides what "nothing sane left to do" means for it
 // (wifilt exits non-zero so a service manager can restart it instead).
 bool nativeReexecSelf(void);
+
+// Starts a program that outlives this process (no console, own process group,
+// out of our job). Windows only -- the web updater's PowerShell script, which
+// has to keep running while it stops and replaces wifilt.exe. On other
+// systems the updater is a systemd unit and this returns false.
+bool nativeSpawnDetached(const char *const *argv);

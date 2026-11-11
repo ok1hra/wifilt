@@ -3,6 +3,17 @@
 
   var MANIFEST_URL = 'https://ok1hra.github.io/wifilt/manifest.json';
   var FLASHER_URL  = 'https://ok1hra.github.io/wifilt/';
+  var UPDATE_URL   = '/update.html';
+  var BANNER_KEY   = 'wifiltUpdateBannerDismissed';
+
+  // Native build (PC / Raspberry Pi) with the web updater: /update/info says
+  // which REV the updater found (its own 12-hour check, done by the machine,
+  // not the browser) and whether an update is running right now. null = not
+  // asked / not native / no updater, and the ESP32 behaviour below applies.
+  var updMode   = null;    // 'systemd' | 'pi' | 'pi-locked' | 'manual'
+  var updRev    = null;    // newest REV the updater found
+  var updState  = 'idle';  // 'running' | 'offline' while an update is under way
+  var updPct    = 0;
 
   var localRev  = null;
   var remoteRev = null;
@@ -54,6 +65,13 @@
       'a.fw-version-link:hover{text-decoration:underline;}' +
       'a.fw-update-link{color:#d97706;font-weight:700;text-decoration:none;margin-left:4px;}' +
       'a.fw-update-link:hover{color:#b45309;text-decoration:underline;}' +
+      '.upd-banner{position:fixed;z-index:150;left:50%;bottom:72px;transform:translateX(-50%);' +
+        'max-width:calc(100vw - 32px);display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;' +
+        'padding:10px 14px;background:#1f2937;color:#f9fafb;border:1px solid #d97706;border-radius:8px;' +
+        'box-shadow:0 6px 24px rgba(0,0,0,.35);font:13px/1.35 system-ui,sans-serif;}' +
+      '.upd-banner a{color:#fbbf24;font-weight:700;}' +
+      '.upd-banner button{font:inherit;padding:3px 10px;border-radius:5px;cursor:pointer;' +
+        'border:1px solid #6b7280;background:transparent;color:#d1d5db;}' +
       '.topbar-wifi-rssi{color:inherit;}' +
       '.topbar-wifi-rssi-bad{color:#dc2626;font-weight:700;}' +
       '.topbar-gps{color:inherit;}' +
@@ -568,26 +586,88 @@
       el.appendChild(sep);
     }
 
+    // With the native updater the link goes to the update wizard (same tab);
+    // otherwise to the web installer / download page, as on the ESP32.
+    var wizard = updMode !== null && updMode !== 'manual';
+    var newRev = wizard ? updRev : remoteRev;
     var a = document.createElement('a');
-    a.href      = FLASHER_URL;
-    a.target    = '_blank';
-    a.rel       = 'noopener';
+    a.href      = wizard ? UPDATE_URL : FLASHER_URL;
+    if (!wizard) { a.target = '_blank'; a.rel = 'noopener'; }
     a.className = 'fw-version-link';
-    var hasUpdate = remoteRev !== null && Number(remoteRev) > Number(localRev);
-    a.title     = hasUpdate ? 'New firmware available — click to open web installer'
-                            : 'Open web installer';
+    var hasUpdate = newRev !== null && Number(newRev) > Number(localRev);
+    a.title     = wizard ? (hasUpdate ? 'New version available — open the update wizard' : 'Update wizard')
+                         : (hasUpdate ? 'New firmware available — click to open web installer'
+                                      : 'Open web installer');
     a.textContent = 'FW ' + localRev;
     el.appendChild(a);
-    if (hasUpdate) {
+    if (wizard && (updState === 'running' || updState === 'offline')) {
+      var busy = document.createElement('a');
+      busy.href      = UPDATE_URL;
+      busy.className = 'fw-update-link';
+      busy.title     = 'An update is running — open the update wizard';
+      busy.textContent = ' UPDATING ' + updPct + ' %';
+      el.appendChild(busy);
+    } else if (hasUpdate) {
       var upd = document.createElement('a');
-      upd.href      = FLASHER_URL;
-      upd.target    = '_blank';
-      upd.rel       = 'noopener';
+      upd.href      = wizard ? UPDATE_URL : FLASHER_URL;
+      if (!wizard) { upd.target = '_blank'; upd.rel = 'noopener'; }
       upd.className = 'fw-update-link';
-      upd.title     = 'New firmware available — click to open web installer';
-      upd.textContent = ' → ' + remoteRev + ' ▲';
+      upd.title     = a.title;
+      upd.textContent = ' → ' + newRev + ' ▲';
       el.appendChild(upd);
     }
+    if (wizard && hasUpdate) maybeShowBanner(newRev);
+  }
+
+  // Once per new REV, a small dismissable note at the bottom of the page. The
+  // dismissal is remembered per browser; a newer REV shows it again.
+  var bannerShown = false;
+  function maybeShowBanner(rev) {
+    if (bannerShown || location.pathname === UPDATE_URL) return;
+    var seen = null;
+    try { seen = window.localStorage.getItem(BANNER_KEY); } catch (e) { seen = null; }
+    if (seen === String(rev)) return;
+    bannerShown = true;
+    var b = document.createElement('div');
+    b.className = 'upd-banner';
+    b.setAttribute('role', 'status');
+    var t = document.createElement('span');
+    t.textContent = 'WIFILT ' + rev + ' is available (you have ' + localRev + ').';
+    var go = document.createElement('a');
+    go.href = UPDATE_URL;
+    go.textContent = 'Update…';
+    var later = document.createElement('button');
+    later.type = 'button';
+    later.textContent = 'Later';
+    later.addEventListener('click', function () {
+      try { window.localStorage.setItem(BANNER_KEY, String(rev)); } catch (e) { /* private mode */ }
+      b.remove();
+    });
+    b.appendChild(t); b.appendChild(go); b.appendChild(later);
+    document.body.appendChild(b);
+  }
+
+  // Native only: asked once at load, then every 10 minutes -- or every 3 s
+  // while an update runs, so the topbar percentage moves.
+  var updTimer = null;
+  function fetchUpdateInfo() {
+    window.clearTimeout(updTimer);
+    fetch('/update/info', { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
+      .then(function (d) {
+        var u = d && d.updater;
+        if (!u) { updMode = null; return; }
+        updMode  = u.mode || 'manual';
+        updRev   = u.check && u.check.rev && !u.check.error ? String(u.check.rev) : null;
+        updState = u.state || 'idle';
+        updPct   = Number(u.pct) || 0;
+        render();
+      })
+      .catch(function () {})
+      .finally(function () {
+        var busy = updState === 'running' || updState === 'offline';
+        updTimer = window.setTimeout(fetchUpdateInfo, busy ? 3000 : 600000);
+      });
   }
 
   // log-manager.js calls this instead of writing el.textContent directly
@@ -621,6 +701,7 @@
           wifiRssi = Number.isFinite(n) ? n : null;
         }
         if (d && typeof d.hostName === 'string') {
+          if (hostName === null && updMode === null) fetchUpdateInfo();
           hostName = d.hostName;
           var h = Number(d.hostRssi);
           hostRssi = Number.isFinite(h) ? h : null;

@@ -63,6 +63,14 @@ volatile sig_atomic_t g_stopRequested = 0;
 
 void onSignal(int) { g_stopRequested = 1; }
 
+}  // namespace
+
+// The Windows updater's /update/quit: the same clean way out as Ctrl+C (radio
+// sessions logged out below), so the replaced wifilt.exe is free to go.
+void nativeRequestStop() { g_stopRequested = 1; }
+
+namespace {
+
 // Permanent diagnostic aid, kept deliberately: no gdb is available in this
 // environment (no passwordless sudo to install it), and a real crash was
 // once observed with zero output at all -- the process just vanished

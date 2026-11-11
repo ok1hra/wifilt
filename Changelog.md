@@ -11,6 +11,32 @@ published.
 
 ## Working tree — not committed
 
+**Update from the web on a PC, a Raspberry Pi and Windows (SOFTWARE.md § 1.8).**
+
+* `/update.html` (desktop build only) is a wizard in three views: what will happen, progress
+  (bar, steps, log), result. It follows a run across the wifilt restart and the Pi reboots,
+  and picks up a run started in another browser.
+* `native/update/wifilt-update.sh` (root, started by `wifilt-update.path` from a request file
+  wifilt drops into `/var/lib/wifilt-update/req/`) does the following:
+  * check, download with progress, SHA256 and edition check, backup to `/opt/wifilt.prev`,
+    stop, `install.sh`, start, health check, rollback;
+  * on a locked Pi: unlock, reboot, finish via `wifilt-update-resume.service`, then
+    `fslock lock` straight away, even after a failure;
+  * `--dry-run` goes through every step without changing anything;
+  * the request carries only the action. Version and URL come from `update-channel.conf`
+    (`KIND=pages`, or `gh-release` with a token).
+* `native/update/wifilt-update.ps1`: the same on Windows, started detached by wifilt.exe;
+  `/update/quit` (localhost only) stops wifilt cleanly before its files are replaced.
+* `install.sh` installs the updater, `/etc/wifilt-update.conf`, `wifilt-update.path` and a
+  12-hour check timer (both enabled; neither touches the radio).
+* `tools/update-manifest.sh` writes `latest.json` (REV, and per platform the name, size and
+  SHA256). `gh-pages.sh` publishes it. The Windows zip now carries `VERSION`.
+* `native/platform/update.cpp` adds `/update/info`, `/update/status`, `/update/start`,
+  `/update/cancel` and `/update/token`. The updater is offered only to a wifilt started by its
+  systemd service from the installed folder. `/health.json` carries `rev`.
+* `fw-version.js`: on the desktop build `▲` opens the wizard, the topbar shows
+  `UPDATING n %`, and a note appears once per new revision. `/state` is unchanged.
+
 **Release: always the public edition, and a point to extend it.**
 
 * `tools/release.sh` builds the public edition also with `addons/` beside the sketch

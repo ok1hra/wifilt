@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UPDATE — WIFILT</title>
+<!-- Update from the web: PC / Raspberry Pi build only (native/update/,
+     native/platform/update.cpp, SOFTWARE.md). wifilt relays; the root
+     updater does the work and reports into status.json, which this page
+     polls -- across the restart of wifilt and, on a locked Pi, across reboots. -->
+<link rel="stylesheet" href="/update.css?v=d9a4109e">
+</head>
+<body>
+
+<header class="upd-top">
+  <a class="upd-brand" href="/" title="WIFILT">WIFILT</a>
+  <b class="upd-title">UPDATE</b>
+  <span id="link" class="pill">connecting…</span>
+</header>
+
+<main class="upd-main">
+
+  <!-- 1. overview -->
+  <section id="viewOverview" class="card" hidden>
+    <div class="revs">
+      <div><span class="label">Installed</span><b id="revInstalled">—</b></div>
+      <div class="arrow">→</div>
+      <div><span class="label">Newest</span><b id="revNewest">—</b></div>
+    </div>
+    <p id="overviewState" class="state-line"></p>
+    <p id="checkedAt" class="muted small"></p>
+
+    <div id="tokenBox" class="token" hidden>
+      <label for="tokenInput">Access token for this update channel</label>
+      <div class="row">
+        <input id="tokenInput" type="password" autocomplete="off" spellcheck="false">
+        <button type="button" id="tokenSave">Save</button>
+      </div>
+      <p class="muted small">Stored on this machine only, readable by the WIFILT user.</p>
+    </div>
+
+    <div id="planBox" hidden>
+      <h3>What will happen</h3>
+      <ol id="planList" class="plan"></ol>
+      <p id="planTime" class="muted small"></p>
+      <p id="busyWarn" class="warn" hidden></p>
+      <p class="muted small">Radio sessions are closed while WIFILT restarts. Your settings stay as they are.</p>
+    </div>
+
+    <div id="manualBox" hidden>
+      <p>This installation cannot update itself from the web.</p>
+      <ul id="manualWhy" class="muted small"></ul>
+      <p><a id="manualLink" href="https://ok1hra.github.io/wifilt/" target="_blank" rel="noopener">Download page</a></p>
+    </div>
+
+    <div class="actions">
+      <button type="button" id="btnCheck">Check now</button>
+      <button type="button" id="btnUpdate" class="primary" hidden>Update now</button>
+      <button type="button" id="btnDry" class="ghost" hidden>Dry run</button>
+    </div>
+    <p id="overviewErr" class="err" hidden></p>
+  </section>
+
+  <!-- 2. progress -->
+  <section id="viewProgress" class="card" hidden>
+    <h2 id="progTitle">Updating…</h2>
+    <progress id="progBar" max="100"></progress>
+    <div class="prog-copy">
+      <span id="progPct">0 %</span>
+      <span id="progBytes" class="muted"></span>
+    </div>
+    <p id="progMsg" class="state-line"></p>
+    <p id="offlineMsg" class="offline" hidden></p>
+    <ol id="phaseList" class="phases"></ol>
+    <details id="logBox">
+      <summary>Log</summary>
+      <pre id="logText"></pre>
+    </details>
+    <div class="actions">
+      <button type="button" id="btnCancel" hidden>Cancel</button>
+    </div>
+  </section>
+
+  <!-- 3. result -->
+  <section id="viewResult" class="card" hidden>
+    <h2 id="resTitle"></h2>
+    <p id="resMsg" class="state-line"></p>
+    <details id="resLogBox">
+      <summary>Log</summary>
+      <pre id="resLog"></pre>
+    </details>
+    <div class="actions">
+      <button type="button" id="btnReload" class="primary">Reload WIFILT</button>
+      <button type="button" id="btnBack">Back</button>
+    </div>
+  </section>
+
+</main>
+
+<script src="/update.js?v=ee4c76e9"></script>
+</body>
+</html>
