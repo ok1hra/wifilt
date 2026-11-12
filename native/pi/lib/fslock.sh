@@ -223,7 +223,7 @@ run_fslock() {
   [[ ${ANS_NETPLAN:-0} == 1 && $NO_NM == 0 ]] && convert_netplan
 
   # --- overlayroot
-  if ! dpkg-query -W -f='${Status}' overlayroot 2>/dev/null | grep -q 'install ok installed'; then
+  if ! dpkg-query -W -f='${Status}' overlayroot 2>/dev/null | grep 'install ok installed' >/dev/null; then
     info "installing overlayroot"
     DEBIAN_FRONTEND=noninteractive apt-get install -y overlayroot
   fi
@@ -233,11 +233,11 @@ run_fslock() {
     *v8*)   initrd=/boot/firmware/initramfs8 ;;
     *)      initrd=/boot/firmware/initramfs8 ;;
   esac
-  if ! lsinitramfs "$initrd" 2>/dev/null | grep -q 'scripts/init-bottom/overlayroot'; then
+  if ! lsinitramfs "$initrd" 2>/dev/null | grep 'scripts/init-bottom/overlayroot' >/dev/null; then
     info "rebuilding the initramfs with overlayroot"
     update-initramfs -u
   fi
-  lsinitramfs "$initrd" 2>/dev/null | grep -q 'scripts/init-bottom/overlayroot' \
+  lsinitramfs "$initrd" 2>/dev/null | grep 'scripts/init-bottom/overlayroot' >/dev/null \
     || die "$initrd does not contain overlayroot (is auto_initramfs=1 in config.txt?)"
 
   # --- the fslock command, its settings and the login notice

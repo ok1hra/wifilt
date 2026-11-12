@@ -16,7 +16,7 @@ WIFI_IF=${PI_SETUP_WIFI:-wlan0}
 AP_CONF=/etc/default/wifi-fallback
 STATIC_HOSTS=/etc/NetworkManager/dnsmasq-shared.d/static-hosts.conf
 
-nm_has() { nmcli -t -f NAME connection show 2>/dev/null | grep -qxF "$1"; }
+nm_has() { nmcli -t -f NAME connection show 2>/dev/null | grep -xF -- "$1" >/dev/null; }
 
 # Wi-Fi profiles generated from netplan: "name|uuid"
 netplan_wifi() {

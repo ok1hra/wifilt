@@ -7,7 +7,7 @@ BASE_PKGS=(curl ca-certificates tar rsync libcap2-bin python3 nftables dnsmasq-b
 missing_pkgs() {
   local p
   for p in "$@"; do
-    dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q 'install ok installed' || echo "$p"
+    dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep 'install ok installed' >/dev/null || echo "$p"
   done
 }
 
@@ -49,7 +49,7 @@ run_packages() {
 
   local g add=()
   for g in audio dialout; do
-    id -nG "$RUN_USER" | tr ' ' '\n' | grep -qx "$g" || add+=("$g")
+    id -nG "$RUN_USER" | tr ' ' '\n' | grep -x -- "$g" >/dev/null || add+=("$g")
   done
   if [[ ${#add[@]} -gt 0 ]]; then
     usermod -aG "$(IFS=,; echo "${add[*]}")" "$RUN_USER"

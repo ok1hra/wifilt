@@ -48,7 +48,7 @@ run_wifilt() {
   # enabling are for a desktop and go to the log only
   SUDO_USER=$RUN_USER "$PKG/install.sh" --prefix "$PREFIX" >> "$LOG_FILE" 2>&1
   [[ -f $PKG/VERSION ]] && install -m 644 "$PKG/VERSION" "$PREFIX/VERSION"
-  getcap "$PREFIX/wifilt" | grep -q cap_net_bind_service \
+  getcap "$PREFIX/wifilt" | grep cap_net_bind_service >/dev/null \
     || die "setcap failed: WIFILT would fall back to port 8080"
   ok "installed $(installed_version)"
 

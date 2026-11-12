@@ -90,7 +90,7 @@ detect_existing() {
 
   HAVE_SERIAL=0 HAVE_ETH=0 HAVE_AP=0 HAVE_OI3=0 HAVE_FSLOCK=0
   # serial aliases made by hand count as "kept as they are" (see serial.sh)
-  [[ $NO_NM == 0 ]] && nmcli -t -f NAME connection show 2>/dev/null | grep -qx 'eth0-dhcp-server' && HAVE_ETH=1
+  [[ $NO_NM == 0 ]] && nmcli -t -f NAME connection show 2>/dev/null | grep -x 'eth0-dhcp-server' >/dev/null && HAVE_ETH=1
   [[ -x /usr/local/sbin/wifi-fallback ]] && HAVE_AP=1
   [[ -x /usr/local/sbin/fslock ]] && HAVE_FSLOCK=1
   local legacy="$RUN_HOME/.local/state/oi3/flashed" o t r
@@ -122,7 +122,7 @@ final_checks() {
       "$(systemctl is-enabled "$s" 2>/dev/null || true)"
   done
   [[ -x $PREFIX/wifilt ]] && printf '  %-16s %s\n' "WIFILT version" "$(installed_version)"
-  if [[ -x $PREFIX/wifilt ]] && ! getcap "$PREFIX/wifilt" 2>/dev/null | grep -q cap_net_bind_service; then
+  if [[ -x $PREFIX/wifilt ]] && ! getcap "$PREFIX/wifilt" 2>/dev/null | grep cap_net_bind_service >/dev/null; then
     printf '  %sWIFILT has no permission for port 80%s -- run pi-setup again\n' "$C_RED" "$C_0"
   fi
   local links
