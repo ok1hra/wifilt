@@ -11,6 +11,24 @@ published.
 
 ## Working tree — not committed
 
+**Waterfall: no white burn for seconds after our own transmission.**
+
+* Measured on wifilt-pi + local-trx + TS-480: the radio keeps its ACC2 audio muted for 1.75 s
+  after `RX;`, then returns at the same level as before TX. The RX audio never gets louder.
+  The JS8 page reset the whole analyser at PTT release, so the first row of that muted tail set
+  the waterfall AGC to silence (the floor dropped 39 dB). The real noise then painted white for
+  ~5.5 s while the AGC climbed back.
+* `spectrum.js`: `resetRing()` clears only the samples. The JS8 page uses it at the end of TX and
+  keeps what the AGC learned. A floor that collapses by more than 20 dB is held for up to 4 s
+  (muted audio, painted dark), and a drop that lasts longer is followed as before. This
+  applies to every page with the shared waterfall (JS8, WSPR, RTTY, Mercury). Live on the Pi,
+  the floor now stays within 1 dB through TX. `tools/spectrum-agc-hold-smoke.js` replays the
+  measured sequence.
+* The decoder has no AGC and was not affected by this.
+* The 1.75 s itself was the TS-480's front-panel **VOX** (`VX1`; VOX delay 1.5 s + latency),
+  even with PTT over CAT and menu 60 (VOX for the data input) off. With VOX off, audio returns
+  0.20 s after `RX;`. With VOX on, JS8 Fast/Turbo lost the start of a reply in the next slot.
+
 **LOGSYNC moved from the top bar into SETUP.**
 
 * The LOGSYNC tab is gone from the top bar on every page (QRPLog, DATA pages, SETUP, BD, and

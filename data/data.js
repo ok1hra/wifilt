@@ -1991,6 +1991,8 @@ const waterfall = new Spectrum.Waterfall({
 function radioTransmitting() { return Boolean(state.radio.tx || sinkProxy.ptt); }
 
 function resetSpectrumAnalyzer() { waterfall.reset(); lastSlotIndex=null; spectrumTimeline.epoch=null; }
+// End of our own TX: same receiver, same band -- keep the AGC (Spectrum.resetRing).
+function resumeSpectrumAfterTx() { waterfall.resetRing(); lastSlotIndex=null; spectrumTimeline.epoch=null; }
 
 // Pause only the visual analyser while transmitting: a monitored carrier would
 // poison its AGC. RX samples must still reach the JS8 decoder because the radio
@@ -2480,7 +2482,7 @@ function renderHeader() {
   const connected=state.radio.connected && state.radio.transceiverType === "ICOM-LAN";
   const transmitting=radioTransmitting();
   const receiving=connected && state.lastAudioMs>0 && performance.now()-state.lastAudioMs<1500;
-  if(state.spectrumWasTransmitting && !transmitting)resetSpectrumAnalyzer();
+  if(state.spectrumWasTransmitting && !transmitting)resumeSpectrumAfterTx();
   state.spectrumWasTransmitting=transmitting;
   const modeCompatible=["USB","USB-D"].includes(state.radio.mode);
   dom.trxFrequencyValue.textContent=formatFrequency(state.pendingFrequency || state.radio.frequency);

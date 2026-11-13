@@ -16,6 +16,10 @@
   else root.Spectrum = value;
 })(typeof globalThis !== "undefined" ? globalThis : self, function () {
 
+  // See Waterfall.holdAgc(). 20 dB is far outside a band's own breathing and
+  // well inside what a muted receiver drops (~35-40 dB measured on a TS-480).
+  const AGC_DROP_DB = 20, AGC_HOLD_MS = 4000;
+
   // Blue -> cyan -> yellow, with the knee pushed high so noise stays dark and a
   // real signal is the only thing that reaches the warm end.
   function color(value) {
@@ -62,9 +66,20 @@
     // Everything the AGC learned is tied to what the receiver was hearing, so a
     // band change or a transmission has to start it over rather than fade.
     reset() {
+      this.resetRing();
+      this.resetAgc();
+    }
+
+    // Only the samples, not what the AGC learned: the end of our own
+    // transmission. The receiver and the band are the ones from before, and
+    // the analyser was paused while keyed, so nothing poisoned the AGC. Starting
+    // it over here made the first row after TX -- a radio that keeps its audio
+    // muted for a while after PTT release (TS-480: 1.75 s) -- set the floor to
+    // digital silence, and the band then burned white for ~5 s while the
+    // 10 %-per-row easing climbed back up to the real noise.
+    resetRing() {
       this.ring.fill(0);
       this.ringPos = 0; this.hop = 0; this.liveHop = 0; this.fill = 0;
-      this.resetAgc();
     }
 
     // Just the AGC statistics, not the ring buffer -- split out (code-review)
@@ -76,8 +91,21 @@
     // ignores these fields, and a page that does needs them reset on every
     // zoom/band change exactly like the main pair.
     resetAgc() {
-      this.agcLow = -85; this.agcHigh = -35; this.agcReady = false;
-      this.liveAgcLow = -85; this.liveAgcHigh = -35; this.liveAgcReady = false;
+      this.agcLow = -85; this.agcHigh = -35; this.agcReady = false; this.agcHeld = 0;
+      this.liveAgcLow = -85; this.liveAgcHigh = -35; this.liveAgcReady = false; this.liveAgcHeld = 0;
+    }
+
+    // A floor that collapses by more than AGC_DROP_DB at once is audio going
+    // away (a radio muting its output after TX), not the band getting quieter:
+    // hold the AGC for up to AGC_HOLD_MS so those rows paint dark instead of
+    // re-learning silence and then burning the real noise white once it
+    // returns. A drop that outlasts the hold is real and is followed as usual.
+    // Returns the new hold count; `ease` is applied only when not holding.
+    holdAgc(held, targetLow, low, hopSize, ease) {
+      const drop = targetLow < low - AGC_DROP_DB;
+      if (drop && held < Math.ceil(AGC_HOLD_MS / 1000 * this.sampleRate / hopSize)) return held + 1;
+      ease();
+      return drop ? held : 0;
     }
 
     state() {
@@ -233,10 +261,10 @@
       const {targetLow, targetHigh, observedHigh} = this.agcTargets(values);
       if (observedHigh > -140) {
         if (!this.agcReady) { this.agcLow = targetLow; this.agcHigh = targetHigh; this.agcReady = true; }
-        else {
+        else this.agcHeld = this.holdAgc(this.agcHeld, targetLow, this.agcLow, this.hopSize, () => {
           this.agcLow += (targetLow - this.agcLow) * .10;
           this.agcHigh += (targetHigh - this.agcHigh) * .10;
-        }
+        });
       }
 
       context.drawImage(canvas, 0, 0, canvas.width, canvas.height - 1,
@@ -270,10 +298,10 @@
       const {targetLow, targetHigh, observedHigh} = this.agcTargets(values);
       if (observedHigh > -140) {
         if (!this.liveAgcReady) { this.liveAgcLow = targetLow; this.liveAgcHigh = targetHigh; this.liveAgcReady = true; }
-        else {
+        else this.liveAgcHeld = this.holdAgc(this.liveAgcHeld, targetLow, this.liveAgcLow, this.liveHopSize, () => {
           this.liveAgcLow += (targetLow - this.liveAgcLow) * this.liveAgcEase;
           this.liveAgcHigh += (targetHigh - this.liveAgcHigh) * this.liveAgcEase;
-        }
+        });
       }
       this.liveValues = values;
     }
@@ -292,5 +320,5 @@
     }
   }
 
-  return {Waterfall, color};
+  return {Waterfall, color, AGC_DROP_DB, AGC_HOLD_MS};
 });
