@@ -496,6 +496,28 @@ login message counts down; `wifilt-pi-setup --keep-unlocked` cancels the lock,
 message says so. The same update can also be started from the web interface; that path
 locks again right away, see [section 1.8](#18-updating-from-the-web-pc-and-raspberry-pi).
 
+**The Pi's state on the OI3 display.** When the Pi runs WIFILT and local-trx, and local-trx
+drives an Open Interface III over TrxNet, the OI3 gets an extra menu item **RPI** (item 26)
+that shows the Pi's state on its LCD — handy when the web page does not answer and there is no
+screen on the Pi:
+
+```
+ B-62 Domov L | USB     signal bars, dBm, Wi-Fi network, lock
+ 192.168.1.23     H     the address to open in a browser, H = heartbeat
+```
+
+The first character is the signal strength, a mast when the Pi runs its setup access point
+(`AP` and the access point's name then follow), or `?` when the OI3 has heard nothing for 15 s;
+`ETH` means wired only. The last character is the lock: a **closed lock** = fslock locked, a
+**blinking open lock** = fslock installed but the Pi is unlocked, nothing = no fslock. Instead
+of the address the second row says `UPDATE 45%` during an update from the web, `RESTART`,
+`WIFILT STOP`, `RPI REBOOT` or `RPI OFFLINE` with a running clock, and every other two seconds
+`local-trx off` or `TRX not linked` when one of the two is missing. CW and RTTY sent by the OI3
+still show on the second row; the Pi's state comes back two seconds after the transmission.
+The item appears in the menu once WIFILT has seen local-trx; it needs OI3 firmware 20261112 or
+newer, which the update from the web brings by itself (below). Details: the OI3 README,
+section *RPI status*; the TrxNet topic `/wl-host`, INTEGRATION.md §7.4.
+
 ### 1.8 Updating from the web (PC and Raspberry Pi)
 
 An installed desktop build updates itself from its own web interface. The machine looks for a
@@ -509,7 +531,10 @@ then runs everything, with a progress bar, the list of steps and the log:
 
 1. download the archive for this computer and check its SHA256 against `latest.json`;
 2. keep a copy of the current installation (`/opt/wifilt.prev`; on Windows `.prev\` next to `wifilt.exe`);
-3. stop WIFILT, and local-trx if it was running, install, and start both again;
+3. stop WIFILT, and local-trx if it was running, install, and start both again — on a Raspberry
+   Pi where `pi-setup` flashed an **Open Interface III**, the OI3 also gets the firmware that
+   came in the archive, in between, when it is newer than the one last flashed (the page says so
+   beforehand: *OI3 firmware 20261031 → 20261112 comes with this update*);
 4. wait until the new version answers. If it does not, the copy from step 2 is put back and
    started, and the page says the update failed and the old version is running.
 
@@ -524,6 +549,13 @@ reboots, which the page waits through. The archive is downloaded and checked fir
 Pi unlocks and reboots, installs the update, checks that it answers, and **locks again
 straight away**, rebooting once more. It ends locked even when the update fails, and in that
 case the previous version is the one running. The whole run takes 3–5 minutes.
+
+**The OI3 firmware** is flashed over the USB port `pi-setup` recorded (`/dev/ttyUSB.cw` by
+default) with the tools its step 5 installed, so it takes about half a minute instead of the
+several minutes of compiling. If the port is missing or busy, or the upload fails, the update
+still finishes — the new WIFILT works with the old OI3 firmware, the OI3 keeps its firmware,
+the result and the log say what happened, and the next update tries again (or run
+`wifilt-pi-setup --only oi3`).
 
 What can update itself:
 

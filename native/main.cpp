@@ -56,6 +56,7 @@ extern void setup();
 extern void loop();
 extern fs::LittleFSFS cfgFS;
 extern void wifiltNativeStopRadioSessions();
+extern void wifiltNativeAnnounceDown(bool restarting);   // wifilt.ino, OI3 LCD
 
 namespace {
 
@@ -359,6 +360,9 @@ int main(int argc, char **argv) {
   }
 
   printf("\nWIFILT | shutting down\n");
+  // Tell the OI3 why it is about to stop hearing from us: stopped, updating,
+  // or the whole machine rebooting (host_status.h).
+  wifiltNativeAnnounceDown(false);
   // Log the radio sessions out. Ctrl+C followed by a quick manual start hits
   // the same ghost-session wedge as a restart: the new process rebinds the
   // fixed ports and keeps the dead session alive by answering its pings.

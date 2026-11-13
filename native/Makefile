@@ -197,6 +197,11 @@ VERSION ?= $(shell awk '/#define REV / { print $$3; exit }' $(SKETCH_DIR)/wifilt
 # tools/gh-pages.sh publishes from dist/.
 DIST    ?= dist$(if $(ADDONS_LINE),-addons)
 ASSETS  := $(DIST)/assets
+# OI3 firmware images (tools/build-oi3-hex.sh, run by tools/release.sh). When
+# present they ride along in the Linux archives as oi3/, and the web updater
+# flashes the OI3 of a Pi set up with one (wifilt-update.sh, phase "oi3").
+# Absent: the archives simply have no oi3/ and the updater leaves the OI3 alone.
+OI3_HEX ?= dist-oi3
 
 .PHONY: dist dist-assets dist-linux dist-windows dist-arm64
 
@@ -225,6 +230,7 @@ dist-linux: all dist-assets
 	cp -r $(ASSETS)           $(DIST)/wifilt-linux-x86_64/data
 	echo $(VERSION)         > $(DIST)/wifilt-linux-x86_64/VERSION
 	cp update/wifilt-update.sh update/update-channel.conf $(DIST)/wifilt-linux-x86_64/
+	@if [ -f $(OI3_HEX)/VERSION ]; then cp -r $(OI3_HEX) $(DIST)/wifilt-linux-x86_64/oi3; fi
 	@cd $(DIST) && tar czf wifilt-$(VERSION)-linux-x86_64.tar.gz wifilt-linux-x86_64
 	@rm -rf $(DIST)/wifilt-linux-x86_64
 
@@ -250,6 +256,7 @@ dist-arm64: arm64 dist-assets
 	cp pi/pi-setup.sh      $(DIST)/wifilt-linux-arm64/
 	mkdir -p               $(DIST)/wifilt-linux-arm64/pi
 	cp -r pi/lib pi/files pi/pi-bootstrap.sh $(DIST)/wifilt-linux-arm64/pi/
+	@if [ -f $(OI3_HEX)/VERSION ]; then cp -r $(OI3_HEX) $(DIST)/wifilt-linux-arm64/oi3; fi
 	@cd $(DIST) && tar czf wifilt-$(VERSION)-linux-arm64.tar.gz wifilt-linux-arm64
 	@rm -rf $(DIST)/wifilt-linux-arm64
 

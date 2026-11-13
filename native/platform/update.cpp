@@ -219,6 +219,41 @@ std::string nativeUpdateInfoJson() {
   return out;
 }
 
+bool nativeRootIsOverlay() { return rootIsOverlay(); }
+
+bool nativePiLockable() {
+#ifdef _WIN32
+  return false;
+#else
+  // pi-setup installs the fslock command only when the operator chose the
+  // power-loss protection (native/pi/lib/fslock.sh).
+  return fileExists(kPiConf) && access("/usr/local/sbin/fslock", X_OK) == 0;
+#endif
+}
+
+bool nativeUpdaterBusy(int *pct) {
+  std::string status = nativeUpdateStatusJson();
+  bool busy = status.find("\"state\":\"running\"") != std::string::npos ||
+              status.find("\"state\":\"offline\"") != std::string::npos;
+  if (!busy) return false;
+  // A run that died without writing its last word must not report "updating"
+  // for ever: the updater rewrites the file at least once a second while it
+  // works, and a locked Pi's reboots take a few minutes.
+  size_t t = status.find("\"ts\":");
+  if (t != std::string::npos) {
+    long long ts = atoll(status.c_str() + t + 5);
+    long long now = (long long)time(nullptr);
+    if (ts > 0 && now - ts > 600) return false;
+  }
+  if (pct) {
+    size_t p = status.find("\"pct\":");
+    *pct = p != std::string::npos ? atoi(status.c_str() + p + 6) : 0;
+    if (*pct < 0) *pct = 0;
+    if (*pct > 100) *pct = 100;
+  }
+  return true;
+}
+
 std::string nativeUpdateRequest(const char *action, bool dry, std::string *idOut) {
   if (strcmp(nativeUpdateMode(), "manual") == 0) return "this installation cannot update itself";
   if (strcmp(action, "check") != 0 && strcmp(action, "update") != 0) return "unknown action";

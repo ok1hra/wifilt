@@ -17,7 +17,7 @@ build-arm64/wifilt.ino.o: ../wifilt.ino arduino/Arduino.h \
  ../aud1_ws_parser.h ../js8_session.h ../rtty_stream.h ../jtty_stream.h \
  ../rkey_net.h ../rkey_server.h ../rkey_proto.h ../web_pacer.h \
  ../watch_hub.h ../trx_power.h ../addon_hooks.h platform/update.h \
- ../icom_lan_discovery.h
+ ../host_status.h ../icom_lan_discovery.h
 arduino/Arduino.h:
 arduino/esp32-hal.h:
 arduino/esp32-hal-log.h:
@@ -82,4 +82,5 @@ platform/freertos/task.h:
 ../trx_power.h:
 ../addon_hooks.h:
 platform/update.h:
+../host_status.h:
 ../icom_lan_discovery.h:

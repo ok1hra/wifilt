@@ -783,10 +783,36 @@ ext_hook() {
   "ext_$1"
 }
 
+# build_oi3_hex  -- native/dist-oi3 for the Linux archives (once per run): the
+# OI3 firmware the web updater flashes (tools/build-oi3-hex.sh). A missing
+# OI3 checkout or a failed build is not fatal: the archives then carry no
+# oi3/ and the updater leaves the OI3 alone.
+OI3_HEX_DONE=false
+build_oi3_hex() {
+  $OI3_HEX_DONE && return 0
+  OI3_HEX_DONE=true
+  local out="${ROOT_DIR}/native/dist-oi3" log="${ROOT_DIR}/native/dist-oi3.log"
+  rm -rf "$out"
+  if [[ ! -f "${OI3_DIR:-$HOME/Arduino/hra/ok1hra/oi3}/oi3.ino" ]]; then
+    warn "  zdroj OI3 nenalezen (OI3_DIR) -- balíčky bez firmwaru OI3"
+    return 0
+  fi
+  if "${ROOT_DIR}/tools/build-oi3-hex.sh" "$out" >"$log" 2>&1; then
+    info "  firmware OI3 $(cat "$out/VERSION") ($(cat "$out/SOURCE")) -> oi3/ v linuxových balíčcích"
+    grep -- '-dirty' "$out/SOURCE" >/dev/null && warn "  OI3 má necommitnuté změny"
+    rm -f "$log"
+  else
+    rm -rf "$out"
+    warn "  build OI3 selhal (viz $log) -- balíčky bez firmwaru OI3"
+  fi
+  return 0
+}
+
 # dist_build DIR [MAKE-VARIABLE...]  -- the archives of REV into DIR: stale
 # revisions out, make, local-trx in (when wanted), SHA256SUMS last.
 dist_build() {
   local dir="$1"; shift
+  build_oi3_hex
   # Archives of other revisions go before make runs: SHA256SUMS would otherwise
   # describe releases that are not published. native/dist* is in .gitignore.
   if [[ -d "$dir" ]]; then

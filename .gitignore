@@ -12,6 +12,8 @@
 /native/dist-addons/
 /native/build-arm64/.addons
 /native/dist/
+/native/dist-oi3/
+/native/dist-oi3.log
 /native/_run/
 
 # local-trx build output -- same reasoning as /native/build/ above.

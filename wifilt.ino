@@ -142,7 +142,7 @@ volatile bool cwIpSendPending = false;
 #ifndef LOOP_WARN_MS
   #define LOOP_WARN_MS 200
 #endif
-#define REV 20261112
+#define REV 20261113
 #define WIFI
 #define FSK_KEYING  // RTTY by keying the FSK + PTT outputs (was UDP_TO_FSK, from when a UDP port fed it)
 #define WDT         // watchdog timer
@@ -465,6 +465,7 @@ char CwMsg[37] = "";
 #include "addon_hooks.h"        // optional add-ons from addons/ (see the end of this file)
 #if defined(WIFILT_NATIVE)
 #include "update.h"             // native: update from the web (native/update/, SOFTWARE.md)
+#include "host_status.h"        // native: the Pi's state on the OI3 LCD (/wl-host)
 #endif
 // See radio_transport.h's own comment on radioLanLocalControlPort(): 0 means
 // "use the real default (50001)", exactly today's behavior on the real
@@ -8740,6 +8741,9 @@ void printMode(void){
 //-------------------------------------------------------------------------------------------------------
 // TrxNet loop — replaces Mqtt(). Handles net.loop() and WiFi reconnect detection.
 // net.begin() is re-called on WiFi reconnect to re-broadcast discovery probe.
+#if defined(WIFILT_NATIVE)
+void hostStatusTick();   // /wl-host, below
+#endif
 void TrxNetLoop(){
   if (APmode || TRXNET_ID == 0x00) return;
   if ((long)(millis() - webQuietUntil) < 0) return;
@@ -8762,8 +8766,132 @@ void TrxNetLoop(){
     paPublishPending();     // after loop(): the peer table is fresh
     rttyStreamDrain(rttyStream, millis(), 4, rttyStreamPublish, nullptr);
     jttyStreamDrain(jttyStream, millis(), 4, rttyStreamPublish, nullptr);
+#if defined(WIFILT_NATIVE)
+    hostStatusTick();
+#endif
   }
 }
+
+#if defined(WIFILT_NATIVE)
+// ---- /wl-host: this Raspberry Pi's state on the OI3 LCD (host_status.h) -------
+//
+// Only from a Pi, only to real OI3s, and only once local-trx has shown up on
+// TrxNet: the OI3's "RPI" menu is for the headless Pi that runs wifilt and
+// local-trx, with the OI3 as local-trx's CAT/CW/PTT. "Once" is sticky -- when
+// local-trx stops later, the OI3 keeps getting the state with HOST_F_LTX clear
+// and says so, instead of declaring the whole Pi offline.
+
+static HostStatusSched hostStatusSched = {};
+static bool            hostStatusLtxSeen = false;
+static uint32_t        hostStatusCollectMs = 0;
+
+// nativeAddressIsOwn() leaves loopback out of its interface list; local-trx on
+// this machine may well be heard from 127.0.0.1.
+static bool hostPeerIsOwn(const TrxPeer* p) {
+  return p->ip[0] == 127 || nativeAddressIsOwn((uint32_t)p->ip);
+}
+
+static bool hostLtxPresent() {
+  int count = net.peerCount();
+  for (int i = 0; i < count; i++) {
+    const TrxPeer* p = net.peer(i);
+    if (p && p->active && strncmp(p->name, "LTX.", 4) == 0 && hostPeerIsOwn(p)) return true;
+  }
+  return false;
+}
+
+// wifilt's own radio slot to local-trx is up (the SETUP LOCAL-TRX prefill).
+static bool hostTrxLinked() {
+  for (uint8_t slot = 0; slot < 3; slot++) {
+    if (!radioSlots[slot].enabled || radioSlots[slot].transport != RADIO_LAN
+        || !radioSlots[slot].localTrx) continue;
+    IcomLanClient* client = radioLanClient(slot);
+    if (client && client->connected()) return true;
+  }
+  return false;
+}
+
+static void hostStatusCollect(HostStatus& s, uint8_t state) {
+  memset(&s, 0, sizeof(s));
+  NativeHostNet hn = nativeHostNet();
+  int pct = 0;
+  bool updating = nativeUpdaterBusy(&pct);
+  s.state = (state == HOST_RUN && updating) ? (uint8_t)HOST_UPDATE : state;
+  s.pct = updating ? (uint8_t)pct : HOST_STATUS_PCT_NONE;
+  if (nativeRootIsOverlay()) s.flags |= HOST_F_LOCKED;
+  if (nativePiLockable())    s.flags |= HOST_F_LOCKABLE;
+  if (hn.wifiUp)             s.flags |= HOST_F_WIFI;
+  if (hn.wifiUp && hn.ap)    s.flags |= HOST_F_AP;
+  if (hn.ip && !hn.ipFromWifi) s.flags |= HOST_F_IP_ETH;
+  if (hostLtxPresent())      s.flags |= HOST_F_LTX;
+  if (hostTrxLinked())       s.flags |= HOST_F_TRXLINK;
+  s.rssi = hostStatusRssi(hn.rssi);
+  memcpy(s.ip, &hn.ip, 4);   // network byte order = a.b.c.d
+  snprintf(s.ssid, sizeof(s.ssid), "%s", hn.ssid);
+}
+
+// To every real OI3: an "OI3.*" on another address. local-trx's FSK stand-in
+// carries the same kind of name but this machine's address.
+static void hostStatusSend(const HostStatus& s) {
+  uint8_t buf[HOST_STATUS_MAX];
+  size_t len = hostStatusEncode(s, buf);
+  int count = net.peerCount();
+  for (int i = 0; i < count; i++) {
+    const TrxPeer* p = net.peer(i);
+    if (!p || !p->active || strncmp(p->name, "OI3.", 4) != 0 || hostPeerIsOwn(p)) continue;
+    net.publishTo(p->name, HOST_STATUS_TOPIC, buf, len, TRX_NON);
+  }
+}
+
+void hostStatusTick() {
+  if (strcmp(nativeHostLabel(), "RPI") != 0) return;
+  // Reading the interfaces and the updater's status file once a second is
+  // plenty for a 5 s period and a 1 s change gap.
+  uint32_t now = millis();
+  if (hostStatusCollectMs != 0 && now - hostStatusCollectMs < 1000) return;
+  hostStatusCollectMs = now;
+  if (!hostStatusLtxSeen) {
+    if (!hostLtxPresent()) return;
+    hostStatusLtxSeen = true;
+    Serial.println("TRXNET| local-trx seen, /wl-host to the OI3 on");
+  }
+  HostStatus s;
+  hostStatusCollect(s, HOST_RUN);
+  if (hostStatusDue(hostStatusSched, s, now)) hostStatusSend(s);
+}
+
+// Why this process is about to end, as the OI3 should show it.
+static uint8_t hostDownState(bool restarting) {
+  if (restarting) return HOST_RESTART;
+  if (nativeUpdaterBusy(nullptr)) return HOST_UPDATE;
+#if defined(__linux__)
+  // systemd says "stopping" while the whole machine shuts down or reboots;
+  // a plain "systemctl stop wifilt" leaves it "running".
+  FILE* pipe = popen("systemctl is-system-running 2>/dev/null", "r");
+  if (pipe) {
+    char word[32] = "";
+    bool got = fgets(word, sizeof(word), pipe) != nullptr;
+    pclose(pipe);
+    if (got && strncmp(word, "stopping", 8) == 0) return HOST_REBOOT;
+  }
+#endif
+  return HOST_STOP;
+}
+
+// Called by the native platform layer: ESP.restart() (restarting = true) and
+// the SIGTERM/Ctrl+C shutdown in native/main.cpp. Twice, because NON may be
+// lost and there is no later chance.
+void wifiltNativeAnnounceDown(bool restarting) {
+  if (!hostStatusLtxSeen || !trxNetEnabled) return;
+  if (strcmp(nativeHostLabel(), "RPI") != 0) return;
+  HostStatus s;
+  hostStatusCollect(s, hostDownState(restarting));
+  Serial.printf("TRXNET| /wl-host going down, state %u\n", (unsigned)s.state);
+  hostStatusSend(s);
+  delay(50);
+  hostStatusSend(s);
+}
+#endif
 
 // One RTTY-stream packet to one subscriber. NON -- see rtty_stream.h for why a
 // retransmitted stream would endanger the FSK keyer's own /s-cw.

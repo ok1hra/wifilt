@@ -16,8 +16,13 @@
 #
 # Format (stable; the updater ignores unknown keys):
 #   { "rev": "20261110",
+#     "oi3": { "fw": "20261112" },
 #     "assets": { "linux-x86_64": { "name": "...", "size": 123, "sha256": "..." },
 #                 "linux-arm64":  { ... }, "windows-x64": { ... } } }
+# "oi3" is the OI3 firmware the Linux archives carry (oi3/VERSION, see
+# tools/build-oi3-hex.sh), read from the archives themselves so the page can
+# say before the download that the update brings the OI3 new firmware. Left
+# out when no archive carries one.
 set -euo pipefail
 
 if [[ $# -ne 3 ]]; then
@@ -28,6 +33,7 @@ dist="$1" rev="$2" out="$3"
 [[ "$rev" =~ ^[0-9]{8}$ ]] || { echo "ERROR: REV '$rev' is not YYYYMMDD" >&2; exit 1; }
 
 entries=()
+oi3_fw=""
 for plat in linux-x86_64 linux-arm64 windows-x64; do
   ext=tar.gz
   [[ "$plat" == windows-* ]] && ext=zip
@@ -37,6 +43,10 @@ for plat in linux-x86_64 linux-arm64 windows-x64; do
   size="$(stat -c%s "$file")"
   sum="$(sha256sum "$file" | awk '{ print $1 }')"
   entries+=("    \"${plat}\": { \"name\": \"${name}\", \"size\": ${size}, \"sha256\": \"${sum}\" }")
+  if [[ -z "$oi3_fw" && "$ext" == tar.gz ]]; then
+    oi3_fw="$(tar -xzOf "$file" --wildcards '*/oi3/VERSION' 2>/dev/null | tr -dc '0-9' || true)"
+    [[ "$oi3_fw" =~ ^[0-9]{8}$ ]] || oi3_fw=""
+  fi
 done
 
 if [[ ${#entries[@]} -eq 0 ]]; then
@@ -48,6 +58,7 @@ tmp="${out}.tmp"
 {
   echo "{"
   echo "  \"rev\": \"${rev}\","
+  [[ -n "$oi3_fw" ]] && echo "  \"oi3\": { \"fw\": \"${oi3_fw}\" },"
   echo "  \"assets\": {"
   for i in "${!entries[@]}"; do
     if (( i + 1 < ${#entries[@]} )); then echo "${entries[$i]},"; else echo "${entries[$i]}"; fi
@@ -56,4 +67,4 @@ tmp="${out}.tmp"
   echo "}"
 } > "$tmp"
 mv "$tmp" "$out"
-echo "==> Update manifest: $(basename "$out") (${#entries[@]} platform(s), REV ${rev})"
+echo "==> Update manifest: $(basename "$out") (${#entries[@]} platform(s), REV ${rev}${oi3_fw:+, OI3 ${oi3_fw}})"

@@ -1,7 +1,10 @@
 #include "WiFi.h"
+#include "platform_caps.h"   // NativeHostNet, nativeHostLabel()
 
+#include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <algorithm>
@@ -17,9 +20,11 @@
   #include <ifaddrs.h>
   #include <net/if.h>
   #ifdef __linux__
+    #include <dirent.h>
     #include <linux/if_packet.h>
     #include <linux/wireless.h>
     #include <sys/ioctl.h>
+    #include <sys/stat.h>
   #elif defined(__APPLE__)
     #include <net/if_dl.h>
   #endif
@@ -954,6 +959,10 @@ int32_t WiFiClass::channel() { return 0; }
 // is down or not associated. -999 = nothing to show.
 
 static const char *hostLabelFromModel() {
+  // Testing only: lets a PC play the Raspberry Pi for the OI3 status topic
+  // (host_status.h), which wifilt sends from a Pi alone.
+  const char *forced = getenv("WIFILT_HOST_LABEL");
+  if (forced && (strcmp(forced, "RPI") == 0 || strcmp(forced, "PC") == 0)) return forced;
 #if defined(__linux__)
   FILE *file = fopen("/proc/device-tree/model", "r");
   if (file) {
@@ -1040,6 +1049,212 @@ int nativeHostWifiRssi() {
   return cached;
 #else
   return -999;   // Windows/macOS: not wired up; the topbar then shows nothing
+#endif
+}
+
+// --- the host's network, for the OI3 status line ------------------------------
+//
+// What an operator standing at the OI3 needs in order to reach this machine:
+// which WiFi it is on (or the hotspot it runs), how strong, and the address to
+// type into a browser. Unlike nativeHostWifiRssi() an AP-mode interface counts
+// here -- a Pi that fell back to its setup hotspot is exactly the case where
+// the OI3 display is the only way to learn the network name.
+
+#if defined(__linux__)
+// dBm from /proc/net/wireless for one interface, or -999.
+static int wirelessLevel(const char *ifname) {
+  FILE *file = fopen("/proc/net/wireless", "r");
+  if (!file) return -999;
+  char line[256];
+  int lineNo = 0, rssi = -999;
+  while (fgets(line, sizeof(line), file)) {
+    if (++lineNo <= 2) continue;
+    char name[IFNAMSIZ] = "";
+    unsigned status = 0;
+    float link = 0, level = 0;
+    if (sscanf(line, " %15[^:]: %x %f %f", name, &status, &link, &level) != 4) continue;
+    if (strcmp(name, ifname) != 0) continue;
+    if (level < 0 && level >= -120) rssi = (int)(level - 0.5f);
+    break;
+  }
+  fclose(file);
+  return rssi;
+}
+
+// SIOCGIWMODE, or -1 when the kernel does not answer.
+static int wirelessMode(const char *ifname) {
+  int sock = socket(AF_INET, SOCK_DGRAM, 0);
+  if (sock < 0) return -1;
+  struct iwreq request;
+  memset(&request, 0, sizeof(request));
+  strncpy(request.ifr_name, ifname, IFNAMSIZ - 1);
+  int mode = ioctl(sock, SIOCGIWMODE, &request) == 0 ? (int)request.u.mode : -1;
+  close(sock);
+  return mode;
+}
+
+// The SSID a client interface is associated with (SIOCGIWESSID). cfg80211
+// answers this for managed mode only.
+static bool wirelessEssid(const char *ifname, char *out, size_t outSize) {
+  out[0] = '\0';
+  int sock = socket(AF_INET, SOCK_DGRAM, 0);
+  if (sock < 0) return false;
+  char essid[IW_ESSID_MAX_SIZE + 1];
+  memset(essid, 0, sizeof(essid));
+  struct iwreq request;
+  memset(&request, 0, sizeof(request));
+  strncpy(request.ifr_name, ifname, IFNAMSIZ - 1);
+  request.u.essid.pointer = essid;
+  request.u.essid.length = IW_ESSID_MAX_SIZE;
+  bool ok = ioctl(sock, SIOCGIWESSID, &request) == 0;
+  close(sock);
+  if (!ok) return false;
+  size_t n = request.u.essid.length;
+  if (n > IW_ESSID_MAX_SIZE) n = IW_ESSID_MAX_SIZE;
+  if (n >= outSize) n = outSize - 1;
+  memcpy(out, essid, n);
+  out[n] = '\0';
+  return n > 0;
+}
+
+// The SSID of a hotspot this machine runs. Wireless extensions do not report
+// it in AP mode, so ask iw (installed by pi-setup); failing that, work it out
+// the way native/pi/files/wifi-fallback names its access point.
+static void apSsid(const char *ifname, char *out, size_t outSize) {
+  out[0] = '\0';
+  char command[64];
+  snprintf(command, sizeof(command), "iw dev %s info 2>/dev/null", ifname);
+  FILE *pipe = popen(command, "r");
+  if (pipe) {
+    char line[160];
+    while (fgets(line, sizeof(line), pipe)) {
+      const char *p = line;
+      while (*p == ' ' || *p == '\t') p++;
+      if (strncmp(p, "ssid ", 5) != 0) continue;
+      snprintf(out, outSize, "%s", p + 5);
+      out[strcspn(out, "\r\n")] = '\0';
+      break;
+    }
+    pclose(pipe);
+  }
+  if (out[0]) return;
+  FILE *conf = fopen("/etc/default/wifi-fallback", "r");
+  if (conf) {
+    char line[160];
+    while (fgets(line, sizeof(line), conf)) {
+      if (strncmp(line, "AP_SSID=", 8) != 0) continue;
+      char *v = line + 8;
+      v[strcspn(v, "\r\n")] = '\0';
+      size_t len = strlen(v);
+      if (len >= 2 && (v[0] == '"' || v[0] == '\'') && v[len - 1] == v[0]) {
+        v[len - 1] = '\0';
+        v++;
+      }
+      snprintf(out, outSize, "%.32s", v);
+      break;
+    }
+    fclose(conf);
+  }
+  if (out[0]) return;
+  char path[96], mac[32] = "";
+  snprintf(path, sizeof(path), "/sys/class/net/%s/address", ifname);
+  FILE *file = fopen(path, "r");
+  if (file) {
+    if (!fgets(mac, sizeof(mac), file)) mac[0] = '\0';
+    fclose(file);
+  }
+  char hex[16] = "";
+  size_t h = 0;
+  for (const char *p = mac; *p && h < sizeof(hex) - 1; p++)
+    if (isxdigit((unsigned char)*p)) hex[h++] = (char)toupper((unsigned char)*p);
+  hex[h] = '\0';
+  snprintf(out, outSize, "WIFILT-setup-%s", h >= 4 ? hex + h - 4 : "0000");
+}
+
+static uint32_t interfaceAddress(const char *ifname) {
+  struct ifaddrs *interfaces = nullptr;
+  if (getifaddrs(&interfaces) != 0) return 0;
+  uint32_t address = 0;
+  for (struct ifaddrs *entry = interfaces; entry; entry = entry->ifa_next) {
+    if (!entry->ifa_addr || entry->ifa_addr->sa_family != AF_INET) continue;
+    if (strcmp(entry->ifa_name, ifname) != 0) continue;
+    address = ((struct sockaddr_in *)entry->ifa_addr)->sin_addr.s_addr;
+    break;
+  }
+  freeifaddrs(interfaces);
+  return address;
+}
+
+static NativeHostNet readHostNet() {
+  NativeHostNet net;
+  memset(&net, 0, sizeof(net));
+  net.rssi = -999;
+  DIR *dir = opendir("/sys/class/net");
+  if (dir) {
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != nullptr) {
+      const char *name = entry->d_name;
+      if (name[0] == '.' || strlen(name) >= IFNAMSIZ) continue;
+      char path[96];
+      struct stat st;
+      snprintf(path, sizeof(path), "/sys/class/net/%s/wireless", name);
+      if (stat(path, &st) != 0) continue;
+      if (!interfaceIsUp(name)) continue;
+      int mode = wirelessMode(name);
+      if (mode != IW_MODE_INFRA && mode != IW_MODE_MASTER) continue;
+      uint32_t address = interfaceAddress(name);
+      if (!address) continue;
+      net.wifiUp = true;
+      net.ap = mode == IW_MODE_MASTER;
+      net.ip = address;
+      net.ipFromWifi = true;
+      if (net.ap) {
+        // popen is the slow part; the hotspot's name does not change while it runs.
+        static char cachedIf[IFNAMSIZ] = "";
+        static char cachedSsid[33] = "";
+        static uint64_t cachedAt = 0;
+        uint64_t now = steadyMs();
+        if (strcmp(cachedIf, name) != 0 || cachedAt == 0 || now - cachedAt >= 30000) {
+          apSsid(name, cachedSsid, sizeof(cachedSsid));
+          snprintf(cachedIf, sizeof(cachedIf), "%s", name);
+          cachedAt = now;
+        }
+        snprintf(net.ssid, sizeof(net.ssid), "%s", cachedSsid);
+      } else {
+        net.rssi = wirelessLevel(name);
+        wirelessEssid(name, net.ssid, sizeof(net.ssid));
+      }
+      break;
+    }
+    closedir(dir);
+  }
+  if (!net.ipFromWifi) {
+    IPAddress primary;
+    if (primaryInterface(&primary, nullptr)) net.ip = (uint32_t)primary;
+  }
+  return net;
+}
+#endif
+
+NativeHostNet nativeHostNet() {
+#if defined(__linux__)
+  static std::mutex lock;
+  static uint64_t stampMs = 0;
+  static NativeHostNet cached;
+  std::lock_guard<std::mutex> guard(lock);
+  uint64_t now = steadyMs();
+  if (stampMs == 0 || now - stampMs >= 2000) {
+    cached = readHostNet();
+    stampMs = now;
+  }
+  return cached;
+#else
+  NativeHostNet net;
+  memset(&net, 0, sizeof(net));
+  net.rssi = -999;
+  IPAddress primary;
+  if (primaryInterface(&primary, nullptr)) net.ip = (uint32_t)primary;
+  return net;
 #endif
 }
 

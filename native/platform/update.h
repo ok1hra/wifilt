@@ -24,6 +24,14 @@ const char *nativeUpdateMode();
 // check is the updater's check.json verbatim (newest REV, asset, error).
 std::string nativeUpdateInfoJson();
 
+// For the OI3 status line (host_status.h): the root filesystem is the fslock
+// overlay; this Pi has fslock at all (so "unlocked" is worth a warning); an
+// update is under way (running, or offline between stop and start), with its
+// overall percentage.
+bool nativeRootIsOverlay();
+bool nativePiLockable();
+bool nativeUpdaterBusy(int *pct);
+
 // The updater's status.json verbatim, or {"state":"idle"} when there is none.
 std::string nativeUpdateStatusJson();
 

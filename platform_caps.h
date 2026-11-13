@@ -64,6 +64,18 @@
   // whose figure it is -- "RPI" on a Raspberry Pi, "PC" elsewhere.
   int         nativeHostWifiRssi();
   const char *nativeHostLabel();
+  // The host's network as the OI3 status line shows it (host_status.h): the
+  // first WiFi interface that is up with an address, client or hotspot, and
+  // the address to browse to (that interface's, else the first one up).
+  struct NativeHostNet {
+    bool     wifiUp;       // a WiFi interface is up with an address
+    bool     ap;           // ...and it is a hotspot this machine runs
+    bool     ipFromWifi;   // ip below is that interface's (false = wired/other)
+    int      rssi;         // client link dBm, -999 = none (always in AP mode)
+    uint32_t ip;           // IPv4, network byte order, 0 = none
+    char     ssid[33];     // associated network, or the hotspot's own name
+  };
+  NativeHostNet nativeHostNet();
   #define PLATFORM_PORT(requested)        nativeActualPort(requested)
   #define PLATFORM_LISTENER_OK(requested) nativeListenerOk(requested)
   #define PLATFORM_LISTENER_ERROR(requested) nativeListenerError(requested)

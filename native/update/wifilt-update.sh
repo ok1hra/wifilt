@@ -183,6 +183,7 @@ asset_url() {  # asset_url NAME
 
 # latest.json is written by tools/update-manifest.sh, one asset per line.
 manifest_rev()   { sed -n 's/.*"rev": *"\([0-9]\{8\}\)".*/\1/p' "$1" | head -n1; }
+manifest_oi3()   { sed -n 's/.*"oi3": *{ *"fw": *"\([0-9]\{8\}\)".*/\1/p' "$1" | head -n1; }
 manifest_field() {  # manifest_field FILE PLATFORM name|size|sha256
   local line
   line="$(grep -F "\"$2\":" "$1" | head -n1)"
@@ -203,11 +204,11 @@ ST_STARTED=0 ST_MODE=""
 set_phases() {
   case "$1" in
     pi-locked)
-      PHASES=(check download verify unlock backup stop install start health relock "done")
-      WEIGHTS=(2 30 6 10 3 3 15 4 12 15 0) ;;
+      PHASES=(check download verify unlock backup stop install oi3 start health relock "done")
+      WEIGHTS=(2 25 6 10 3 3 15 5 4 12 15 0) ;;
     *)
-      PHASES=(check download verify backup stop install start health "done")
-      WEIGHTS=(2 40 8 5 5 20 5 15 0) ;;
+      PHASES=(check download verify backup stop install oi3 start health "done")
+      WEIGHTS=(2 35 8 5 5 20 5 5 15 0) ;;
   esac
 }
 
@@ -286,13 +287,116 @@ do_check() {
   else
     err="$(tail -n1 "$DL_DIR/check.err" 2>/dev/null)"; err="${err:-download failed}"
   fi
-  local out="$CHECK.tmp"
-  printf '{"rev":"%s","installed":"%s","platform":"%s","asset":%s,"size":%d,"sha256":"%s","channel":"%s","tokenNeeded":%s,"checkedAt":%d,"error":%s}\n' \
+  local out="$CHECK.tmp" oi3="null"
+  # The page shows whether the update also brings the OI3 new firmware. Only
+  # this root program can read pi-setup's answers (mode 600).
+  if oi3_configured; then
+    oi3="$(printf '{"have":true,"board":"%s","installed":"%s","latest":"%s"}' \
+      "$OI3_REV_CONF" "$(oi3_installed_fw)" "$([[ $rc -eq 0 ]] && manifest_oi3 "$tmp")")"
+  fi
+  printf '{"rev":"%s","installed":"%s","platform":"%s","asset":%s,"size":%d,"sha256":"%s","channel":"%s","tokenNeeded":%s,"oi3":%s,"checkedAt":%d,"error":%s}\n' \
     "$rev" "$(installed_rev)" "$(platform_id)" "$(json_str "$name")" "${size:-0}" "$sum" \
     "$CH_KIND" "$([[ "$CH_TOKEN" == required ]] && echo true || echo false)" \
-    "$(now)" "$(json_str "$err")" > "$out"
+    "$oi3" "$(now)" "$(json_str "$err")" > "$out"
   chmod 644 "$out"; mv -f "$out" "$CHECK"
   [[ -z "$err" ]]
+}
+
+# ------------------------------------------------------------------- OI3 ---
+# A Raspberry Pi set up by pi-setup with "Open Interface III firmware" has the
+# OI3 on a USB serial port. The arm64 package carries prebuilt images of its
+# firmware (oi3/, made by tools/build-oi3-hex.sh), so an update brings the
+# board up to date in the same run -- without the toolchain and the minutes of
+# compiling that pi-setup step 5 needs. Flashed between install and start,
+# while wifilt and local-trx are stopped and the port is free. Never fatal: the
+# new wifilt works with the old OI3 firmware, and the board's bootloader
+# survives a failed upload, so the next update simply tries again.
+
+PI_CONF="${WIFILT_PI_CONF:-/etc/wifilt-pi/setup.conf}"
+OI3_STATE="${WIFILT_OI3_STATE:-/var/lib/wifilt-pi/oi3-flashed}"
+OI3_REV_CONF="" OI3_PORT_CONF="" OI3_WARN=""
+
+# One KEY=value line of pi-setup's answers (written with printf %q; the values
+# read here are plain words and paths). Parsed rather than sourced.
+conf_value() {
+  sed -n "s/^$2=//p" "$1" 2>/dev/null | tail -n1
+}
+
+# true when pi-setup flashed an OI3 here; sets OI3_REV_CONF / OI3_PORT_CONF
+oi3_configured() {
+  [[ -r "$PI_CONF" ]] || return 1
+  [[ "$(conf_value "$PI_CONF" HAVE_OI3)" == 1 ]] || return 1
+  OI3_REV_CONF="$(conf_value "$PI_CONF" OI3_REV)"
+  OI3_PORT_CONF="$(conf_value "$PI_CONF" OI3_PORT)"
+  [[ "$OI3_REV_CONF" == 3_1415 || "$OI3_REV_CONF" == 3_141 ]] || return 1
+  [[ -n "$OI3_PORT_CONF" ]]
+}
+
+# the firmware REV last flashed from this Pi (4th field of pi-setup's record)
+oi3_installed_fw() {
+  local fw=""
+  [[ -r "$OI3_STATE" ]] && read -r _ _ _ fw < "$OI3_STATE"
+  printf '%s' "$fw" | tr -dc '0-9'
+}
+
+oi3_skip() {
+  log "[oi3] $1"
+  progress 100 "$1"
+}
+
+oi3_warn() {
+  OI3_WARN="$1"
+  log "WARNING: $1"
+  progress 100 "$1"
+}
+
+oi3_flash() {  # oi3_flash PKG -- always returns 0
+  local pkg="$1" new inst hex port dev u rc=0
+  phase oi3 "checking the OI3 firmware"
+  if ! oi3_configured; then oi3_skip "no OI3 set up on this machine"; return 0; fi
+  new="$(tr -dc '0-9' < "$pkg/oi3/VERSION" 2>/dev/null)"
+  hex="$pkg/oi3/PCB_${OI3_REV_CONF}_oi3.ino.hex"
+  if [[ -z "$new" || ! -s "$hex" ]]; then
+    oi3_skip "the package carries no OI3 firmware for board ${OI3_REV_CONF//_/.}"; return 0
+  fi
+  inst="$(oi3_installed_fw)"
+  if [[ -n "$inst" && "$new" -le "$inst" ]]; then
+    oi3_skip "OI3 firmware $inst is up to date"; return 0
+  fi
+  port="$OI3_PORT_CONF"
+  log "OI3 firmware ${inst:-unknown} -> $new (board ${OI3_REV_CONF//_/.}, $port)"
+  if [[ $DRY_RUN -eq 1 ]]; then
+    progress 50 "dry run: would flash OI3 firmware $new to $port"
+    sleep 2
+    progress 100 "dry run: OI3 not flashed"
+    return 0
+  fi
+  [[ -e "$port" ]] || { oi3_warn "$port does not exist -- the OI3 keeps its firmware ${inst:-}"; return 0; }
+  dev="$(readlink -f "$port")"
+  if fuser "$dev" >/dev/null 2>&1; then
+    oi3_warn "$port is used by another program -- the OI3 keeps its firmware ${inst:-}"; return 0
+  fi
+  progress 20 "flashing OI3 firmware $new to $port (about half a minute)"
+  u="$(run_user)"
+  if command -v arduino-cli >/dev/null 2>&1 && [[ -n "$u" ]]; then
+    # As the station user: pi-setup installed the arduino:avr core in its ~/.arduino15.
+    runuser -u "$u" -- arduino-cli upload -b arduino:avr:mega -p "$port" --input-file "$hex" \
+      >> "$LOG" 2>&1 || rc=$?
+  elif command -v avrdude >/dev/null 2>&1; then
+    avrdude -p atmega2560 -c wiring -P "$port" -b 115200 -D -U "flash:w:$hex:i" >> "$LOG" 2>&1 || rc=$?
+  else
+    oi3_warn "neither arduino-cli nor avrdude is installed -- the OI3 keeps its firmware ${inst:-}"
+    return 0
+  fi
+  if [[ $rc -ne 0 ]]; then
+    oi3_warn "flashing the OI3 failed (exit $rc) -- it keeps its firmware ${inst:-}; replug its USB and update again, or run pi-setup step 5"
+    return 0
+  fi
+  install -d -m 755 "$(dirname "$OI3_STATE")"
+  echo "pkg-$ST_TO - $OI3_REV_CONF $new" > "$OI3_STATE"
+  log "OI3 firmware $new flashed to $port"
+  progress 100 "OI3 firmware $new flashed"
+  return 0
 }
 
 # ---------------------------------------------------------------- update ---
@@ -454,6 +558,8 @@ install_package() {
     fi
   fi
 
+  oi3_flash "$pkg"
+
   phase start "starting ${WAS_ACTIVE[*]:-nothing (no service was running)}"
   if [[ $DRY_RUN -eq 0 ]]; then
     for s in "${WAS_ACTIVE[@]}"; do systemctl start "$s" || log "start $s failed"; done
@@ -483,7 +589,7 @@ install_package() {
 
 finish_ok() {
   ST_STATE="done"
-  phase "done" "$([[ $DRY_RUN -eq 1 ]] && echo "dry run finished, nothing was changed" || echo "updated to REV $ST_TO")"
+  phase "done" "$([[ $DRY_RUN -eq 1 ]] && echo "dry run finished, nothing was changed" || echo "updated to REV $ST_TO")${OI3_WARN:+ -- but the OI3 was not updated: $OI3_WARN}"
   rm -rf "$DL_DIR/pkg" "$DL_DIR"/wifilt-*.tar.gz
   [[ $DRY_RUN -eq 0 ]] && do_check >/dev/null 2>&1
   return 0
@@ -615,7 +721,7 @@ pi_resume() {
   PH_PCT=0
   local i
   for i in "${!PHASES[@]}"; do [[ "${PHASES[i]}" == relock ]] && PH_IDX=$i; done
-  ST_MSG="locking the system again and rebooting"
+  ST_MSG="locking the system again and rebooting${OI3_WARN:+ (the OI3 was not updated: $OI3_WARN)}"
   log "[relock] $ST_MSG"
   ST_STATE=offline
   write_status

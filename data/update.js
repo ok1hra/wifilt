@@ -15,6 +15,7 @@
     backup:   'Save the current version',
     stop:     'Stop WIFILT',
     install:  'Install',
+    oi3:      'Flash the OI3 firmware',
     start:    'Start WIFILT',
     health:   'Check that the new version answers',
     relock:   'Lock the system again (reboot)',
@@ -26,6 +27,7 @@
     backup: 'WIFILT is restarting with the new version.',
     stop: 'WIFILT is restarting with the new version.',
     install: 'WIFILT is restarting with the new version.',
+    oi3: 'The OI3 is getting its new firmware. WIFILT starts right after.',
     start: 'WIFILT is restarting with the new version.',
     health: 'WIFILT is restarting with the new version.',
     relock: 'The system is rebooting to lock again. This takes a minute or two.'
@@ -87,16 +89,28 @@
 
   // ------------------------------------------------------------ overview --
 
-  function planFor(mode) {
+  // The OI3 firmware this update brings, from check.json (the updater reads
+  // pi-setup's answers and the newest latest.json): null when there is no OI3
+  // here or nothing newer for it.
+  function oi3Upgrade(c) {
+    var o = c && c.oi3;
+    if (!o || !o.have || !o.latest) return null;
+    if (o.installed && Number(o.latest) <= Number(o.installed)) return null;
+    return { from: o.installed || '?', to: o.latest };
+  }
+
+  function planFor(mode, oi3) {
     var p = ['Download the new version and check its SHA256'];
     if (mode === 'pi-locked') {
       p.push('Unlock the read-only system and reboot');
       p.push('Install the new version and restart WIFILT');
+      if (oi3) p.push('Flash the new OI3 firmware (the OI3 restarts)');
       p.push('Check that it answers (otherwise go back to the current version)');
       p.push('Lock the system again and reboot');
     } else {
       p.push('Save the current version so it can be restored');
       p.push('Stop WIFILT (and local-trx, if it runs), install, start again');
+      if (oi3) p.push('Flash the new OI3 firmware in between (the OI3 restarts)');
       p.push('Check that the new version answers; if not, the current version comes back');
     }
     return p;
@@ -131,6 +145,12 @@
     else line = 'You have the newest version.';
     $('overviewState').textContent = line;
     $('newsLine').hidden = !hasNew;
+    var oi3 = oi3Upgrade(c);
+    var o = c && c.oi3;
+    $('oi3Line').hidden = !(o && o.have);
+    $('oi3Line').textContent = !(o && o.have) ? '' :
+      oi3 ? 'OI3 firmware ' + oi3.from + ' → ' + oi3.to + (hasNew ? ' comes with this update.' : ' is in the newest build.') :
+      'OI3 firmware ' + (o.installed || '?') + ' is up to date.';
 
     $('tokenBox').hidden = !(c && (c.error === 'token-missing' || c.tokenNeeded));
     $('manualBox').hidden = mode !== 'manual';
@@ -151,7 +171,7 @@
     if (hasNew && mode !== 'manual') {
       var ol = $('planList');
       ol.innerHTML = '';
-      planFor(mode).forEach(function (t) { var li = document.createElement('li'); li.textContent = t; ol.appendChild(li); });
+      planFor(mode, oi3).forEach(function (t) { var li = document.createElement('li'); li.textContent = t; ol.appendChild(li); });
       $('planTime').textContent = durationFor(mode);
     }
     var busyWhy = info.tx ? 'The radio is transmitting.' :

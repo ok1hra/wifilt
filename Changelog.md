@@ -11,6 +11,28 @@ published.
 
 ## Working tree — not committed
 
+**The Raspberry Pi's state on the OI3 display, and the web update brings the OI3 firmware too (SOFTWARE.md § 1.7, § 1.8).**
+
+* New TrxNet topic `/wl-host` (TrxNet INTEGRATION.md §7.4, `host_status.h`): the native build on a
+  Raspberry Pi tells every real OI3 (an `OI3.*` on another address) its state once local-trx's
+  `LTX.*` has been seen. Sent every 5 s, at once on a change, and twice on the way down: RESTART
+  from `ESP.restart()`, STOP / REBOOT / UPDATE from the SIGTERM path (`systemctl
+  is-system-running`, the updater's status file). It carries the Wi-Fi client link or hotspot,
+  its SSID (`SIOCGIWESSID`, `iw` in AP mode), dBm, the address to browse to, the fslock lock,
+  update progress and whether local-trx and the radio slot to it are up.
+* OI3 FW 20261112 (`oi3` repository): menu item 26 **RPI** shows it on both LCD rows — signal
+  bars / AP mast, dBm, SSID (scrolling), closed lock or a blinking open lock, the IP with a
+  heartbeat, or UPDATE %, RESTART, RPI REBOOT, RPI OFFLINE with a clock. Keyer CW/RTTY text
+  takes row 1 over and gives it back 2 s after TX.
+* The web updater gets an `oi3` phase between install and start: on a Pi where `pi-setup`
+  flashed an OI3, the prebuilt image from the archive (`oi3/`, `tools/build-oi3-hex.sh`, run by
+  `release.sh`) is uploaded when it is newer than the last one flashed. Never fatal. The page
+  says beforehand *OI3 firmware X → Y comes with this update* (`check.json` `oi3`,
+  `latest.json` `oi3.fw`).
+* Tests: `tools/host-status-smoke.cpp`, `tools/host-status-native-check.sh` (wifilt in a
+  namespace, the OI3 behind a veth pair), `tools/update-oi3-dryrun-check.sh`; OI3
+  `test/rpi_sim`.
+
 **Update from the web on a PC, a Raspberry Pi and Windows (SOFTWARE.md § 1.8).**
 
 * `/update.html` (desktop build only) is a wizard in three views: what will happen, progress

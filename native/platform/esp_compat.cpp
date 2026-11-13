@@ -11,6 +11,9 @@ EspClass ESP;
 // IC-705 does not keep serving a ghost session after the re-exec (see the note
 // at the definition).
 extern void wifiltNativeStopRadioSessions();
+// Also wifilt.ino: tells the OI3 (TrxNet /wl-host) that this is a restart, not
+// a crash, so its LCD says "RESTART" instead of going quiet.
+extern void wifiltNativeAnnounceDown(bool restarting);
 
 void EspClass::restart() {
   Serial.println("\nWIFILT | restarting...");
@@ -19,6 +22,7 @@ void EspClass::restart() {
   // Say goodbye to the radio first. The re-exec'd process comes back on the
   // same fixed local ports within a second, so without a logout it would adopt
   // the dead session's keepalives and the radio would never expire it.
+  wifiltNativeAnnounceDown(true);   // first, while the radio link still says what it is
   wifiltNativeStopRadioSessions();
 
   // The actual re-exec (argv capture, FD_CLOEXEC sweep, execv/CreateProcess)
