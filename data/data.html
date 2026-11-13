@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>JS8Call-ICOM — WIFILT</title>
-  <link rel="stylesheet" href="/data.css?v=3aad2ade">
+  <link rel="stylesheet" href="/data.css?v=2af27e00">
 </head>
 <body class="startup-pending lan-gate-checking">
   <header class="site-topbar">
@@ -535,6 +535,10 @@
             </div>
           </details>
           <div class="settings-storage"><span id="storageState"></span><button id="resetSettings" type="button">Restore defaults</button></div>
+          <!-- Kept in this browser only, four weeks per band: who is heard every time this
+               station listens. It drives the bars and scores in the route list, and CLEAR
+               does not touch it, so forgetting it is its own button. -->
+          <div class="settings-storage"><span id="stationHistoryState">Station history</span><button id="stationHistoryReset" type="button" title="Forget which stations were heard on which days. The route bars start again from today.">Forget station history</button></div>
           <!-- Shown only while the interface has no profile of its own: these are
                the operator's settings from before the profile moved off the
                browser, and offering them upwards beats deleting them. It is a
@@ -611,6 +615,7 @@
   <script src="/js8-presets.js?v=7131988f"></script>
   <script src="/js8-scheduler.js?v=7264d5e6"></script>
   <script src="/js8-inbox.js?v=571d5bc3"></script>
+  <script src="/js8-station-history.js?v=65777471"></script>
   <script src="/js8-msgbox.js?v=9a48d5e1"></script>
   <script src="/js8-relay.js?v=9165b49d"></script>
   <script src="/js8-heartbeat.js?v=2fb0a1da"></script>
@@ -663,7 +668,7 @@
   <script src="/settings-fold.js?v=b75dee54"></script>
   <script src="/station-map.js?v=7bd5311c"></script>
   <script src="/watch-publish.js?v=036bd568"></script>
-  <script src="/data.js?v=47af0876"></script>
+  <script src="/data.js?v=030a51c3"></script>
   <script src="/compression.js?v=768da432"></script>
 </body>
 </html>

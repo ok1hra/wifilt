@@ -402,6 +402,21 @@ oi3_warn() {
   progress 100 "$1"
 }
 
+# oi3_record LINE -- pi-setup's record of what was flashed. On a locked Pi
+# ("wifilt-update oi3" run by hand) the root is an overlay in RAM: the line
+# also goes to the real root underneath, or the next update would flash the
+# same firmware again.
+oi3_record() {
+  install -d -m 755 "$(dirname "$OI3_STATE")"
+  echo "$1" > "$OI3_STATE"
+  if is_locked_pi && findmnt "$ROOT_RO" >/dev/null 2>&1 && mount -o remount,rw "$ROOT_RO" 2>/dev/null; then
+    install -d -m 755 "$ROOT_RO$(dirname "$OI3_STATE")"
+    echo "$1" > "$ROOT_RO$OI3_STATE" || log "cannot write the record on the real root"
+    sync
+    mount -o remount,ro "$ROOT_RO" || log "cannot remount $ROOT_RO read-only again"
+  fi
+}
+
 oi3_flash() {  # oi3_flash PKG -- always returns 0
   local pkg="$1" new inst hex port dev u rc=0
   phase oi3 "checking the OI3 firmware"
@@ -444,8 +459,7 @@ oi3_flash() {  # oi3_flash PKG -- always returns 0
     oi3_warn "flashing the OI3 failed (exit $rc) -- it keeps its firmware ${inst:-}; replug its USB and update again, or run pi-setup step 5"
     return 0
   fi
-  install -d -m 755 "$(dirname "$OI3_STATE")"
-  echo "pkg-$ST_TO - $OI3_REV_CONF $new" > "$OI3_STATE"
+  oi3_record "pkg-$ST_TO - $OI3_REV_CONF $new"
   log "OI3 firmware $new flashed to $port"
   progress 100 "OI3 firmware $new flashed"
   return 0

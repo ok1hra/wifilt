@@ -2912,6 +2912,46 @@ f.onload=()=>{
                     checks.viaPinRefusesUnusable=dtV.msgBoxDefer('OK9TGT','PIN TEST','OK9TGT/P')==='pin-is-the-addressee'&&
                       dtV.msgBoxDefer('OK9TGT','PIN TEST','TOOLONGCALL')==='pin-not-addressable'&&
                       dtV.msgBoxDeferred().filter(item=>item.text==='PIN TEST').length===0;
+                    // Station history. Everything above was recorded on 17 m today only, so
+                    // every row already carries seven bars and a score -- marked "?" because
+                    // one day of listening is not enough to reorder anything.
+                    dtV.viaSetOpen(false);
+                    setRecipient('OK9TGT');
+                    const hState=dtV.viaState();
+                    checks.historyBarsOnEveryRow=hState.barCounts.length>=3&&hState.barCounts.every(n=>n===7);
+                    checks.historyLowConfidenceMarked=hState.scores.length===hState.rows.length&&
+                      hState.scores.every(text=>/^[0-9]+[?]$/.test(text));
+                    const hBefore=dtV.viaCandidates('OK9TGT');
+                    checks.historyNotConfidentKeepsHopOrder=hBefore.findIndex(row=>row.via==='SP3WK')<
+                      hBefore.findIndex(row=>row.via==='OM3VIA')&&hBefore.every(row=>row.confident===false);
+                    // Five earlier evenings in which OM3VIA was heard and copied the target,
+                    // SP3WK never: the band is now confident and the dependable station leads,
+                    // although SP3WK still has the stronger weakest hop this hour.
+                    const DAY=86400000;
+                    for(let back=1;back<=5;back++){
+                      const at=vNow-back*DAY;
+                      dtV.historyListen('17m',at);
+                      dtV.historyHeard('17m','OM3VIA',-15,at);
+                      dtV.historyLink('17m','OK9TGT','OM3VIA',at);
+                    }
+                    const hAfter=dtV.viaCandidates('OK9TGT');
+                    const hOm=hAfter.find(row=>row.via==='OM3VIA'), hSp=hAfter.find(row=>row.via==='SP3WK');
+                    checks.historyReordersRoutes=hAfter[0].via==='OM3VIA'&&hOm.confident===true&&
+                      hOm.pairDays>=5&&hOm.route>hSp.route;
+                    // Six days back nobody listened (null, not 0); OM3VIA filled every hour of
+                    // the five seeded days, SP3WK none; today both were heard.
+                    checks.historyBarsShowWeek=hOm.bars.length===7&&hOm.bars[0]===null&&
+                      hOm.bars.slice(1,6).every(ratio=>ratio===1)&&hOm.bars[6]>0&&
+                      hSp.bars.slice(1,6).every(ratio=>ratio===0)&&hSp.bars[6]>0;
+                    setRecipient('OK9TGT');
+                    const hShown=dtV.viaState();
+                    checks.historyScoreRendered=hShown.rows[1]==='OM3VIA'&&/^[0-9]+$/.test(hShown.scores[1])&&
+                      Number(hShown.scores[1])===hOm.route;
+                    checks.historySettingsLine=/Station history: [0-9]+ stations? on [0-9]+ bands? · [0-9]+ kB/.test(dtV.historyStateText());
+                    // CLEAR wipes the traffic, not the history; the reset button is its own thing.
+                    dtV.historyReset();
+                    checks.historyResetEmpties=dtV.historyScore('17m','OM3VIA').heardDays===0&&
+                      dtV.historyStateText().indexOf('empty')>=0;
                     dtV.clearTxQueue(); dtV.clearTxCaptured();
                     setMessage('');
                     if(vSelectedWas)setRecipient(vSelectedWas);

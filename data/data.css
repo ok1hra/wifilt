@@ -540,7 +540,7 @@ button { color: inherit; cursor: pointer; }
 .via-details > summary:hover, .via-details > summary:focus-visible { color:var(--text); outline:none; }
 .via-summary-hint { color:#3f5c55; }
 .via-list { display:grid; gap:2px; margin-top:4px; }
-.via-list button { display:grid; grid-template-columns:minmax(64px,auto) minmax(0,1fr); gap:8px; align-items:baseline; width:100%; padding:4px 7px; border:1px solid transparent; border-radius:4px; background:transparent; color:var(--text); text-align:left; font:11px/1.35 ui-monospace,monospace; }
+.via-list button { display:grid; grid-template-columns:minmax(64px,auto) minmax(0,1fr) auto auto; gap:8px; align-items:baseline; width:100%; padding:4px 7px; border:1px solid transparent; border-radius:4px; background:transparent; color:var(--text); text-align:left; font:11px/1.35 ui-monospace,monospace; }
 .via-list button:hover, .via-list button:focus-visible { border-color:var(--cyan); background:#132a26; outline:none; }
 .via-list button[aria-pressed="true"] { border-color:var(--cyan); background:#0c1c19; }
 .via-list button[disabled] { color:var(--muted); }
@@ -550,6 +550,16 @@ button { color: inherit; cursor: pointer; }
 .via-list span { color:var(--muted); overflow-wrap:anywhere; }
 .via-list em { color:var(--green); font-style:normal; }
 .via-list i { color:var(--amber); font-style:normal; }
+/* Station history: seven days, today on the right. A heard day is a cyan bar as tall as
+   the share of my listening hours it was heard in, a listened-but-absent day a hairline,
+   a day I did not listen at all a dot -- "no data" must not look like "not heard". */
+.via-list .rel-bars { display:inline-flex; align-items:flex-end; align-self:center; gap:1px; width:30px; height:12px; overflow:visible; }
+.via-list .rel-bars i { position:relative; flex:1 1 0; min-height:0; background:var(--cyan); }
+.via-list .rel-bars i.zero { min-height:1px; background:var(--muted); opacity:.6; }
+.via-list .rel-bars i.none { background:transparent; }
+.via-list .rel-bars i.none::after { content:""; position:absolute; bottom:0; left:50%; width:2px; height:2px; margin-left:-1px; border-radius:50%; background:var(--line); }
+.via-list .rel-score { min-width:2.6em; text-align:right; color:var(--text); }
+.via-list .rel-score.low { color:var(--muted); font-weight:400; }
 .via-empty { padding:3px 7px; color:var(--muted); font:11px/1.4 ui-monospace,monospace; }
 .aprs-param-preview { display:grid; grid-template-columns:140px minmax(0,1fr); gap:9px; align-items:center; margin:0 14px; color:var(--muted); font-size:12px; }
 .aprs-param-preview output { min-height:42px; padding:9px; border:1px solid #31574f; border-radius:4px; background:#07100f; color:#fff; font:12px/1.45 ui-monospace,monospace; overflow-wrap:anywhere; white-space:pre-wrap; }

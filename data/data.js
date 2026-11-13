@@ -200,6 +200,7 @@ const dom = {
   armHours:$("armHours"), autoState:$("autoState"),
   resetSettings:$("resetSettings"), settingsSummary:$("settingsSummary"), settingsFlags:$("settingsFlags"),
   settingsSection:document.querySelector('[data-section="settings"]'),
+  stationHistoryState:$("stationHistoryState"), stationHistoryReset:$("stationHistoryReset"),
   telemetrySection:document.querySelector('[data-section="telemetry"]'),
   telemetrySummary:$("telemetrySummary"), telemetryFlags:$("telemetryFlags"),
   telemetryJobs:$("telemetryJobs"), telemetryEmpty:$("telemetryEmpty"),
@@ -320,6 +321,11 @@ const autoReply = new Js8AutoReply.Js8AutoReply({restrictions,
 const aprsGate = new Js8AprsGate.Js8AprsGate({storage: localStorage,
   onEvent: event => console.info("[js8-aprs-gate]", event.type,
     event.entry ? `${event.entry.from} ${event.entry.kind}` : "", event.detail || "")});
+// Who is heard EVERY time this station listens, per band, four weeks deep (see
+// js8-station-history.js). Kept apart from the activity buffers on purpose: CLEAR wipes
+// the traffic on screen, not a month of evidence about which stations are dependable.
+const stationHistory = new Js8StationHistory.StationHistory({
+  storage: (() => { try { return localStorage; } catch (_error) { return null; } })()});
 let masterTimer = null, masterPeriodMs = 0;
 function setMasterTick(periodMs) {
   if (masterTimer && masterPeriodMs === periodMs) return;
@@ -975,11 +981,13 @@ function applyDecoderActivity(snapshot) {
   const session=activitySessionFor(state.activityFrequency,false);
   if(!session)return;
   const activity=session.activity;
+  const freshMessages=[], freshCalls=[];
   for(const item of snapshot.messages || []){
     const key=activityMessageKey(item);
     if(decoderActivitySeen.messages.has(key))continue;
     decoderActivitySeen.messages.add(key);
     activity.messages.push({...item});
+    freshMessages.push(item);
     if(!item.restored) dispatchAssembledMessage(item);
     Promise.resolve(handleFileActivityMessage(item)).catch(error=>{
       binState.storageError=error.message; renderControls();
@@ -992,8 +1000,10 @@ function applyDecoderActivity(snapshot) {
     if(decoderActivitySeen.calls.get(item.call)===signature)continue;
     decoderActivitySeen.calls.set(item.call,signature);
     calls.set(item.call,{...item});
+    freshCalls.push(item);
   }
   activity.calls=[...calls.values()].sort((a,b)=>String(a.call).localeCompare(String(b.call)));
+  recordStationHistory(session.frequencyHz,freshMessages,freshCalls);
   for(const item of snapshot.frames || []){
     const key=activityFrameKey(item);
     if(decoderActivitySeen.frames.has(key))continue;
@@ -4072,11 +4082,62 @@ function respondingCalls() {
   const responders=new Set();
   if(!own) return responders;
   for(const message of state.activity.messages || []){
-    if(message.outgoing || messageInvolvesBlocked(message) || !messageMentionsCall(message,own)) continue;
-    const sender=(message.directed && message.directed.from) || (message.callsigns || [])[0];
-    if(sender && !sameCall(sender,own)) responders.add(String(sender).toUpperCase());
+    const sender=messageResponder(message,own);
+    if(sender) responders.add(sender);
   }
   return responders;
+}
+// The one test both respondingCalls and the station history apply: the station that
+// sent this message, if the message proves it copied `own`; "" otherwise.
+function messageResponder(message,own){
+  if(!own || message.outgoing || messageInvolvesBlocked(message) || !messageMentionsCall(message,own)) return "";
+  const sender=(message.directed && message.directed.from) || (message.callsigns || [])[0];
+  return sender && !sameCall(sender,own) ? String(sender).toUpperCase() : "";
+}
+
+// ---- long-term station history ----------------------------------------------
+// Fed from the same decoder snapshot as everything above, but only with what is NEW in
+// it -- and even a repeat would be harmless, every write there is an OR or a max.
+function recordStationHistory(frequencyHz,messages,calls){
+  const band=bandOf(frequencyHz);
+  const own=currentJs8().myCall;
+  if(!band) return;
+  for(const item of calls){
+    if(!item || !item.call || item.heardDirectly===false) continue;
+    if(sameCall(item.call,own) || isBlockedCall(item.call)) continue;
+    stationHistory.noteHeard(band,item.call,item.snr,Number(item.lastSlotUtcMs)||0);
+  }
+  if(!messages.length) return;
+  const now=js8Clock.now();
+  for(const message of messages){
+    if(message.incomplete || message.checksumOk===false) continue;
+    const sender=messageResponder(message,own);
+    if(sender) stationHistory.noteHearsMe(band,sender,Number(message.lastSlotUtcMs||message.firstSlotUtcMs)||0);
+  }
+  for(const link of hearingLinks(messages,own,now))
+    stationHistory.noteLink(band,link.from,link.to,link.atMs);
+}
+
+// Once a minute: credit the minute to the band if the decoder is actually listening
+// (audio arriving, modem ready, not keyed), and flush whatever changed. The flush is
+// read-merge-write, so a second tab on the same browser adds to it instead of losing it.
+const STATION_HISTORY_TICK_MS=60000;
+function stationHistoryTick(){
+  const now=js8Clock.now();
+  const band=bandOf(state.activityFrequency||state.radio.frequency);
+  const listening=state.decoderStatus==="ready" && state.lastAudioMs>0 &&
+    performance.now()-state.lastAudioMs<1500 && !radioTransmitting();
+  if(band && listening) stationHistory.noteListening(band,now);
+  if(stationHistory.dirty) stationHistory.save(now);
+}
+// The settings line. Measuring the size serialises the whole store, so it is drawn when the
+// SETTINGS section opens and after a reset, never on the render path.
+function renderStationHistoryState(){
+  if(!dom.stationHistoryState)return;
+  const stats=stationHistory.stats();
+  dom.stationHistoryState.textContent=stats.stations
+    ? `Station history: ${stats.stations} station${stats.stations===1?"":"s"} on ${stats.bands} band${stats.bands===1?"":"s"} · ${Math.max(1,Math.round(stats.bytes/1024))} kB, last ${Js8StationHistory.WINDOW_DAYS} days`
+    : "Station history: empty — it fills while this page listens";
 }
 function stationReacted(responders,call){ return responders.has(String(call||"").toUpperCase()); }
 
@@ -4196,8 +4257,9 @@ function viaDetailSnr(detail){
 }
 
 // The route list for one addressee, newest evidence per station, best first.
-// Derived per call from state.activity -- no new persistent state, exactly like the
-// hearing links on the map, so it survives reload and resets with CLEAR.
+// WHO is offered is derived per call from state.activity, exactly like the hearing links
+// on the map, so it survives reload and resets with CLEAR. HOW they rank once the band
+// has some days behind it comes from the long-term stationHistory, which CLEAR keeps.
 function viaCandidates(target, nowMs){
   const call=String(target||"").toUpperCase().trim();
   const js8=currentJs8();
@@ -4233,10 +4295,19 @@ function viaCandidates(target, nowMs){
       hearsMe:stationReacted(responders,via),
       stale:nowMs-link.atMs>VIA_EVIDENCE_AGING_MS});
   }
+  // The long-term view of each candidate: how dependably it is here when I listen, and
+  // how often it has been seen with the target. Same band as the evidence above.
+  const band=bandOf(state.activityFrequency);
+  for(const row of rows){
+    const toTarget=row.toTargetSnr;
+    const freshSnr=toTarget===null ? null : Math.min(Number(row.mySnr),toTarget);
+    row.history=stationHistory.routeScore(band,row.via,call,Number.isFinite(freshSnr)?freshSnr:null,nowMs);
+    row.bars=stationHistory.weekBars(band,row.via,nowMs);
+  }
   // A route is only as good as its worst hop, so the key is the weaker of the two numbers.
   // Evidence without a number cannot be compared to a signal report at all, so it sorts
   // after everything numeric rather than being given an invented value (decision 5).
-  rows.sort((left,right)=>{
+  const weakestHop=(left,right)=>{
     const lhs=left.toTargetSnr, rhs=right.toTargetSnr;
     if(lhs===null && rhs!==null) return 1;
     if(rhs===null && lhs!==null) return -1;
@@ -4245,7 +4316,14 @@ function viaCandidates(target, nowMs){
       if(diff) return diff;
     }
     return right.toTargetAtMs-left.toTargetAtMs;
-  });
+  };
+  // Once the band has a few days of listening behind it, the route score leads (decision
+  // 16): a station that is here every evening beats one that is loud this hour. Before
+  // that the numbers are an anecdote, so they are shown but the hop rule still orders.
+  const ranked=stationHistory.confident(band,nowMs);
+  rows.sort((left,right)=>ranked
+    ? (right.history.route-left.history.route) || weakestHop(left,right)
+    : weakestHop(left,right));
   return rows.slice(0,VIA_ROUTE_LIMIT);
 }
 
@@ -7664,6 +7742,38 @@ function viaEvidence(snr,detail){
   return String(detail||"").trim()||"—";
 }
 
+// ---- station history on the route rows --------------------------------------
+// Seven bars, oldest left, today right. A bar is the share of MY listening hours that day
+// in which the station was decoded; a day I did not listen at all is a dot on the floor,
+// because "no data" is not "not heard".
+const HISTORY_WEEKDAYS=["Su","Mo","Tu","We","Th","Fr","Sa"];
+function historyDayLabel(day){
+  const date=new Date(day*86400000);
+  return `${HISTORY_WEEKDAYS[date.getUTCDay()]} ${date.getUTCDate()}.${date.getUTCMonth()+1}.`;
+}
+function historyBarsHtml(bars){
+  const heardDays=bars.filter(bar=>bar.heard>0).length, listenDays=bars.filter(bar=>bar.ratio!==null).length;
+  return `<span class="rel-bars" role="img" aria-label="heard ${heardDays} of ${listenDays} listening days this week">`+
+    bars.map(bar=>{
+      const label=bar.ratio===null
+        ? `${historyDayLabel(bar.day)} · not listening`
+        : `${historyDayLabel(bar.day)} · heard ${bar.heard}/${bar.listened} h`+
+          (bar.best!==null?` · best ${formatJs8Snr(bar.best)}`:"")+(bar.hearsMe?" · hears me":"");
+      const kind=bar.ratio===null?"none":bar.heard?"":"zero";
+      const height=bar.heard?Math.max(12,Math.round(bar.ratio*100)):0;
+      return `<i${kind?` class="${kind}"`:""} style="height:${height}%" title="${esc(label)}"></i>`;
+    }).join("")+`</span>`;
+}
+function historyStationText(score,band){
+  const typical=score.typicalSnr===null?"":` · typical ${formatJs8Snr(score.typicalSnr)}`;
+  return `station ${score.score}: heard ${score.heardDays}/${score.listenDays} days · `+
+    `${Math.round(score.P*100)}% of my hours · hears me ${score.meDays} d${typical}`+
+    (score.confident?"":` · only ${score.listenDays} day${score.listenDays===1?"":"s"} of listening on ${band||"this band"}, not used for ordering yet`);
+}
+function historyScoreHtml(value,title,confident){
+  return `<b class="rel-score${confident?"":" low"}" title="${esc(title)}">${value}${confident?"":"?"}</b>`;
+}
+
 function viaRow(row,chosen){
   const numbers=[`me ${formatJs8Snr(row.mySnr)}`,
     `hears ${viaEvidence(row.toTargetSnr,row.toTargetDetail)}`,
@@ -7672,8 +7782,17 @@ function viaRow(row,chosen){
     row.hearsMe?"<em>hears me</em>":"",
     row.stale?`<i>${esc(age(row.toTargetAtMs))}</i>`:esc(age(row.toTargetAtMs))]
     .filter(Boolean);
+  const history=row.history, band=bandOf(state.activityFrequency);
+  const target=String(state.selectedCall||"").toUpperCase();
+  const routeTitle=history
+    ? `route ${history.route} = ${historyStationText(history.station,band)} · `+
+      `with ${target} ${history.pair.pairDays}/${history.pair.listenDays} days · now `+
+      (row.toTargetSnr===null?viaEvidence(null,row.toTargetDetail):formatJs8Snr(Math.min(row.mySnr,row.toTargetSnr)))
+    : "";
   return `<button type="button" data-via="${esc(row.via)}" aria-pressed="${chosen?"true":"false"}">`+
-    `<b>${esc(row.via)}</b><span>${numbers.join(" · ")}</span></button>`;
+    `<b>${esc(row.via)}</b><span>${numbers.join(" · ")}</span>`+
+    (history?historyBarsHtml(row.bars)+historyScoreHtml(history.route,routeTitle,history.confident):"")+
+    `</button>`;
 }
 
 // The direct path competes in the same list as the routes, so "through nobody" is a
@@ -7684,8 +7803,14 @@ function viaDirectRow(target){
   const detail=station
     ? `me ${formatJs8Snr(station.snr)} · ${esc(age(station.lastSlotUtcMs))}`
     : "not heard here";
+  // The addressee's own record: is it usually here when I am?
+  const now=js8Clock.now(), band=bandOf(state.activityFrequency);
+  const score=stationHistory.stationScore(band,target,now);
   return `<button type="button" data-via="" aria-pressed="${state.viaRoute?"false":"true"}">`+
-    `<b>DIRECT</b><span>${detail}</span></button>`;
+    `<b>DIRECT</b><span>${detail}</span>`+
+    historyBarsHtml(stationHistory.weekBars(band,target,now))+
+    historyScoreHtml(score.score,historyStationText(score,band),score.confident)+
+    `</button>`;
 }
 
 // Why the list is empty, in the terms of the actual obstacle. "0 routes" would be
@@ -8867,7 +8992,14 @@ function bind() {
   window.addEventListener("resize",resizeWaterfall);
   window.addEventListener("beforeunload",confirmJs8Leave);
   dom.sessionTakeover.addEventListener("click",()=>{dom.sessionTakeover.disabled=true;acquireJs8Session(true).then(won=>{if(won)location.reload();else dom.sessionTakeover.disabled=false;});});
-  window.addEventListener("pagehide",()=>{flushSession();if(activeEncoder)activeEncoder.abort();stopAudio();releaseJs8Session();});
+  if(dom.settingsSection)dom.settingsSection.addEventListener("toggle",()=>{if(dom.settingsSection.open)renderStationHistoryState();});
+  if(dom.stationHistoryReset)dom.stationHistoryReset.addEventListener("click",()=>{
+    if(!confirm("Forget which stations were heard on which days? The route bars and scores start again from today."))return;
+    stationHistory.reset(js8Clock.now());
+    renderStationHistoryState();
+    renderControls();
+  });
+  window.addEventListener("pagehide",()=>{flushSession();if(stationHistory.dirty)stationHistory.save(js8Clock.now());if(activeEncoder)activeEncoder.abort();stopAudio();releaseJs8Session();});
   document.addEventListener("visibilitychange",()=>{if(document.hidden&&activeEncoder)activeEncoder.abort();});
   // Escape inside a modal belongs to that dialog. Without this guard, dismissing
   // the APRS parameter popup would also abort a transmission already on air.
@@ -8959,6 +9091,7 @@ async function init() {
   restoreFileTransfers();
   refreshJs8Log();
   scheduler.every("sessionPing",SESSION_PING_MS,pingJs8Session);
+  scheduler.every("stationHistory",STATION_HISTORY_TICK_MS,stationHistoryTick);
   scheduler.every("utcClock",250,()=>{dom.utcClock.textContent=`UTC ${new Date().toISOString().slice(11,19)}`;});
   renderRhythm(); scheduler.every("rhythm",100,renderRhythm);
   // The station's calibration table. Read once here and re-read before every
@@ -9218,14 +9351,27 @@ async function init() {
     viaCandidates(target){return viaCandidates(String(target||"").toUpperCase(),Date.now())
       .map(row=>({via:row.via,mySnr:row.mySnr,toTargetSnr:row.toTargetSnr,
         toTargetDetail:row.toTargetDetail,fromTargetSnr:row.fromTargetSnr,
-        hearsMe:row.hearsMe,stale:row.stale}));},
+        hearsMe:row.hearsMe,stale:row.stale,route:row.history.route,
+        station:row.history.station.score,confident:row.history.confident,
+        pairDays:row.history.pair.pairDays,bars:row.bars.map(bar=>bar.ratio)}));},
     viaState(){return {hidden:dom.viaRoutes.hidden,open:dom.viaDetails.open,
       summary:dom.viaSummary.textContent,badge:dom.viaBadge.hidden?"":dom.viaBadge.textContent,
       route:state.viaRoute?state.viaRoute.via:"",
       rows:[...dom.viaList.querySelectorAll("[data-via]")].map(node=>node.dataset.via),
+      scores:[...dom.viaList.querySelectorAll("[data-via]")].map(node=>{
+        const score=node.querySelector(".rel-score");return score?score.textContent:"";}),
+      barCounts:[...dom.viaList.querySelectorAll("[data-via]")].map(node=>node.querySelectorAll(".rel-bars i").length),
       empty:(dom.viaList.querySelector(".via-empty")||{textContent:""}).textContent,
       hint:dom.sendHint.textContent};},
     viaChoose(via){chooseViaRoute(via);},
+    // Station history, driven through the same note* calls the decoder path makes.
+    historyReset(){stationHistory.reset(Date.now());},
+    historyListen(band,atMs){for(let i=0;i<Js8StationHistory.LISTEN_MINUTES_PER_HOUR;i++)
+      stationHistory.noteListening(band,atMs+i*60000);},
+    historyHeard(band,call,snr,atMs){stationHistory.noteHeard(band,call,snr,atMs);},
+    historyLink(band,heard,listener,atMs){stationHistory.noteLink(band,heard,listener,atMs);},
+    historyScore(band,call){return stationHistory.stationScore(band,call,Date.now());},
+    historyStateText(){renderStationHistoryState();return dom.stationHistoryState.textContent;},
     viaSetOpen(open){dom.viaDetails.open=Boolean(open);state.viaOpen=Boolean(open);renderControls();},
     viaOpenState(){return state.viaOpen;},
     viaBlocked(){return viaBlockReasons(true);},
