@@ -289,8 +289,7 @@ Every page carries the same bar:
 | **QRPLog** | `/log` | the logbook |
 | **DXC** | `/dxc.html` | the DX cluster client — splits the QRPLog page in two; its own 600×750 window from anywhere else |
 | **DATA** | `/data` | the modes over the radio's LAN audio, chosen in the page's own sub-navigation: **JS8Call-ICOM**, **RTTY-ICOM**, **JTTY**, **WSPR** and **Mercury**. Only one of them can run at a time — see [section 12](#12-transmit-safety). |
-| **SETUP** | `/setup` | configuration |
-| **LOGSYNC** | `/datasync` | log synchronisation, backup, import |
+| **SETUP** | `/setup` | configuration; also the way to **LOGSYNC** (`/datasync`: log backup file, import, device-to-device sync) |
 | **BD** | `/bd` | band decoder — hidden unless the hardware has it |
 
 The right end of the bar carries the firmware revision, the **WiFi signal strength in dBm**
@@ -4387,7 +4386,9 @@ Turn it off if pages load too slowly and the radio link has never suffered.
 
 ## 10. LOGSYNC
 
-**`/datasync`**
+**`/datasync`** — opened from **SETUP → LOGSYNC**; it has no tab of its own in the top bar.
+Everyday sync and backup is GIT LOG SYNC ([section 3.15](#git-log-sync)); LOGSYNC stays for
+the backup file, import and syncing two devices directly.
 
 ![LOGSYNC](img/logsync.png)
 

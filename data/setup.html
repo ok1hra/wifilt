@@ -25,7 +25,6 @@
       <a class="tab" href="/dxc.html" onclick="window.open(this.href,'DXC','width=600,height=750,left=0,top=0,menubar=no,location=no,status=no'); return false;">DXC</a>
       <a class="tab" href="/data" title="JS8Call-ICOM, WSPR and Mercury over ICOM-LAN">DATA</a>
       <a class="tab tab-active" href="/setup">SETUP</a>
-      <a class="tab" href="/datasync">LOGSYNC</a>
       <a class="tab bd-nav" href="/bd" hidden>BD</a>
       <span id="topbarFw" class="topbar-fw" data-rev=""></span>
     </nav>
@@ -690,6 +689,21 @@
                  2nd session -- still the same firmware/EEPROM-backed setting
                  (see /log-config, /log-config/fsk), just edited from the page
                  that actually keys FSK instead of from here. -->
+          </div>
+        </details>
+
+        <!-- LOGSYNC had its own tab in the top bar until 2026-11-13. GIT LOG SYNC
+             (QRPLog) took over the everyday sync and backup, so the page moved
+             here: still reachable, no longer competing for a place in every bar. -->
+        <details class="setup-section" id="logsyncSection">
+          <summary class="setup-section-title">LOGSYNC</summary>
+          <div class="setup-section-body">
+            <p class="setup-hint">The QSO log lives in each browser. Everyday sync and backup
+              is <b>GIT LOG SYNC</b> in QRPLog (⚙ next to it at the bottom right), through a GitHub
+              repository. LOGSYNC is for what that does not cover: a backup file you export and
+              restore yourself, importing a log, and copying the log between two devices
+              directly, without GitHub.</p>
+            <p><a class="txgain-link" href="/datasync">OPEN LOGSYNC &#8599;</a></p>
           </div>
         </details>
 

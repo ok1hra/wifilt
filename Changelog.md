@@ -11,6 +11,22 @@ published.
 
 ## Working tree — not committed
 
+**LOGSYNC moved from the top bar into SETUP.**
+
+* The LOGSYNC tab is gone from the top bar on every page (QRPLog, DATA pages, SETUP, BD, and
+  the add-on pages). GIT LOG SYNC took over the everyday sync and backup. The page itself
+  stays at `/datasync` and is reached from a new **SETUP → LOGSYNC** section. On LOGSYNC
+  itself the bar now marks SETUP as active.
+
+**Update page: unattended operation blocks the update only when it can actually transmit.**
+
+* The JS8 page arms the firmware only while both AUTO and Radio TX are on. Switching Radio TX
+  off with AUTO on disarms it. `/update/info` and `/update/start` count unattended only when it
+  is armed and a page is connected (`unattendedOperating`).
+* The update page has a **Disarm unattended** button in the warning, and re-reads the busy
+  state every 3 s, so the button unlocks without a reload. A dry run is no longer refused
+  while busy, since it stops nothing.
+
 **More than one release a day: version REV.N (`#define REV_BUILD`).**
 
 * `wifilt.ino` has `#define REV_BUILD 0` next to `REV`. With `REV_BUILD > 0` the version is
