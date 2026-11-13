@@ -30,6 +30,17 @@ published.
 
 **Fix: the web update of REV 20261113 failed on a locked Pi and took local-trx away.**
 
+* Why 20261113 had no local-trx: `native/net/WiFi.cpp` included `platform_caps.h`, which
+  local-trx does not have on its include path, so its build failed. `NativeHostNet` is now
+  declared in `native/net/WiFi.h`. `release.sh` shows the end of the local-trx build log
+  instead of discarding it.
+* The health check asked the wrong port. `~/.config/wifilt/http-port` is the "home" port (where
+  the browser keeps the QSO log), not the listener: on the Pi it said 8080 while wifilt ran on 80.
+  The check now tries 80, 8080 and that file's port.
+* The Pi stayed unlocked: after a failed install `pi_resume` deleted its own unit file, then ran
+  `daemon-reload`. systemd then applied the 90 s default timeout instead of 30 min and killed the
+  run between "[relock]" and `fslock lock`. Reproduced with a user unit. The file now stays (it
+  is disarmed by its wants-link and `ConditionPathExists`), and the timeout is `infinity`.
 * The 20261113 archives went out without local-trx. `install.sh` then disabled and removed
   `local-trx.service`, and the update failed. `release.sh` now stops phase 3 and refuses phase 9
   when a Linux or Windows archive lacks local-trx (`--force` overrides). The updater refuses such

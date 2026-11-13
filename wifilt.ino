@@ -148,7 +148,7 @@ volatile bool cwIpSendPending = false;
 // REV alone stays an 8-digit date wherever an older updater reads it (/health.json
 // "rev", the package's VERSION, latest.json "rev"): those updaters take exactly
 // eight digits, and a same-day build is then simply not offered to them.
-#define REV_BUILD 2
+#define REV_BUILD 3
 #define REV_STR2(x) #x
 #define REV_STR1(x) REV_STR2(x)
 #if REV_BUILD > 0

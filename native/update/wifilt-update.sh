@@ -118,14 +118,20 @@ run_user() {
 
 user_home() { getent passwd "$1" 2>/dev/null | cut -d: -f6; }
 
-# The port wifilt really listens on: 80, or 8080 when it could not bind 80.
-# wifilt writes it to ~/.config/wifilt/http-port (native/main.cpp).
-http_port() {
+# The ports wifilt may answer on, as a list: 80, 8080 (where it moves when it
+# cannot bind 80), and whatever ~/.config/wifilt/http-port says. That file is
+# NOT the port wifilt listens on: it is the "home" port, where the browser
+# keeps the QSO log, and it keeps the first port the configuration ever served
+# on (native/main.cpp rememberHttpPort). A Pi that ran on 8080 before setcap
+# keeps 8080 there while wifilt is on 80 -- taking it for the listener made
+# every health check of the 2026-11-13 updates wait 90 s on a dead port.
+http_ports() {
   [[ -n "${WIFILT_UPDATE_HTTP_PORT:-}" ]] && { echo "$WIFILT_UPDATE_HTTP_PORT"; return; }   # tests only
-  local u h p=""
+  local u h p="" out="80 8080"
   u="$(run_user)"; h="$(user_home "$u")"
   [[ -n "$h" && -r "$h/.config/wifilt/http-port" ]] && p="$(tr -dc '0-9' < "$h/.config/wifilt/http-port")"
-  echo "${p:-80}"
+  [[ -n "$p" && " $out " != *" $p "* ]] && out="$out $p"
+  echo "$out"
 }
 
 is_locked_pi() { [[ "$(findmnt -no FSTYPE / 2>/dev/null)" == overlay ]]; }
@@ -483,12 +489,17 @@ health_is() {
 }
 
 wait_health() {  # wait_health REV BUILD SECONDS -> 0 when /health.json reports that version
-  local rev="$1" build="$2" limit="$3" port t0 body
-  port="$(http_port)"; t0="$(uptime_s)"
+  local rev="$1" build="$2" limit="$3" ports port t0 body
+  ports="$(http_ports)"; t0="$(uptime_s)"
   while (( $(uptime_s) - t0 < limit )); do
-    body="$(curl -fsS --max-time 3 "http://127.0.0.1:${port}/health.json" 2>/dev/null || true)"
-    health_is "$body" "$rev" "$build" && return 0
-    progress $(( ($(uptime_s) - t0) * 100 / limit )) "waiting for WIFILT $(version_str "$rev" "$build") on port $port"
+    for port in $ports; do
+      body="$(curl -fsS --max-time 2 "http://127.0.0.1:${port}/health.json" 2>/dev/null || true)"
+      if health_is "$body" "$rev" "$build"; then
+        log "WIFILT $(version_str "$rev" "$build") answers on port $port"
+        return 0
+      fi
+    done
+    progress $(( ($(uptime_s) - t0) * 100 / limit )) "waiting for WIFILT $(version_str "$rev" "$build") (ports ${ports// /, })"
     sleep 1
   done
   return 1
@@ -660,8 +671,7 @@ install_package() {
     fi
   fi
   ST_STATE=running
-  if [[ " ${WAS_ACTIVE[*]} " == *" wifilt "* ]]; then log "WIFILT $(version_str "$expect" "$expect_build") answers"
-  else log "wifilt.service was not running, nothing to check"; fi
+  [[ " ${WAS_ACTIVE[*]} " == *" wifilt "* ]] || log "wifilt.service was not running, nothing to check"
   return 0
 }
 
@@ -727,7 +737,7 @@ ConditionPathExists=$STATE_DIR/resume.conf
 Type=oneshot
 ExecStart=/bin/bash $STATE_DIR/resume-$SELF_NAME --resume
 KillMode=process
-TimeoutStartSec=30min
+TimeoutStartSec=infinity
 
 [Install]
 WantedBy=multi-user.target
@@ -793,8 +803,13 @@ pi_resume() {
     fail "the saved package is missing"
   fi
 
-  rm -rf "$pkg" "$a.done" "/etc/systemd/system/$RESUME_UNIT"
-  systemctl daemon-reload || true
+  # The unit file stays: this very script runs as that unit, and deleting its
+  # file plus any daemon-reload (restore_previous and install.sh do one too)
+  # leaves systemd with no TimeoutStartSec=30min, only the 90 s default --
+  # already over by then, so the run was killed between "[relock]" and
+  # "fslock lock" and the Pi stayed unlocked (2026-11-13). Disarmed is enough:
+  # its wants-link is gone and ConditionPathExists=resume.conf no longer holds.
+  rm -rf "$pkg" "$a.done"
 
   # Lock again in both cases: the machine ends as it started. On failure the
   # previous version is back by now (install_package rolled it back).

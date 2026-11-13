@@ -16,6 +16,8 @@
 #   - installed 20261113 (no BUILD file), offered 20261113.1 -> installed,
 #     and the health wait insists on "build":1
 #   - installed 20261113.1, offered 20261113.1 -> "not newer"
+# The health check tries a list of ports, the first one dead -- as on the Pi,
+# whose ~/.config/wifilt/http-port says 8080 while wifilt listens on 80.
 # Shims: systemctl (logs every call), date (+%s jumps 5000 s per call),
 # setcap. Overrides: WIFILT_UPDATE_{STATE,PREFIX,BASE,UNIT_DIR,HTTP_PORT}.
 
@@ -119,7 +121,7 @@ run_updater() {
   PATH="$WORK/bin:$PATH" \
   WIFILT_UPDATE_STATE="$WORK/state" WIFILT_UPDATE_PREFIX="$WORK/prefix" \
   WIFILT_UPDATE_BASE="http://127.0.0.1:$CH_PORT/" WIFILT_UPDATE_UNIT_DIR="$WORK/units" \
-  WIFILT_UPDATE_HTTP_PORT="$HP" \
+  WIFILT_UPDATE_HTTP_PORT="1 $HP" \
   WIFILT_PI_CONF="$WORK/none.conf" WIFILT_OI3_STATE="$WORK/none" \
     bash "${UPDATER:-$ROOT/native/update/wifilt-update.sh}" update > "$WORK/run.out" 2>&1
 }
@@ -137,6 +139,9 @@ more "$(cat "$WORK/date.n" 2>/dev/null || echo 0)" 3
 check "  (date +%s really was called and jumped)" $?
 has "$WORK/prefix/VERSION" "$REV_NEW"
 check "  new version installed" $?
+# Port 1 plays the Pi's http-port file (8080) with wifilt really on 80.
+has "$WORK/state/update.log" "answers on port $HP"
+check "  found on the second port of the list, not stuck on the first" $? "$(grep -i answers "$WORK/state/update.log")"
 
 # -- 2. package without local-trx, local-trx installed -----------------------------
 reset_prefix
