@@ -6172,7 +6172,9 @@ void setupWebServer(void){
     out += "\",\"busy\":";
     // What would make stopping wifilt now a bad idea; the page shows it and
     // /update/start refuses the same.
-    bool armed = unattendedArmActive(unattendedGuard, millis());
+    // Armed with no page alive cannot transmit, so it does not count; the JS8
+    // page itself only arms while its Radio TX switch is on.
+    bool armed = unattendedOperating(unattendedGuard, millis());
     out += (stateTx || armed) ? "true" : "false";
     out += ",\"tx\":"; out += stateTx ? "true" : "false";
     out += ",\"unattended\":"; out += armed ? "true" : "false";
@@ -6190,7 +6192,8 @@ void setupWebServer(void){
     String body = webServer.arg("plain");
     bool check = extractJsonString(body, "action") == "check" || webServer.arg("action") == "check";
     bool dry = extractJsonBool(body, "dry", false) || webServer.arg("dry") == "1";
-    if (!check && (stateTx || unattendedArmActive(unattendedGuard, millis()))) {
+    // A dry run stops nothing, so only a real update has to wait.
+    if (!check && !dry && (stateTx || unattendedOperating(unattendedGuard, millis()))) {
       webServer.send(409, "application/json",
         "{\"ok\":false,\"error\":\"the radio is transmitting or unattended operation is armed\"}");
       return;
@@ -12086,7 +12089,12 @@ void handleUnattendedPost(){
 
   if(action == "revoke"){
     unattendedRevoke(unattendedGuard);
-    unattendedLogEvent(UEV_REVOKE, "remote revoke");
+    // Who asked, so the log tells a TX switch-off from a hand on Revoke. A
+    // fixed list: the note lands in a file other devices read back.
+    String from = extractJsonString(body, "from");
+    unattendedLogEvent(UEV_REVOKE, from == "update" ? "revoked on the update page"
+                                 : from == "tx-off" ? "Radio TX switched off"
+                                 : "remote revoke");
     handleUnattendedGet();
     return;
   }

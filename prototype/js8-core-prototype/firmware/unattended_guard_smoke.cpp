@@ -55,6 +55,23 @@ int main() {
         pass = check(guard.blockedNotArmed == 1, "disarmed blocks must be counted") && pass;
     }
 
+    // --- "operating" = armed and a page alive (what the updater waits for) ---
+    {
+        UnattendedGuard guard;
+        pass = check(!unattendedOperating(guard, 1000), "a fresh guard must not be operating") && pass;
+        unattendedArm(guard, 3600UL * 1000UL, 1000);
+        pass = check(!unattendedOperating(guard, 1000),
+                     "armed with no page ever seen must not count as operating") && pass;
+        unattendedNoteClient(guard, 2000);
+        pass = check(unattendedOperating(guard, 2000), "armed with a live page must be operating") && pass;
+        pass = check(!unattendedOperating(guard, 8000),
+                     "armed after the page went silent must not be operating") && pass;
+        pass = check(unattendedArmActive(guard, 8000), "the arming itself must survive a silent page") && pass;
+        unattendedNoteClient(guard, 9000);
+        unattendedRevoke(guard);
+        pass = check(!unattendedOperating(guard, 9000), "revoked must not be operating") && pass;
+    }
+
     // --- arming window, expiry and revoke ------------------------------------
     {
         UnattendedGuard guard;

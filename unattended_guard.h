@@ -68,6 +68,14 @@ inline bool unattendedArmActive(const UnattendedGuard &guard, uint32_t nowMs) {
   return guard.armed && (int32_t)(nowMs - guard.armedUntilMs) < 0;
 }
 
+// Armed AND a frontend is alive to act on it. Arming alone is only a deadline:
+// with no page connected the liveness gate refuses every transmission, so
+// nothing can go out unattended. This is what "the station is running
+// unattended right now" means to anything outside the TX path (the updater).
+inline bool unattendedOperating(const UnattendedGuard &guard, uint32_t nowMs) {
+  return unattendedArmActive(guard, nowMs) && unattendedLivenessFresh(guard, nowMs);
+}
+
 inline uint32_t unattendedRemainingMs(const UnattendedGuard &guard, uint32_t nowMs) {
   if (!unattendedArmActive(guard, nowMs)) return 0;
   return (uint32_t)(guard.armedUntilMs - nowMs);

@@ -2854,15 +2854,17 @@ function cancelTxConfirm() {
   renderSettingsFlags(currentJs8());
 }
 function toggleTxSafety(js8) {
-  if(js8.txSafetyAccepted===true){cancelTxConfirm();setJs8Setting("txSafetyAccepted",false);return;}
+  if(js8.txSafetyAccepted===true){cancelTxConfirm();setJs8Setting("txSafetyAccepted",false);txSwitchedUnattended(false);return;}
   if(!txConfirmArmed){armTxConfirm();return;}
   cancelTxConfirm();
   setJs8Setting("txSafetyAccepted",true);
+  txSwitchedUnattended(true);
 }
 
 function toggleAutoReply(js8) {
   const next=js8.auto!==true;
   setJs8Setting("auto",next);
+  // The pill only reaches here with Radio TX on (needsTx), so AUTO on arms.
   // The same call the checkbox makes. A refusal leaves the switch where the
   // operator put it (armUnattended's own comment) and says so in #autoState --
   // which is inside the section, invisible to whoever switched this from a closed
@@ -5421,7 +5423,8 @@ function renderAutoState() {
   const remaining = state.autoExpiryAt ? state.autoExpiryAt - Date.now() : 0;
   dom.autoState.textContent = autoStateError || (remaining > 0
     ? `armed, ${Math.max(1, Math.round(remaining / 60000))} min left`
-    : "disarmed");
+    : currentJs8().auto === true && currentJs8().txSafetyAccepted !== true
+      ? "disarmed while Radio TX is off" : "disarmed");
 }
 // The composed STATUS answer. It is the one dynamic value this station can state
 // honestly: while unattended is armed we know how much longer it will keep answering
@@ -5506,11 +5509,23 @@ function renderStatusAnswer(js8) {
     : "STATUS? goes unanswered.";
 }
 
-function armUnattended(action) {
+// The firmware arming means "this station may transmit by itself", and AUTO is
+// only half of that: with Radio TX off nothing reaches the air, so an arming then
+// promised nothing and only made the updater refuse. Armed = AUTO and Radio TX.
+function unattendedWanted(js8 = currentJs8()) {
+  return js8.auto === true && js8.txSafetyAccepted === true;
+}
+// Radio TX switched by the operator: AUTO follows it in the firmware.
+function txSwitchedUnattended(on) {
+  if (currentJs8().auto !== true) return;
+  armUnattended(on ? "arm" : "revoke", on ? undefined : "tx-off");
+}
+
+function armUnattended(action, from) {
   const hours = Number(currentJs8().armHours) || 1;
   return fetch("/unattended", {method: "POST", signal: fetchDeadline(),
     headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({action, hours})})
+    body: JSON.stringify(from ? {action, hours, from} : {action, hours})})
     .then(response => response.ok ? response.json() : Promise.reject(new Error(String(response.status))))
     .then(result => {
       autoStateError = "";
@@ -5551,7 +5566,7 @@ function applyUnattendedState(result) {
 // running and armed==false, and neither is re-armed here: a forgotten tab still
 // switches itself off and a remote revoke still sticks.
 function reconcileUnattended(reason) {
-  if (!currentJs8().auto || state.autoExpiryAt) return;
+  if (!unattendedWanted() || state.autoExpiryAt) return;
   console.info("[js8-unattended] arming after", reason);
   return armUnattended("arm");
 }
@@ -8718,7 +8733,7 @@ function bind() {
     renderControls();
     if(statusCustomOpen)dom.statusText.focus();
   });
-  dom.armHours.addEventListener("change",()=>{setJs8Setting("armHours",Number(dom.armHours.value)||1);if(currentJs8().auto)armUnattended("extend");});
+  dom.armHours.addEventListener("change",()=>{setJs8Setting("armHours",Number(dom.armHours.value)||1);if(unattendedWanted())armUnattended("extend");});
   // The field ADDS to what is already joined; it never replaces it. Anything else would
   // mean that picking a second name from the autocomplete silently unjoins the first,
   // because a datalist completes the whole field value rather than the word being typed.
@@ -8833,7 +8848,9 @@ function bind() {
   dom.hbMinutes.addEventListener("change",()=>{setJs8Setting("hbMinutes",Number(dom.hbMinutes.value)||60);applyHeartbeatSettings();});
   dom.autoReply.addEventListener("change",()=>{
     setJs8Setting("auto",dom.autoReply.checked);
-    armUnattended(dom.autoReply.checked?"arm":"revoke");
+    if(unattendedWanted())armUnattended("arm");
+    else if(!dom.autoReply.checked||state.autoExpiryAt)armUnattended("revoke");
+    renderAutoState();
   });
   if(dom.alertBeep)dom.alertBeep.addEventListener("change",()=>{
     setJs8Setting("alertBeep",dom.alertBeep.checked);
@@ -8858,7 +8875,7 @@ function bind() {
     dom.aprsGatePort.addEventListener("change",()=>setAprsGateSetting({port:dom.aprsGatePort.value}));
   }
   dom.txGain.addEventListener("change",()=>{const value=state.settingsDraft.txGain===null?dom.txGain.value:state.settingsDraft.txGain;state.settingsDraft.txGain=null;setJs8Setting("txGain",Number(value)||.25);});
-  dom.txSafety.addEventListener("change",()=>setJs8Setting("txSafetyAccepted",dom.txSafety.checked));
+  dom.txSafety.addEventListener("change",()=>{setJs8Setting("txSafetyAccepted",dom.txSafety.checked);txSwitchedUnattended(dom.txSafety.checked);});
   // The SETTINGS header pills, which are switches as well as readouts since
   // 2026-09-12. The row handles its own clicks; the rest of the <summary> only
   // has to stand the TX? confirmation down -- a pill click never reaches here,

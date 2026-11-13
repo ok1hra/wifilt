@@ -194,10 +194,22 @@
       planFor(mode, oi3).forEach(function (t) { var li = document.createElement('li'); li.textContent = t; ol.appendChild(li); });
       $('planTime').textContent = durationFor(mode);
     }
-    var busyWhy = info.tx ? 'The radio is transmitting.' :
-                  info.unattended ? 'Unattended operation is armed. Disarm it first.' : '';
-    $('busyWarn').hidden = !busyWhy;
-    $('busyWarn').textContent = busyWhy ? busyWhy + ' Updating now is refused.' : '';
+    // Say where the switch is: "disarm it first" alone left the operator
+    // hunting through pages for it.
+    var warn = $('busyWarn');
+    warn.textContent = '';
+    if (info.tx) {
+      warn.textContent = 'The radio is transmitting. Updating now is refused.';
+    } else if (info.unattended) {
+      warn.appendChild(document.createTextNode('JS8 unattended operation (AUTO) is running, so updating now is refused. '));
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = 'Disarm unattended';
+      b.addEventListener('click', disarmUnattended);
+      warn.appendChild(b);
+      warn.appendChild(document.createTextNode(' The JS8 page keeps its AUTO switch and arms again after the update.'));
+    }
+    warn.hidden = !warn.textContent;
     $('btnUpdate').hidden = !hasNew || mode === 'manual';
     $('btnUpdate').disabled = !!info.busy;
     $('btnDry').hidden = !(dryAllowed && mode !== 'manual' && c && c.rev);
@@ -216,9 +228,26 @@
       getJson('/update/status').then(function (s) {
         if (!idleShown()) return;
         if (s.state === 'running' || s.state === 'offline') { status = s; enterProgress(null); return; }
-        watchOverview();
+        // TX ends and arming lapses or is revoked elsewhere: without this the
+        // button stayed disabled until a reload.
+        if ($('viewOverview').hidden) { watchOverview(); return; }
+        var was = busyKey(info);
+        loadInfo().then(function (d) {
+          if (busyKey(d) !== was && !$('viewOverview').hidden) renderOverview();
+          else watchOverview();
+        }).catch(watchOverview);
       }).catch(watchOverview);
     }, 3000);
+  }
+  function busyKey(d) { return d ? [!!d.busy, !!d.tx, !!d.unattended].join() : ''; }
+
+  function disarmUnattended(e) {
+    var b = e.target;
+    b.disabled = true;
+    postJson('/unattended', { action: 'revoke', from: 'update' })
+      .then(loadInfo)
+      .then(renderOverview)
+      .catch(function (err) { b.disabled = false; showErr('Disarm failed: ' + err.message); });
   }
 
   function loadInfo() {

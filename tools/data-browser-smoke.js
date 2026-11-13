@@ -718,7 +718,7 @@ f.onload=()=>{
       d.querySelector('#planField [data-plan="run"]').click();
       await new Promise(resolve=>setTimeout(resolve,400));
       const planError=d.querySelector('#planField [data-plan="error"]').textContent;
-      checks.js8PlanRefusesWhileUnattendedIsArmed=/unattended/i.test(planError);
+      checks.js8PlanRefusesWhileUnattendedIsArmed=/\bAUTO is on\b/.test(planError);
       checks.js8PlanDoesNotDisarmItForYou=Boolean(autoReply)&&autoReply.checked===true;
       if(autoReply&&!autoWas){autoReply.checked=false;
         autoReply.dispatchEvent(new f.contentWindow.Event('change',{bubbles:true}));}
