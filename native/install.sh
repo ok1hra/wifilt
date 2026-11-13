@@ -80,6 +80,14 @@ cp -r "$ASSETS" "$PREFIX/data"
 [[ -f "$HERE/VERSION" ]] && install -m 0644 "$HERE/VERSION" "$PREFIX/VERSION"
 if [[ -f "$HERE/BUILD" ]]; then install -m 0644 "$HERE/BUILD" "$PREFIX/BUILD"; else rm -f "$PREFIX/BUILD"; fi
 
+# The OI3 firmware that came with this release (tools/build-oi3-hex.sh): the
+# web update flashes it from the package, "wifilt-update oi3" from here.
+rm -rf "$PREFIX/oi3"
+if [[ -f "$HERE/oi3/VERSION" ]]; then
+  install -d -m 0755 "$PREFIX/oi3"
+  install -m 0644 "$HERE"/oi3/* "$PREFIX/oi3/"
+fi
+
 # The web updater (native/update/, SOFTWARE.md "Updating from the web") and the
 # channel it reads. Its units are written further down.
 HAVE_UPDATER=0

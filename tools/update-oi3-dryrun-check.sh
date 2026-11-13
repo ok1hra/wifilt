@@ -137,5 +137,24 @@ check "  and the update still finishes" $?
 hasnt "$WORK/channel/latest.json" '"oi3"'
 check "  latest.json without an oi3 key" $?
 
+# -- "wifilt-update oi3": the firmware install.sh left in the prefix --------------
+mkdir -p "$WORK/prefix/oi3"
+echo ":00000001FF" > "$WORK/prefix/oi3/PCB_3_1415_oi3.ino.hex"
+echo "20261112" > "$WORK/prefix/oi3/VERSION"
+printf "RUN_USER=nobody\nHAVE_OI3=1\nOI3_REV=3_1415\nOI3_PORT=''\n" > "$WORK/setup.conf"   # as on wifilt-pi
+echo "abc123 def456 3_1415 20261031" > "$WORK/oi3-flashed"
+run_updater oi3 --dry-run
+has "$WORK/state/oi3.log" "OI3 firmware 20261031 -> 20261112 (board 3.1415, /dev/ttyUSB.cw)"
+check "oi3 command: planned from the prefix, OI3_PORT='' -> /dev/ttyUSB.cw" $? "$(cat "$WORK/state/oi3.log" 2>/dev/null; tail -3 "$WORK/run.out")"
+hasnt "$WORK/state/status.json" '"phase"'
+check "  and it leaves the page's status.json alone" $?
+echo "abc123 def456 3_1415 20261112" > "$WORK/oi3-flashed"
+run_updater oi3 --dry-run
+has "$WORK/state/oi3.log" "[oi3] OI3 firmware 20261112 is up to date"
+check "oi3 command: same firmware -> up to date" $?
+run_updater oi3 --dry-run --force
+has "$WORK/state/oi3.log" "OI3 firmware 20261112 -> 20261112"
+check "oi3 --force: flashes the same firmware again" $?
+
 echo "$PASS/$((PASS + FAIL)) checks passed"
 [[ $FAIL -eq 0 ]]

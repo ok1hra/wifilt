@@ -30,6 +30,10 @@ published.
 
 **Fix: the web update of REV 20261113 failed on a locked Pi and took local-trx away.**
 
+* OI3: `sudo /opt/wifilt/wifilt-update oi3 [--force]` flashes the OI3 firmware of the installed
+  release on demand. `install.sh` now keeps it in `/opt/wifilt/oi3`. An empty `OI3_PORT=''` in
+  `setup.conf` (older pi-setup) means `/dev/ttyUSB.cw`, as in pi-setup; before this the
+  updater took such an OI3 as not set up.
 * Why 20261113 had no local-trx: `native/net/WiFi.cpp` included `platform_caps.h`, which
   local-trx does not have on its include path, so its build failed. `NativeHostNet` is now
   declared in `native/net/WiFi.h`. `release.sh` shows the end of the local-trx build log

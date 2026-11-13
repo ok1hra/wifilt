@@ -555,7 +555,9 @@ default) with the tools its step 5 installed, so it takes about half a minute in
 several minutes of compiling. If the port is missing or busy, or the upload fails, the update
 still finishes — the new WIFILT works with the old OI3 firmware, the OI3 keeps its firmware,
 the result and the log say what happened, and the next update tries again (or run
-`wifilt-pi-setup --only oi3`).
+`wifilt-pi-setup --only oi3`). The firmware that came with the installed version stays in
+`/opt/wifilt/oi3`. `sudo /opt/wifilt/wifilt-update oi3` flashes it by hand when it is newer
+than the one last flashed; `--force` flashes it anyway.
 
 **Versions.** A version is the release date, `20261113`. A second release the same day is
 `20261113.1`, then `20261113.2`, and the page and the updater treat it as newer. Installations

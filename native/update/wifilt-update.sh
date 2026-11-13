@@ -6,6 +6,8 @@
 #   wifilt-update update [--dry-run]  download, verify, install, restart, check
 #   wifilt-update --from-request      what wifilt-update.service runs: reads
 #                                     req/request.json written by wifilt
+#   wifilt-update oi3 [--force]       flash the OI3 firmware installed with
+#                                     WIFILT (/opt/wifilt/oi3), when newer
 #
 # Why a separate root program: the wifilt service runs as an ordinary user and
 # installing (/opt/wifilt, setcap, systemd units, unlocking a locked Pi) needs
@@ -48,9 +50,10 @@ PREFIX="${WIFILT_UPDATE_PREFIX:-$PREFIX}"
 EDITION_MARK="WIFILT-""ADDONS"
 
 DRY_RUN=0
+OI3_FORCE=0
 REQ_ID=""
 
-die_usage() { sed -n '2,8p' "$0" | sed 's/^# \?//'; exit 2; }
+die_usage() { sed -n '2,10p' "$0" | sed 's/^# \?//'; exit 2; }
 
 # ---------------------------------------------------------------- helpers ---
 
@@ -375,8 +378,10 @@ oi3_configured() {
   [[ "$(conf_value "$PI_CONF" HAVE_OI3)" == 1 ]] || return 1
   OI3_REV_CONF="$(conf_value "$PI_CONF" OI3_REV)"
   OI3_PORT_CONF="$(conf_value "$PI_CONF" OI3_PORT)"
-  [[ "$OI3_REV_CONF" == 3_1415 || "$OI3_REV_CONF" == 3_141 ]] || return 1
-  [[ -n "$OI3_PORT_CONF" ]]
+  # Empty or quoted-empty: what pi-setup offers by default (lib/oi3.sh); some
+  # setup.conf files carry OI3_PORT='' from an older pi-setup.
+  [[ -z "$OI3_PORT_CONF" || "$OI3_PORT_CONF" == "''" ]] && OI3_PORT_CONF=/dev/ttyUSB.cw
+  [[ "$OI3_REV_CONF" == 3_1415 || "$OI3_REV_CONF" == 3_141 ]]
 }
 
 # the firmware REV last flashed from this Pi (4th field of pi-setup's record)
@@ -407,7 +412,7 @@ oi3_flash() {  # oi3_flash PKG -- always returns 0
     oi3_skip "the package carries no OI3 firmware for board ${OI3_REV_CONF//_/.}"; return 0
   fi
   inst="$(oi3_installed_fw)"
-  if [[ -n "$inst" && "$new" -le "$inst" ]]; then
+  if [[ -n "$inst" && "$new" -le "$inst" && $OI3_FORCE -eq 0 ]]; then
     oi3_skip "OI3 firmware $inst is up to date"; return 0
   fi
   port="$OI3_PORT_CONF"
@@ -444,6 +449,36 @@ oi3_flash() {  # oi3_flash PKG -- always returns 0
   log "OI3 firmware $new flashed to $port"
   progress 100 "OI3 firmware $new flashed"
   return 0
+}
+
+# oi3_cmd -- "wifilt-update oi3": the OI3 phase on its own, from the firmware
+# install.sh left in $PREFIX/oi3. For an OI3 the update could not reach (port
+# missing, older updater) or a board that was swapped. It keeps out of the
+# page's status: its own status and log files beside the updater's.
+oi3_cmd() {
+  [[ $EUID -eq 0 || $DRY_RUN -eq 1 ]] || { echo "run it as root: sudo $0 oi3" >&2; return 1; }
+  STATUS="$STATE_DIR/oi3-status.json"
+  LOG="$STATE_DIR/oi3.log"
+  : > "$LOG"
+  set_phases systemd
+  ST_STATE=running ST_STARTED="$(now)" ST_FROM="$(installed_version)" ST_TO="$ST_FROM"
+  log "----- $SELF_NAME oi3 $(date -Iseconds) force=$OI3_FORCE dry=$DRY_RUN -----"
+  local stopped=() s dev
+  # The port may be held by local-trx (serial keying) or wifilt (CI-V on that
+  # adapter): stopped for the upload, started again after it.
+  if oi3_configured && [[ $DRY_RUN -eq 0 ]]; then
+    dev="$(readlink -f "$OI3_PORT_CONF" 2>/dev/null)"
+    if [[ -n "$dev" ]] && fuser "$dev" >/dev/null 2>&1; then
+      for s in wifilt local-trx; do svc_active "$s" && stopped+=("$s"); done
+      log "stopping ${stopped[*]:-nothing} to free $OI3_PORT_CONF"
+      systemctl stop wifilt local-trx 2>/dev/null || true
+      sleep 1
+    fi
+  fi
+  oi3_flash "$PREFIX"
+  for s in "${stopped[@]}"; do systemctl start "$s" || log "start $s failed"; done
+  ST_STATE="done"; write_status
+  [[ -z "$OI3_WARN" ]]
 }
 
 # ---------------------------------------------------------------- update ---
@@ -843,6 +878,7 @@ main() {
   for a in "$@"; do
     case "$a" in
       --dry-run) DRY_RUN=1 ;;
+      --force)   OI3_FORCE=1 ;;
       *) die_usage ;;
     esac
   done
@@ -874,6 +910,7 @@ main() {
 
   case "$cmd" in
     check)  do_check ;;
+    oi3)    oi3_cmd ;;
     update)
       if [[ $EUID -ne 0 && $DRY_RUN -eq 0 ]]; then
         # Say so where the page looks, or it waits for a run that never starts.
