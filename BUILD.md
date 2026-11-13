@@ -104,12 +104,10 @@ them on this computer — and still touches neither the radio hardware, nor git,
 | 1 | `REV` → today's date | `y/N` | asked only when the two differ; a REV in the future is left alone |
 | 2 | export compiled binary | `Y/n` | `tools/export-compiled-binary.sh`, described below |
 | 3 | `make -C native dist` | `Y/n` | clears archives of other revisions first, so `SHA256SUMS` describes exactly what ships |
-| 4 | `tools/native-integration-test.sh` | `y/N` | offers `make -C native setcap`; without it the audio half of the test silently does not run |
-| 5 | run `./native/build/wifilt --data-dir data` | `y/N` | offers the capability first, and gives the binary its own process group, so the Ctrl-C that stops it does not end the release run |
-| 6 | install this build on this computer | `Y/n` | unpacks the phase-3 archive and runs its `install.sh`; stops a running `wifilt.service` first, because `install(1)` cannot write over a binary that is executing |
-| 7 | `tools/upload-firmware-spiffs.sh` | `y/N` | picks the port from a numbered list carrying each device's `by-id` name, and flashes the `by-id` path |
-| 8 | `git commit` / `git push` | `y/N` ×2 | re-stamps the assets first, and compares REV against the Changelog |
-| 9 | `tools/gh-pages.sh --publish` | `y/N` | refuses unless the tree is clean and `HEAD` is `origin/main` |
+| 4 | install this build on this computer | `Y/n` | unpacks the phase-3 archive and runs its `install.sh`; stops a running `wifilt.service` first, because `install(1)` cannot write over a binary that is executing |
+| 5 | `tools/upload-firmware-spiffs.sh` | `y/N` | picks the port from a numbered list carrying each device's `by-id` name, and flashes the `by-id` path |
+| 6 | `git commit` / `git push` | `y/N` ×2 | re-stamps the assets first, and compares REV against the Changelog |
+| 7 | `tools/gh-pages.sh --publish` | `y/N` | refuses unless the tree is clean and `HEAD` is `origin/main` |
 
 The order of the last two is deliberate. `gh-pages.sh` publishes from a throwaway git
 repository, so it will happily put a build of source that exists nowhere onto a public
@@ -119,29 +117,9 @@ and past the guards that check the firmware is newer than its sources and that
 `native/dist` holds archives for this REV — each of which is a way the page could end up
 describing something that does not exist.
 
-Phases 2, 3, 6, 7, 8 and 9 end the run when they fail — they build something, write to the
-computer, to the board, or outward. Phases 4 and 5 are looks rather than steps, so a
-failure there asks whether to carry on. Nothing is offered on a branch other than `main`
-from phase 8 onwards.
-
-Phase 5 has three wrinkles worth knowing before they surprise you.
-
-Ctrl-C makes the native binary print `shutting down` and then die on `terminate called
-without an active exception` — a thread left unjoined in its shutdown path. The script
-names it and carries on rather than asking, and the summary keeps the phase yellow so it
-is not forgotten.
-
-`http://wifilt.local` may not reach the binary even though it announces exactly that name.
-`nsswitch.conf` reads `hosts: files mdns4_minimal …`, so a single line in `/etc/hosts`
-outranks the responder and no mDNS query is ever made; if that line points at the hardware
-on a network this machine is not on, the result looks precisely like a web server that
-does not work. The script prints the addresses that do work and says so when the name
-resolves somewhere else.
-
-`getcap` lives in `/sbin`, which is not on a normal user's `PATH` on Debian. Calling it by
-name alone reports "no capability" for a binary that has one, and asks for a sudo password
-that changes nothing — so the script looks in `/sbin` and `/usr/sbin` too, and says openly
-when it cannot check at all.
+Every phase from 2 on ends the run when it fails: each builds something or writes to the
+computer, to the board, or outward. Nothing is offered on a branch other than `main` from
+phase 6 onwards.
 
 By hand it is still two steps — bump `REV` in `wifilt.ino`, then Arduino IDE:
 Sketch → Export Compiled Binary — and step 2 has a headless equivalent, for when the

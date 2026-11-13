@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# One release, nine phases: every question first, then the whole chain at once.
+# One release, seven phases: every question first, then the whole chain at once.
 #
 # Everything is built without addons/, also when it is beside the sketch
 # (-DWIFILT_NO_ADDONS, NO_ADDONS=1, --edition public; addon_hooks.h).
-# Phase 9 publishes the page only when the source changed since the last
+# Phase 7 publishes the page only when the source changed since the last
 # publication.
 #
 # Extensions: when addons/release-ext.sh exists it is sourced before phase 0
@@ -39,11 +39,11 @@
 # what was written where. Nothing here
 # writes to the device, to this computer, to git or to the web unless the plan
 # says so. What only the run itself can know (a failed build, a guard in front
-# of phase 9) is decided by the plan's answers or by the guard, never by a
+# of phase 7) is decided by the plan's answers or by the guard, never by a
 # question in the middle of the run.
 #
 #   tools/release.sh            plan interactively, then the whole chain
-#   tools/release.sh --force    bypass the pre-publish guards (see phase 9)
+#   tools/release.sh --force    bypass the pre-publish guards (see phase 7)
 
 set -uo pipefail
 
@@ -51,24 +51,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SKETCH="${ROOT_DIR}/wifilt.ino"
 FIRMWARE_BIN="${ROOT_DIR}/wifilt.ino.esp32.bin"
 # M5Stack Atom Lite -- built alongside the box in phase 2, gated alongside it in
-# phase 9. Same first-class treatment as the box: a failed Atom export aborts
+# phase 7. Same first-class treatment as the box: a failed Atom export aborts
 # the release the same way a failed box export does, see phase 2 below.
 FIRMWARE_BIN_M5ATOM="${ROOT_DIR}/wifilt.ino.m5stack_atom.bin"
 DIST_DIR="${ROOT_DIR}/native/dist"                  # what gh-pages.sh publishes
-# The binary phases 4 and 5 grant the capability to and phase 5 runs, the make
-# variables that build it (NO_ADDONS=1 -> build-public/) and any further
-# arguments it is run with. An extension may point all three elsewhere.
-NATIVE_BIN="${ROOT_DIR}/native/build-public/wifilt"
-NATIVE_MAKE_ARGS=(NO_ADDONS=1)
-NATIVE_RUN_ARGS=()
 RELEASE_EXT="${ROOT_DIR}/addons/release-ext.sh"
-# getcap lives in /sbin, which is not on a normal user's PATH on Debian. Looking
-# it up by name alone therefore reports "no capability" for a binary that has
-# one, and asks for a sudo password that changes nothing.
-GETCAP=""
-for _cap_candidate in "$(command -v getcap || true)" /sbin/getcap /usr/sbin/getcap; do
-  if [[ -n "$_cap_candidate" && -x "$_cap_candidate" ]]; then GETCAP="$_cap_candidate"; break; fi
-done
 RELEASE_BRANCH="main"
 PAGE_URL="https://ok1hra.github.io/wifilt/"
 FORCE=false
@@ -77,7 +64,7 @@ usage() {
   cat <<'EOF'
 Usage: tools/release.sh [--force]
 
-Lists all nine phases and their options on one screen (arrows, space, Enter),
+Lists all seven phases and their options on one screen (arrows, space, Enter),
 then runs them in one go without further questions. Enter accepts the capitalised default. addons/release-ext.sh,
 when present, extends it.
 
@@ -86,15 +73,13 @@ when present, extends it.
       offers today's version -- a second release the same day, "REV.N")
   2  Export compiled binary                  (Y/n)
   3  make -C native NO_ADDONS=1 dist         (Y/n, Y/n)
-  4  tools/native-integration-test.sh        (y/N)
-  5  run the native build --data-dir data    (y/N)
-  6  install this build on this computer     (Y/n)
-  7  tools/upload-firmware-spiffs.sh         (Y/n)
-  8  git commit / git push                   (Y/n, twice)
-  9  tools/gh-pages.sh --publish             (Y/n, only if the source changed)
+  4  install this build on this computer     (Y/n)
+  5  tools/upload-firmware-spiffs.sh         (Y/n)
+  6  git commit / git push                   (Y/n, twice)
+  7  tools/gh-pages.sh --publish             (Y/n, only if the source changed)
 
 Options:
-  --force   Skip the guards in front of phase 9 and allow phases 8 and 9 on a
+  --force   Skip the guards in front of phase 7 and allow phases 6 and 7 on a
             branch other than main. Everything they check is a reason not to
             publish, so use it only when you know which one you are overriding.
   -h, --help
@@ -597,8 +582,8 @@ print_esp_usage() {
   done
 }
 
-# sudo once, before the run, and kept fresh while it lasts: phases 4 to 6 need
-# it after builds that can take longer than sudo's own timeout.
+# sudo once, before the run, and kept fresh while it lasts: phase 4 needs it
+# after builds that can take longer than sudo's own timeout.
 SUDO_KEEPALIVE_PID=""
 sudo_prime() {
   info "  sudo: heslo teď, ať se release během běhu na nic neptá"
@@ -618,8 +603,6 @@ PHASES=(
   "1 REV"
   "2 export firmware"
   "3 make -C native dist"
-  "4 integrační test"
-  "5 spuštění binárky"
   "6 instalace na PC"
   "7 flash do zařízení"
   "8 git commit/push"
@@ -647,34 +630,8 @@ print_summary() {
   done
 }
 
-# One capability, three privileged ports, one inode that forgets it on every
-# relink. Both the integration test and running the binary by hand need it, so
-# the question lives in one place.
-# Without BIN it is NATIVE_BIN, built with NATIVE_MAKE_ARGS.
-ensure_setcap() {   # ensure_setcap WHAT-BREAKS-WITHOUT-IT [BIN MAKE-VARIABLE...]
-  local bin="$NATIVE_BIN" margs=("${NATIVE_MAKE_ARGS[@]}")
-  if [[ $# -gt 1 ]]; then bin="$2"; margs=("${@:3}"); fi
-  [[ -x "$bin" ]] || return 1
-  if [[ -n "$GETCAP" ]]; then
-    if "$GETCAP" "$bin" 2>/dev/null | grep -q cap_net_bind_service; then
-      return 0
-    fi
-    warn "  Binárka nemá CAP_NET_BIND_SERVICE -- $1"
-  else
-    warn "  getcap nenalezen, capability nelze ověřit -- $1"
-  fi
-  if [[ "$PLAN_SETCAP" == yes ]]; then
-    make -C "${ROOT_DIR}/native" "${margs[@]}" setcap && return 0
-    warn "  setcap se nepovedl"
-  else
-    info "  setcap nebyl v plánu"
-  fi
-  return 1
-}
-PLAN_SETCAP=no          # grant the capability via sudo where it is missing
-PLAN_CONTINUE_ON_FAIL=no  # phases 4/5: go on after a failed test or run
-PLAN_STOP_SERVICES=yes  # phase 6: stop wifilt/local-trx while installing
-PLAN_PORT=""            # phase 7: the port to flash, by-id path when there is one
+PLAN_STOP_SERVICES=yes  # phase 4: stop wifilt/local-trx while installing
+PLAN_PORT=""            # phase 5: the port to flash, by-id path when there is one
 declare -A PLAN_LTX_CROSS=()  # phase 3: win|arm64 -> yes/no, build cross libs
 
 # local-trx bundling (fáze 3, docs/local-trx-implementace.md bod 1/12: local-trx/
@@ -759,24 +716,23 @@ bundle_local_trx_into() {
 
 # ext_hook POINT  -- calls ext_POINT when an extension defined it. The points,
 # in the order they come:
-#   preflight      phase 0, after the tools are reported (may set BLOCKED,
-#                  NATIVE_BIN, NATIVE_MAKE_ARGS, NATIVE_RUN_ARGS, and append
-#                  to ESP_APP_ROWS / ESP_FS_ROWS)
-#   plan_install   menu, after the phase 6 item (menu_add its own items)
-#   plan_flash     menu, after the phase 7 port item
+#   preflight      phase 0, after the tools are reported (may set BLOCKED
+#                  and append to ESP_APP_ROWS / ESP_FS_ROWS)
+#   plan_install   menu, after the phase 4 item (menu_add its own items)
+#   plan_flash     menu, after the phase 5 port item
 #   plan_commit    menu, after this repository (plan_commit_repo)
-#   plan           menu, after phase 9 (its own phases: menu_phase N ...)
+#   plan           menu, after phase 7 (its own phases: menu_phase N ...)
 #   menu_refresh   before every redraw (may set INSTALL_ARCHIVE, M_OFF, M_NOTE)
 #   plan_resolve   after Enter, choices -> plan (may set FLASH_ARGS,
 #                  INSTALL_SCOPE, FLASH_SCOPE, PLAN_NOTE)
 #   firmware       phase 2, after the export succeeded
 #   dist           phase 3, after the archives were built (dist_targets,
 #                  want_ltx and dist_build are there to reuse)
-#   install        phase 6, before the archive is checked
-#   flash          phase 7, before flashing
-#   stamp         phase 8, after data/*.html got its ?v=
-#   commit         phase 8, after this repository (commit_repo is there)
-#   end            after phase 9, before the summary and the tables
+#   install        phase 4, before the archive is checked
+#   flash          phase 5, before flashing
+#   stamp         phase 6, after data/*.html got its ?v=
+#   commit         phase 6, after this repository (commit_repo is there)
+#   end            after phase 7, before the summary and the tables
 # An extension shares this shell: its failures go through abort like ours, and
 # what it writes goes into the list at the end through wrote SCOPE WHAT WHERE.
 # Nothing after the menu asks: ask() then takes its default.
@@ -834,9 +790,9 @@ dist_build() {
   return 0
 }
 
-# plan_commit_repo DIR LABEL  -- the menu items of one repository under phase 8:
+# plan_commit_repo DIR LABEL  -- the menu items of one repository under phase 6:
 # commit (with its message) and push, keyed by its index in REPO_LABELS. The
-# tree is shown as it is now; by the time phase 8 runs, phases 1 and 8 itself
+# tree is shown as it is now; by the time phase 6 runs, phases 1 and 6 itself
 # may have changed it, so the answer means "commit whatever is there then".
 declare -A COMMIT_PLAN=() COMMIT_MSG=() PUSH_PLAN=()
 REPO_LABELS=()
@@ -845,11 +801,11 @@ plan_commit_repo() {
   REPO_LABELS+=("$label")
   branch="$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "?")"
   dirty="$(git -C "$dir" status --porcelain | wc -l)"
-  menu_add "c$i" bool 1 "commit ${label} (${branch})" yes "on p8"
+  menu_add "c$i" bool 1 "commit ${label} (${branch})" yes "on p6"
   M_NOTE["c$i"]="teď ${dirty} změněných souborů; git add -A"
   menu_add "m$i" text 2 "zpráva" "" "on c$i"
   M_HINT["m$i"]="prázdná = REV <rev>"
-  menu_add "u$i" bool 1 "push ${label} -> origin/${branch}" yes "on p8"
+  menu_add "u$i" bool 1 "push ${label} -> origin/${branch}" yes "on p6"
 }
 
 # commit_repo DIR LABEL PHASE [SCOPE]  -- status, commit, push for one
@@ -872,8 +828,8 @@ commit_repo() {
     if [[ "${COMMIT_PLAN[$label]:-no}" == yes ]]; then
       msg="${COMMIT_MSG[$label]:-REV $REV}"
       info "  commit: $msg"
-      git -C "$dir" add -A || abort "git add ($label) selhal" 8
-      git -C "$dir" commit -m "$msg" || { mark 8 "selhalo"; abort "git commit ($label) selhal." 8; }
+      git -C "$dir" add -A || abort "git add ($label) selhal" 6
+      git -C "$dir" commit -m "$msg" || { mark 6 "selhalo"; abort "git commit ($label) selhal." 6; }
       wrote "$scope" "commit" "${label} ${branch} $(git -C "$dir" rev-parse --short HEAD) \"${msg}\""
       result="hotovo"
     else
@@ -888,7 +844,7 @@ commit_repo() {
   if [[ "$ahead" != 0 ]]; then
     if [[ "${PUSH_PLAN[$label]:-no}" == yes ]]; then
       info "  git push ${label} na origin/${branch} (${ahead} commitů)"
-      git -C "$dir" push origin "$branch" || { mark 8 "selhalo"; abort "git push ($label) selhal." 8; }
+      git -C "$dir" push origin "$branch" || { mark 6 "selhalo"; abort "git push ($label) selhal." 6; }
       wrote "$scope" "push" "${label} -> $(git -C "$dir" remote get-url origin 2>/dev/null) ${branch} (${ahead} commitů)"
       ok "  pushnuto"
     else
@@ -1010,9 +966,9 @@ report_tool() {  # report_tool LABEL OK DETAIL
 [[ -n "$ARDUINO_BIN" ]] && report_tool "arduino 1.8.x" 1 "$ARDUINO_BIN" \
   || { report_tool "arduino 1.8.x" 0 "nenalezeno (ARDUINO_IDE=...)"; BLOCKED[2]="Arduino 1.8.x nenalezeno"; }
 have node && report_tool "node" 1 "$(command -v node)" \
-  || { report_tool "node" 0 "chybí"; BLOCKED[3]="node chybí"; BLOCKED[7]="node chybí"; BLOCKED[9]="node chybí"; }
+  || { report_tool "node" 0 "chybí"; BLOCKED[3]="node chybí"; BLOCKED[5]="node chybí"; BLOCKED[7]="node chybí"; }
 have 7z && report_tool "7z" 1 "$(command -v 7z)" \
-  || { report_tool "7z" 0 "chybí (p7zip-full)"; BLOCKED[3]="7z chybí"; BLOCKED[7]="7z chybí"; BLOCKED[9]="7z chybí"; }
+  || { report_tool "7z" 0 "chybí (p7zip-full)"; BLOCKED[3]="7z chybí"; BLOCKED[5]="7z chybí"; BLOCKED[7]="7z chybí"; }
 have zip && report_tool "zip" 1 "$(command -v zip)" \
   || { report_tool "zip" 0 "chybí"; DEGRADED_WINDOWS="zip chybí"; }
 have x86_64-w64-mingw32-g++ && report_tool "mingw-w64" 1 "$(command -v x86_64-w64-mingw32-g++)" \
@@ -1043,13 +999,13 @@ if [[ -n "$ARDUINO15_DIR" ]]; then
   report_tool "esp32 core tools" 1 "$ARDUINO15_DIR"
 else
   report_tool "esp32 core tools" 0 "nenalezeno (ARDUINO15_DIR=...)"
-  BLOCKED[7]="jádro ESP32 nenalezeno"; BLOCKED[9]="jádro ESP32 nenalezeno"
+  BLOCKED[5]="jádro ESP32 nenalezeno"; BLOCKED[7]="jádro ESP32 nenalezeno"
 fi
 if git -C "$ROOT_DIR" remote get-url origin >/dev/null 2>&1; then
   report_tool "git remote origin" 1 "$(git -C "$ROOT_DIR" remote get-url origin)"
 else
   report_tool "git remote origin" 0 "chybí"
-  BLOCKED[8]="git remote origin chybí"; BLOCKED[9]="git remote origin chybí"
+  BLOCKED[6]="git remote origin chybí"; BLOCKED[7]="git remote origin chybí"
 fi
 
 ext_hook preflight
@@ -1059,8 +1015,8 @@ if [[ "$BRANCH" != "$RELEASE_BRANCH" ]]; then
   if $FORCE; then
     warn "  Větev je '$BRANCH', ne '$RELEASE_BRANCH' -- --force to povoluje."
   else
-    warn "  Větev je '$BRANCH', ne '$RELEASE_BRANCH': fáze 8 a 9 se nenabídnou."
-    BLOCKED[8]="větev $BRANCH != $RELEASE_BRANCH"; BLOCKED[9]="větev $BRANCH != $RELEASE_BRANCH"
+    warn "  Větev je '$BRANCH', ne '$RELEASE_BRANCH': fáze 6 a 7 se nenabídnou."
+    BLOCKED[6]="větev $BRANCH != $RELEASE_BRANCH"; BLOCKED[7]="větev $BRANCH != $RELEASE_BRANCH"
   fi
 fi
 
@@ -1156,18 +1112,9 @@ for _t in win arm64; do
   M_NOTE["ltx_$_t"]="řádově minuty, jednorázově"
 done
 
-menu_add h_test head 0 "ověření na tomto počítači"
-# ---- 4 integration test
-menu_phase 4 "integrační test proti falešnému rádiu" N
-# ---- 5 run the binary
-menu_phase 5 "spustit ./${NATIVE_BIN#"${ROOT_DIR}"/} --data-dir data" N
-M_NOTE[p5]="běží do Ctrl-C"
-menu_add setcap bool 1 "chybí-li CAP_NET_BIND_SERVICE, udělit přes sudo" no "on p4 || on p5"
-menu_add contfail bool 1 "pokračovat i po selhání testu / běhu binárky" no "on p4 || on p5"
-
 menu_add h_deploy head 0 "nasazení"
 # ---- 6 install on this computer
-menu_phase 6 "instalace na tento počítač (sudo, /opt/wifilt)" Y
+menu_phase 4 "instalace na tento počítač (sudo, /opt/wifilt)" Y
 ext_hook plan_install
 _running=()
 for _svc in wifilt local-trx; do
@@ -1176,25 +1123,25 @@ done
 if [[ ${#_running[@]} -gt 0 ]]; then
   # install(1) cannot write over a binary that is being executed: the install
   # would fail with "Text file busy" halfway, having already replaced data/.
-  menu_add stopsvc bool 1 "zastavit běžící ${_running[*]} na dobu instalace" yes "on p6"
+  menu_add stopsvc bool 1 "zastavit běžící ${_running[*]} na dobu instalace" yes "on p4"
 fi
 
 # ---- 7 flash the device
-menu_phase 7 "flash firmware + assets do zařízení" Y
-menu_add port choice 1 "port" "" "on p7"
+menu_phase 5 "flash firmware + assets do zařízení" Y
+menu_add port choice 1 "port" "" "on p5"
 ext_hook plan_flash
 detect_ports
 
 menu_add h_pub head 0 "zveřejnění"
 # ---- 8 git
-menu_phase 8 "git commit / push" Y
-M_NOTE[p8]="před commitem se přerazí ?v= v data/*.html"
+menu_phase 6 "git commit / push" Y
+M_NOTE[p6]="před commitem se přerazí ?v= v data/*.html"
 plan_commit_repo "$ROOT_DIR" "wifilt"
 ext_hook plan_commit
 
 # ---- 9 publish
-menu_phase 9 "publikace instalační stránky (gh-pages)" Y
-M_NOTE[p9]="jen změnil-li se zdroj a projdou-li závory"
+menu_phase 7 "publikace instalační stránky (gh-pages)" Y
+M_NOTE[p7]="jen změnil-li se zdroj a projdou-li závory"
 
 ext_hook plan
 
@@ -1212,26 +1159,22 @@ menu_refresh() {
   INSTALL_ARCHIVE="${DIST_DIR}/wifilt-${REV_PLAN}-linux-x86_64.tar.gz"
   # An extension may point INSTALL_ARCHIVE elsewhere, or mark its items here.
   ext_hook menu_refresh
-  if [[ -z "${BLOCKED[5]:-}" ]]; then
-    if [[ -x "$NATIVE_BIN" ]] || on p3; then M_OFF[p5]=""
-    else M_OFF[p5]="${NATIVE_BIN#"${ROOT_DIR}"/} neexistuje a fáze 3 je vypnutá"; fi
-  fi
-  if [[ -z "${BLOCKED[6]:-}" ]]; then
+  if [[ -z "${BLOCKED[4]:-}" ]]; then
     if on p3; then
-      M_OFF[p6]=""; M_NOTE[p6]="${INSTALL_ARCHIVE#"${ROOT_DIR}"/}"
+      M_OFF[p4]=""; M_NOTE[p4]="${INSTALL_ARCHIVE#"${ROOT_DIR}"/}"
     elif [[ -f "$INSTALL_ARCHIVE" ]]; then
       # The archive exists by NAME (wifilt-$REV-...) -- that alone does not
       # mean THIS run rebuilt it. Found live: phase 3 declined ("the archive is
       # already there"), then the install quietly deployed an hours-old archive
       # without a fix made to start-wifilt.sh in the meantime.
-      M_OFF[p6]=""; M_NOTE[p6]="POZOR: $(basename "$INSTALL_ARCHIVE") nebude přebudován -- může být starší než zdroj"
+      M_OFF[p4]=""; M_NOTE[p4]="POZOR: $(basename "$INSTALL_ARCHIVE") nebude přebudován -- může být starší než zdroj"
     else
-      M_OFF[p6]="chybí $(basename "$INSTALL_ARCHIVE") a fáze 3 je vypnutá"
+      M_OFF[p4]="chybí $(basename "$INSTALL_ARCHIVE") a fáze 3 je vypnutá"
     fi
   fi
-  if [[ -z "${BLOCKED[7]:-}" ]]; then
-    if [[ ${#PORT_VALS[@]} -gt 0 ]]; then M_OFF[p7]=""
-    else M_OFF[p7]="žádný sériový port (r = hledat znovu)"; fi
+  if [[ -z "${BLOCKED[5]:-}" ]]; then
+    if [[ ${#PORT_VALS[@]} -gt 0 ]]; then M_OFF[p5]=""
+    else M_OFF[p5]="žádný sériový port (r = hledat znovu)"; fi
   fi
 }
 
@@ -1254,13 +1197,11 @@ fi
 on ltx && want_ltx=true
 want 3 && $want_ltx && PLAN_NOTE[3]+=" + local-trx"
 for _t in win arm64; do on "ltx_$_t" && PLAN_LTX_CROSS[$_t]=yes; done
-on setcap && PLAN_SETCAP=yes
-on contfail && PLAN_CONTINUE_ON_FAIL=yes
 if [[ -n "${M_TYPE[stopsvc]:-}" ]] && ! on stopsvc; then PLAN_STOP_SERVICES=no; fi
 PLAN_PORT="${M_VAL[port]:-}"
 FLASH_ARGS=(--edition public)
-# Phase 8 runs (and stamps ?v=) only when it is to commit or push something:
-# stamping alone would leave the tree dirty in front of phase 9.
+# Phase 6 runs (and stamps ?v=) only when it is to commit or push something:
+# stamping alone would leave the tree dirty in front of phase 7.
 _notes=()
 for _i in "${!REPO_LABELS[@]}"; do
   _label="${REPO_LABELS[$_i]}"
@@ -1273,18 +1214,18 @@ for _i in "${!REPO_LABELS[@]}"; do
   [[ "${PUSH_PLAN[$_label]}" == yes ]] && _n="${_n:+$_n+}push"
   [[ -n "$_n" ]] && _notes+=("$_label: $_n")
 done
-if want 8; then
-  if [[ ${#_notes[@]} -gt 0 ]]; then PLAN_NOTE[8]="$(IFS=,; echo "${_notes[*]}")"
-  else PLAN[8]=no; PLAN_NOTE[8]="ani commit, ani push"; fi
+if want 6; then
+  if [[ ${#_notes[@]} -gt 0 ]]; then PLAN_NOTE[6]="$(IFS=,; echo "${_notes[*]}")"
+  else PLAN[6]=no; PLAN_NOTE[6]="ani commit, ani push"; fi
 fi
 # An extension turns its own items into FLASH_ARGS, INSTALL_SCOPE, ...
 ext_hook plan_resolve
-want 7 && PLAN_NOTE[7]="$(basename "$PLAN_PORT") ${FLASH_ARGS[*]}"
+want 5 && PLAN_NOTE[5]="$(basename "$PLAN_PORT") ${FLASH_ARGS[*]}"
 
 print_plan
 
 # sudo goes first, while someone is still at the keyboard.
-if want 6 || [[ "$PLAN_SETCAP" == yes ]]; then
+if want 4; then
   sudo_prime || { fail "sudo selhalo -- nic se neprovedlo."; exit 1; }
 fi
 PLAN_LOCKED=true
@@ -1321,7 +1262,7 @@ fi
 
 # REV is final after phase 1 (it only ever changes there) -- defined here,
 # once, so every later phase that names the Linux archive (3's local-trx
-# bundling, 6's install, 9's publish gate) shares one path instead of each
+# bundling, 4's install, 7's publish gate) shares one path instead of each
 # phase re-deriving it or -- as phase 3's local-trx bundling briefly did --
 # using it before it was ever set at all (found by code review: a bare
 # reference under `set -u` aborted the whole script mid-phase-3).
@@ -1359,7 +1300,7 @@ if ! skip_if_blocked 3; then
   if want 3; then
     info "  REV $REV: ${dist_targets[*]}$($want_ltx && echo " + local-trx")"
     # NO_ADDONS=1: native/dist is built without addons/ whatever is beside the
-    # sketch -- it is what phase 9 publishes.
+    # sketch -- it is what phase 7 publishes.
     dist_build "$DIST_DIR" NO_ADDONS=1 || { mark 3 "selhalo"; abort "make -C native dist selhal." 3; }
     missing_ltx="$(archives_missing_ltx "$DIST_DIR" | tr '\n' ' ')"
     if [[ -n "$missing_ltx" ]]; then
@@ -1379,85 +1320,9 @@ if ! skip_if_blocked 3; then
 fi
 
 # ---------------------------------------------------------------- phase 4 ----
-phase_banner 4 "integrační test proti falešnému rádiu"
-if want 4; then
-  # The test builds and runs native/build (plain make), not NATIVE_BIN.
-  ensure_setcap "audio půlka testu se přeskočí (port 83)" "${ROOT_DIR}/native/build/wifilt" || true
-  if "${ROOT_DIR}/tools/native-integration-test.sh"; then
-    mark 4 "hotovo"
-  else
-    mark 4 "selhalo"
-    fail "  Integrační test skončil chybou."
-    [[ "$PLAN_CONTINUE_ON_FAIL" == yes ]] || abort "Zastaveno po selhaném testu (plán: nepokračovat)." 4
-    warn "  pokračuji (plán: pokračovat i po selhání)"
-  fi
-else
+phase_banner 4 "instalace na tento počítač"
+if ! want 4; then
   mark 4 "přeskočeno"
-fi
-
-# ---------------------------------------------------------------- phase 5 ----
-phase_banner 5 "spuštění linuxové binárky"
-if ! want 5; then
-  mark 5 "přeskočeno"
-elif [[ ! -x "$NATIVE_BIN" ]]; then
-  info "  ${NATIVE_BIN#"${ROOT_DIR}"/} neexistuje -- fáze 3 neproběhla."
-  mark 5 "nedostupné"
-else
-  ensure_setcap "porty 80, 82 a 83 nepůjde otevřít" || true
-  say ""
-  local_ips="$(hostname -I 2>/dev/null) 127.0.0.1"
-  info "  http://localhost/   -- Ctrl-C binárku ukončí a skript pokračuje"
-  for ip in $(hostname -I 2>/dev/null); do info "  http://${ip}/"; done
-  # The binary announces itself as wifilt.local, but that name is only as good
-  # as whatever resolves it -- and `files` precedes `mdns4_minimal` in nsswitch,
-  # so one line in /etc/hosts silences the responder completely. When that line
-  # points at an address on a network this machine is not on, the result looks
-  # exactly like a web server that does not work.
-  resolved="$(getent hosts wifilt.local 2>/dev/null | awk '{print $1; exit}')"
-  if [[ -n "$resolved" && " $local_ips " != *" $resolved "* ]]; then
-    warn "  POZOR: wifilt.local ukazuje na $resolved, což není tento počítač."
-    if grep -qs 'wifilt\.local' /etc/hosts; then
-      warn "  Zdroj je řádek v /etc/hosts, který má přednost před mDNS:"
-      warn "    $(grep -s 'wifilt\.local' /etc/hosts | head -1)"
-    fi
-    warn "  Otevři adresu výše, ne wifilt.local."
-  elif [[ -z "$resolved" ]]; then
-    info "  wifilt.local se zatím neresolvuje; responder odpovídá až po startu"
-  fi
-  say ""
-  # Job control, and it is not decoration: without `set -m` the binary shares
-  # this script's process group, so the Ctrl-C that stops it would end the whole
-  # release run with it. With it the binary gets its own group and the terminal,
-  # and the signal reaches only the app.
-  set -m
-  ( cd "$ROOT_DIR" && "$NATIVE_BIN" --data-dir data "${NATIVE_RUN_ARGS[@]}" )
-  run_status=$?
-  set +m
-  say ""
-  if [[ $run_status -eq 0 || $run_status -eq 130 || $run_status -eq 2 ]]; then
-    info "  binárka ukončena (stav $run_status)"
-    mark 5 "hotovo"
-  elif [[ $run_status -eq 134 ]]; then
-    # Ctrl-C prints "shutting down" and then dies on `terminate called without
-    # an active exception` -- a thread going out of scope unjoined in the
-    # shutdown path. It is a defect of the native build, not a reason to stop a
-    # release the operator ended themselves, so it is reported and not acted
-    # on. The yellow line in the summary is what keeps it from being forgotten.
-    warn "  Binárka po SIGINT spadla na SIGABRT (terminate without active exception)"
-    warn "  -- vada úklidové cesty native buildu, ne tohoto kroku."
-    mark 5 "ukončena s SIGABRT"
-  else
-    mark 5 "selhalo"
-    fail "  Binárka skončila se stavem $run_status."
-    [[ "$PLAN_CONTINUE_ON_FAIL" == yes ]] || abort "Zastaveno po selhaném běhu (plán: nepokračovat)." 5
-    warn "  pokračuji (plán: pokračovat i po selhání)"
-  fi
-fi
-
-# ---------------------------------------------------------------- phase 6 ----
-phase_banner 6 "instalace na tento počítač"
-if ! want 6; then
-  mark 6 "přeskočeno"
 else
   # The plan named the archive after REV_PLAN, which phase 1 made REV.
   ext_hook install
@@ -1465,7 +1330,7 @@ else
   info "  ${INSTALL_ARCHIVE#"${ROOT_DIR}"/}"
   if [[ ! -f "$INSTALL_ARCHIVE" ]]; then
     info "  chybí $(basename "$INSTALL_ARCHIVE") -- fáze 3 neproběhla."
-    mark 6 "nedostupné"
+    mark 4 "nedostupné"
   else
     info "  /opt/wifilt + systemd jednotka (neaktivovaná); ~/.config/wifilt zůstává"
     # local-trx.service the same as wifilt: install.sh overwrites its binary too.
@@ -1490,21 +1355,21 @@ else
       # removes its own copy at the end of `dist` and this removes ours.
       rm -rf "${INSTALL_DIST}/wifilt-linux-x86_64"
       wrote "$INSTALL_SCOPE" "instalace" "/opt/wifilt + systemd jednotka <- ${INSTALL_ARCHIVE#"${ROOT_DIR}"/}"
-      mark 6 "hotovo"
+      mark 4 "hotovo"
       [[ ${#stopped_services[@]} -gt 0 ]] && warn "  Služby jsi zastavil: sudo systemctl start ${stopped_services[*]}"
     else
-      mark 6 "selhalo"; abort "Instalace selhala." 6
+      mark 4 "selhalo"; abort "Instalace selhala." 4
     fi
   fi
 fi
 
-# ---------------------------------------------------------------- phase 7 ----
-phase_banner 7 "flash firmware + assets do zařízení"
-if ! skip_if_blocked 7; then
-  if ! want 7; then
-    mark 7 "přeskočeno"
+# ---------------------------------------------------------------- phase 5 ----
+phase_banner 5 "flash firmware + assets do zařízení"
+if ! skip_if_blocked 5; then
+  if ! want 5; then
+    mark 5 "přeskočeno"
   elif [[ ! -e "$PLAN_PORT" ]]; then
-    mark 7 "selhalo"; abort "Port $PLAN_PORT z plánu už neexistuje (odpojeno?)." 7
+    mark 5 "selhalo"; abort "Port $PLAN_PORT z plánu už neexistuje (odpojeno?)." 5
   else
     ext_hook flash
     info "  ${PLAN_PORT} ${FLASH_ARGS[*]}"
@@ -1517,25 +1382,25 @@ if ! skip_if_blocked 7; then
       # table at the end.
       fs_record "$_ed" "${ROOT_DIR}/build/release-upload/data" || true
       wrote "$FLASH_SCOPE" "zařízení" "$(basename "$PLAN_PORT"): app0 @$(part_field app0 4) + spiffs @$(part_field spiffs 4) (${_ed}); cfg beze změny"
-      mark 7 "hotovo"
+      mark 5 "hotovo"
     else
-      mark 7 "selhalo"; abort "Zápis do zařízení selhal." 7
+      mark 5 "selhalo"; abort "Zápis do zařízení selhal." 5
     fi
   fi
 fi
 
-# ---------------------------------------------------------------- phase 8 ----
-phase_banner 8 "git commit / git push"
-if ! skip_if_blocked 8; then
-  if ! want 8; then
-    mark 8 "přeskočeno"
+# ---------------------------------------------------------------- phase 6 ----
+phase_banner 6 "git commit / git push"
+if ! skip_if_blocked 6; then
+  if ! want 6; then
+    mark 6 "přeskočeno"
   else
     # Stamping before the commit, not after: gh-pages.sh runs prepare-spiffs-tree.sh
     # inside itself, and that rewrites the ?v= in the TRACKED data/*.html. Left for
-    # phase 9 it would dirty the tree immediately after the commit that was meant
+    # phase 7 it would dirty the tree immediately after the commit that was meant
     # to capture it.
     if ! node "${ROOT_DIR}/tools/stamp-asset-versions.js" >/dev/null; then
-      abort "stamp-asset-versions.js selhal." 8
+      abort "stamp-asset-versions.js selhal." 6
     fi
     info "  ?v= v data/*.html přeraženy podle obsahu"
 
@@ -1551,24 +1416,24 @@ if ! skip_if_blocked 8; then
 
     ext_hook stamp
 
-    commit_repo "$ROOT_DIR" "wifilt" 9
+    commit_repo "$ROOT_DIR" "wifilt" 7
     ext_hook commit
     if [[ " ${REPO_RESULTS[*]} " == *" hotovo "* ]]; then
-      mark 8 "hotovo"
+      mark 6 "hotovo"
     elif [[ " ${REPO_RESULTS[*]} " != *" přeskočeno "* ]]; then
-      mark 8 "beze změny"
+      mark 6 "beze změny"
     else
-      mark 8 "přeskočeno"
+      mark 6 "přeskočeno"
     fi
   fi
 fi
 
-# ---------------------------------------------------------------- phase 9 ----
-phase_banner 9 "publikace instalační stránky"
-if skip_if_blocked 9; then
+# ---------------------------------------------------------------- phase 7 ----
+phase_banner 7 "publikace instalační stránky"
+if skip_if_blocked 7; then
   :
-elif ! want 9; then
-  mark 9 "přeskočeno"
+elif ! want 7; then
+  mark 7 "přeskočeno"
 else
   gate_ok=true
   gate() { fail "  ✗ $1"; gate_ok=false; }
@@ -1636,19 +1501,19 @@ else
 
   if ! $public_changed && ! $FORCE; then
     info "  Zdroj se od poslední publikace (${published_sha}) nezměnil -- stránka zůstává."
-    mark 9 "beze změny"
+    mark 7 "beze změny"
   elif ! $gate_ok; then
     info "  publikace zastavena závorami; obejít lze jen přes --force"
-    mark 9 "nedostupné"
+    mark 7 "nedostupné"
   else
     info "  Zdroj se změnil (stránka: ${published_sha:-žádná}) -- publikuji na origin/gh-pages"
     short="$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || echo "?")"
     if "${ROOT_DIR}/tools/gh-pages.sh" --publish --message "WIFILT REV ${REV} (${short})"; then
-      mark 9 "hotovo"
+      mark 7 "hotovo"
       wrote "wifilt" "stránka" "origin/gh-pages \"WIFILT REV ${REV} (${short})\" -> $PAGE_URL"
       ok "  $PAGE_URL"
     else
-      mark 9 "selhalo"; abort "Publikace selhala." 9
+      mark 7 "selhalo"; abort "Publikace selhala." 7
     fi
   fi
 fi
@@ -1669,5 +1534,5 @@ print_esp_usage
 print_written
 say ""
 info "REV $REV | větev $BRANCH"
-[[ "${RESULT[9]:-}" == "hotovo" ]] && ok "Stránka: $PAGE_URL"
+[[ "${RESULT[7]:-}" == "hotovo" ]] && ok "Stránka: $PAGE_URL"
 exit 0

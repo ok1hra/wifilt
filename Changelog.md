@@ -11,6 +11,15 @@ published.
 
 ## Working tree — not committed
 
+**`release.sh`: seven phases instead of nine.**
+
+* The two never-used checks on this computer are gone: the integration test against the fake
+  radio (`tools/native-integration-test.sh` still runs on its own) and running the native
+  binary until Ctrl-C. With them went the setcap and "continue after a failure" options and
+  everything that served only those two.
+* The rest is renumbered: 4 install on this computer, 5 flash, 6 git commit/push, 7 publish the
+  page. The private release in `addons/release-ext.sh` is now phase 8. BUILD.md follows.
+
 **Waterfall: no white burn for seconds after our own transmission.**
 
 * Measured on wifilt-pi + local-trx + TS-480: the radio keeps its ACC2 audio muted for 1.75 s
