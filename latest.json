@@ -1,9 +1,9 @@
 {
-  "rev": "20261113", "build": 4, "version": "20261113.4",
+  "rev": "20261113", "build": 5, "version": "20261113.5",
   "oi3": { "fw": "20261113" },
   "assets": {
-    "linux-x86_64": { "name": "wifilt-20261113.4-linux-x86_64.tar.gz", "size": 4142689, "sha256": "d99ac1d2e576ac313a64c249fb07afcf9984d09b2188f653921cbc3f5ab1cddc" },
-    "linux-arm64": { "name": "wifilt-20261113.4-linux-arm64.tar.gz", "size": 10380063, "sha256": "28fbd88ff7d048479fc3996753bb02d41bb83a4d0f34ce74bb4c890695d619e6" },
-    "windows-x64": { "name": "wifilt-20261113.4-windows-x64.zip", "size": 11430736, "sha256": "e1f0f3cc11b947c9c47d2e49015e6c60dec1b47a1320c8cba08c461889e20ecf" }
+    "linux-x86_64": { "name": "wifilt-20261113.5-linux-x86_64.tar.gz", "size": 4147209, "sha256": "b9e52544dd704c137835cfd5bd3b26c4ccda7fe74d595d2de55a5cbb5397217d" },
+    "linux-arm64": { "name": "wifilt-20261113.5-linux-arm64.tar.gz", "size": 10384484, "sha256": "c52c7ed0490866bf24719b718d505775f6ca650c72cb3e51fc7e619cb59ff290" },
+    "windows-x64": { "name": "wifilt-20261113.5-windows-x64.zip", "size": 11435361, "sha256": "3a2bf7ba6add8fd654883e638214f7fa1bd8b6e8814a422a5fbb79441a347068" }
   }
 }
