@@ -219,7 +219,9 @@ volatile bool cwIpSendPending = false;
   203-218 DXC callsign (16B)
   219-224 DXC locator (6B)
   225-241 TRX1_LAN_PASSWORD (17B including 0xff terminator padding)
-  242-245 FREE       (was TRX2 MQTT root topic)
+  242-245 SCREEN saved (screen_dim.h: the IC-705's own SET > Display values
+                      from before dimming -- backlight 0..255, auto adjust,
+                      saver battery, saver DC; 243 = 0xff -> nothing kept)
   246-266 FREE       (was TRX3 MQTT root topic 21B)
   267-287 BT_NAME (21B)
   288 TRXNET_PRIO flag (0xff=unprogrammed → default "OI3 ANT"; 0x01=user set → read string)
@@ -236,7 +238,8 @@ volatile bool cwIpSendPending = false;
                       on for the ESP32 box, off for native; 0 off, 1 on)
   422 WATCH         (native only, watch_hub.h; 0xff = never set = off;
                       bit0 on, bit1 viewers may take RX audio for a waterfall)
-  423 FREE
+  423 SCREEN choice (screen_dim.h; 0xff = never set = dim in digital modes
+                      only; bit0 dim in digital modes, bit1 in the others)
 
   !! Increment EEPROM_SIZE #define !!
 */
@@ -475,6 +478,7 @@ char CwMsg[37] = "";
   #include "watch_hub.h"        // viewers follow the holder's data page (native only)
 #endif
 #include "trx_power.h"          // wake / standby / shutdown of the LAN radio from the web UI
+#include "screen_dim.h"         // IC-705 screen dimming by mode, topbar icon
 #include "addon_hooks.h"        // optional add-ons from addons/ (see the end of this file)
 #if defined(WIFILT_NATIVE)
 #include "update.h"             // native: update from the web (native/update/, SOFTWARE.md)
@@ -633,6 +637,20 @@ LanRadioSnapshot lanRadioSnap;
 // (trxPowerSlot, 0xFF = none). See trx_power.h.
 TrxPowerOp trxPowerOp;
 uint8_t trxPowerSlot = 0xFF;
+// IC-705 screen dimming on the same slot (screen_dim.h). EEPROM 423 / 242-245.
+#define SCREEN_PREFS_EEPROM 423
+#define SCREEN_SAVED_EEPROM 242
+ScreenDimOp screenDimOp;
+ScreenSaved screenSaved;
+uint8_t screenPrefs = 0xff;
+uint8_t screenDimSlot = 0xFF;
+// QRPlog open and in front: CW and SSB are worked at the radio, so the screen
+// stays normal whatever the mode. Its /state poll carries ?scrhold=1 every 5 s;
+// the hold lapses SCREEN_HOLD_LAPSE_MS after the last one.
+#define SCREEN_HOLD_LAPSE_MS 15000
+uint32_t screenHoldUntil = 0;
+// A macro, not a function: a definition this early breaks the .ino prototypes.
+#define screenHeld() (screenHoldUntil && (int32_t)(screenHoldUntil - millis()) > 0)
 WiFiUDP trxUdp;
 TrxNet  net(trxUdp);
 char    trxDeviceName[TRXNET_MAX_DEVICE_NAME];
@@ -1314,6 +1332,8 @@ extern "C" void SHA1Final(unsigned char digest[20], SHA1_CTX* context){
   uint8_t trxPowerControlSlot(void);
   const char *trxPowerRequest(TrxPowerTarget target);
   void trxPowerService(void);
+  void screenDimService(void);
+  const char *screenDimRequest(bool dim);
   String jsonEscape(const String &value);
   String configJsonEscape(const String &s);
   bool rkeyParseKey(const String &text, uint8_t out[16]);
@@ -3011,6 +3031,17 @@ void buildStateJson(char *buf, size_t bufSize, bool lanView){
              !pwrClient->connected() ? "off" : (pwrClient->radioPowered() ? "on" : "standby"),
              trxPowerOffMenu(radioSlots[pwrSlot].civAddr) ? "true" : "false", op);
   }
+  // IC-705 screen dimming (screen_dim.h): ,"scr":"dark" -- absent unless the
+  // LAN radio is an IC-705 that is on, which is how the topbar knows to draw
+  // no screen icon.
+  char scrFrag[24] = "";
+  // "qrplog" = held normal while QRPlog is in front.
+  if (screenDimSlot != 0xFF && pwrSlot == screenDimSlot && radioLanClient(pwrSlot)->radioPowered()) {
+    bool held = screenHeld();
+    const char *scrName = screenDimStateName(screenDimOp, held ? 0 : screenPrefs, screenSaved);
+    if (held && strcmp(scrName, "normal") == 0) scrName = "qrplog";
+    snprintf(scrFrag, sizeof(scrFrag), ",\"scr\":\"%s\"", scrName);
+  }
   // The host machine's WiFi (native only): ,"hostRssi":-48,"hostName":"RPI".
   // hostName present = the topbar is on a PC/Pi and labels the figure with it;
   // hostRssi -999 = wired, AP mode or not associated, show nothing. Empty on the
@@ -3043,7 +3074,7 @@ void buildStateJson(char *buf, size_t bufSize, bool lanView){
     "\"pingRttCtrlMs\":%u,\"pingRttCivMs\":%u,\"pingRttAudioMs\":%u,"
     "\"rxJitterMs\":%u,\"txBufferMs\":%u,\"txBufferNextMs\":%u,"
     "\"civRttLanMs\":%u,\"civRttSerialMs\":%u,\"txDefer\":%s,\"modemBusy\":%s,"
-    "\"dxcConnected\":%s%s%s%s}",
+    "\"dxcConnected\":%s%s%s%s%s}",
     radioLinked ? "true" : "false", lanCatHealthy ? "true" : "false",
     lanAudioReady ? "true" : "false", lanAudioTxReady ? "true" : "false",
     lanStatus, btStat, wifiStat,
@@ -3075,14 +3106,16 @@ void buildStateJson(char *buf, size_t bufSize, bool lanView){
     txRealtimeNow() ? "true" : "false",
     modemBusyNow() ? "true" : "false",
     DxcTelnetStatus ? "true" : "false",
-    gpsFrag, pwrFrag, hostFrag
+    gpsFrag, pwrFrag, scrFrag, hostFrag
   );
 }
 
 void handleGetState(){
   // CAT page polls /state?fast=1 — hold the fast BT poll cadence while it's open
   if (webServer.arg("fast") == "1") catFastUntil = millis() + CAT_FAST_HOLD_MS;
-  static char stateBuf[1536];
+  // QRPlog in front: keep the IC-705 screen normal (screen_dim.h).
+  if (webServer.arg("scrhold") == "1") screenHoldUntil = (millis() + SCREEN_HOLD_LAPSE_MS) | 1;
+  static char stateBuf[1600];
   // ?radio=lan -> the radio JS8 drives; anything else keeps meaning TRX1.
   buildStateJson(stateBuf, sizeof(stateBuf), webServer.arg("radio") == "lan");
   webServer.sendHeader("Cache-Control", "no-cache");
@@ -3296,6 +3329,14 @@ void handlePostCmd(){
                       : target == "standby" ? trxPowerRequest(TRX_POWER_STANDBY)
                       : target == "off"     ? trxPowerRequest(TRX_POWER_SHUTDOWN)
                       : "invalid_state";
+    if (error) webServer.send(409, "application/json", String("{\"error\":\"") + error + "\"}");
+    else webServer.send(200, "application/json", "{\"ok\":true}");
+    return;
+  }
+
+  // IC-705 screen dimming for the mode class the radio is in now.
+  if (type == "screen") {
+    const char *error = screenDimRequest(extractJsonBool(body, "dim", false));
     if (error) webServer.send(409, "application/json", String("{\"error\":\"") + error + "\"}");
     else webServer.send(200, "application/json", "{\"ok\":true}");
     return;
@@ -6614,6 +6655,12 @@ void setup(){
       RkeyKeySet = any != 0 && blank != 0xff;
     }
 
+    // 423 + 242-245 IC-705 screen dimming
+    screenPrefs = EEPROM.read(SCREEN_PREFS_EEPROM);
+    if (screenPrefs != 0xff) screenPrefs &= 3;
+    screenSaved.valid = EEPROM.read(SCREEN_SAVED_EEPROM + 1) != 0xff;
+    for (uint8_t i = 0; i < SCREEN_ITEMS; i++) screenSaved.v[i] = EEPROM.read(SCREEN_SAVED_EEPROM + i);
+
     // 421 web upload pacing
     if (EEPROM.read(WEB_PACING_EEPROM) != 0xff) webPacing = EEPROM.read(WEB_PACING_EEPROM) == 1;
 
@@ -7378,6 +7425,7 @@ void lanClientLoop(){
   if (IcomLanClient *audioRadio = lanRadioClient()) audioRadio->setQuiet(modemBusyNow());
   secondaryLanClientsLoop();
   trxPowerService();
+  screenDimService();
   lanTxBufferTick();
   if (radioSlots[0].transport != RADIO_LAN) return;
   if (lanReconnectRequested) {
@@ -8493,6 +8541,7 @@ void lanRadioCivSnapshot(const uint8_t *frame, size_t len) {
 // snapshot when it is the LAN radio driving JS8.
 void lanCivFrameRoute(uint8_t slot, const uint8_t *frame, size_t len) {
   if (slot == trxPowerSlot) trxPowerOnFrame(trxPowerOp, frame, len);
+  if (slot == screenDimSlot) screenDimOnFrame(screenDimOp, frame, len);
   if (slot == 0) { lanCivFrameHandler(frame, len); return; }
   lanSecondaryCivFrameHandler(slot, frame, len);
   if (slot == lanRadioSnap.slot) lanRadioCivSnapshot(frame, len);
@@ -8546,6 +8595,75 @@ void trxPowerService(void) {
     else if (trxPowerOp.phase == TrxPowerOp::MENU) Serial.println("radio menu Power OFF Setting");
     else if (trxPowerOp.phase == TrxPowerOp::OFF_SENT) Serial.println("18 00");
   }
+}
+
+// The LAN radio's mode text with the DATA suffix ("USB-D"), "" when unknown.
+static const char *screenDimMode(uint8_t slot) {
+  static char text[sizeof(modes)];
+  if (slot == 0) { copyModesText(text, sizeof(text)); return text; }
+  return slot == lanRadioSnap.slot ? lanRadioSnap.mode : "";
+}
+
+// The slot dimming may act on: the power-control slot, when it is an IC-705.
+static uint8_t screenDimControlSlot(void) {
+  uint8_t slot = trxPowerControlSlot();
+  return slot != 0xFF && screenSupported(radioSlots[slot].civAddr) ? slot : 0xFF;
+}
+
+static void screenSavedPersist(void) {
+  for (uint8_t i = 0; i < SCREEN_ITEMS; i++)
+    EEPROM.write(SCREEN_SAVED_EEPROM + i, screenSaved.valid ? screenSaved.v[i] : 0xff);
+  EEPROM.commit();
+}
+
+// Runs from lanClientLoop() on every pass. Never during TX or a power
+// operation, so the EEPROM commit below stays out of the TX-critical window.
+void screenDimService(void) {
+  uint8_t slot = screenDimControlSlot();
+  if (slot != screenDimSlot) {             // SETUP moved or replaced the radio
+    ScreenDimOp fresh;
+    screenDimOp = fresh;
+    screenDimSlot = slot;
+  }
+  if (slot == 0xFF) return;
+  IcomLanClient *client = radioLanClient(slot);
+  bool ready = client->connected() && client->radioPowered() &&
+               !trxPowerSlotTransmitting(slot) && !trxPowerOp.busy();
+  ScreenDimOp::Phase before = screenDimOp.phase;
+  bool savedChanged = false;
+  uint8_t body[6];
+  // Held = nothing wanted dark in any class (prefs 0), so dimming ends now.
+  size_t n = screenDimTick(screenDimOp, millis(), screenDimMode(slot),
+                           screenHeld() ? 0 : screenPrefs, ready, screenSaved, savedChanged, body);
+  if (n) client->sendCommand(body, n);
+  if (savedChanged) screenSavedPersist();
+  if (screenDimOp.phase != before) {
+    Serial.print(" SCR| ");
+    if (screenDimOp.phase == ScreenDimOp::READ) Serial.println("reading SET > Display");
+    else if (screenDimOp.phase == ScreenDimOp::WRITE)
+      Serial.println(screenDimOp.toDark ? "dimming" : "restoring");
+    else if (screenDimOp.phase == ScreenDimOp::HOLD) { Serial.print("failed: "); Serial.println(screenDimOp.why); }
+    else if (screenDimOp.phase == ScreenDimOp::IDLE && before == ScreenDimOp::VERIFY)
+      Serial.println(screenDimOp.toDark ? "dark" : "restored");
+  }
+}
+
+// The topbar icon: dim or not in the mode class the radio is in now. Error for
+// the web request, nullptr when stored.
+const char *screenDimRequest(bool dim) {
+  uint8_t slot = screenDimControlSlot();
+  if (slot == 0xFF) return "unsupported";
+  ScreenClass cls = screenModeClass(screenDimMode(slot));
+  if (cls == SCREEN_CLASS_NONE) return "mode_unknown";
+  screenPrefs = screenPrefsSet(screenPrefs, cls, dim);
+  EEPROM.write(SCREEN_PREFS_EEPROM, screenPrefs);
+  EEPROM.commit();
+  // A failure's hold-off would make the click look ignored.
+  if (screenDimOp.phase == ScreenDimOp::HOLD) { screenDimOp.failures = 0; screenDimOp.enter(ScreenDimOp::IDLE, millis()); }
+  Serial.print(" SCR| ");
+  Serial.print(cls == SCREEN_CLASS_DIGITAL ? "digital" : "voice/CW");
+  Serial.println(dim ? " modes: dim" : " modes: normal");
+  return nullptr;
 }
 
 //-------------------------------------------------------------------------------------------------------

@@ -37,6 +37,12 @@ USAGE
     (for Remote Control)" menu (1A 05 00 73 on the IC-705, 1A 05 01 35 on the
     IC-7610): standby, or a shutdown after which nothing answers at all.
 
+    Mode and display, as an IC-705 (tools/screen-dim-native-check.sh): 26 00
+    reads mode + DATA flag + filter (--data sets the flag); --mode-file names a
+    file holding "<mode byte> <data 0/1>" (hex/dec), re-read every pass, so a
+    test can turn the dial. The IC-705 keeps SET > Display 1A 05 01 36..39
+    (backlight, auto adjust, screen saver battery / DC), read and written.
+
 EXIT
     Runs until interrupted. Prints one line per protocol milestone so a test can
     grep for "CONNECTED".
@@ -309,11 +315,18 @@ class ControlChannel(Channel):
 class CivChannel(Channel):
     CTRL = 0xE1                                                  # deviation 6
 
-    def __init__(self, ip, verbose, civ_addr, freq_hz, mode):
+    def __init__(self, ip, verbose, civ_addr, freq_hz, mode, data_mode=0, mode_file=None):
         super().__init__(ip, CIV_PORT, "civ", verbose)
         self.civ_addr = civ_addr
         self.freq_hz = freq_hz
         self.mode = mode
+        self.data_mode = data_mode
+        self.mode_file = mode_file
+        self.mode_file_text = None
+        # IC-705 SET > Display, 1A 05 01 36..39: backlight 50 %, auto adjust ON,
+        # screen saver 15 min on battery, OFF on DC.
+        self.display = ({0x36: b"\x01\x28", 0x37: b"\x01", 0x38: b"\x04", 0x39: b"\x00"}
+                        if civ_addr == 0xA4 else {})
         self.seq_b = 0
         self.levels = {}                     # 14 xx sub-command -> 2 BCD bytes
         self.opened = False
@@ -334,6 +347,17 @@ class CivChannel(Channel):
         if self.boot_at and now >= self.boot_at:
             self.boot_at = 0.0
             self.set_standby(False)
+        if self.mode_file:
+            try:
+                text = open(self.mode_file).read().strip()
+            except OSError:
+                text = None
+            if text and text != self.mode_file_text:
+                self.mode_file_text = text
+                parts = text.split()
+                self.mode = int(parts[0], 0)
+                self.data_mode = int(parts[1], 0) if len(parts) > 1 else 0
+                self.log(f"-- mode 0x{self.mode:02x} data {self.data_mode} (mode file)")
 
     def set_standby(self, on):
         if on != self.standby:
@@ -411,6 +435,15 @@ class CivChannel(Channel):
                 reply(b"\xFB")
             else:
                 reply(bytes([0x1A, 0x05]) + self.power_menu + bytes([self.power_off_setting]))
+        elif (cmd == 0x1A and len(body) >= 3 and body[0] == 0x05 and body[1] == 0x01
+              and body[2] in self.display):                # SET > Display
+            sub = body[2]
+            if len(body) > 3:
+                self.display[sub] = bytes(body[3:])
+                self.log(f"-- Display 01 {sub:02x} = {hexdump(body[3:])}")
+                reply(b"\xFB")
+            else:
+                reply(bytes([0x1A, 0x05, 0x01, sub]) + self.display[sub])
         elif cmd in (0x00, 0x05) and len(body) == 5:   # set operating frequency
             self.freq_hz = hz_from_bcd(body)
             self.log(f"-- frequency set to {self.freq_hz} Hz")
@@ -422,7 +455,11 @@ class CivChannel(Channel):
             reply(b"\xFB")
         elif cmd == 0x26 and len(body) >= 2 and body[0] == 0x00:   # set selected VFO mode
             self.mode = body[1]
+            if len(body) >= 3:
+                self.data_mode = body[2]
             reply(b"\xFB")
+        elif cmd == 0x26 and body == b"\x00":     # read selected VFO mode + data + filter
+            reply(bytes([0x26, 0x00, self.mode, self.data_mode, 0x01]))
         elif cmd == 0x03:                    # read operating frequency
             reply(bytes([0x03]) + bcd_from_hz(self.freq_hz))
             if self.answered == 1:
@@ -583,6 +620,9 @@ def main():
     parser.add_argument("--freq", type=int, default=7035920, help="frequency in Hz")
     parser.add_argument("--mode", type=lambda v: int(v, 0), default=0x03,
                         help="CI-V mode byte (default 0x03 = CW)")
+    parser.add_argument("--data", type=int, default=0, help="DATA flag of the mode (26 00)")
+    parser.add_argument("--mode-file", default=None,
+                        help='file with "<mode byte> <data 0/1>", re-read every pass')
     parser.add_argument("--civ", type=lambda v: int(v, 0), default=0xA4,
                         help="radio CI-V address (default 0xA4 = IC-705)")
     parser.add_argument("--name", default="IC-705", help="radio name in capabilities")
@@ -606,7 +646,8 @@ def main():
     try:
         control = ControlChannel(args.ip, args.verbose, args.name, args.civ,
                                  args.user, args.password)
-        civ = CivChannel(args.ip, args.verbose, args.civ, args.freq, args.mode)
+        civ = CivChannel(args.ip, args.verbose, args.civ, args.freq, args.mode,
+                         args.data, args.mode_file)
         audio = AudioChannel(args.ip, args.verbose, rx_stall_ms=args.rx_stall, tx_dump=args.tx_dump)
     except OSError as error:
         print(f"cannot bind on {args.ip}: {error}", file=sys.stderr)

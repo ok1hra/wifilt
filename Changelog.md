@@ -11,6 +11,28 @@ published.
 
 ## Working tree — not committed
 
+**IC-705: the screen dims by itself in digital modes, with one icon next to ⏻.**
+
+* CI-V has no "screen off now" (`1A 05 01 40` only lets a short press of POWER do it). Dimming
+  therefore writes SET > Display: backlight 0 %, auto adjust off, screen saver 1 min on battery
+  and on DC. The display goes dark a minute after the last operation at the radio. The radio's
+  own values are read first, kept in EEPROM (242–245) and written back when dimming ends.
+* The firmware decides by the radio's mode (`screen_dim.h`). By default it dims in digital modes
+  (any `-D` mode, RTTY, RTTY-R) and not in SSB, CW, AM, FM or DV. The mode has to hold for 3 s
+  first. Nothing is written during TX, during a power operation, or when the radio did not answer
+  all four reads. Each write is confirmed by reading it back, and settings changed at the radio
+  afterwards are left alone.
+* The topbar icon flips the choice for the kind of mode the radio is in now, kept in EEPROM 423:
+  grey = normal, blue with a moon = dimmed, blinking while it writes, red after a failure.
+  `/cmd {"type":"screen","dim":…}`, `/state` `"scr"`. The `/state` buffer grows to 1600 B.
+* QRPlog in front keeps the screen normal whatever the mode, because CW and SSB are worked at the
+  radio there. Its `/state` poll carries `?scrhold=1`, and dimming by mode returns 15 s after
+  QRPlog is closed or another tab is in front.
+* Tests: `tools/screen-dim-smoke.cpp` (logic) and `tools/screen-dim-native-check.sh` (native
+  build against the fake radio, which now answers `26 00` with the DATA flag, keeps the Display
+  items and takes its mode from `--mode-file`). Not yet tried on a real IC-705, in particular
+  whether wifilt's CI-V polling keeps the screen saver from starting.
+
 **`release.sh`: seven phases instead of nine.**
 
 * The two never-used checks on this computer are gone: the integration test against the fake

@@ -97,6 +97,8 @@ const ARGUMENT_BOUNDS = [
   // ,"radioPower":"standby","pwrCtl":false,"powerOp":"failed:timeout" -- or
   // empty without a LAN radio / for local-trx. Its own bounded snprintf.
   [/^pwrFrag$/, 66, "LAN radio power, present only for an Icom LAN slot"],
+  // ,"scr":"restoring" -- IC-705 screen dimming; empty for any other radio.
+  [/^scrFrag$/, 18, "IC-705 screen dimming"],
   // ,"hostRssi":-999,"hostName":"RPI" -- the PC/Pi's own WiFi link, native
   // build only; empty on the box. Its own snprintf into char[40].
   [/^hostFrag$/, 33, "host WiFi, native only"],

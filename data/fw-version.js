@@ -65,6 +65,16 @@
   var powerFastTimer = null;
   var powerFastUntil = 0;
   var WAKE_ASKED_KEY = 'wifilt.standbyAsked';
+  // IC-705 screen dimming (screen_dim.h in the firmware), /state "scr": null =
+  // no icon (not an IC-705, or it is not on); 'dark' / 'normal' = what is wanted
+  // in the mode the radio is in; 'dimming' / 'restoring' while it is written;
+  // 'failed' while the firmware holds off after a failure; 'qrplog' = kept
+  // normal because QRPlog is in front (CW and SSB are worked at the radio).
+  // The firmware decides by mode by itself -- the icon only flips the choice
+  // for the current class.
+  var scrState = null;
+  var scrWant = null;         // last 'dark'/'normal' intent, for a retry after 'failed'
+  var scrError = '';
   var failCount = 0;
   var OFFLINE_AFTER = 2;      // consecutive failed polls before warning
   var FETCH_TIMEOUT = 4000;   // ms; hung request counts as a failed poll
@@ -118,6 +128,13 @@
       '.topbar-pwr-standby{color:#e0a020;animation:pwrPulse 2s ease-in-out infinite;}' +
       '.topbar-pwr-busy{animation:espOfflineBlink .6s step-end infinite;}' +
       '@keyframes pwrPulse{50%{opacity:.35;}}' +
+      // Screen dimming: grey = normal, blue with a moon = dimmed in this mode.
+      '.topbar-scr{margin-left:7px;color:#7d918b;}' +
+      '.topbar-scr .scr-moon{display:none;}' +
+      '.topbar-scr-dark{color:#6ea8ff;}' +
+      '.topbar-scr-dark .scr-moon{display:inline;fill:currentColor;stroke:none;}' +
+      '.topbar-scr-failed{color:#e5484d;}' +
+      '.topbar-scr[aria-disabled=true]{cursor:default;opacity:.6;}' +
       // The topbar is nowrap; the notes in the panel have to wrap. Anchored on
       // the icon's left edge: the icon leads the segment, so RSSI and FW give
       // the panel room to the right even on a phone, where right:0 ran it off
@@ -276,6 +293,59 @@
 
   var POWER_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" ' +
     'stroke-linecap="round" aria-hidden="true"><path d="M12 3v9"/><path d="M6.34 7.34A8 8 0 1 0 17.66 7.34"/></svg>';
+
+  var SCREEN_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M9 20h6M12 16v4"/>' +
+    '<path class="scr-moon" d="M14.2 7.2a3.2 3.2 0 1 0 0 5.6a3.9 3.9 0 0 1 0-5.6z"/></svg>';
+
+  // QRPlog in front asks the firmware to keep the screen normal: its /state poll
+  // carries ?scrhold=1, which lapses 15 s after the last one -- a closed or
+  // hidden QRPlog tab gives dimming by mode back.
+  function qrplogHold() {
+    return location.pathname === '/log.html' && document.visibilityState !== 'hidden';
+  }
+
+  function screenWantsDark() {
+    if (scrState === 'qrplog') return false;
+    if (scrState === 'dark' || scrState === 'dimming') return true;
+    if (scrState === 'normal' || scrState === 'restoring') return false;
+    return scrWant === 'dark';
+  }
+
+  function screenTitle() {
+    if (scrState === 'qrplog')
+      return 'IC-705 screen: kept normal while QRPlog is open (CW and SSB are worked at the radio). ' +
+        'Dimming by mode comes back when QRPlog is closed or another page is in front.';
+    var now = scrState === 'dimming' ? 'dimming\u2026' : scrState === 'restoring' ? 'restoring\u2026'
+      : scrState === 'failed' ? 'the radio did not take the setting (click to retry)'
+      : scrState === 'dark' ? 'dimmed in this mode' : 'normal in this mode';
+    return 'IC-705 screen: ' + now + (scrError ? ' \u2014 ' + scrError : '') +
+      '. Dimmed = backlight 0 % and screen saver 1 min; the radio\u2019s own settings come back ' +
+      'when dimming ends. Default: dimmed in digital modes (-D, RTTY), normal in SSB and CW. ' +
+      'Click to ' + (scrState === 'failed' ? 'retry' : screenWantsDark() ? 'keep the screen normal' : 'dim the screen') +
+      ' in this kind of mode.';
+  }
+
+  function onScreenClick() {
+    if (scrState === 'qrplog') return;
+    var dim = scrState === 'failed' ? screenWantsDark() : !screenWantsDark();
+    scrError = '';
+    fetch('/cmd', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                   body: JSON.stringify({type: 'screen', dim: dim})})
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (d) {
+          if (!r.ok) scrError = d && d.error === 'mode_unknown'
+            ? 'the radio\u2019s mode is not known yet' : 'the interface refused it';
+        });
+      })
+      .catch(function () { scrError = 'the interface did not answer'; })
+      .then(function () {
+        if (!scrError) scrState = dim ? 'dimming' : 'restoring';
+        render();
+        followFast(15000);
+      });
+  }
 
   var POWER_REFUSALS = {
     transmitting: 'The radio is transmitting. Try again after the over.',
@@ -442,18 +512,22 @@
       .catch(function () { powerError = 'The interface did not answer.'; })
       .then(function () {
         if (powerError) { powerPanelOpen = true; render(); }
-        // Follow the operation at 1 s rather than the usual 5 s.
-        powerFastUntil = Date.now() + 40000;
-        if (!powerFastTimer) powerFastTimer = window.setInterval(function () {
-          if (Date.now() > powerFastUntil) {
-            window.clearInterval(powerFastTimer);
-            powerFastTimer = null;
-            return;
-          }
-          fetchLocal();
-        }, 1000);
-        fetchLocal();
+        followFast(40000);
       });
+  }
+
+  // Follow an operation at 1 s rather than the usual 5 s.
+  function followFast(ms) {
+    powerFastUntil = Math.max(powerFastUntil, Date.now() + ms);
+    if (!powerFastTimer) powerFastTimer = window.setInterval(function () {
+      if (Date.now() > powerFastUntil) {
+        window.clearInterval(powerFastTimer);
+        powerFastTimer = null;
+        return;
+      }
+      fetchLocal();
+    }, 1000);
+    fetchLocal();
   }
 
   function onPowerClick() {
@@ -532,6 +606,20 @@
       pwrWrap.appendChild(pwr);
       if (powerPanelOpen) floatPanel(powerPanel(), pwrWrap, 'left');
       el.appendChild(pwrWrap);
+      if (scrState !== null && radioPower === 'on') {
+        var scr = document.createElement('button');
+        scr.type = 'button';
+        var scrBusy = scrState === 'dimming' || scrState === 'restoring';
+        if (scrState === 'qrplog') scr.setAttribute('aria-disabled', 'true');
+        scr.className = 'topbar-pwr topbar-scr' + (screenWantsDark() ? ' topbar-scr-dark' : '') +
+          (scrState === 'failed' || scrError ? ' topbar-scr-failed' : '') + (scrBusy ? ' topbar-pwr-busy' : '');
+        scr.innerHTML = SCREEN_ICON;
+        scr.title = screenTitle();
+        scr.setAttribute('aria-label', scr.title);
+        scr.setAttribute('aria-pressed', screenWantsDark() ? 'true' : 'false');
+        scr.addEventListener('click', onScreenClick);
+        el.appendChild(scr);
+      }
       var pwrSep = document.createElement('span');
       pwrSep.className = 'topbar-fw-sep';
       pwrSep.textContent = '|';
@@ -700,7 +788,8 @@
   function fetchLocal() {
     var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
     var timer = ctrl ? window.setTimeout(function () { ctrl.abort(); }, FETCH_TIMEOUT) : null;
-    fetch('/state', ctrl ? { signal: ctrl.signal, cache: 'no-store' } : { cache: 'no-store' })
+    fetch(qrplogHold() ? '/state?scrhold=1' : '/state',
+          ctrl ? { signal: ctrl.signal, cache: 'no-store' } : { cache: 'no-store' })
       .then(function (r) {
         if (!r.ok) throw new Error('http ' + r.status);
         return r.json();
@@ -735,6 +824,8 @@
         } else {
           radioPower = null; pwrCtl = false; powerOp = '';
         }
+        scrState = d && typeof d.scr === 'string' ? d.scr : null;
+        if (scrState === 'dark' || scrState === 'normal') scrWant = scrState;
         if (d && typeof d.gpsGrid === 'string') {
           gpsGrid = d.gpsGrid;
           gpsFixAgeMs = Number.isFinite(Number(d.gpsFixAgeMs)) ? Number(d.gpsFixAgeMs) : null;
@@ -802,6 +893,9 @@
     window.addEventListener('resize', placePanels);
     window.addEventListener('scroll', placePanels, true);
     window.setInterval(fetchLocal, 5000);
+    // Back to QRPlog: hold the screen normal now, not at the next poll.
+    if (location.pathname === '/log.html')
+      document.addEventListener('visibilitychange', function () { if (qrplogHold()) fetchLocal(); });
     fetchRemote();
   }
 
