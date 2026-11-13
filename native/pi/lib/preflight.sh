@@ -9,8 +9,15 @@ CMDLINE=/boot/firmware/cmdline.txt
 fs_locked_now()  { [[ $(findmnt -no FSTYPE / 2>/dev/null) == overlay ]]; }
 fs_locked_conf() { grep -q 'overlayroot=tmpfs' "$CMDLINE" 2>/dev/null; }
 
-pkg_version() { cat "$PKG/VERSION" 2>/dev/null || echo "unknown"; }
-installed_version() { cat "$PREFIX/VERSION" 2>/dev/null || { [[ -x $PREFIX/wifilt ]] && echo "unknown"; } || echo "none"; }
+# "20261113", or "20261113.1" with a same-day build number in BUILD
+version_of() {  # version_of DIR -> prints, fails when there is no VERSION
+  local v b=""
+  v=$(tr -dc '0-9' < "$1/VERSION" 2>/dev/null) && [[ -n $v ]] || return 1
+  [[ -r $1/BUILD ]] && b=$(tr -dc '0-9' < "$1/BUILD")
+  if [[ -n $b && $b != 0 ]]; then echo "$v.$b"; else echo "$v"; fi
+}
+pkg_version() { version_of "$PKG" || echo "unknown"; }
+installed_version() { version_of "$PREFIX" || { [[ -x $PREFIX/wifilt ]] && echo "unknown"; } || echo "none"; }
 
 preflight() {
   local arch id ver

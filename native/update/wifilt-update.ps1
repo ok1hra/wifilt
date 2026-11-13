@@ -90,11 +90,33 @@ function Get-InstalledRev {
   return ''
 }
 
+# Same-day release number (REV_BUILD, file BUILD next to VERSION); 0 for the
+# first release of a day and for packages from before it. VERSION stays the
+# 8-digit date: updaters older than this read exactly eight digits there.
+function Get-BuildIn([string]$dir) {
+  $f = Join-Path $dir 'BUILD'
+  if (Test-Path $f) {
+    $b = (Get-Content $f -Raw) -replace '[^0-9]', ''
+    if ($b) { return [int]$b }
+  }
+  return 0
+}
+function Format-Version([string]$rev, [int]$build) {
+  if ($rev -and $build -gt 0) { return "$rev.$build" }
+  return $rev
+}
+function Get-InstalledVersion { Format-Version (Get-InstalledRev) (Get-BuildIn $ExeDir) }
+# true when rev/build is newer than thanRev/thanBuild
+function Test-Newer([string]$rev, [int]$build, [string]$thanRev, [int]$thanBuild) {
+  if ([long]$rev -ne [long]$thanRev) { return ([long]$rev -gt [long]$thanRev) }
+  return ($build -gt $thanBuild)
+}
+
 # ------------------------------------------------------------------- status --
 $Phases  = @('check', 'download', 'verify', 'backup', 'stop', 'install', 'start', 'health', 'done')
 $Weights = @(2, 40, 8, 5, 5, 20, 5, 15, 0)
 $S = [ordered]@{
-  id = $Id; from = (Get-InstalledRev); to = ''; platform = $Platform; mode = 'windows'
+  id = $Id; from = (Get-InstalledVersion); to = ''; platform = $Platform; mode = 'windows'
   state = 'running'; dry = [int][bool]$Dry; phase = 'check'; phaseIdx = 0; phases = $Phases
   phasePct = 0; pct = 0; bytes = 0; total = 0; msg = ''; error = ''
   startedAt = (Now); ts = (Now); log = @()
@@ -134,10 +156,11 @@ function Fail([string]$why) {
 
 # -------------------------------------------------------------------- check --
 function Invoke-Check {
-  $err = ''; $rev = ''; $name = ''; $size = 0; $sha = ''
+  $err = ''; $rev = ''; $build = 0; $name = ''; $size = 0; $sha = ''
   try {
     $m = Get-Latest
     $rev = [string]$m.rev
+    if ($m.build) { $build = [int]$m.build }
     $a = $m.assets.$Platform
     if ($a) { $name = [string]$a.name; $size = [long]$a.size; $sha = [string]$a.sha256 }
     elseif ($rev) { $err = "no build for $Platform in REV $rev" }
@@ -146,7 +169,9 @@ function Invoke-Check {
     $err = if ($_.Exception.Message -eq 'token-missing') { 'token-missing' } else { $_.Exception.Message }
   }
   $o = [ordered]@{
-    rev = $rev; installed = (Get-InstalledRev); platform = $Platform; asset = $name; size = $size
+    rev = $rev; build = $build; version = (Format-Version $rev $build)
+    installed = (Get-InstalledRev); installedBuild = (Get-BuildIn $ExeDir); installedVersion = (Get-InstalledVersion)
+    platform = $Platform; asset = $name; size = $size
     sha256 = $sha; channel = $Channel.KIND; tokenNeeded = ($Channel.TOKEN -eq 'required')
     checkedAt = (Now); error = $err
   }
@@ -156,14 +181,21 @@ function Invoke-Check {
 }
 
 # ------------------------------------------------------------------- update --
-function Test-Health([string]$rev, [int]$limit) {
+# A wifilt from before REV_BUILD reports no "build" at all, which counts as 0.
+function Test-HealthBody([string]$b, [string]$rev, [int]$build) {
+  if ($b -notlike "*`"rev`":`"$rev`"*") { return $false }
+  if ($b -like "*`"build`":*") { return ($b -match ('"build":' + $build + '[,}]')) }
+  return ($build -eq 0)
+}
+
+function Test-Health([string]$rev, [int]$build, [int]$limit) {
   $t0 = Now
   while ((Now) - $t0 -lt $limit) {
     try {
       $b = (Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 -Uri "http://127.0.0.1:$Port/health.json").Content
-      if ($b -like "*`"rev`":`"$rev`"*") { return $true }
+      if (Test-HealthBody $b $rev $build) { return $true }
     } catch { }
-    $S.phasePct = [int](((Now) - $t0) * 100 / $limit); $S.msg = "waiting for WIFILT $rev on port $Port"
+    $S.phasePct = [int](((Now) - $t0) * 100 / $limit); $S.msg = "waiting for WIFILT $(Format-Version $rev $build) on port $Port"
     Write-Status
     Start-Sleep -Seconds 1
   }
@@ -202,10 +234,12 @@ function Invoke-Update {
   Set-Phase 'check' 'looking for the newest build'
   $c = Invoke-Check
   if ($c.error) { Fail "check failed: $($c.error)"; return }
-  $S.to = $c.rev
+  $toRev = [string]$c.rev; $toBuild = [int]$c.build
+  $S.to = Format-Version $toRev $toBuild
   if ($c.sha256 -notmatch '^[0-9a-f]{64}$') { Fail "latest.json has no valid SHA256 for $Platform"; return }
-  if (-not $Dry -and $S.from -and ([long]$S.to -le [long]$S.from)) {
-    Fail "REV $($S.to) is not newer than the installed $($S.from)"; return
+  $instRev = Get-InstalledRev; $instBuild = Get-BuildIn $ExeDir
+  if (-not $Dry -and $instRev -and -not (Test-Newer $toRev $toBuild $instRev $instBuild)) {
+    Fail "$($S.to) is not newer than the installed $($S.from)"; return
   }
   Write-Log "installed $($S.from), newest $($S.to) ($($c.asset), $($c.size) B)"
 
@@ -265,7 +299,10 @@ function Invoke-Update {
   $pkg = $pkg.FullName
   $pkgRev = ''
   if (Test-Path (Join-Path $pkg 'VERSION')) { $pkgRev = (Get-Content (Join-Path $pkg 'VERSION') -Raw) -replace '[^0-9]', '' }
-  if ($pkgRev -ne $S.to) { Fail "package VERSION '$pkgRev' does not match REV $($S.to)"; return }
+  $pkgBuild = Get-BuildIn $pkg
+  if ($pkgRev -ne $toRev -or $pkgBuild -ne $toBuild) {
+    Fail "package $(Format-Version $pkgRev $pkgBuild) does not match $($S.to)"; return
+  }
   $edOld = [bool](Select-String -Path (Join-Path $ExeDir 'wifilt.exe') -SimpleMatch $EditionMark -Quiet)
   $edNew = [bool](Select-String -Path (Join-Path $pkg 'wifilt.exe') -SimpleMatch $EditionMark -Quiet)
   if ($edOld -ne $edNew) { Fail 'the package is a different edition than the installed one -- refused'; return }
@@ -296,11 +333,12 @@ function Invoke-Update {
     Start-Sleep -Seconds 1
   } else { Start-Sleep -Seconds 2 }
 
-  Set-Phase 'install' "installing REV $($S.to)"
+  Set-Phase 'install' "installing $($S.to)"
   if (-not $Dry) {
     try {
       $dataDir = Join-Path $ExeDir 'data'
       if (Test-Path (Join-Path $pkg 'data')) { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $dataDir }
+      if (-not (Test-Path (Join-Path $pkg 'BUILD'))) { Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $ExeDir 'BUILD') }
       Copy-Item -Path (Join-Path $pkg '*') -Destination $ExeDir -Recurse -Force
     } catch {
       Fail "install failed: $($_.Exception.Message)"; Restore-Previous $ltx; return
@@ -314,14 +352,14 @@ function Invoke-Update {
   }
 
   Set-Phase 'health' 'waiting for the new version to answer'
-  $expect = if ($Dry) { $S.from } else { $S.to }
-  if (-not (Test-Health $expect 60)) {
+  if ($Dry) { $expRev = $instRev; $expBuild = $instBuild } else { $expRev = $toRev; $expBuild = $toBuild }
+  if (-not (Test-Health $expRev $expBuild 60)) {
     Fail 'the new version did not answer within 60 s'
     if (-not $Dry) { Restore-Previous $ltx }
     Write-Status; return
   }
   $S.state = 'done'
-  Set-Phase 'done' $(if ($Dry) { 'dry run finished, nothing was changed' } else { "updated to REV $($S.to)" })
+  Set-Phase 'done' $(if ($Dry) { 'dry run finished, nothing was changed' } else { "updated to $($S.to)" })
   Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $work, $file
   if (-not $Dry) { Invoke-Check | Out-Null }
 }

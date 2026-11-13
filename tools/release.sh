@@ -82,13 +82,15 @@ then runs them in one go without further questions. Enter accepts the capitalise
 when present, extends it.
 
   1  REV -> today's date                     (y/N)
+     (REV already today: REV_BUILD + 1, on by default when the page already
+      offers today's version -- a second release the same day, "REV.N")
   2  Export compiled binary                  (Y/n)
   3  make -C native NO_ADDONS=1 dist         (Y/n, Y/n)
   4  tools/native-integration-test.sh        (y/N)
   5  run the native build --data-dir data    (y/N)
   6  install this build on this computer     (Y/n)
   7  tools/upload-firmware-spiffs.sh         (Y/n)
-  8  git commit / git push                   (y/N, twice)
+  8  git commit / git push                   (Y/n, twice)
   9  tools/gh-pages.sh --publish             (Y/n, only if the source changed)
 
 Options:
@@ -895,14 +897,43 @@ commit_repo() {
   fi
 }
 
+# archives_missing_ltx DIR  -- the archives of REV in DIR that do not carry
+# local-trx, one name per line. Such an archive must never be published: the
+# web updater installs it with install.sh, which removes a local-trx it does
+# not find in the archive -- REV 20261113 went out like that and took
+# local-trx away from the station that updated.
+archives_missing_ltx() {
+  local dir="$1" a
+  for a in "${dir}/wifilt-${REV}-linux-x86_64.tar.gz" "${dir}/wifilt-${REV}-linux-arm64.tar.gz"; do
+    [[ -f "$a" ]] || continue
+    tar tzf "$a" 2>/dev/null | grep -E '^[^/]+/local-trx$' >/dev/null || basename "$a"
+  done
+  a="${dir}/wifilt-${REV}-windows-x64.zip"
+  if [[ -f "$a" ]]; then
+    unzip -Z1 "$a" 2>/dev/null | grep -E '^[^/]+/local-trx\.exe$' >/dev/null || basename "$a"
+  fi
+  return 0
+}
+
 # bundle_local_trx_set DIST  -- local-trx into the three archives in DIST
 # (dist_targets decides which exist). Called again for another DIST, make
 # finds local-trx already built.
+# ltx_make LOG [TARGET]  -- make -C local-trx into LOG; on failure the end of
+# the log is shown, so the reason is on screen and not only "failed".
+ltx_make() {
+  local log="$1"; shift
+  mkdir -p "$(dirname "$log")"   # local-trx/build/ is in .gitignore
+  if make -C "${ROOT_DIR}/local-trx" "$@" >"$log" 2>&1; then return 0; fi
+  warn "  make -C local-trx $* selhalo, konec $log:"
+  tail -n 15 "$log" | sed 's/^/    /' >&2
+  return 1
+}
+
 bundle_local_trx_set() {
   local dir="$1" entry target gate archive staging bin kind label
   LOCAL_TRX_BUNDLED=()
   info "  make -C local-trx (Linux x86_64)"
-  if make -C "${ROOT_DIR}/local-trx" >/dev/null 2>&1; then
+  if ltx_make "${ROOT_DIR}/local-trx/build/release-linux.log"; then
     if bundle_local_trx_into "${dir}/wifilt-${REV}-linux-x86_64.tar.gz" "wifilt-linux-x86_64" \
         "${ROOT_DIR}/local-trx/build/local-trx" tar; then
       LOCAL_TRX_BUNDLED+=("linux-x86_64")
@@ -920,7 +951,7 @@ bundle_local_trx_set() {
   for entry in "${cross[@]}"; do
     IFS='|' read -r target gate archive staging bin kind label <<< "$entry"
     [[ " ${dist_targets[*]} " == *" $gate "* ]] || continue
-    if ensure_local_trx_cross_libs "$target" && make -C "${ROOT_DIR}/local-trx" "$target" >/dev/null 2>&1; then
+    if ensure_local_trx_cross_libs "$target" && ltx_make "${ROOT_DIR}/local-trx/build/release-${target}.log" "$target"; then
       if bundle_local_trx_into "$archive" "$staging" "$bin" "$kind"; then
         LOCAL_TRX_BUNDLED+=("${staging#wifilt-}")
       fi
@@ -1043,10 +1074,21 @@ skip_if_blocked() {  # skip_if_blocked N  -> 0 when the phase must be skipped
   return 1
 }
 
-read_rev() { sed -n 's/^#define[[:space:]]\+REV[[:space:]]\+\([0-9]\+\).*/\1/p' "$SKETCH" | head -1; }
+# REV_DATE = #define REV (the date), REV_BUILD = #define REV_BUILD (same-day
+# release number, 0 = first of the day). REV = the version everything is
+# named after: "20261113", or "20261113.1" -- what native/Makefile calls
+# VERSION and gh-pages.sh FW_REV.
+read_rev_date()  { sed -n 's/^#define[[:space:]]\+REV[[:space:]]\+\([0-9]\+\).*/\1/p' "$SKETCH" | head -1; }
+read_rev_build() { sed -n 's/^#define[[:space:]]\+REV_BUILD[[:space:]]\+\([0-9]\+\).*/\1/p' "$SKETCH" | head -1; }
+version_of() { if [[ "${2:-0}" -gt 0 ]]; then echo "$1.$2"; else echo "$1"; fi; }
+read_rev() {
+  REV_DATE="$(read_rev_date)"
+  REV_BUILD="$(read_rev_build)"; REV_BUILD="${REV_BUILD:-0}"
+  REV="$(version_of "$REV_DATE" "$REV_BUILD")"
+}
 
-REV="$(read_rev)"
-[[ -n "$REV" ]] || { fail "ERROR: v $SKETCH není #define REV"; exit 1; }
+read_rev
+[[ -n "$REV_DATE" ]] || { fail "ERROR: v $SKETCH není #define REV"; exit 1; }
 say ""
 info "  REV $REV, větev $BRANCH"
 
@@ -1055,6 +1097,15 @@ info "  REV $REV, větev $BRANCH"
 # here and the Enter writes anything anywhere.
 TODAY="$(date +%Y%m%d)"
 REV_PLAN="$REV"
+# The version on the published page (gh-pages latest.json): when it is already
+# today's REV, another release today needs REV_BUILD + 1 -- otherwise no
+# updater would ever see it as newer.
+PUBLISHED_VERSION=""
+if git -C "$ROOT_DIR" fetch --quiet origin gh-pages 2>/dev/null; then
+  _pub="$(git -C "$ROOT_DIR" show FETCH_HEAD:latest.json 2>/dev/null || true)"
+  PUBLISHED_VERSION="$(sed -n 's/.*"version": *"\([0-9.]*\)".*/\1/p' <<<"$_pub" | head -1)"
+  [[ -n "$PUBLISHED_VERSION" ]] || PUBLISHED_VERSION="$(sed -n 's/.*"rev": *"\([0-9]\{8\}\)".*/\1/p' <<<"$_pub" | head -1)"
+fi
 
 # dist-linux always; dist-windows/dist-arm64 only when their cross-toolchain
 # was found in phase 0. Built as an explicit target list (not the Makefile's
@@ -1067,13 +1118,21 @@ want_ltx=false
 
 menu_add h_build head 0 "sestavení"
 # ---- 1 REV
-menu_phase 1 "REV -> dnešní datum ($TODAY)" N
-if [[ "$REV" == "$TODAY" ]]; then
-  M_OFF[p1]="REV $REV už odpovídá dnešku"
-elif [[ "$REV" -gt "$TODAY" ]]; then
-  M_OFF[p1]="REV $REV je v budoucnosti -- nechává se"
+if [[ "$REV_DATE" == "$TODAY" ]]; then
+  # Same day: the choice is another release of today, REV_BUILD + 1. On by
+  # default when today's version is what the page already offers.
+  _p1_default=N
+  [[ -n "$PUBLISHED_VERSION" && "$PUBLISHED_VERSION" == "$REV" ]] && _p1_default=Y
+  menu_phase 1 "další vydání dnes: $REV -> $(version_of "$REV_DATE" $((REV_BUILD + 1)))" "$_p1_default"
+  if [[ "$_p1_default" == Y ]]; then M_NOTE[p1]="$REV už je na stránce"
+  else M_NOTE[p1]="na stránce ${PUBLISHED_VERSION:-nic / nezjištěno}"; fi
 else
-  M_NOTE[p1]="teď $REV"
+  menu_phase 1 "REV -> dnešní datum ($TODAY)" N
+  if [[ "$REV_DATE" -gt "$TODAY" ]]; then
+    M_OFF[p1]="REV $REV je v budoucnosti -- nechává se"
+  else
+    M_NOTE[p1]="teď $REV"
+  fi
 fi
 
 # ---- 2 firmware
@@ -1128,7 +1187,7 @@ detect_ports
 
 menu_add h_pub head 0 "zveřejnění"
 # ---- 8 git
-menu_phase 8 "git commit / push" N
+menu_phase 8 "git commit / push" Y
 M_NOTE[p8]="před commitem se přerazí ?v= v data/*.html"
 plan_commit_repo "$ROOT_DIR" "wifilt"
 ext_hook plan_commit
@@ -1146,7 +1205,10 @@ M_NOTE[fsm]="~1 min na edici"
 # menu_refresh -- what changes with the other choices; before every redraw.
 menu_refresh() {
   REV_PLAN="$REV"
-  on p1 && REV_PLAN="$TODAY"
+  if on p1; then
+    if [[ "$REV_DATE" == "$TODAY" ]]; then REV_PLAN="$(version_of "$REV_DATE" $((REV_BUILD + 1)))"
+    else REV_PLAN="$TODAY"; fi
+  fi
   INSTALL_ARCHIVE="${DIST_DIR}/wifilt-${REV_PLAN}-linux-x86_64.tar.gz"
   # An extension may point INSTALL_ARCHIVE elsewhere, or mark its items here.
   ext_hook menu_refresh
@@ -1184,7 +1246,11 @@ for _k in "${MENU_KEYS[@]}"; do
   if [[ -n "${M_OFF[$_k]}" ]]; then PLAN_NOTE[$_n]="${M_OFF[$_k]}"
   elif [[ -n "${M_NOTE[$_k]}" ]]; then PLAN_NOTE[$_n]="${M_NOTE[$_k]}"; fi
 done
-want 1 && PLAN_NOTE[1]="$REV -> $TODAY"
+if [[ "$REV_DATE" == "$TODAY" ]]; then
+  want 1 && PLAN_NOTE[1]="$REV -> $(version_of "$REV_DATE" $((REV_BUILD + 1)))"
+else
+  want 1 && PLAN_NOTE[1]="$REV -> $TODAY"
+fi
 on ltx && want_ltx=true
 want 3 && $want_ltx && PLAN_NOTE[3]+=" + local-trx"
 for _t in win arm64; do on "ltx_$_t" && PLAN_LTX_CROSS[$_t]=yes; done
@@ -1225,18 +1291,28 @@ PLAN_LOCKED=true
 
 # ---------------------------------------------------------------- phase 1 ----
 phase_banner 1 "REV podle dnešního data"
-if [[ "$REV" == "$TODAY" ]]; then
+# set_rev DATE BUILD -- both #defines in wifilt.ino
+set_rev() {
+  sed -i -e "s/^\(#define[[:space:]]\+REV[[:space:]]\+\)[0-9]\+/\1$1/" \
+         -e "s/^\(#define[[:space:]]\+REV_BUILD[[:space:]]\+\)[0-9]\+/\1$2/" "$SKETCH"
+  read_rev
+  [[ "$REV_DATE" == "$1" && "$REV_BUILD" == "$2" ]] || abort "REV / REV_BUILD se nepodařilo přepsat" 1
+  ok "  REV $REV"
+  wrote "wifilt" "REV" "wifilt.ino: #define REV $REV_DATE, #define REV_BUILD $REV_BUILD"
+}
+if [[ "$REV_DATE" == "$TODAY" ]] && want 1; then
+  set_rev "$REV_DATE" $((REV_BUILD + 1))
+  mark 1 "hotovo"
+elif [[ "$REV_DATE" == "$TODAY" ]]; then
   info "  REV $REV už odpovídá dnešku."
+  [[ -n "$PUBLISHED_VERSION" && "$PUBLISHED_VERSION" == "$REV" ]] \
+    && warn "  $REV už je na stránce -- bez REV_BUILD + 1 ho žádný updater nenabídne"
   mark 1 "beze změny"
-elif [[ "$REV" -gt "$TODAY" ]]; then
+elif [[ "$REV_DATE" -gt "$TODAY" ]]; then
   warn "  REV $REV je v budoucnosti (dnes $TODAY) -- nechávám být."
   mark 1 "beze změny"
 elif want 1; then
-  sed -i "s/^\(#define[[:space:]]\+REV[[:space:]]\+\)[0-9]\+/\1$TODAY/" "$SKETCH"
-  REV="$(read_rev)"
-  [[ "$REV" == "$TODAY" ]] || abort "REV se nepodařilo přepsat" 1
-  ok "  REV $REV"
-  wrote "wifilt" "REV" "wifilt.ino: #define REV $REV"
+  set_rev "$TODAY" 0
   mark 1 "hotovo"
 else
   info "  REV zůstává $REV"
@@ -1285,6 +1361,15 @@ if ! skip_if_blocked 3; then
     # NO_ADDONS=1: native/dist is built without addons/ whatever is beside the
     # sketch -- it is what phase 9 publishes.
     dist_build "$DIST_DIR" NO_ADDONS=1 || { mark 3 "selhalo"; abort "make -C native dist selhal." 3; }
+    missing_ltx="$(archives_missing_ltx "$DIST_DIR" | tr '\n' ' ')"
+    if [[ -n "$missing_ltx" ]]; then
+      if $FORCE; then
+        warn "  --force: balíky BEZ local-trx: ${missing_ltx}-- update z webu by local-trx odinstaloval"
+      else
+        mark 3 "bez local-trx"
+        abort "balíky bez local-trx: ${missing_ltx}-- update z webu by local-trx odinstaloval (zapni 'přibalit local-trx', oprav build local-trx, nebo --force)" 3
+      fi
+    fi
     wrote_dist "wifilt" "$DIST_DIR"
     ext_hook dist
     mark 3 "hotovo"
@@ -1455,7 +1540,7 @@ if ! skip_if_blocked 8; then
     info "  ?v= v data/*.html přeraženy podle obsahu"
 
     changelog_rev="$(sed -n '/^## Working tree/,/^## REV/p' "${ROOT_DIR}/Changelog.md" \
-                     | grep -o '\*\*REV [0-9]\+\.\*\*' | head -1 | grep -o '[0-9]\+' || true)"
+                     | grep -oE '\*\*REV [0-9]+(\.[0-9]+)?\.\*\*' | head -1 | grep -oE '[0-9]+(\.[0-9]+)?' || true)"
     if [[ -z "$changelog_rev" ]]; then
       warn "  V sekci 'Working tree — not committed' není žádné **REV NNNNNNNN.**"
     elif [[ "$changelog_rev" != "$REV" ]]; then
@@ -1515,6 +1600,9 @@ else
     [[ -f "$win_archive"     ]] || warn "  chybí windowsový archiv pro REV $REV -- stránka ho nenabídne"
     [[ -f "$arm64_archive"   ]] || warn "  chybí Raspberry Pi archiv pro REV $REV -- stránka ho nenabídne"
   fi
+
+  missing_ltx="$(archives_missing_ltx "$DIST_DIR" | tr '\n' ' ')"
+  [[ -z "$missing_ltx" ]] || gate "balíky bez local-trx: ${missing_ltx}-- update z webu by local-trx odinstaloval"
 
   if [[ -n "$(git -C "$ROOT_DIR" status --porcelain)" ]]; then
     gate "pracovní strom není čistý -- publikoval bys necommitnutý stav"

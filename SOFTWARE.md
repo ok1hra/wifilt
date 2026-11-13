@@ -557,6 +557,11 @@ still finishes — the new WIFILT works with the old OI3 firmware, the OI3 keeps
 the result and the log say what happened, and the next update tries again (or run
 `wifilt-pi-setup --only oi3`).
 
+**Versions.** A version is the release date, `20261113`. A second release the same day is
+`20261113.1`, then `20261113.2`, and the page and the updater treat it as newer. Installations
+older than 20261113.1 still update normally from one day to the next, but they do not see a
+second release of the same day.
+
 What can update itself:
 
 | Installation | From the web |

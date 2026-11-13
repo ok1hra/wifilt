@@ -56,6 +56,12 @@ die_usage() { sed -n '2,8p' "$0" | sed 's/^# \?//'; exit 2; }
 
 now() { date +%s; }
 
+# Seconds since boot. Every timeout is measured with this, never with the wall
+# clock: a Raspberry Pi has no RTC, comes back from the unlock reboot with the
+# time it saved before (hours old) and jumps when NTP syncs -- with date +%s
+# that jump made a 90 s health wait "expire" after a few seconds (2026-11-13).
+uptime_s() { local u; read -r u _ < /proc/uptime; echo "${u%%.*}"; }
+
 json_str() {  # json_str TEXT -> "escaped"
   local s
   s="$(printf '%s' "$1" | tr -d '\000-\010\013-\037')"
@@ -84,6 +90,27 @@ installed_rev() {
   echo "$v"
 }
 
+# Same-day release number (REV_BUILD in wifilt.ino, file BUILD next to
+# VERSION); 0 for the first release of a day and for packages from before it.
+# VERSION itself stays the 8-digit date: updaters older than this read exactly
+# eight digits there.
+installed_build() {
+  local b=""
+  [[ -r "$PREFIX/BUILD" ]] && b="$(tr -dc '0-9' < "$PREFIX/BUILD")"
+  echo "$((10#${b:-0}))"
+}
+
+# version_str REV BUILD -> "20261113" or "20261113.1"
+version_str() { if [[ -n "$1" && "${2:-0}" -gt 0 ]]; then echo "$1.$2"; else echo "$1"; fi; }
+
+installed_version() { version_str "$(installed_rev)" "$(installed_build)"; }
+
+# newer REV BUILD THAN_REV THAN_BUILD -> 0 when the first is newer
+newer() {
+  (( 10#$1 > 10#$3 )) && return 0
+  (( 10#$1 == 10#$3 && ${2:-0} > ${4:-0} ))
+}
+
 run_user() {
   if [[ -n "$RUN_USER" ]]; then echo "$RUN_USER"; return; fi
   systemctl show -p User --value wifilt 2>/dev/null || true
@@ -94,6 +121,7 @@ user_home() { getent passwd "$1" 2>/dev/null | cut -d: -f6; }
 # The port wifilt really listens on: 80, or 8080 when it could not bind 80.
 # wifilt writes it to ~/.config/wifilt/http-port (native/main.cpp).
 http_port() {
+  [[ -n "${WIFILT_UPDATE_HTTP_PORT:-}" ]] && { echo "$WIFILT_UPDATE_HTTP_PORT"; return; }   # tests only
   local u h p=""
   u="$(run_user)"; h="$(user_home "$u")"
   [[ -n "$h" && -r "$h/.config/wifilt/http-port" ]] && p="$(tr -dc '0-9' < "$h/.config/wifilt/http-port")"
@@ -183,6 +211,11 @@ asset_url() {  # asset_url NAME
 
 # latest.json is written by tools/update-manifest.sh, one asset per line.
 manifest_rev()   { sed -n 's/.*"rev": *"\([0-9]\{8\}\)".*/\1/p' "$1" | head -n1; }
+manifest_build() {  # 0 for a latest.json from before REV_BUILD
+  local b
+  b="$(sed -n 's/.*"build": *\([0-9]\{1,4\}\).*/\1/p' "$1" | head -n1)"
+  echo "$((10#${b:-0}))"
+}
 manifest_oi3()   { sed -n 's/.*"oi3": *{ *"fw": *"\([0-9]\{8\}\)".*/\1/p' "$1" | head -n1; }
 manifest_field() {  # manifest_field FILE PLATFORM name|size|sha256
   local line
@@ -199,6 +232,9 @@ PHASES=()
 WEIGHTS=()
 PH_IDX=0 PH_PCT=0
 ST_STATE=idle ST_MSG="" ST_ERR="" ST_FROM="" ST_TO="" ST_BYTES=0 ST_TOTAL=0
+# ST_FROM / ST_TO are versions for people ("20261113.1"); TO_REV / TO_BUILD
+# are what the package and the new wifilt are checked against.
+TO_REV="" TO_BUILD=0
 ST_STARTED=0 ST_MODE=""
 
 set_phases() {
@@ -273,10 +309,11 @@ fail() {
 do_check() {
   load_channel
   mkdir -p "$DL_DIR"
-  local tmp="$DL_DIR/latest.json" err="" rc=0 rev="" name="" size=0 sum=""
+  local tmp="$DL_DIR/latest.json" err="" rc=0 rev="" build=0 name="" size=0 sum=""
   fetch_latest "$tmp" 2> "$DL_DIR/check.err" || rc=$?
   if [[ $rc -eq 0 ]]; then
     rev="$(manifest_rev "$tmp")"
+    build="$(manifest_build "$tmp")"
     name="$(manifest_field "$tmp" "$(platform_id)" name)"
     size="$(manifest_field "$tmp" "$(platform_id)" size)"
     sum="$(manifest_field "$tmp" "$(platform_id)" sha256)"
@@ -294,8 +331,12 @@ do_check() {
     oi3="$(printf '{"have":true,"board":"%s","installed":"%s","latest":"%s"}' \
       "$OI3_REV_CONF" "$(oi3_installed_fw)" "$([[ $rc -eq 0 ]] && manifest_oi3 "$tmp")")"
   fi
-  printf '{"rev":"%s","installed":"%s","platform":"%s","asset":%s,"size":%d,"sha256":"%s","channel":"%s","tokenNeeded":%s,"oi3":%s,"checkedAt":%d,"error":%s}\n' \
-    "$rev" "$(installed_rev)" "$(platform_id)" "$(json_str "$name")" "${size:-0}" "$sum" \
+  # rev / installed stay the 8-digit dates older pages compare; build and the
+  # version strings carry the same-day release number.
+  printf '{"rev":"%s","build":%d,"version":"%s","installed":"%s","installedBuild":%d,"installedVersion":"%s","platform":"%s","asset":%s,"size":%d,"sha256":"%s","channel":"%s","tokenNeeded":%s,"oi3":%s,"checkedAt":%d,"error":%s}\n' \
+    "$rev" "$build" "$(version_str "$rev" "$build")" \
+    "$(installed_rev)" "$(installed_build)" "$(installed_version)" \
+    "$(platform_id)" "$(json_str "$name")" "${size:-0}" "$sum" \
     "$CH_KIND" "$([[ "$CH_TOKEN" == required ]] && echo true || echo false)" \
     "$oi3" "$(now)" "$(json_str "$err")" > "$out"
   chmod 644 "$out"; mv -f "$out" "$CHECK"
@@ -402,7 +443,7 @@ oi3_flash() {  # oi3_flash PKG -- always returns 0
 # ---------------------------------------------------------------- update ---
 
 PREV="$PREFIX.prev"
-UNIT_DIR=/etc/systemd/system
+UNIT_DIR="${WIFILT_UPDATE_UNIT_DIR:-/etc/systemd/system}"   # override: tests only
 WAS_ACTIVE=()
 
 svc_active() { systemctl is-active --quiet "$1" 2>/dev/null; }
@@ -418,17 +459,36 @@ restore_previous() {
   done
   setcap cap_net_bind_service=+ep "$PREFIX/wifilt" 2>/dev/null || true
   systemctl daemon-reload
+  for u in wifilt.service local-trx.service; do
+    if [[ -f "$STATE_DIR/units/$u.enabled" ]]; then
+      systemctl enable "$u" >/dev/null 2>&1 || log "cannot enable $u again"
+    elif [[ -f "$STATE_DIR/units/$u" ]]; then
+      systemctl disable "$u" >/dev/null 2>&1 || true
+    fi
+  done
   local s
   for s in "${WAS_ACTIVE[@]}"; do systemctl start "$s" || true; done
 }
 
-wait_health() {  # wait_health REV SECONDS -> 0 when /health.json reports REV
-  local rev="$1" limit="$2" port t0 body
-  port="$(http_port)"; t0="$(now)"
-  while (( $(now) - t0 < limit )); do
+# health_is BODY REV BUILD -> 0 when /health.json is that version. A wifilt
+# from before REV_BUILD reports no "build" at all, which counts as 0.
+health_is() {
+  local body="$1" rev="$2" build="${3:-0}"
+  [[ "$body" == *"\"rev\":\"$rev\""* || "$body" == *"\"rev\":$rev,"* ]] || return 1
+  if [[ "$body" == *"\"build\":"* ]]; then
+    [[ "$body" == *"\"build\":$build,"* || "$body" == *"\"build\":$build}"* ]]
+  else
+    [[ "$build" -eq 0 ]]
+  fi
+}
+
+wait_health() {  # wait_health REV BUILD SECONDS -> 0 when /health.json reports that version
+  local rev="$1" build="$2" limit="$3" port t0 body
+  port="$(http_port)"; t0="$(uptime_s)"
+  while (( $(uptime_s) - t0 < limit )); do
     body="$(curl -fsS --max-time 3 "http://127.0.0.1:${port}/health.json" 2>/dev/null || true)"
-    if [[ "$body" == *"\"rev\":\"$rev\""* || "$body" == *"\"rev\":$rev"* ]]; then return 0; fi
-    progress $(( ($(now) - t0) * 100 / limit )) "waiting for WIFILT $rev on port $port"
+    health_is "$body" "$rev" "$build" && return 0
+    progress $(( ($(uptime_s) - t0) * 100 / limit )) "waiting for WIFILT $(version_str "$rev" "$build") on port $port"
     sleep 1
   done
   return 1
@@ -437,7 +497,7 @@ wait_health() {  # wait_health REV SECONDS -> 0 when /health.json reports REV
 do_update() {
   ST_MODE="$(mode_id)"
   set_phases "$ST_MODE"
-  ST_STATE=running ST_STARTED="$(now)" ST_FROM="$(installed_rev)" ST_ERR=""
+  ST_STATE=running ST_STARTED="$(now)" ST_FROM="$(installed_version)" ST_ERR=""
   rm -f "$REQ_DIR/cancel"
   : > "$LOG"
   log "----- $SELF_NAME $(date -Iseconds) mode=$ST_MODE dry=$DRY_RUN -----"
@@ -449,13 +509,16 @@ do_update() {
   if ! do_check; then fail "check failed: $(sed -n 's/.*"error":"\([^"]*\)".*/\1/p' "$CHECK")"; return 1; fi
   local latest="$DL_DIR/latest.json" plat name size sum
   plat="$(platform_id)"
-  ST_TO="$(manifest_rev "$latest")"
+  TO_REV="$(manifest_rev "$latest")"
+  TO_BUILD="$(manifest_build "$latest")"
+  ST_TO="$(version_str "$TO_REV" "$TO_BUILD")"
   name="$(manifest_field "$latest" "$plat" name)"
   size="$(manifest_field "$latest" "$plat" size)"
   sum="$(manifest_field "$latest" "$plat" sha256)"
   if [[ ! "$sum" =~ ^[0-9a-f]{64}$ ]]; then fail "latest.json has no valid SHA256 for $plat"; return 1; fi
-  if [[ $DRY_RUN -eq 0 && -n "$ST_FROM" && "$ST_TO" -le "$ST_FROM" ]]; then
-    fail "REV $ST_TO is not newer than the installed $ST_FROM"; return 1
+  if [[ $DRY_RUN -eq 0 && -n "$(installed_rev)" ]] \
+     && ! newer "$TO_REV" "$TO_BUILD" "$(installed_rev)" "$(installed_build)"; then
+    fail "$ST_TO is not newer than the installed $ST_FROM"; return 1
   fi
   log "installed ${ST_FROM:-?}, newest $ST_TO ($name, $size B)"
 
@@ -501,8 +564,20 @@ do_update() {
   local pkg
   pkg="$(find "$work" -mindepth 1 -maxdepth 1 -type d | head -n1)"
   [[ -x "$pkg/wifilt" && -x "$pkg/install.sh" && -d "$pkg/data" ]] || { fail "package is incomplete"; return 1; }
-  local pkgrev; pkgrev="$(tr -dc '0-9' < "$pkg/VERSION" 2>/dev/null)"
-  [[ "$pkgrev" == "$ST_TO" ]] || { fail "package VERSION '$pkgrev' does not match REV $ST_TO"; return 1; }
+  local pkgrev pkgbuild=""
+  pkgrev="$(tr -dc '0-9' < "$pkg/VERSION" 2>/dev/null)"
+  [[ -r "$pkg/BUILD" ]] && pkgbuild="$(tr -dc '0-9' < "$pkg/BUILD")"
+  pkgbuild="$((10#${pkgbuild:-0}))"
+  if [[ "$pkgrev" != "$TO_REV" || "$pkgbuild" != "$TO_BUILD" ]]; then
+    fail "package $(version_str "$pkgrev" "$pkgbuild") does not match $ST_TO"; return 1
+  fi
+  # install.sh removes a local-trx it does not find in the archive (an archive
+  # built without it). Here that would take local-trx away from a station that
+  # uses it, so such a package is refused -- REV 20261113 went out like that.
+  if [[ -x "$PREFIX/local-trx" && ! -x "$pkg/local-trx" ]]; then
+    fail "the package has no local-trx, but local-trx is installed here -- refused (it would be removed)"
+    return 1
+  fi
   local ed_old=0 ed_new=0
   LC_ALL=C grep -a -q "$EDITION_MARK" "$PREFIX/wifilt" 2>/dev/null && ed_old=1
   LC_ALL=C grep -a -q "$EDITION_MARK" "$pkg/wifilt" && ed_new=1
@@ -533,8 +608,11 @@ install_package() {
     mkdir -p "$STATE_DIR/units"
     local u
     for u in wifilt.service local-trx.service; do
-      rm -f "$STATE_DIR/units/$u"
+      rm -f "$STATE_DIR/units/$u" "$STATE_DIR/units/$u.enabled"
       [[ -f "$UNIT_DIR/$u" ]] && cp -f "$UNIT_DIR/$u" "$STATE_DIR/units/$u"
+      # install.sh may disable a unit (local-trx when the archive lacks it);
+      # a rollback has to switch it back on, not just put the file back.
+      systemctl is-enabled --quiet "$u" 2>/dev/null && : > "$STATE_DIR/units/$u.enabled"
     done
   fi
   # No way back from here without the rollback.
@@ -550,7 +628,7 @@ install_package() {
     systemctl stop wifilt local-trx 2>/dev/null || true
   fi
 
-  phase install "installing REV $ST_TO"
+  phase install "installing $ST_TO"
   if [[ $DRY_RUN -eq 1 ]]; then sleep 3; else
     local u; u="$(run_user)"
     if ! SUDO_USER="$u" "$pkg/install.sh" --prefix "$PREFIX" >> "$LOG" 2>&1; then
@@ -566,10 +644,10 @@ install_package() {
   fi
 
   phase health "waiting for the new version to answer"
-  local expect="$ST_TO"
-  [[ $DRY_RUN -eq 1 ]] && expect="$ST_FROM"
+  local expect="$TO_REV" expect_build="$TO_BUILD"
+  [[ $DRY_RUN -eq 1 ]] && { expect="$(installed_rev)"; expect_build="$(installed_build)"; }
   if [[ " ${WAS_ACTIVE[*]} " == *" wifilt "* ]]; then
-    if ! wait_health "$expect" 90; then
+    if ! wait_health "$expect" "$expect_build" 90; then
       fail "the new version did not answer within 90 s"
       [[ $DRY_RUN -eq 0 ]] && restore_previous
       write_status; return 1
@@ -582,14 +660,14 @@ install_package() {
     fi
   fi
   ST_STATE=running
-  if [[ " ${WAS_ACTIVE[*]} " == *" wifilt "* ]]; then log "WIFILT $expect answers"
+  if [[ " ${WAS_ACTIVE[*]} " == *" wifilt "* ]]; then log "WIFILT $(version_str "$expect" "$expect_build") answers"
   else log "wifilt.service was not running, nothing to check"; fi
   return 0
 }
 
 finish_ok() {
   ST_STATE="done"
-  phase "done" "$([[ $DRY_RUN -eq 1 ]] && echo "dry run finished, nothing was changed" || echo "updated to REV $ST_TO")${OI3_WARN:+ -- but the OI3 was not updated: $OI3_WARN}"
+  phase "done" "$([[ $DRY_RUN -eq 1 ]] && echo "dry run finished, nothing was changed" || echo "updated to $ST_TO")${OI3_WARN:+ -- but the OI3 was not updated: $OI3_WARN}"
   rm -rf "$DL_DIR/pkg" "$DL_DIR"/wifilt-*.tar.gz
   [[ $DRY_RUN -eq 0 ]] && do_check >/dev/null 2>&1
   return 0
@@ -633,8 +711,8 @@ pi_locked_handoff() {
   rm -rf "$dst/pkg"
   cp -a "$pkg" "$dst/pkg" || { mount -o remount,ro "$lower"; fail "cannot copy the package"; return 1; }
   cp -f "$0" "$dst/resume-$SELF_NAME" && chmod 755 "$dst/resume-$SELF_NAME"
-  printf 'REQ_ID=%q\nST_FROM=%q\nST_TO=%q\nST_STARTED=%q\n' \
-    "$REQ_ID" "$ST_FROM" "$ST_TO" "$ST_STARTED" > "$dst/resume.conf"
+  printf 'REQ_ID=%q\nST_FROM=%q\nST_TO=%q\nTO_REV=%q\nTO_BUILD=%q\nST_STARTED=%q\n' \
+    "$REQ_ID" "$ST_FROM" "$ST_TO" "$TO_REV" "$TO_BUILD" "$ST_STARTED" > "$dst/resume.conf"
   chmod 600 "$dst/resume.conf"
   cp -f "$LOG" "$dst/update.log" 2>/dev/null || true
 
@@ -690,6 +768,12 @@ pi_resume() {
 
   # shellcheck disable=SC1090
   . "$a.done"
+  # A resume.conf without TO_REV/TO_BUILD: take them from the version string.
+  if [[ -z "$TO_REV" ]]; then
+    TO_REV="${ST_TO%%.*}"
+    TO_BUILD=0
+    [[ "$ST_TO" == *.* ]] && TO_BUILD="$((10#${ST_TO#*.}))"
+  fi
   ST_MODE=pi-locked
   set_phases "$ST_MODE"
   ST_STATE=running
@@ -716,7 +800,7 @@ pi_resume() {
   # previous version is back by now (install_package rolled it back).
   if [[ $ok -eq 1 ]]; then
     ST_ERR=""
-    log "updated to REV $ST_TO"
+    log "updated to $ST_TO"
   fi
   PH_PCT=0
   local i
@@ -778,7 +862,7 @@ main() {
     update)
       if [[ $EUID -ne 0 && $DRY_RUN -eq 0 ]]; then
         # Say so where the page looks, or it waits for a run that never starts.
-        set_phases "$(mode_id)"; ST_STARTED="$(now)"; ST_FROM="$(installed_rev)"
+        set_phases "$(mode_id)"; ST_STARTED="$(now)"; ST_FROM="$(installed_version)"
         fail "the updater must run as root (wifilt-update.service)"
         exit 1
       fi

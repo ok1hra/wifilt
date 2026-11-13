@@ -4,7 +4,7 @@ build-arm64/WiFi.cpp.o: net/WiFi.cpp net/WiFi.h arduino/Arduino.h \
  arduino/pgmspace.h arduino/WCharacter.h arduino/Printable.h \
  arduino/Print.h arduino/Stream.h arduino/IPAddress.h arduino/WString.h \
  arduino/Printable.h net/Client.h arduino/Print.h arduino/Stream.h \
- arduino/IPAddress.h net/Server.h net/socket_compat.h ../platform_caps.h
+ arduino/IPAddress.h net/Server.h net/socket_compat.h
 net/WiFi.h:
 arduino/Arduino.h:
 arduino/esp32-hal.h:
@@ -27,4 +27,3 @@ arduino/Stream.h:
 arduino/IPAddress.h:
 net/Server.h:
 net/socket_compat.h:
-../platform_caps.h:

@@ -192,7 +192,13 @@ run: all
 # reads it. Not a build date: the binary and the .bin flashed onto a box are the
 # same source, so they must not be able to claim different versions. That is the
 # mix-up this naming exists to prevent.
-VERSION ?= $(shell awk '/#define REV / { print $$3; exit }' $(SKETCH_DIR)/wifilt.ino)
+#   REV_DATE  the 8-digit #define REV -- what the package's VERSION file holds,
+#             because updaters older than REV_BUILD read exactly eight digits there
+#   REV_BUILD the same-day release number, 0 for the first (package file BUILD)
+#   VERSION   the archive names: 20261113, or 20261113.1 for a same-day build
+REV_DATE  ?= $(shell awk '/#define REV / { print $$3; exit }' $(SKETCH_DIR)/wifilt.ino)
+REV_BUILD ?= $(shell awk '/#define REV_BUILD / { print $$3; exit }' $(SKETCH_DIR)/wifilt.ino)
+VERSION   ?= $(REV_DATE)$(if $(filter-out 0,$(REV_BUILD)),.$(REV_BUILD))
 # The edition with add-ons goes to dist-addons/, never next to the archives
 # tools/gh-pages.sh publishes from dist/.
 DIST    ?= dist$(if $(ADDONS_LINE),-addons)
@@ -228,7 +234,8 @@ dist-linux: all dist-assets
 	cp install.sh             $(DIST)/wifilt-linux-x86_64/
 	cp start-wifilt.sh        $(DIST)/wifilt-linux-x86_64/
 	cp -r $(ASSETS)           $(DIST)/wifilt-linux-x86_64/data
-	echo $(VERSION)         > $(DIST)/wifilt-linux-x86_64/VERSION
+	echo $(REV_DATE)         > $(DIST)/wifilt-linux-x86_64/VERSION
+	echo $(or $(REV_BUILD),0)         > $(DIST)/wifilt-linux-x86_64/BUILD
 	cp update/wifilt-update.sh update/update-channel.conf $(DIST)/wifilt-linux-x86_64/
 	@if [ -f $(OI3_HEX)/VERSION ]; then cp -r $(OI3_HEX) $(DIST)/wifilt-linux-x86_64/oi3; fi
 	@cd $(DIST) && tar czf wifilt-$(VERSION)-linux-x86_64.tar.gz wifilt-linux-x86_64
@@ -239,7 +246,8 @@ dist-windows: win dist-assets
 	cp $(WIN_DIR)/wifilt.exe $(DIST)/wifilt-windows-x64/
 	cp start-wifilt.bat     $(DIST)/wifilt-windows-x64/
 	cp -r $(ASSETS)         $(DIST)/wifilt-windows-x64/data
-	echo $(VERSION)       > $(DIST)/wifilt-windows-x64/VERSION
+	echo $(REV_DATE)       > $(DIST)/wifilt-windows-x64/VERSION
+	echo $(or $(REV_BUILD),0)       > $(DIST)/wifilt-windows-x64/BUILD
 	cp update/wifilt-update.ps1 update/update-channel.conf $(DIST)/wifilt-windows-x64/
 	@cd $(DIST) && zip -qr wifilt-$(VERSION)-windows-x64.zip wifilt-windows-x64
 	@rm -rf $(DIST)/wifilt-windows-x64
@@ -250,7 +258,8 @@ dist-arm64: arm64 dist-assets
 	cp install.sh          $(DIST)/wifilt-linux-arm64/
 	cp start-wifilt.sh     $(DIST)/wifilt-linux-arm64/
 	cp -r $(ASSETS)        $(DIST)/wifilt-linux-arm64/data
-	echo $(VERSION)      > $(DIST)/wifilt-linux-arm64/VERSION
+	echo $(REV_DATE)      > $(DIST)/wifilt-linux-arm64/VERSION
+	echo $(or $(REV_BUILD),0)      > $(DIST)/wifilt-linux-arm64/BUILD
 	cp update/wifilt-update.sh update/update-channel.conf $(DIST)/wifilt-linux-arm64/
 	@# the guided Raspberry Pi installer (pi/pi-setup.sh, SOFTWARE.md section 1.7)
 	cp pi/pi-setup.sh      $(DIST)/wifilt-linux-arm64/

@@ -88,6 +88,8 @@ const ARGUMENT_BOUNDS = [
   [/^radioNameForJson\(/, 15, "radio caps name, sanitised and bounded"],
   [/^rssi$/, 5, "-999 .. 0"],
   [/^\(unsigned\)/, 10, "uint32"],
+  // fwRev: "20261113", or "20261113.N" for a same-day release (REV_BUILD).
+  [/^REV_STR$/, 13, '"20261113.9999"'],
   [/^(state|view)(SupplyVolts|Swr)$/, 8, '"%.2f"'],
   // ,"gpsGrid":"JO60WC28","gpsFixAgeMs":999999999,"gpsSel":255 -- or empty when
   // the radio has no GPS. Built by its own bounded snprintf in buildStateJson.

@@ -273,6 +273,10 @@ done
 FW_REV="$(
   awk '/#define REV / { print $3; exit }' "$SKETCH_FILE"
 )"
+# A same-day release (#define REV_BUILD N > 0) is "REV.N" everywhere a version
+# is named here -- the same string native/Makefile names the archives after.
+FW_BUILD="$(awk '/#define REV_BUILD / { print $3; exit }' "$SKETCH_FILE")"
+if [[ -n "$FW_REV" && "${FW_BUILD:-0}" -gt 0 ]]; then FW_REV="${FW_REV}.${FW_BUILD}"; fi
 
 if [[ -z "$FW_REV" ]]; then
   echo "ERROR: Could not read REV from $SKETCH_FILE" >&2

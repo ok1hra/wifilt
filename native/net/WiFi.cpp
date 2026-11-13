@@ -1,5 +1,4 @@
 #include "WiFi.h"
-#include "platform_caps.h"   // NativeHostNet, nativeHostLabel()
 
 #include <ctype.h>
 #include <errno.h>

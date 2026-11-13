@@ -107,6 +107,21 @@ const std::string &nativeBindAddress();
 // sketch reads them before it includes this header.
 void nativeSetPortOverride(uint16_t requested, uint16_t port);
 
+// The host's network as the OI3 status line shows it (host_status.h): the
+// first WiFi interface that is up with an address, client or hotspot, and the
+// address to browse to (that interface's, else the first one up). Here and
+// not in platform_caps.h: local-trx compiles WiFi.cpp too, without the sketch
+// directory on its include path.
+struct NativeHostNet {
+  bool     wifiUp;       // a WiFi interface is up with an address
+  bool     ap;           // ...and it is a hotspot this machine runs
+  bool     ipFromWifi;   // ip below is that interface's (false = wired/other)
+  int      rssi;         // client link dBm, -999 = none (always in AP mode)
+  uint32_t ip;           // IPv4, network byte order, 0 = none
+  char     ssid[33];     // associated network, or the hotspot's own name
+};
+NativeHostNet nativeHostNet();
+
 // ---------------------------------------------------------------------------
 // WiFiServer -- listening socket, non-blocking accept.
 // ---------------------------------------------------------------------------

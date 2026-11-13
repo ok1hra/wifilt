@@ -75,7 +75,10 @@ cp -r "$ASSETS" "$PREFIX/data"
 [[ -f "$HERE/start-wifilt.sh" ]] && install -m 0755 "$HERE/start-wifilt.sh" "$PREFIX/start-wifilt.sh"
 
 # The release (firmware REV) this came from -- pi-setup and fslock show it.
+# BUILD is the same-day release number (REV_BUILD in wifilt.ino); a package
+# from before it has none, and a stale one must not outlive it.
 [[ -f "$HERE/VERSION" ]] && install -m 0644 "$HERE/VERSION" "$PREFIX/VERSION"
+if [[ -f "$HERE/BUILD" ]]; then install -m 0644 "$HERE/BUILD" "$PREFIX/BUILD"; else rm -f "$PREFIX/BUILD"; fi
 
 # The web updater (native/update/, SOFTWARE.md "Updating from the web") and the
 # channel it reads. Its units are written further down.

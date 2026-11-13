@@ -36,6 +36,24 @@
   var RECENT_RESULT_S = 15 * 60;
 
   var $ = function (id) { return document.getElementById(id); };
+
+  // Versions are REV ("20261113") or REV.BUILD ("20261113.1", a same-day
+  // release). /update/info and check.json carry "version"; from before that,
+  // only "rev". Compared part by part: ".10" is newer than ".9".
+  function versionOf(o, rev, build) {
+    if (!o) return '';
+    if (o.version) return String(o.version);
+    var r = o[rev || 'rev'], b = Number(o[build || 'build']) || 0;
+    return r ? String(r) + (b > 0 ? '.' + b : '') : '';
+  }
+  function versionNewer(a, b) {
+    var x = String(a || '').split('.'), y = String(b || '').split('.');
+    for (var i = 0; i < 2; i++) {
+      var p = Number(x[i]) || 0, q = Number(y[i]) || 0;
+      if (p !== q) return p > q;
+    }
+    return false;
+  }
   var info = null;
   var status = null;
   var pollTimer = null;
@@ -126,10 +144,12 @@
     var u = info.updater || {};
     var c = u.check || null;
     var mode = u.mode || 'manual';
-    $('revInstalled').textContent = info.rev;
-    var newest = c && c.rev ? c.rev : '—';
+    var installed = versionOf(info);
+    var latest = versionOf(c);
+    $('revInstalled').textContent = installed;
+    var newest = latest || '—';
     $('revNewest').textContent = newest;
-    var hasNew = c && c.rev && Number(c.rev) > Number(info.rev) && !c.error;
+    var hasNew = !!(c && latest && versionNewer(latest, installed) && !c.error);
     $('revNewest').className = hasNew ? 'newer' : '';
     $('checkedAt').textContent = c && c.checkedAt
       ? 'Checked ' + fmtAge(Math.max(0, Date.now() / 1000 - c.checkedAt)) +
@@ -204,8 +224,8 @@
   function loadInfo() {
     return getJson('/update/info').then(function (d) {
       info = d;
-      setLink(true, (d.host || 'PC') + ' · ' + d.rev);
-      if (startRev === null) startRev = d.rev;
+      setLink(true, (d.host || 'PC') + ' · ' + versionOf(d));
+      if (startRev === null) startRev = versionOf(d);
       return d;
     });
   }
@@ -241,7 +261,7 @@
   function startUpdate(dry) {
     var c = info.updater.check;
     var what = dry ? 'Simulate the update (nothing is changed)?' :
-      'Update WIFILT ' + info.rev + ' → ' + c.rev + ' now?' +
+      'Update WIFILT ' + versionOf(info) + ' → ' + versionOf(c) + ' now?' +
       (info.updater.mode === 'pi-locked' ? '\n\nThe system will reboot twice.' : '');
     if (!window.confirm(what)) return;
     $('btnUpdate').disabled = true;

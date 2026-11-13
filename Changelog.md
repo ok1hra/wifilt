@@ -11,6 +11,38 @@ published.
 
 ## Working tree — not committed
 
+**More than one release a day: version REV.N (`#define REV_BUILD`).**
+
+* `wifilt.ino` has `#define REV_BUILD 0` next to `REV`. With `REV_BUILD > 0` the version is
+  `REV_STR` = "20261113.1". It shows in `fwRev` (now always a string) and the boot lines, and as
+  `build` / `version` in `/health.json` and `/update/info`.
+* Backward compatible: wherever an older updater reads the version, it stays the 8-digit date:
+  `"rev"` in `latest.json` and `/health.json`, and the package's `VERSION` file. The build number
+  goes beside it (`"build"`, `"version"`, a `BUILD` file in the package). An updater from
+  before this sees the same rev as installed and does not offer a same-day build. Checked by
+  running the 20261112 updater against the new `latest.json`.
+* `native/Makefile` names the archives `wifilt-20261113.1-…`. `update-manifest.sh` takes
+  `REV[.N]`. Both updaters (`wifilt-update.sh`, `.ps1`) compare (rev, build), check `BUILD` in the
+  package and wait for `"build"` in `/health.json`. `update.js` and the topbar compare versions
+  part by part (`.10` > `.9`).
+* `release.sh` phase 1: when REV is already today, it offers REV_BUILD + 1. That is on by
+  default when gh-pages already offers today's version. `gh-pages.sh` publishes `REV.N`.
+
+**Fix: the web update of REV 20261113 failed on a locked Pi and took local-trx away.**
+
+* The 20261113 archives went out without local-trx. `install.sh` then disabled and removed
+  `local-trx.service`, and the update failed. `release.sh` now stops phase 3 and refuses phase 9
+  when a Linux or Windows archive lacks local-trx (`--force` overrides). The updater refuses such
+  a package before stopping anything when local-trx is installed.
+* The health wait timed out after a few seconds: the Pi has no RTC, came back from the unlock
+  reboot with yesterday's time and jumped about 11 h when NTP synced. Timeouts now count
+  `/proc/uptime`, not `date +%s`.
+* The rollback put the files and unit files back, but not "enabled": local-trx stayed disabled.
+  The backup now records `systemctl is-enabled` for both units and the rollback restores it.
+* `tools/update-rollback-check.sh`: a real (not dry) update in a user namespace. It checks
+  the clock jump, the refused package without local-trx, and a rollback after a failed
+  `install.sh`.
+
 **The Raspberry Pi's state on the OI3 display, and the web update brings the OI3 firmware too (SOFTWARE.md § 1.7, § 1.8).**
 
 * New TrxNet topic `/wl-host` (TrxNet INTEGRATION.md §7.4, `host_status.h`): the native build on a

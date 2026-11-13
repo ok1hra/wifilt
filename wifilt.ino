@@ -39,7 +39,7 @@
   /opt/wifilt/start-wifilt.sh
   /opt/wifilt/wifilt
 
-  1. Increase REV value in this .ino
+  1. Increase REV value in this .ino (same day again: REV_BUILD + 1)
   2. Arduino IDE 1.8.19 menu: Sketch/Export compiled Binary
      Board "ESP32 Dev Module", Tools/Partition Scheme:"No OTA (2MB APP/2MB SPIFFS)",
      Tools/Flash Mode:"DIO"  <-- NOT the IDE default QIO. These boards carry a Zbit
@@ -143,6 +143,19 @@ volatile bool cwIpSendPending = false;
   #define LOOP_WARN_MS 200
 #endif
 #define REV 20261113
+// A second (third, ...) release on the same day: REV stays the date, REV_BUILD
+// counts up (tools/release.sh does both), and the version reads "20261113.1".
+// REV alone stays an 8-digit date wherever an older updater reads it (/health.json
+// "rev", the package's VERSION, latest.json "rev"): those updaters take exactly
+// eight digits, and a same-day build is then simply not offered to them.
+#define REV_BUILD 2
+#define REV_STR2(x) #x
+#define REV_STR1(x) REV_STR2(x)
+#if REV_BUILD > 0
+  #define REV_STR REV_STR1(REV) "." REV_STR1(REV_BUILD)
+#else
+  #define REV_STR REV_STR1(REV)
+#endif
 #define WIFI
 #define FSK_KEYING  // RTTY by keying the FSK + PTT outputs (was UDP_TO_FSK, from when a UDP port fed it)
 #define WDT         // watchdog timer
@@ -2228,7 +2241,7 @@ void handleSetupData(){
 
   String j;
   j.reserve(3500);
-  j += "{\"fwRev\":"; j += (unsigned)REV;
+  j += "{\"fwRev\":\"" REV_STR "\"";
   // What this build physically has. The browser hides whole SETUP sections
   // from this rather than probing for 404s: on the PC binary there is no WiFi
   // to provision, no CI-V wire and no GPIO, so the first-run wizard must not
@@ -3016,7 +3029,7 @@ void buildStateJson(char *buf, size_t bufSize, bool lanView){
     "{\"connected\":%s,\"catHealthy\":%s,\"audioReady\":%s,\"audioTxReady\":%s,"
     "\"lanStatus\":\"%s\",\"btStatus\":\"%s\",\"wifiStatus\":\"%s\","
     "\"radioTransport\":\"%s\",\"fullCat\":%s,\"tuneSupported\":true,"
-    "\"wifiRssi\":%d,\"fwRev\":\"%u\",\"bdSupported\":%s,\"power\":%s,"
+    "\"wifiRssi\":%d,\"fwRev\":\"%s\",\"bdSupported\":%s,\"power\":%s,"
     "\"frequency\":%u,\"mode\":\"%s\",\"filter\":%u,"
     "\"radioAddress\":\"%s\",\"transceiverType\":\"%s\",\"radioName\":\"%s\",\"radioNameSeen\":%s,\"tx\":%s,\"ritRaw\":%u,"
     "\"smeterRaw\":%u,\"powerMeterRaw\":%u,\"alcRaw\":%u,"
@@ -3035,7 +3048,7 @@ void buildStateJson(char *buf, size_t bufSize, bool lanView){
     lanAudioReady ? "true" : "false", lanAudioTxReady ? "true" : "false",
     lanStatus, btStat, wifiStat,
     radioTransportName(primaryTransport), fullCat ? "true" : "false",
-    rssi, (unsigned)REV, bdEnabled ? "true" : "false", viewPower ? "true" : "false",
+    rssi, REV_STR, bdEnabled ? "true" : "false", viewPower ? "true" : "false",
     (unsigned)viewFrequency, modesSnapshot, (unsigned)viewFilter,
     addrStr, viewType, radioNameForJson(client),
     radioNameSeenForJson(client) ? "true" : "false", viewTx ? "true" : "false",
@@ -3979,7 +3992,7 @@ void handleConfigDownload() {
   snprintf(civHex, sizeof(civHex), "%02X", configuredCivAddress);
   String j;
   j.reserve(2048);
-  j += "{\"fwRev\":";           j += (unsigned)REV;
+  j += "{\"fwRev\":\"" REV_STR "\"";
   j += ",\"ssid\":\"";          j += configJsonEscape(SSID);          j += "\"";
   j += ",\"pswd\":\"";          j += configJsonEscape(PSWD);          j += "\"";
   j += ",\"ssid2\":\"";         j += configJsonEscape(SSID2);         j += "\"";
@@ -5915,7 +5928,7 @@ void handleAprsisSpot() {
   aprsResultServer = "";
   aprsResultLine = "";
   aprsPendingLine = line;
-  aprsPendingLogin = "user " + call + " pass " + pass + " vers wifilt " + String(REV);
+  aprsPendingLogin = "user " + call + " pass " + pass + " vers wifilt " REV_STR;
   aprsPendingHost = host;
   aprsPendingPort = (uint16_t)port;
   aprsPhase = 1;
@@ -5986,7 +5999,8 @@ void setupWebServer(void){
     const char *names[] = {"web", "dxc", "audio"};
     String out = "{\"platform\":\"" CAP_PLATFORM_NAME "\",\"rev\":\"";
     out += String((unsigned)REV);
-    out += "\",\"homeHttp\":";
+    // build: the same-day release number (REV_BUILD); the updater waits for both.
+    out += "\",\"build\":" + String((unsigned)REV_BUILD) + ",\"homeHttp\":";
     out += PLATFORM_HOME_HTTP_PORT();
     out += ",\"listeners\":[";
     for (int i = 0; i < 3; i++) {
@@ -6152,7 +6166,8 @@ void setupWebServer(void){
   // keeps the web installer link.
   webServer.on("/update.html", HTTP_GET, [](){ handleFileFromSPIFFS("/update.html"); });
   webServer.on("/update/info", HTTP_GET, [](){
-    String out = "{\"rev\":\"" + String((unsigned)REV) + "\",\"platform\":\"" CAP_PLATFORM_NAME "\",\"host\":\"";
+    String out = "{\"rev\":\"" + String((unsigned)REV) + "\",\"build\":" + String((unsigned)REV_BUILD) +
+                 ",\"version\":\"" REV_STR "\",\"platform\":\"" CAP_PLATFORM_NAME "\",\"host\":\"";
     out += nativeHostLabel();
     out += "\",\"busy\":";
     // What would make stopping wifilt now a bad idea; the page shows it and
@@ -6612,7 +6627,7 @@ void setup(){
 
   Serial.println();
   Serial.print(" FW | ");
-  Serial.println(REV);
+  Serial.println(REV_STR);
   pinMode(HWidPin, INPUT);
     // HWidValue = readADC_Cal(analogRead(HWidPin));
     HWidValue = analogRead(HWidPin);
@@ -10727,7 +10742,7 @@ void ListCommands(){
     Serial.print( String(millis()/86400000) );
     Serial.println(" days");
   }
-  Serial.println("  FW "+String(REV)+" | HW "+String(HardwareRev)+" ["+String(HWidValue)+" raw]" );
+  Serial.println("  FW " REV_STR " | HW "+String(HardwareRev)+" ["+String(HWidValue)+" raw]" );
   if(APmode==true){
     Serial.println("  WIFI-AP mode ON" );
     APcliAlert();

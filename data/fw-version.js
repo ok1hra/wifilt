@@ -12,6 +12,17 @@
   // asked / not native / no updater, and the ESP32 behaviour below applies.
   var updMode   = null;    // 'systemd' | 'pi' | 'pi-locked' | 'manual'
   var updRev    = null;    // newest REV the updater found
+
+  // Versions are REV ("20261113") or REV.BUILD ("20261113.1", a same-day
+  // release), compared part by part so ".10" is newer than ".9".
+  function versionNewer(a, b) {
+    var x = String(a || '').split('.'), y = String(b || '').split('.');
+    for (var i = 0; i < 2; i++) {
+      var p = Number(x[i]) || 0, q = Number(y[i]) || 0;
+      if (p !== q) return p > q;
+    }
+    return false;
+  }
   var updState  = 'idle';  // 'running' | 'offline' while an update is under way
   var updPct    = 0;
 
@@ -594,7 +605,7 @@
     a.href      = wizard ? UPDATE_URL : FLASHER_URL;
     if (!wizard) { a.target = '_blank'; a.rel = 'noopener'; }
     a.className = 'fw-version-link';
-    var hasUpdate = newRev !== null && Number(newRev) > Number(localRev);
+    var hasUpdate = newRev !== null && versionNewer(newRev, localRev);
     a.title     = wizard ? (hasUpdate ? 'New version available — open the update wizard' : 'Update wizard')
                          : (hasUpdate ? 'New firmware available — click to open web installer'
                                       : 'Open web installer');
@@ -658,7 +669,11 @@
         var u = d && d.updater;
         if (!u) { updMode = null; return; }
         updMode  = u.mode || 'manual';
-        updRev   = u.check && u.check.rev && !u.check.error ? String(u.check.rev) : null;
+        var ck = u.check;
+        updRev   = ck && ck.rev && !ck.error
+          ? (ck.version ? String(ck.version)
+                        : String(ck.rev) + (Number(ck.build) > 0 ? '.' + Number(ck.build) : ''))
+          : null;
         updState = u.state || 'idle';
         updPct   = Number(u.pct) || 0;
         render();

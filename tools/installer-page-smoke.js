@@ -39,7 +39,10 @@ if (!fs.existsSync(PAGE)) {
 
 const html = fs.readFileSync(PAGE, "utf8");
 const sketch = fs.readFileSync(path.join(ROOT, "wifilt.ino"), "utf8");
-const rev = (sketch.match(/#define REV\s+(\d+)/) || [])[1];
+const revDate = (sketch.match(/#define REV\s+(\d+)/) || [])[1];
+const revBuild = Number((sketch.match(/#define REV_BUILD\s+(\d+)/) || [])[1] || 0);
+// The version gh-pages.sh prints: REV, or REV.N for a same-day release.
+const rev = revDate && (revBuild > 0 ? revDate + "." + revBuild : revDate);
 // app0 as gh-pages.sh prints it: decimal MB, two places, rounded half up.
 const app0Row = fs.readFileSync(path.join(ROOT, "partitions.csv"), "utf8")
   .split("\n").find(line => /^app0\s*,/.test(line));
