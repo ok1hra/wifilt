@@ -93,6 +93,12 @@ Config parseConfigJson(const std::string &jsonText, std::string *error) {
       if (t.contains("networkPort")) config.trxnet.networkPort = (uint16_t)t["networkPort"].get<unsigned>();
     }
 
+    if (root.contains("ts480Panel")) {
+      auto &t = root["ts480Panel"];
+      if (t.contains("enabled")) config.ts480Panel.enabled = t["enabled"].get<bool>();
+      if (t.contains("port"))    config.ts480Panel.port    = t["port"].get<std::string>();
+    }
+
     if (root.contains("identity")) {
       auto &i = root["identity"];
       if (i.contains("radioName"))  config.identity.radioName  = i["radioName"].get<std::string>();
@@ -160,6 +166,10 @@ std::string configToJsonString(const Config &config) {
   root["identity"] = {
     {"radioName", config.identity.radioName},
     {"civAddress", config.identity.civAddress},
+  };
+  root["ts480Panel"] = {
+    {"enabled", config.ts480Panel.enabled},
+    {"port", config.ts480Panel.port},
   };
   return root.dump(2);
 }

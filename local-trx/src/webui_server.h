@@ -42,6 +42,16 @@ class HamlibRigBackend;
 // and main.cpp's stderr alike) -- see UdpSocket::isValidBindIp().
 std::string listenIpError(const std::string &listenIp);
 
+// What the TS-480 panel pages (webui/ts480/) learn from /ts480/config.js:
+// whether the panel runs in this process, and where its WebSocket is.
+struct Ts480WebInfo {
+  bool enabled = false;
+  uint16_t wsPort = 0;
+  bool af = false;   // RX audio to the browser available
+  bool tx = false;   // browser microphone TX available
+  std::string port;  // the RJ12 adapter, for the page's tooltip
+};
+
 class WebUiServer {
  public:
   // webRoot: directory holding index.html (and any static assets) -- mapped
@@ -83,6 +93,8 @@ class WebUiServer {
   // this wizard alone instead) -- handed to the page with GET /api/config.
   void setStartupError(std::string error) { startupError_ = std::move(error); }
 
+  void setTs480Info(Ts480WebInfo info) { ts480_ = std::move(info); }
+
  private:
   void setupRoutes();
   void handleDevices();
@@ -98,12 +110,15 @@ class WebUiServer {
   void handleTrxnetPeers();
   void handleTrxnetTestPtt();
   void sendError(int code, const std::string &message);
+  void handleTs480Config();
+  bool serveTs480File(const std::string &uri);
 
   uint16_t port_;
   std::string webRoot_;
   std::string configDir_;
   bool hardwareLive_;
   std::string startupError_;
+  Ts480WebInfo ts480_;
   std::unique_ptr<WebServer> server_;
 
   // POST /api/test-line's own state (bod: live DTR/RTS test button, asked

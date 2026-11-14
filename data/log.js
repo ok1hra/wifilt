@@ -5326,3 +5326,33 @@ document.getElementById('logCallSearchInp').addEventListener('keydown', e => {
   if (first) first.scrollIntoView({ block: 'center' });
   e.target.blur();
 });
+
+/* TS-480 software panel (local-trx). Everything -- the TS480 button, the
+   palette, the LCD, the audio -- is served by local-trx itself; wifilt only
+   finds it: the LOCAL-TRX slot's IP from SETUP, loopback meaning the host
+   this page came from (setup.html does the same). config.js says whether
+   the panel runs there; if local-trx is not running, the script just fails
+   to load and nothing appears. Waits for 'load' because lan-gate.js comes
+   after this file in log.html. */
+window.addEventListener('load', function loadLocalTrxTs480() {
+  if (!window.LanGate || !LanGate.read) return;
+  const known = LanGate.result && LanGate.result();
+  (known ? Promise.resolve(known) : LanGate.read(document)).then(function (r) {
+    if (!r || !r.localTrx || !r.slot) return;
+    const cfg = (LanGate.config && LanGate.config()) || {};
+    let ip = String(cfg['trx' + r.slot + 'lanip'] || (r.slot === 1 ? cfg.lanip : '') || '').trim();
+    if (!ip || ip === '0.0.0.0') return;
+    if (/^(127\.|localhost$)/i.test(ip)) ip = location.hostname;
+    const base = 'http://' + ip + ':8765/ts480/';
+    const add = (src, onload) => {
+      const s = document.createElement('script');
+      s.src = src;
+      s.onload = onload || null;
+      document.head.appendChild(s);
+    };
+    add(base + 'config.js', function () {
+      const c = window.LTX_TS480;
+      if (c && c.enabled) add(base + 'qrplog.js?v=' + encodeURIComponent(c.rev || 0));
+    });
+  }).catch(function () {});
+});

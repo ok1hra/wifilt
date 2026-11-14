@@ -26,6 +26,22 @@ uint8_t ulawEncode(int16_t sample) {
 
 AudioCapture::AudioCapture(std::string deviceName) : deviceName_(std::move(deviceName)) {
   ring_.resize(32000);   // 4s at 8kHz mono uLaw (1 byte/sample)
+  tapRing_.resize(8000);  // 1s -- the browser plays live or not at all
+}
+
+void AudioCapture::setTapEnabled(bool on) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (on != tapEnabled_) tapHead_ = tapCount_ = 0;
+  tapEnabled_ = on;
+}
+
+size_t AudioCapture::pullTap(uint8_t *out, size_t max) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  size_t take = tapCount_ < max ? tapCount_ : max;
+  for (size_t i = 0; i < take; i++) out[i] = tapRing_[(tapHead_ + i) % tapRing_.size()];
+  tapHead_ = (tapHead_ + take) % tapRing_.size();
+  tapCount_ -= take;
+  return take;
 }
 
 AudioCapture::~AudioCapture() { close(); }
@@ -68,6 +84,12 @@ void AudioCapture::onCaptured(const int16_t *samples, ma_uint32 frameCount) {
       // Ring full: drop the oldest byte rather than block or grow -- live
       // audio favours fresh samples over ones the consumer never caught up to.
       head_ = (head_ + 1) % ring_.size();
+    }
+    if (tapEnabled_) {
+      size_t tapTail = (tapHead_ + tapCount_) % tapRing_.size();
+      tapRing_[tapTail] = encoded;
+      if (tapCount_ < tapRing_.size()) tapCount_++;
+      else tapHead_ = (tapHead_ + 1) % tapRing_.size();
     }
   }
 }
@@ -277,6 +299,13 @@ bool AudioPlayback::start(std::string *error) {
 }
 
 void AudioPlayback::push(const int16_t *samples, size_t count) {
+  if (browserExclusive_) return;
+  pushSamples(samples, count);
+}
+
+void AudioPlayback::pushBrowser(const int16_t *samples, size_t count) { pushSamples(samples, count); }
+
+void AudioPlayback::pushSamples(const int16_t *samples, size_t count) {
   std::lock_guard<std::mutex> lock(mutex_);
   for (size_t i = 0; i < count; i++) {
     size_t tail = (head_ + count_) % ring_.size();

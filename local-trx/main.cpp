@@ -57,11 +57,15 @@
 #include "src/icom_lan_server.h"
 #include "src/key_runner.h"
 #include "src/mixer_control.h"
+#include "src/ptt_arbiter.h"
 #include "src/serial_key.h"
 #include "src/trxnet_keying.h"
 #include "src/trxnet_link.h"
 #include "src/trxnet_peer.h"
 #include "src/trxnet_rig.h"
+#include "src/ts480_link.h"
+#include "src/ts480_sim.h"
+#include "src/ts480_ws.h"
 #include "src/tx_level.h"
 #include "src/udp_socket.h"
 #include "src/webui_server.h"
@@ -324,6 +328,8 @@ void printHelp() {
       "  --bind-ip IP        documentation only -- see the note at the top of main.cpp\n"
       "  --web-port PORT     setup-wizard HTTP port (default: 8765, 0 disables it)\n"
       "  --web-root PATH     wizard's static assets (default: webui/ next to the binary)\n"
+      "  --ts480-ws-port N   TS-480 panel WebSocket port (default: web port + 1, 0 disables it)\n"
+      "  --ts480-sim         TS-480 panel against a built-in radio simulator (no RJ12 adapter)\n"
       "  -v, --verbose       log every handshake/keepalive packet\n"
       "  -h, --help          this text\n",
       LocalTrx::defaultConfigDir().c_str());
@@ -356,6 +362,8 @@ int main(int argc, char **argv) {
                          // out of printHelp()'s static text, which cannot see it
   uint16_t webPort = 8765;   // bod "Setup/config UI"'s own suggested port
   bool verbose = false;
+  bool ts480Sim = false;
+  int ts480WsPort = -1;   // -1 = webPort + 1
 
   for (int i = 1; i < argc; i++) {
     std::string arg = argv[i];
@@ -367,6 +375,10 @@ int main(int argc, char **argv) {
       webPort = (uint16_t)std::strtoul(argv[++i], nullptr, 10);
     } else if (arg == "--web-root" && i + 1 < argc) {
       webRoot = argv[++i];
+    } else if (arg == "--ts480-ws-port" && i + 1 < argc) {
+      ts480WsPort = (int)std::strtoul(argv[++i], nullptr, 10);
+    } else if (arg == "--ts480-sim") {
+      ts480Sim = true;
     } else if (arg == "-v" || arg == "--verbose") {
       verbose = true;
     } else if (arg == "-h" || arg == "--help") {
@@ -551,6 +563,21 @@ int main(int argc, char **argv) {
     keying = trxnetCw.get();
   }
 
+  // TS-480 software panel (ts480_link.h): a hamlib TS-480 with the panel
+  // switched on in the wizard, or --ts480-sim. Its browser microphone shares
+  // the transmitter with wifilt, so audio PTT goes through PttArbiter.
+  const bool ts480Active = ts480Sim || config.ts480PanelActive();
+  if (config.ts480Panel.enabled && !ts480Active) {
+    std::fprintf(stderr, "warning: TS-480 software panel is switched on but not used -- it needs CAT "
+                         "through hamlib with rig model TS-480 (%d) and the panel cable's port\n",
+                 LocalTrx::kRigModelTs480);
+  }
+  std::unique_ptr<LocalTrx::PttArbiter> pttArbiter;
+  if (ts480Active) {
+    pttArbiter = std::make_unique<LocalTrx::PttArbiter>(*keying);
+    keying = pttArbiter.get();
+  }
+
   // RX audio (bod 2, fáze 2, no PTT interaction): only attempted when
   // explicitly configured -- an empty audio.inputDevice means "not set up
   // yet" the same way an empty keying.port does, not "use whatever the
@@ -612,6 +639,39 @@ int main(int argc, char **argv) {
     if (!txLevel) std::fprintf(stderr, "warning: no MOD level for wifilt's CAL PLAN: %s\n", mixerError.c_str());
   }
 
+  // The panel link runs on its own thread from here on: the radio switches
+  // itself off ~4 s after the panel stops answering its keepalives.
+  std::unique_ptr<LocalTrx::Ts480Link> ts480Link;
+  std::unique_ptr<LocalTrx::Ts480WsServer> ts480Ws;
+  if (ts480Active) {
+    std::unique_ptr<LocalTrx::Ts480Transport> transport;
+    LocalTrx::Ts480LinkOptions linkOptions;
+    linkOptions.verbose = verbose;
+    if (ts480Sim) {
+      transport = std::make_unique<LocalTrx::SimTs480Transport>();
+    } else {
+      transport = std::make_unique<LocalTrx::SerialTs480Transport>(config.ts480Panel.port);
+      // The radio comes back the way it was before this (re)start.
+      linkOptions.restorePower = LocalTrx::loadTs480LastPower(configDir);
+      linkOptions.persistPower = [configDir](bool on) { LocalTrx::saveTs480LastPower(configDir, on); };
+    }
+    ts480Link = std::make_unique<LocalTrx::Ts480Link>(std::move(transport), linkOptions);
+    ts480Link->start();
+    const int wsPort = ts480WsPort >= 0 ? ts480WsPort : (webPort ? webPort + 1 : 8766);
+    if (wsPort > 0) {
+      ts480Ws = std::make_unique<LocalTrx::Ts480WsServer>((uint16_t)wsPort, *ts480Link, audioCapturePtr,
+                                                           audioPlaybackPtr, pttArbiter.get());
+      if (ts480Ws->begin(&error)) {
+        std::printf("local-trx: TS-480 software panel on %s, WebSocket port %d%s%s\n",
+                    ts480Link->describe().c_str(), wsPort, ts480Ws->afAvailable() ? ", AF" : "",
+                    ts480Ws->txAvailable() ? ", microphone TX" : "");
+      } else {
+        std::fprintf(stderr, "warning: %s -- the panel runs, but no browser can reach it\n", error.c_str());
+        ts480Ws.reset();
+      }
+    }
+  }
+
   LocalTrx::IcomLanServer server(config.listenIp, config.identity.radioName, civAddr, *rig,
                                   keying, audioCapturePtr, audioPlaybackPtr, verbose);
   server.setModLevel(txLevel.get());
@@ -646,6 +706,16 @@ int main(int argc, char **argv) {
     webUi = startWizard(webPort, webRoot, configDir, /*hardwareLive=*/true, config, suppressAutoOpen, &webError);
     if (webUi) {
       std::printf("local-trx: setup wizard at http://127.0.0.1:%u/\n", webPort);
+      if (ts480Ws) {
+        LocalTrx::Ts480WebInfo info;
+        info.enabled = true;
+        info.wsPort = ts480Ws->port();
+        info.af = ts480Ws->afAvailable();
+        info.tx = ts480Ws->txAvailable();
+        info.port = ts480Link->describe();
+        webUi->setTs480Info(info);
+        std::printf("local-trx: TS-480 panel page at http://127.0.0.1:%u/ts480/\n", webPort);
+      }
     } else {
       std::fprintf(stderr, "warning: setup wizard unavailable (%s)\n", webError.c_str());
     }
@@ -693,7 +763,9 @@ int main(int argc, char **argv) {
     if (audioCapturePtr) captureKeeper.keep(audioCapture);
     if (audioPlaybackPtr) playbackKeeper.keep(audioPlayback);
     if (webUi) webUi->poll();
+    if (ts480Ws) ts480Ws->poll();
     if (webUi && webUi->restartRequested()) {
+      ts480Ws.reset();   // drops a browser's PTT before the re-exec
       releaseCatPtt();
       restartSelfAfterSave();
     }
@@ -706,6 +778,8 @@ int main(int argc, char **argv) {
   }
 
   std::printf("local-trx: shutting down\n");
+  ts480Ws.reset();
   releaseCatPtt();
+  if (ts480Link) ts480Link->stop();
   return 0;
 }

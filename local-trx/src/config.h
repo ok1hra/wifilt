@@ -85,6 +85,19 @@ struct IdentityConfig {
                                     // with any entry in icom-models.js's MODELS table
 };
 
+// TS-480 software panel (ts480_link.h): replaces the radio's detachable
+// control panel over the RJ12 panel cable -- a USB-UART of its own (5 V TTL,
+// NOT RS-232), separate from cat.port. Only with cat.backend "hamlib" and
+// cat.rigModel RIG_MODEL_TS480 (2028); otherwise ignored at startup.
+struct Ts480PanelConfig {
+  bool enabled = false;
+  std::string port;
+};
+
+// hamlib's RIG_MODEL_TS480 = RIG_MAKE_MODEL(RIG_KENWOOD, 28), spelled out so
+// config.h does not need hamlib's headers.
+constexpr int kRigModelTs480 = 2028;
+
 struct Config {
   // Master switch, OFF by default -- an installed-but-unconfigured local-trx
   // (e.g. shipped alongside a wifilt release, not asked for by every
@@ -114,6 +127,13 @@ struct Config {
   KeyingConfig keying;
   TrxnetConfig trxnet;
   IdentityConfig identity;
+  Ts480PanelConfig ts480Panel;
+
+  // The panel may run: switched on, a port given, CAT through hamlib to a TS-480.
+  bool ts480PanelActive() const {
+    return ts480Panel.enabled && !ts480Panel.port.empty() && cat.backend == "hamlib" &&
+           cat.rigModel == kRigModelTs480;
+  }
 
   bool catOverTrxnet() const { return cat.backend == "trxnet"; }
   bool cwOverTrxnet() const { return keying.cwBackend == "trxnet"; }

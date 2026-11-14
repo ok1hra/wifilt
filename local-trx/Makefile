@@ -63,10 +63,11 @@ CXX_SOURCES := \
   src/serial_key.cpp src/audio_bridge.cpp src/tx_level.cpp src/mixer_control.cpp \
   src/trxnet_udp.cpp src/trxnet_peer.cpp src/trxnet_rig.cpp src/trxnet_ptt.cpp src/trxnet_link.cpp \
   src/device_enum.cpp src/webui_server.cpp \
+  src/ts480_protocol.cpp src/ts480_link.cpp src/ts480_sim.cpp src/ts480_ws.cpp src/ws_frame.cpp \
   $(NATIVE_DIR)/arduino/Arduino.cpp $(NATIVE_DIR)/arduino/WString.cpp \
   $(NATIVE_DIR)/arduino/Print.cpp $(NATIVE_DIR)/arduino/Stream.cpp \
   $(NATIVE_DIR)/arduino/IPAddress.cpp \
-  $(NATIVE_DIR)/net/WiFi.cpp $(NATIVE_DIR)/net/WebServer.cpp \
+  $(NATIVE_DIR)/net/WiFi.cpp $(NATIVE_DIR)/net/WebServer.cpp $(NATIVE_DIR)/net/mbedtls/sha1.cpp \
   $(NATIVE_DIR)/fs/FS.cpp $(NATIVE_DIR)/platform/paths.cpp \
   $(NATIVE_DIR)/platform/process_args.cpp \
   $(TRXNET_DIR)/TrxNet.cpp
@@ -81,7 +82,7 @@ OBJECTS := \
   $(patsubst %,$(BUILD_DIR)/%.o,$(notdir $(CXX_SOURCES))) \
   $(patsubst %,$(BUILD_DIR)/%.o,$(notdir $(C_SOURCES)))
 
-VPATH := . src $(NATIVE_DIR)/arduino $(NATIVE_DIR)/net $(NATIVE_DIR)/fs $(NATIVE_DIR)/platform \
+VPATH := . src $(NATIVE_DIR)/arduino $(NATIVE_DIR)/net $(NATIVE_DIR)/net/mbedtls $(NATIVE_DIR)/fs $(NATIVE_DIR)/platform \
          $(TRXNET_DIR) third_party/miniaudio
 
 .PHONY: all clean clean-cross test win arm64
@@ -162,11 +163,12 @@ TEST_BIN       := $(TEST_BUILD_DIR)/local-trx-tests
 TEST_SOURCES   := tests/test_civ_router.cpp tests/test_config.cpp tests/test_hamlib_bridge.cpp \
                   tests/test_keyer.cpp tests/test_keying_backend.cpp tests/test_key_runner.cpp \
                   tests/test_serial_key.cpp tests/test_audio_bridge.cpp tests/test_device_enum.cpp \
-                  tests/test_cached_rig.cpp tests/test_trxnet.cpp tests/test_tx_level.cpp \
+                  tests/test_cached_rig.cpp tests/test_trxnet.cpp tests/test_tx_level.cpp tests/test_ts480.cpp \
                   src/trxnet_rig.cpp src/trxnet_ptt.cpp src/tx_level.cpp src/mixer_control.cpp \
                   src/config.cpp src/civ_router.cpp src/hamlib_bridge.cpp src/cached_rig.cpp src/keyer.cpp \
                   src/keying_backend.cpp src/key_runner.cpp src/serial_key.cpp src/audio_bridge.cpp \
-                  src/device_enum.cpp $(NATIVE_DIR)/platform/paths.cpp
+                  src/device_enum.cpp src/ts480_protocol.cpp src/ts480_link.cpp src/ts480_sim.cpp \
+                  src/ws_frame.cpp $(NATIVE_DIR)/net/mbedtls/sha1.cpp $(NATIVE_DIR)/platform/paths.cpp
 TEST_C_SOURCES := third_party/miniaudio/miniaudio_impl.c
 TEST_OBJECTS   := $(patsubst %,$(TEST_BUILD_DIR)/%.o,$(notdir $(TEST_SOURCES))) \
                   $(patsubst %,$(TEST_BUILD_DIR)/%.o,$(notdir $(TEST_C_SOURCES)))

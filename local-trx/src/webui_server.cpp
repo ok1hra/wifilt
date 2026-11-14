@@ -97,7 +97,56 @@ void WebUiServer::setupRoutes() {
   server_->on("/api/trxnet-peers", HTTP_GET, [this]() { handleTrxnetPeers(); });
   server_->on("/api/trxnet-test-ptt", HTTP_POST, [this]() { handleTrxnetTestPtt(); });
 
-  server_->onNotFound([this]() { server_->send(404, "text/plain", "not found"); });
+  // TS-480 software panel pages (webui/ts480/). They are also loaded by
+  // QRPlog from wifilt's origin -- plain <script src>, which needs no CORS.
+  server_->on("/ts480/config.js", HTTP_GET, [this]() { handleTs480Config(); });
+
+  server_->onNotFound([this]() {
+    const std::string uri = server_->uri().c_str();
+    if (uri.rfind("/ts480", 0) == 0 && serveTs480File(uri)) return;
+    server_->send(404, "text/plain", "not found");
+  });
+}
+
+void WebUiServer::handleTs480Config() {
+  json info;
+  info["enabled"] = ts480_.enabled;
+  info["wsPort"] = ts480_.wsPort;
+  info["af"] = ts480_.af;
+  info["tx"] = ts480_.tx;
+  info["port"] = ts480_.port;
+  info["rev"] = LOCAL_TRX_REV;
+  server_->sendHeader("Cache-Control", "no-store");
+  server_->send(200, "application/javascript; charset=utf-8",
+                ("window.LTX_TS480=" + info.dump() + ";\n").c_str());
+}
+
+bool WebUiServer::serveTs480File(const std::string &uri) {
+  std::string path = uri;
+  const size_t query = path.find('?');
+  if (query != std::string::npos) path = path.substr(0, query);
+  if (path == "/ts480") {   // relative script paths in panel.html need the slash
+    server_->sendHeader("Location", "/ts480/");
+    server_->send(302, "text/plain", "");
+    return true;
+  }
+  if (path == "/ts480/") path = "/ts480/panel.html";
+  if (path.find("..") != std::string::npos || path.find('\\') != std::string::npos) return false;
+  const size_t dot = path.rfind('.');
+  const std::string ext = dot == std::string::npos ? "" : path.substr(dot);
+  const char *type = ext == ".html" ? "text/html; charset=utf-8"
+                     : ext == ".js"  ? "application/javascript; charset=utf-8"
+                     : ext == ".css" ? "text/css; charset=utf-8"
+                     : ext == ".svg" ? "image/svg+xml"
+                     : ext == ".json" ? "application/json"
+                                      : nullptr;
+  if (!type) return false;
+  fs::File file = LittleFS.open(path.c_str());
+  if (!file) return false;
+  // Small files on a LAN; always revalidate so a local-trx update shows at once.
+  server_->sendHeader("Cache-Control", "no-cache");
+  server_->streamFile(file, type);
+  return true;
 }
 
 // Step 1's "TX level mixer": the controls wifilt's CAL PLAN may set as the
@@ -179,6 +228,23 @@ void WebUiServer::handlePostConfig() {
   if (!UdpSocket::isValidBindIp(config.listenIp)) {
     sendError(400, listenIpError(config.listenIp));
     return;
+  }
+  if (config.ts480Panel.enabled) {
+    const std::string &panelPort = config.ts480Panel.port;
+    if (panelPort.empty()) {
+      sendError(400, "TS-480 software panel: pick the serial port of the RJ12 panel cable (Step 2)");
+      return;
+    }
+    if (config.cat.backend == "hamlib" && panelPort == config.cat.port) {
+      sendError(400, "TS-480 software panel: the panel cable needs its own USB-UART -- it cannot be "
+                     "the CAT port " + panelPort);
+      return;
+    }
+    if (panelPort == config.keying.port &&
+        !(config.cwOverTrxnet() && (config.pttOverTrxnet() || config.pttOverCat()))) {
+      sendError(400, "TS-480 software panel: " + panelPort + " is already the keying port (Step 3)");
+      return;
+    }
   }
   if (config.pttOverCat() && config.catOverTrxnet()) {
     sendError(400, "PTT through CAT needs CAT through hamlib (Step 2) -- over TrxNet, pick the "

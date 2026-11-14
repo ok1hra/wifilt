@@ -67,6 +67,13 @@ class AudioCapture {
   // full 20ms/160-byte packet's worth instead of draining a partial one.
   size_t available();
 
+  // A second consumer of the same captured audio: the TS-480 panel's browser
+  // AF (ts480_ws.h). It has a ring of its own, filled only while enabled, so
+  // pull() above still gets every sample for ICOM-LAN -- two readers of one
+  // ring would steal samples from each other. 1 s, oldest dropped.
+  void setTapEnabled(bool on);
+  size_t pullTap(uint8_t *out, size_t max);
+
  private:
   static void dataCallback(ma_device *device, void *output, const void *input,
                             ma_uint32 frameCount);
@@ -83,6 +90,10 @@ class AudioCapture {
   std::mutex mutex_;
   std::vector<uint8_t> ring_;
   size_t head_ = 0, count_ = 0;   // tail = (head + count) % ring_.size()
+
+  bool tapEnabled_ = false;   // guarded by mutex_, like the tap ring
+  std::vector<uint8_t> tapRing_;
+  size_t tapHead_ = 0, tapCount_ = 0;
 };
 
 // Mirror of AudioCapture for fáze 3's TX direction (wifilt->local-trx audio,
@@ -106,6 +117,12 @@ class AudioPlayback {
   // AudioCapture's ring on the other side.
   void push(const int16_t *samples, size_t count);
 
+  // The TS-480 panel's browser microphone (ts480_ws.h). While it holds PTT
+  // (exclusive on) push() above -- wifilt's TX audio over ICOM-LAN -- is
+  // dropped, so only one source ever reaches the radio.
+  void pushBrowser(const int16_t *samples, size_t count);
+  void setBrowserExclusive(bool on) { browserExclusive_ = on; }
+
   // The software part of local-trx's MOD level (tx_level.h): what is left
   // below one step of the sound card's mixer. 0..1 -- attenuation only.
   void setTrim(float trim) { trim_ = trim < 0.0f ? 0.0f : trim > 1.0f ? 1.0f : trim; }
@@ -116,7 +133,10 @@ class AudioPlayback {
   static void notificationCallback(const ma_device_notification *notification);
   void onPlayback(int16_t *output, ma_uint32 frameCount);
 
+  void pushSamples(const int16_t *samples, size_t count);
+
   std::atomic<float> trim_{1.0f};
+  std::atomic<bool> browserExclusive_{false};
 
   std::string deviceName_;
   ma_context context_{};

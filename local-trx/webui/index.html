@@ -151,6 +151,17 @@
   </div>
   <button id="testCatBtn" type="button" class="test-btn">Test read freq</button>
   <span class="note" id="catTestResult"></span>
+  <div id="ts480PanelFields" hidden>
+    <label><input type="checkbox" id="ts480Enabled"> TS-480 software panel</label>
+    <p class="note">Replaces the radio's detachable control panel: local-trx talks to the radio over
+      the panel cable (RJ12) and shows its display in QRPlog (TS480 button) and as a full panel at
+      <a href="/ts480/" target="_blank" rel="noopener">/ts480/</a>. Needs a USB-UART of its own on the
+      RJ12 cable -- <b>5 V TTL, not RS-232</b> (pin 3 GND, 4 radio&rarr;panel to RX, 5 panel&rarr;radio
+      to TX) -- and the physical panel unplugged. The radio switches itself off about 4 s after
+      local-trx stops answering it; after a restart local-trx puts it back the way it was.</p>
+    <label>Panel cable serial port</label>
+    <select id="ts480Port"><option value="">(none)</option></select>
+  </div>
   </div>
 </fieldset>
 
@@ -413,6 +424,7 @@ async function loadAll() {
   applyAudioDevices(devices);
   applySerialPorts(el("catPort"), devices);
   applySerialPorts(el("keyPort"), devices);
+  applySerialPorts(el("ts480Port"), devices);
   applyRigModels(devices);
 
   // _startupError: config.json says Run, but main.cpp refused to go live
@@ -434,6 +446,9 @@ async function loadAll() {
   setSelectValue(el("catPort"), config.cat.port);
   el("catBaud").value = config.cat.baud;
   setSelectValue(el("rigModel"), String(config.cat.rigModel));
+  const panel = config.ts480Panel || {};
+  el("ts480Enabled").checked = !!panel.enabled;
+  setSelectValue(el("ts480Port"), panel.port || "");
   setSelectValue(el("keyPort"), config.keying.port);
   el("keyBaud").value = config.keying.baud;
   el("cwWpm").value = config.keying.cwWpm;
@@ -510,6 +525,7 @@ async function saveConfig() {
       localPort: Number(el("trxnetLocalPort").value), networkPort: 5683,
     },
     identity: { radioName: el("radioName").value, civAddress: el("civAddress").value },
+    ts480Panel: { enabled: el("ts480Enabled").checked, port: el("ts480Port").value },
   };
   const status = el("status");
   try {
@@ -554,7 +570,10 @@ function wireRefreshButton(btn, apply) {
   });
 }
 wireRefreshButton(el("refreshAudioBtn"), devices => { applyAudioDevices(devices); loadMixers(); });
-wireRefreshButton(el("refreshCatBtn"), devices => applySerialPorts(el("catPort"), devices));
+wireRefreshButton(el("refreshCatBtn"), devices => {
+  applySerialPorts(el("catPort"), devices);
+  applySerialPorts(el("ts480Port"), devices);
+});
 wireRefreshButton(el("refreshKeyBtn"), devices => applySerialPorts(el("keyPort"), devices));
 
 // ---- Step 3: live DTR/RTS test -------------------------------------------
@@ -768,6 +787,9 @@ function updateBackendFields() {
   // CAT PTT is a hamlib command -- there is none with CAT over TrxNet.
   el("pttBackend").querySelector('option[value="cat"]').disabled = cat;
   el("catHamlibFields").hidden = cat;
+  // The TS-480 software panel: offered for a hamlib TS-480 only (rig model 2028).
+  el("ts480PanelFields").hidden = cat || el("rigModel").value !== "2028";
+  el("ts480Port").disabled = !el("ts480Enabled").checked;
   el("catTrxnetNote").hidden = !cat;
   el("pttCatFields").hidden = !pttCat;
   el("pttLineField").hidden = ptt || pttCat;
@@ -776,7 +798,7 @@ function updateBackendFields() {
   el("trxnetFieldset").hidden = !(cat || cw || ptt);
   el("trxnetOwnName").textContent = "LTX." + trxnetNetId().toString(16).padStart(2, "0");
 }
-for (const id of ["catBackend", "cwBackend", "pttBackend"]) el(id).addEventListener("change", updateBackendFields);
+for (const id of ["catBackend", "cwBackend", "pttBackend", "rigModel", "ts480Enabled"]) el(id).addEventListener("change", updateBackendFields);
 el("trxnetNetId").addEventListener("input", updateBackendFields);
 
 // ---- TrxNet device: scan + pick + PTT test ----------------------------------

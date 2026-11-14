@@ -43,6 +43,7 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
  · [3.12 The DX cluster beside the log](#312-the-dx-cluster-beside-the-log)
  · [3.13 Radio selection](#313-radio-selection)
  · [3.14 PA — the linear amplifier](#314-pa--the-linear-amplifier)
+ · [3.14b TS480 — the TS-480's own display](#314b-ts480--the-ts-480s-own-display)
  · [3.15 Export and backup — GIT LOG SYNC and the web log viewer](#315-export-and-backup)
  · [3.16 Statistics](#316-statistics)
  · [3.17 Keyboard shortcuts](#317-keyboard-shortcuts)
@@ -430,6 +431,12 @@ programs and opens both pages, because an operator has no other way to discover 
 are two. Building it from source is [BUILD.md § 5](BUILD.md#5-local-trx-a-hamlib-bridge-for-non-icom-radios).
 
 Pointing WIFILT at it is one checkbox in [SETUP → Radio](#93-radio).
+
+**A Kenwood TS-480 gets its front panel back.** When step 2 is set to hamlib's *Kenwood
+TS-480*, the setup page also offers the **TS-480 software panel**: a USB-UART on the radio's
+panel cable (RJ12) lets `local-trx` *be* the radio's detachable control panel. QRPLog then
+shows the radio's own display, and a second page shows the whole front panel — see
+[§ 3.14b](#314b-ts480--the-ts-480s-own-display).
 
 ### 1.7 A Raspberry Pi station
 
@@ -1518,6 +1525,80 @@ during a run at all. Where you put it is remembered, and it stays put across a r
 
 Stale telemetry greys the panel but does **not** disable the buttons. "No reading right now"
 is not a reason to refuse to switch an amplifier off.
+
+### 3.14b TS480 — the TS-480's own display
+
+A Kenwood **TS-480** behind [`local-trx`](#16-local-trx--any-radio-on-a-pc) can have its
+detachable control panel replaced by software. `local-trx` then talks to the radio over the
+**panel cable**, exactly as the real head does, and the radio's display, keys, knobs and
+power switch work from the browser. It is not CAT: the radio sends the panel its LCD segments,
+so what you see is what the real display would show, menus included.
+
+**What it needs.**
+
+- CAT through hamlib with the rig model **Kenwood TS-480** (local-trx setup, step 2). Only
+  then does the setup page show **TS-480 software panel**.
+- A **USB-UART of its own** on the RJ12 panel cable, separate from the CAT adapter. It must be
+  **5 V TTL, never RS-232**: RJ12 pin 3 to GND, pin 4 (radio → panel) to the adapter's RX,
+  pin 5 (panel → radio) to its TX. Pin 6 carries the speaker audio and pin 2 +8 V — leave
+  pin 2 unconnected. On a Raspberry Pi the guided installer can name this adapter
+  `/dev/ttyUSB.panel` ([§ 1.7](#17-a-raspberry-pi-station)).
+- The **physical panel unplugged** — only one panel may drive the radio.
+
+Tick **TS-480 software panel**, pick the panel cable's port, switch to **Run**.
+
+**The radio follows local-trx.** The TS-480 switches itself off about 4 s after its panel
+stops answering — so stopping `local-trx` switches the radio off. After a restart (Save in the
+setup page, an update, a reboot) `local-trx` puts the radio back the way it was: if it was on,
+it is switched on again; if you switched it off with ⏻, it stays off. A quick restart from Save
+is usually short enough that the radio does not go off at all.
+
+**In QRPLog** a **TS480** button appears in the bottom bar, next to PA, while `local-trx`
+answers and its panel cable is open — also with the radio off, so it can be switched on. It
+opens a palette with **only the radio's display**, no controls in it:
+
+| In the palette | |
+|---|---|
+| drag the title bar | moves it; where you leave it is remembered, measured from the bottom of the window like the RTTY palette |
+| the corner handle | changes its width — the display scales with it |
+| **⏻** after the title | switches the radio on or off; green while it is on |
+| **AF** | plays the radio's receive audio in this browser (see below) |
+| **PTT** | transmits this browser's microphone (see below) |
+| the button at the right end | **expand**: the palette closes and the full front panel opens in its own window |
+
+The full panel — the photo-accurate TS-480 front with every key (hold one for a second for its
+long-press function), the tuning dial, MULTI, RIT/XIT, AF/SQL and IF SHIFT knobs, plus direct
+frequency entry and a VFO step choice — has the same header. Its right-hand button is
+**collapse**: it closes the window and brings the palette back in QRPLog. The full panel can
+also be opened directly at `http://<local-trx PC>:8765/ts480/`, and the setup page links to it.
+
+The palette's buttons never take the keyboard; the caret stays in *Call*.
+
+**AF — the radio's audio in the browser.** Shown when `local-trx` has a capture device (setup,
+step 1). Click it and the receive audio from that sound card plays in this browser; click again
+to stop. Browsers start sound only after a click, so after expand or collapse the AF button
+**pulses** in the new place until you click it once more.
+
+**PTT — transmitting your microphone.** Offered only while AF is on, the radio is on and in
+**SSB, AM or FM**, and `local-trx` has a playback device. The audio goes into the radio the way
+WIFILT's own transmit audio does — through the sound card and `local-trx`'s PTT (step 3). It
+is a toggle: click to transmit, click again to stop; the receive audio is muted meanwhile so
+the speaker cannot feed the microphone. Use headphones anyway.
+
+Browsers hand a page the microphone only on a **secure origin** — https, or a browser on the
+same PC (`localhost`). On any other machine PTT is greyed out and its tooltip says why; a
+Chrome launched with `--unsafely-treat-insecure-origin-as-secure=http://<address>` lifts that
+for one address.
+
+PTT drops by itself — and the palette says why — when:
+
+- no microphone audio has arrived for **1 s** (the page was closed, hung or lost the network);
+- it has been held for **3 minutes**;
+- the radio leaves SSB, AM or FM, is switched off, or its panel cable goes silent.
+
+Only one transmitter owner at a time: while WIFILT itself transmits (JS8, WSPR, RTTY, CW…)
+PTT is refused, while a browser transmits WIFILT's own transmissions are refused, and a second
+browser cannot take over a first one's PTT.
 
 ### 3.15 Export and backup
 

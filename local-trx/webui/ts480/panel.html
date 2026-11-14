@@ -1,0 +1,397 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- TS-480 software panel, full front panel. Port of ts-480-web-panel's
+     ts480/web/index.html; served by local-trx (webui/ts480/), talks to its
+     WebSocket (ts480_ws.h). Opened from QRPlog's TS480 palette (expand) or
+     directly at http://<local-trx>:8765/ts480/. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TS-480</title>
+<link rel="icon" href="data:,">
+<style>
+:root{
+  --page:#0d0e10; --ink:#c9ced6; --muted:#7c838d;
+  --print-alt:#f39a33; --print:#eef0f2; --ok:#3ecf6a; --tx:#ff4b3a;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--page);color:var(--ink);font:14px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+button{font:inherit}
+.head{display:flex;align-items:center;gap:8px;padding:5px 10px;border-bottom:1px solid #28443e;background:#0e1b19;
+  position:sticky;top:0;z-index:2}
+.title{font:700 12px/1 ui-monospace,Consolas,monospace;letter-spacing:.08em;color:#e8f3ee;flex:none}
+.wrap{max-width:1500px;margin:0 auto;padding:8px 12px 16px}
+.tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px;font-size:12px;color:var(--muted)}
+.tbtn{background:#1d2024;color:var(--ink);border:1px solid #2e3238;border-radius:6px;padding:3px 9px;cursor:pointer;font-size:12px}
+.tbtn:hover{background:#2a2e34}
+.tbtn.on{background:var(--print-alt);color:#111;border-color:var(--print-alt)}
+.rate{display:inline-flex;gap:3px;align-items:center}
+input[type=number]{background:#0e0f11;color:var(--ink);border:1px solid #2e3238;border-radius:6px;padding:3px 6px;
+  font:12px ui-monospace,Consolas,monospace;width:120px}
+kbd{background:#23262b;border-radius:4px;padding:0 5px;font-size:11px}
+#panel{width:100%;height:auto;display:block;user-select:none;-webkit-user-select:none;touch-action:none}
+#panel text{font-family:"Liberation Sans Narrow","Nimbus Sans Narrow","Arial Narrow","Roboto Condensed","DejaVu Sans Condensed",sans-serif}
+.key{cursor:pointer}
+.key .cap{fill:url(#gKey);stroke:#3c4045;stroke-width:1.3}
+.key .lab{fill:#1c1e21;font-weight:700;pointer-events:none}
+.key .labs{stroke:#1c1e21;pointer-events:none}
+.key:hover .cap{stroke:#000;stroke-width:1.8}
+.key.down .cap{fill:url(#gKeyDown)}
+.key.long .cap{stroke:var(--print-alt);stroke-width:3}
+#panel.lit .key .cap{fill:url(#gKeyLit);filter:url(#glow)}
+#panel.lit .key.down .cap{fill:url(#gKeyLitDown)}
+#panel.lit .key .lab{fill:#2b1d0c}
+#panel.lit .key .labs{stroke:#2b1d0c}
+.plab{fill:var(--print-alt);font-size:18px;font-weight:700}
+.plab.w,.plab .w{fill:var(--print)}
+.knob{cursor:grab}
+.knob:active{cursor:grabbing}
+</style>
+</head>
+<body>
+<div class="head" id="head"><span class="title">TS-480</span></div>
+<div class="wrap">
+  <svg id="panel" viewBox="110 195 1395 640" xmlns="http://www.w3.org/2000/svg" aria-label="TS-480 front panel">
+    <defs>
+      <linearGradient id="gBody" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#2b2d30"/><stop offset=".3" stop-color="#1d1e21"/><stop offset="1" stop-color="#121315"/>
+      </linearGradient>
+      <linearGradient id="gHood" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#3a3c40"/><stop offset="1" stop-color="#1a1b1d"/>
+      </linearGradient>
+      <linearGradient id="gKey" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#f1f3f4"/><stop offset=".55" stop-color="#d9dde1"/><stop offset="1" stop-color="#b4b9bf"/>
+      </linearGradient>
+      <linearGradient id="gKeyDown" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#a9aeb4"/><stop offset="1" stop-color="#c9cdd2"/>
+      </linearGradient>
+      <linearGradient id="gKeyLit" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#fbf0de"/><stop offset=".55" stop-color="#f5dcb4"/><stop offset="1" stop-color="#e6bd82"/>
+      </linearGradient>
+      <linearGradient id="gKeyLitDown" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#d9b07a"/><stop offset="1" stop-color="#efd2a6"/>
+      </linearGradient>
+      <radialGradient id="gKnob" cx=".38" cy=".3" r=".85">
+        <stop offset="0" stop-color="#4a4d52"/><stop offset=".5" stop-color="#202225"/><stop offset="1" stop-color="#0b0c0d"/>
+      </radialGradient>
+      <radialGradient id="gRubber" cx=".5" cy=".5" r=".5">
+        <stop offset=".74" stop-color="#4a4c50"/><stop offset=".8" stop-color="#2c2e31"/><stop offset=".93" stop-color="#1a1b1d"/><stop offset="1" stop-color="#0c0c0d"/>
+      </radialGradient>
+      <radialGradient id="gDimple" cx=".45" cy=".35" r=".75">
+        <stop offset="0" stop-color="#f4f5f6"/><stop offset=".45" stop-color="#b9bdc2"/><stop offset=".85" stop-color="#7b8086"/><stop offset="1" stop-color="#505459"/>
+      </radialGradient>
+      <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+        <feGaussianBlur in="SourceAlpha" stdDeviation="2" result="b"/>
+        <feFlood flood-color="#ffb04a" flood-opacity=".3"/>
+        <feComposite in2="b" operator="in" result="g"/>
+        <feMerge><feMergeNode in="g"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+    </defs>
+    <path d="M125,296 Q127,218 206,216 L236,216 L240,205 L1283,205 L1287,214 L1410,214 Q1491,218 1493,292 L1493,722 Q1493,796 1420,796 L202,796 Q125,796 125,722 Z"
+          fill="url(#gBody)" stroke="#000" stroke-width="2"/>
+    <path d="M240,205 L1283,205 L1286,250 L238,250 Z" fill="url(#gHood)"/>
+    <path d="M238,252 Q232,520 248,794 M1286,252 Q1294,520 1286,794" stroke="#08090a" stroke-width="2" fill="none" opacity=".8"/>
+    <rect x="244" y="250" width="1040" height="230" rx="8" fill="#060708" stroke="#000"/>
+    <text x="283" y="292" fill="#d8dbe0" font-size="31" letter-spacing="1">KENWOOD</text>
+    <text x="1138" y="293" fill="#e4e6e9" font-size="17" font-weight="700" text-anchor="end" letter-spacing=".6">HF/50MHz ALL MODE TRANSCEIVER   TS-480</text>
+    <text x="1153" y="295" fill="none" stroke="#e4e6e9" stroke-width="1.3" font-size="27" font-weight="900" font-style="italic">DSP</text>
+    <g id="controls"></g>
+  </svg>
+
+  <div class="tools">
+    <span class="rate" id="rate">VFO ×</span>
+    <span><input type="number" id="fIn" placeholder="kHz, e.g. 14074" step="0.01">
+      <button class="tbtn" id="fGo" title="Types it in with ENT, digits, ENT">Enter (ENT)</button></span>
+    <button class="tbtn" id="btnReconnect" title="Ask the radio for a full redraw (02)">Redraw</button>
+    <span>Drag or scroll knobs (outer ring and inner knob are separate) · <kbd>↑</kbd>/<kbd>↓</kbd> VFO ·
+      <kbd>Shift</kbd> ×10 · <kbd>PgUp</kbd>/<kbd>PgDn</kbd> MULTI · hold a key &gt; 1 s = long press ·
+      double-click IF SHIFT = centre</span>
+  </div>
+</div>
+
+<script src="config.js"></script>
+<script src="lcd.js"></script>
+<script src="audio.js"></script>
+<script src="client.js"></script>
+<script>
+"use strict";
+const NS = "http://www.w3.org/2000/svg";
+function el(tag, attrs = {}, parent = null, text = null) {
+  const e = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (text !== null) e.textContent = text;
+  if (parent) parent.appendChild(e);
+  return e;
+}
+
+const CFG = window.LTX_TS480 || {};
+const params = new URLSearchParams(location.search);
+const client = new Ts480Client(`ws://${location.hostname}:${CFG.wsPort || (Number(location.port || 80) + 1)}/ts480`);
+function send(o) { client.send(o); }
+
+// ---- header: title, ⏻ AF PTT, collapse back into QRPlog's palette -------
+let collapsing = false;
+const hasOpener = (() => { try { return !!(window.opener && !window.opener.closed); } catch (_) { return false; } })();
+function tellOpener(op) {
+  try { if (window.opener && !window.opener.closed) window.opener.postMessage({ src: "ltx-ts480", op, af: client.af || client.afWanted }, "*"); } catch (_) {}
+}
+document.getElementById("head").appendChild(client.headerControls({
+  end: hasOpener ? { icon: "collapse", title: "Back into the QRPlog palette", onClick: () => {
+    collapsing = true;
+    tellOpener("collapse");
+    client.close();
+    window.close();
+  } } : null,
+}));
+window.addEventListener("pagehide", () => { if (!collapsing) tellOpener("closed"); client.close(); });
+if (!CFG.enabled) client.setMessage("the TS-480 panel is off in local-trx (wizard, Step 2)", true);
+if (params.get("af") === "1") client.wantAf();
+
+// ---- LCD (lcd.js) ----------------------------------------------------------
+const PANEL = document.getElementById("panel");
+const C = document.getElementById("controls");
+const lcd = Ts480Lcd.mount(PANEL);
+PANEL.appendChild(C);   // controls drawn over the LCD group, as in the original
+
+// ---- controls (positions measured on a straight front photo) ---------------
+const KEYDEFS = [
+  ["POWER", 187, 320, 56, 56, "⏻", 0, "circle"],
+  ["PF", 181, 400, 70, 40, "PF", 10], ["ATT", 180, 467, 70, 42, "ATT/PRE", 11], ["AT", 180, 537, 70, 40, "AT", 9],
+  ["CH1", 332, 561, 64, 35, "CH1"], ["CH2", 420, 561, 64, 35, "CH2"], ["CH3", 510, 561, 64, 35, "CH3"],
+  ["PWR", 332, 628, 64, 35, "PWR"], ["MIC", 420, 628, 64, 35, "MIC"], ["KEY", 510, 628, 64, 35, "KEY"],
+  ["NB", 332, 690, 64, 35, "NB/T"], ["VOX", 420, 690, 64, 35, "VOX"], ["PROC", 510, 691, 64, 35, "PROC"],
+  ["MTR", 333, 754, 64, 35, "MTR"], ["AGC", 422, 754, 64, 35, "AGC"], ["ENT", 510, 755, 64, 35, "ENT"],
+  ["DNL", 647, 565, 62, 38, "DNL"], ["NR", 597, 623, 62, 38, "NR"],
+  ["FIL", 700, 625, 62, 38, "FIL"], ["BC", 648, 680, 62, 38, "BC"],
+  ["FINE", 613, 755, 80, 38, "FINE"], ["SCAN", 721, 755, 80, 38, "SCAN"],
+  ["MODE", 835, 573, 66, 50, "MODE", 0, "sq"], ["MENU", 823, 660, 62, 47, "MENU", 0, "sq"], ["MHZ", 847, 742, 70, 37, "MHz"],
+  ["QMI", 1235, 563, 70, 34, "QMI", -8], ["QMR", 1241, 622, 70, 34, "QMR", -4],
+  ["AB", 1245, 681, 70, 34, "A/B", 0], ["ASB", 1224, 742, 70, 34, "A=B", 7],
+  ["CL", 1327, 283, 48, 37, "CL"], ["XIT", 1324, 352, 48, 37, "XIT"], ["RIT", 1324, 420, 48, 37, "RIT"],
+  ["DOWN", 1345, 499, 90, 64, "⌄", 0, "path", "M-40,-12 Q-40,-24 -28,-25 L28,-32 Q41,-33 42,-20 L44,19 Q44,31 32,31 L-33,32 Q-45,32 -45,20 Z"],
+  ["UP", 1443, 492, 80, 76, "⌃", 0, "path", "M-38,-24 Q-38,-36 -26,-36 L12,-38 Q38,-38 39,-12 L38,26 Q37,38 25,38 L-27,38 Q-39,38 -39,26 Z"],
+];
+const PANEL_LABELS = [
+  [180, 446, "ANT 1/2", 9, "middle"],
+  [332, 537, "1 REC", 0, "middle"], [420, 537, "2 REC", 0, "middle"], [510, 537, "3 REC", 0, "middle"],
+  [337, 600, "4 TX MONI", 0, "middle"], [425, 600, "5 RF.G", 0, "middle"], [515, 600, "6 DELAY", 0, "middle"],
+  [300, 664, "7"], [388, 664, "8"], [476, 664, "9"],
+  [333, 725, "CLR", 0, "middle"], [423, 725, "0 OFF", 0, "middle"],
+  [743, 591, "NAR", 0, "middle"], [723, 696, "– CW.T", 0, "middle"],
+  [610, 723, "STEP", 0, "middle"], [717, 725, "SG.SEL", 0, "middle"], [823, 628, "F.LOCK", 0, "middle"],
+  [1225, 542, "M.IN", 0, "middle"], [1240, 598, "M▸VFO", 0, "middle"], [1252, 661, "M/V", 0, "middle"],
+  [1243, 719, "SPLIT", 0, "middle"],
+  [1400, 566, "|TF-SET|", 0, "middle"],
+];
+
+const keyEls = {};
+function buildKeys() {
+  for (const [name, cx, cy, w, h, label, rot = 0, shape = "pill", d = ""] of KEYDEFS) {
+    const g = el("g", { class: "key", "data-key": name, transform: `translate(${cx},${cy}) rotate(${rot})` }, C);
+    if (shape === "circle") el("circle", { class: "cap", r: w / 2 }, g);
+    else if (shape === "path") el("path", { class: "cap", d }, g);
+    else el("rect", { class: "cap", x: -w / 2, y: -h / 2, width: w, height: h, rx: shape === "sq" ? 15 : h / 2 }, g);
+    if (shape === "path") {
+      el("path", { class: "labs", d: label === "⌄" ? "M-14,-4 L0,6 L14,-4" : "M-14,6 L0,-5 L14,6", fill: "none",
+        "stroke-width": 3, "stroke-linecap": "round", "stroke-linejoin": "round" }, g);
+    } else if (shape === "circle") {
+      el("path", { class: "labs", d: "M-6.5,-8.5 A10.5,10.5 0 1,0 6.5,-8.5 M0,-13 L0,-1.5", fill: "none", "stroke-width": 2.6,
+        "stroke-linecap": "round" }, g);
+    } else {
+      const fs = label.length > 5 ? 16 : label.length > 3 ? 18 : 19;
+      el("text", { class: "lab", "text-anchor": "middle", y: fs * 0.36, "font-size": fs }, g, label);
+    }
+    keyEls[name] = g;
+    keyHandlers(g, name);
+  }
+  for (const [x, y, t, rot = 0, anchor = "start"] of PANEL_LABELS) {
+    const tx = el("text", { class: "plab", x, y, "text-anchor": anchor, transform: rot ? `rotate(${rot} ${x} ${y})` : "" }, C);
+    t.split("|").forEach((part, i) => { if (part) el("tspan", i % 2 ? { class: "w" } : {}, tx, part); });
+  }
+  el("path", { d: "M750,598 L756,598 L756,592", fill: "none", stroke: "var(--print-alt)", "stroke-width": 2 }, C);
+  el("ellipse", { id: "lamp", cx: 873, cy: 529, rx: 10, ry: 6, fill: "#1a1a1a", stroke: "#000", "stroke-width": 1.5 }, C);
+}
+function titleKeys(keys) {
+  for (const k of keys) {
+    const g = keyEls[k.name]; if (!g) continue;
+    const t = g.querySelector("title") || el("title", {}, g);
+    t.textContent = `${k.label}${k.alt ? " / " + k.alt : ""}`;
+  }
+}
+function keyHandlers(g, name) {
+  let t = null;
+  const down = ev => {
+    ev.preventDefault(); if (g.classList.contains("down")) return;
+    try { if (ev.pointerId !== undefined) g.setPointerCapture(ev.pointerId); } catch (_) {}
+    g.classList.add("down"); send({ op: "down", key: name });
+    t = setTimeout(() => g.classList.add("long"), 1000);
+  };
+  const up = () => {
+    if (!g.classList.contains("down")) return;
+    clearTimeout(t); g.classList.remove("down", "long"); send({ op: "up", key: name });
+  };
+  g.addEventListener("pointerdown", down);
+  g.addEventListener("pointerup", up); g.addEventListener("pointercancel", up); g.addEventListener("lostpointercapture", up);
+  g.addEventListener("contextmenu", e => e.preventDefault());
+}
+
+function knurl(parent, cx, cy, r, teeth, depth, fill, stroke = "#000") {
+  let d = "";
+  for (let i = 0; i <= teeth * 2; i++) {
+    const a = i / (teeth * 2) * Math.PI * 2, rr = i % 2 ? r - depth : r;
+    d += (i ? "L" : "M") + (cx + rr * Math.cos(a)).toFixed(1) + "," + (cy + rr * Math.sin(a)).toFixed(1);
+  }
+  return el("path", { d: d + "Z", fill, stroke, "stroke-width": 1.2, "stroke-linejoin": "round" }, parent);
+}
+function lobes(parent, cx, cy, r, n, depth, fill) {
+  let d = "";
+  const N = n * 24;
+  for (let i = 0; i <= N; i++) {
+    const a = i / N * Math.PI * 2, rr = r - depth * (0.5 - 0.5 * Math.cos(a * n)) ** 3;
+    d += (i ? "L" : "M") + (cx + rr * Math.cos(a)).toFixed(1) + "," + (cy + rr * Math.sin(a)).toFixed(1);
+  }
+  return el("path", { d: d + "Z", fill, stroke: "#000", "stroke-width": 1.5 }, parent);
+}
+function spunDisc(parent, cx, cy, r) {
+  const fo = el("foreignObject", { x: cx - r, y: cy - r, width: 2 * r, height: 2 * r }, parent);
+  const d = document.createElement("div");
+  d.style.cssText = `width:${2 * r}px;height:${2 * r}px;border-radius:50%;
+    background:radial-gradient(circle at 50% 50%,rgba(255,255,255,.25) 0 6%,transparent 7%),
+    conic-gradient(from 20deg,#d9dcdf,#8d9297 12%,#f4f5f6 24%,#9da2a7 37%,#e6e8ea 50%,#868b90 62%,#f1f2f3 75%,#a2a7ac 88%,#d9dcdf);
+    box-shadow:inset 0 0 0 2px rgba(0,0,0,.45),inset 0 -6px 14px rgba(0,0,0,.25)`;
+  fo.appendChild(d);
+  return fo;
+}
+function rotary(target, cx, cy, onTurn) {
+  let last = null;
+  const ang = e => {
+    const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(PANEL.getScreenCTM().inverse());
+    return Math.atan2(p.y - cy, p.x - cx) * 180 / Math.PI;
+  };
+  target.addEventListener("pointerdown", e => { e.preventDefault(); e.stopPropagation(); try { target.setPointerCapture(e.pointerId); } catch (_) {} last = ang(e); });
+  target.addEventListener("pointermove", e => {
+    if (last === null) return;
+    const a = ang(e); let d = a - last; if (d > 180) d -= 360; if (d < -180) d += 360; last = a; onTurn(d, e);
+  });
+  const end = () => { last = null; };
+  target.addEventListener("pointerup", end); target.addEventListener("pointercancel", end);
+}
+function wheel(target, fn) {
+  target.addEventListener("wheel", e => { e.preventDefault(); e.stopPropagation(); fn(e.deltaY < 0 ? 1 : -1, e); }, { passive: false });
+}
+function encoderKnob({ cx, cy, r, which, degPerCount, mult = () => 1, group, inner }) {
+  let ang = 0, acc = 0;
+  const rot = el("g", {}, group);
+  inner(rot);
+  const set = () => rot.setAttribute("transform", `rotate(${ang} ${cx} ${cy})`);
+  const hit = el("circle", { cx, cy, r, fill: "transparent", class: "knob" }, group);
+  rotary(hit, cx, cy, d => {
+    ang += d; set(); acc += d / degPerCount;
+    const n = Math.trunc(acc); if (n) { acc -= n; send({ op: "enc", which, delta: n * mult() }); }
+  });
+  wheel(hit, (s, e) => { ang += s * degPerCount * 3; set(); send({ op: "enc", which, delta: s * mult() * (e.shiftKey ? 10 : 1) }); });
+  return n => { ang += n * degPerCount * 3; set(); };
+}
+function potKnob({ cx, cy, which, max, rOuter, rInner, ring, group, draw }) {
+  let v = 0, busy = 0, timer = null;
+  const rot = el("g", {}, group);
+  draw(rot);
+  const set = () => rot.setAttribute("transform", `rotate(${-150 + 300 * v / max} ${cx} ${cy})`);
+  const hit = ring
+    ? el("path", { d: `M${cx - rOuter},${cy}a${rOuter},${rOuter} 0 1,0 ${2 * rOuter},0a${rOuter},${rOuter} 0 1,0 ${-2 * rOuter},0Z M${cx - rInner},${cy}a${rInner},${rInner} 0 1,1 ${2 * rInner},0a${rInner},${rInner} 0 1,1 ${-2 * rInner},0Z`, "fill-rule": "evenodd", fill: "transparent", class: "knob" }, group)
+    : el("circle", { cx, cy, r: rOuter, fill: "transparent", class: "knob" }, group);
+  const title = el("title", {}, hit);
+  const push = () => {
+    busy = Date.now(); clearTimeout(timer);
+    timer = setTimeout(() => send({ op: "pot", which, value: Math.round(v) }), 30);
+    title.textContent = `${which.toUpperCase()} ${Math.round(v)}`;
+  };
+  rotary(hit, cx, cy, d => { v = Math.max(0, Math.min(max, v + d * max / 300)); set(); push(); });
+  wheel(hit, (s, e) => { v = Math.max(0, Math.min(max, v + s * max / (e.shiftKey ? 100 : 40))); set(); push(); });
+  if (which === "ifshift") hit.addEventListener("dblclick", () => { v = 511; set(); push(); });
+  set();
+  return val => { if (Date.now() - busy > 800) { v = val; set(); title.textContent = `${which.toUpperCase()} ${val}`; } };
+}
+
+let rate = 2;
+let vfoSpin = () => {}, multiSpin = () => {}, setAf = () => {}, setSql = () => {}, setIf = () => {};
+function concentric(cx, cy, ringWhich, ringMax, innerWhich, isEncoder, rO, rI) {
+  const g = el("g", {}, C);
+  el("circle", { cx, cy: cy + 3, r: rO + 3, fill: "rgba(0,0,0,.55)" }, g);
+  const ring = potKnob({ cx, cy, which: ringWhich, max: ringMax, rOuter: rO, rInner: rI, ring: true, group: g,
+    draw: g2 => { lobes(g2, cx, cy, rO, 12, 5, "url(#gKnob)");
+      knurl(g2, cx, cy, rO - 6, 40, 2, "none", "rgba(255,255,255,.06)");
+      el("rect", { x: cx - 2.5, y: cy - rO + 3, width: 5, height: 12, rx: 2, fill: "#f2f3f4" }, g2); } });
+  const drawInner = g2 => { el("circle", { cx, cy, r: rI + 2, fill: "#050506" }, g2);
+    knurl(g2, cx, cy, rI, 48, 1.6, "url(#gKnob)");
+    el("circle", { cx, cy, r: rI - 7, fill: "url(#gKnob)", stroke: "rgba(0,0,0,.6)" }, g2);
+    el("rect", { x: cx - 2.5, y: cy - rI + 6, width: 5, height: 16, rx: 2, fill: "#f2f3f4" }, g2); };
+  const inner = isEncoder
+    ? encoderKnob({ cx, cy, r: rI, which: innerWhich, degPerCount: 15, group: g, inner: drawInner })
+    : potKnob({ cx, cy, which: innerWhich, max: 255, rOuter: rI, group: g, draw: drawInner });
+  return [ring, inner];
+}
+function buildKnobs() {
+  el("text", { class: "plab w", x: 205, y: 607, "text-anchor": "middle" }, C).textContent = "AF –◉– SQL";
+  [setSql, setAf] = concentric(205, 702, "sql", 255, "af", false, 80, 54);
+  el("text", { class: "plab w", x: 1412, y: 612, "text-anchor": "middle" }, C).textContent = "MULTI –◉– SHIFT";
+  el("text", { class: "plab w", x: 1452, y: 591, "text-anchor": "middle" }, C, "IF");
+  [setIf, multiSpin] = concentric(1412, 702, "ifshift", 1022, "multi", true, 74, 50);
+  el("circle", { cx: 1420, cy: 347, r: 58, fill: "#0d0e10", stroke: "#000" }, C);
+  encoderKnob({ cx: 1420, cy: 347, r: 46, which: "rit", degPerCount: 10, group: el("g", {}, C),
+    inner: g => { knurl(g, 1420, 347, 46, 30, 2.5, "url(#gKnob)"); el("circle", { cx: 1420, cy: 347, r: 37, fill: "url(#gKnob)", stroke: "#000" }, g);
+      el("rect", { x: 1418, y: 313, width: 4, height: 9, rx: 1.5, fill: "#8d9196" }, g); } });
+  vfoSpin = encoderKnob({ cx: 1045, cy: 665, r: 162, which: "vfo", degPerCount: 3.6, mult: () => rate, group: el("g", {}, C),
+    inner: g => {
+      el("circle", { cx: 1045, cy: 670, r: 164, fill: "rgba(0,0,0,.6)" }, g);
+      lobes(g, 1045, 665, 162, 10, 6, "url(#gRubber)");
+      el("circle", { cx: 1045, cy: 665, r: 126, fill: "#101112" }, g);
+      spunDisc(g, 1045, 665, 121);
+      el("circle", { cx: 1012, cy: 719, r: 54, fill: "rgba(0,0,0,.35)" }, g);
+      el("circle", { cx: 1010, cy: 715, r: 52, fill: "url(#gDimple)", stroke: "#4b4f54", "stroke-width": 1.5 }, g);
+    } });
+}
+
+// ---- state -> panel ----------------------------------------------------------
+function render(m) {
+  lcd.render(m);
+  const s = m && m.state;
+  const live = !!(m && m.connected && s && s.power !== false);
+  PANEL.classList.toggle("lit", live && !!s.backlight);
+  const lamp = document.getElementById("lamp");
+  const l = s ? s.lamp : "off";
+  lamp.setAttribute("fill", live && l === "rx" ? "var(--ok)" : live && l === "tx" ? "var(--tx)" : "#222");
+  lamp.style.filter = live && (l === "rx" || l === "tx") ? "drop-shadow(0 0 4px currentColor)" : "";
+  if (m && m.pots) { setAf(m.pots.af); setSql(m.pots.sql); setIf(m.pots.ifshift); }
+  document.title = s && s.freq_hz && live ? `TS-480 ${(s.freq_hz / 1e6).toFixed(5)} ${s.mode || ""}` : "TS-480";
+}
+client.on("state", render);
+client.on("hello", h => titleKeys(h.keys || []));
+
+// ---- tools -------------------------------------------------------------------
+document.getElementById("fGo").onclick = () => { const v = parseFloat(document.getElementById("fIn").value); if (v > 0) send({ op: "freq", khz: v }); };
+document.getElementById("fIn").addEventListener("keydown", e => { if (e.key === "Enter") document.getElementById("fGo").click(); });
+document.getElementById("btnReconnect").onclick = () => send({ op: "reconnect" });
+const rateBox = document.getElementById("rate");
+[1, 2, 5, 20, 100].forEach(r => {
+  const b = document.createElement("button"); b.className = "tbtn" + (r === rate ? " on" : ""); b.textContent = r;
+  b.onclick = () => { rate = r; [...rateBox.querySelectorAll("button")].forEach(c => c.classList.toggle("on", c === b)); };
+  rateBox.appendChild(b);
+});
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT") return;
+  const k = e.shiftKey ? 10 : 1;
+  if (e.key === "ArrowUp") { e.preventDefault(); send({ op: "enc", which: "vfo", delta: rate * k }); vfoSpin(1); }
+  else if (e.key === "ArrowDown") { e.preventDefault(); send({ op: "enc", which: "vfo", delta: -rate * k }); vfoSpin(-1); }
+  else if (e.key === "PageUp") { e.preventDefault(); send({ op: "enc", which: "multi", delta: 1 }); multiSpin(1); }
+  else if (e.key === "PageDown") { e.preventDefault(); send({ op: "enc", which: "multi", delta: -1 }); multiSpin(-1); }
+});
+
+buildKnobs();
+buildKeys();
+render(null);
+client.connect();
+</script>
+</body>
+</html>

@@ -11,6 +11,28 @@ published.
 
 ## Working tree — not committed
 
+**local-trx: TS-480 software panel — the radio's display in QRPlog, the whole front panel in a window.**
+
+* With CAT through hamlib to a Kenwood TS-480 (model 2028), local-trx's setup offers *TS-480
+  software panel* and a serial port for the radio's panel cable (RJ12, a 5 V TTL USB-UART of its
+  own). local-trx then *is* the radio's detachable panel: a C++ port of ts-480-web-panel
+  (GPL-3.0) — `ts480_protocol` (frame codec, LCD state), `ts480_link` (own thread answering the
+  radio's keepalives, keys with long press, encoders, pots), `ts480_sim` (`--ts480-sim`).
+* The radio switches itself off ~4 s after the panel stops answering. local-trx keeps the last
+  power state the radio reported in `ts480-state.json` and after a restart switches the radio
+  back on if it was on (up to 3 tries).
+* WebSocket `ws://<host>:8766/ts480` (`--ts480-ws-port`, `ts480_ws`), pages in
+  `local-trx/webui/ts480/`: `panel.html` (full front panel), `lcd.js`, `client.js`, `audio.js`,
+  `qrplog.js`. Nothing of it is in `data/`: QRPlog's `log.js` only finds the LOCAL-TRX slot's
+  local-trx and loads `/ts480/config.js` + `qrplog.js` from it, which add a **TS480** button and a
+  movable, resizable palette with the display; ⏻, AF, PTT in its title, expand → the full panel in
+  its own window, collapse → back (postMessage).
+* AF: RX audio from local-trx's capture device to the browser (a second ring in `AudioCapture`,
+  ICOM-LAN keeps every sample) and the browser microphone back (SSB/AM/FM only, secure origin
+  only). `PttArbiter` lets one owner at a time key — wifilt over CI-V `1C 00` or the browser.
+  Browser PTT drops on 1 s without microphone audio, after 3 min, on a mode change out of voice,
+  with the radio off, or when the page goes away.
+
 **IC-705: the screen dims by itself in digital modes, with one icon next to ⏻.**
 
 * CI-V has no "screen off now" (`1A 05 01 40` only lets a short press of POWER do it). Dimming
