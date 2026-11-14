@@ -142,13 +142,13 @@ volatile bool cwIpSendPending = false;
 #ifndef LOOP_WARN_MS
   #define LOOP_WARN_MS 200
 #endif
-#define REV 20261113
+#define REV 20261114
 // A second (third, ...) release on the same day: REV stays the date, REV_BUILD
 // counts up (tools/release.sh does both), and the version reads "20261113.1".
 // REV alone stays an 8-digit date wherever an older updater reads it (/health.json
 // "rev", the package's VERSION, latest.json "rev"): those updaters take exactly
 // eight digits, and a same-day build is then simply not offered to them.
-#define REV_BUILD 6
+#define REV_BUILD 0
 #define REV_STR2(x) #x
 #define REV_STR1(x) REV_STR2(x)
 #if REV_BUILD > 0
