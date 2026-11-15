@@ -654,6 +654,8 @@ def sheet_qrplog():
             KV("[[Esc]]", L("**stop TX at once** · close a dialog · end the search",
                             "**okamžitě zastaví TX** · zavře dialog · ukončí hledání"), kw),
             KV("[[Space]]", L("in Call: dupe & partial-call search", "v Call: hledání dupe a části značky"), kw),
+            KV("14025CW [[Enter]]", L("in Call: tune the TRX — kHz, 14.025 MHz, a mode, or both",
+                                      "v Call: naladí TRX — kHz, 14.025 MHz, mód, nebo obojí"), kw),
             KV("[[Home]]", L("to **Call**, cursor at the end", "do **Call**, kurzor na konec"), kw),
             KV("[[End]]", L("to **EXCH**", "do **EXCH**"), kw),
             KV("[[Tab]]", L("to the Snt / Rcv reports — [[Enter]] there transmits too",

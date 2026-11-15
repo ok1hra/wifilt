@@ -11,6 +11,32 @@ published.
 
 ## Working tree — not committed
 
+**QRPlog: a frequency and mode typed into Call tune the selected TRX; the TS480 palette resizes by mouse; a TS480 pill on the DATA pages.**
+
+* `Enter` on `14025` (kHz), `14.025` / `144.3` (MHz), a mode (`CW USB LSB SSB AM FM RTTY FSK DV`)
+  or both (`14025CW`, `CW14025`) in Call tunes the selected TRX instead of calling. SSB is LSB
+  below 10 MHz except 60 m. A callsign is never taken (letters after its digits); something of
+  that shape that is no frequency (`59`) only gets a hint. Disconnected, it fills the manual
+  frequency/mode. `log.js` `parseCallQsy()` / `qsyFromCall()`; in the `?` list, SOFTWARE.md
+  § 3.13 and § 3.17, and the QRPlog cheat sheet.
+* Firmware: `/cmd?trx=1..3` addresses that slot (an unconfigured one answers 503, never falls
+  back to TRX1), so TRX2/3 get their mode: frequency over `/oi3/set-hz` as before, mode over
+  `/cmd?trx=N` `setMode`.
+* `tools/log-call-qsy-smoke.js` 31/31 (on the wire: `/cmd`, `/cmd?trx=2`, `/oi3/set-hz`).
+  End to end on native wifilt → local-trx (hamlib dummy): `7074USB`, `14025CW` reach the rig.
+* TS480 palette (local-trx `webui/ts480/qrplog.js`): the browser's own resize corner never
+  worked — it starts on mousedown, which the palette cancels to keep the caret in Call. A
+  striped grip in the bottom-right corner now does it with pointer events: top-left stays put,
+  200 px minimum, clamped to the window, width and bottom gap remembered.
+* DATA pages (JS8Call-ICOM, RTTY-ICOM, JTTY, WSPR, Mercury): a **TS480** pill at the end of the
+  sub-tab row while local-trx runs the TS-480 panel. It drops a palette with ⏻ ON/OFF (panel
+  cable), the radio's frequency and mode from its display, a frequency field (QRPlog's kHz/MHz
+  rule, 30 kHz – 60 MHz) and LSB USB CW FSK FM AM — set over `/cmd?radio=lan`, refused while
+  transmitting. Served by local-trx (`webui/ts480/datamenu.js`); wifilt's `addon-tabs.js` only
+  finds local-trx, as log.js does for QRPlog. With the pill the row may wrap, so a phone does
+  not scroll sideways. Checked on native wifilt + local-trx `--ts480-sim` + hamlib dummy, all
+  five pages, desktop and 390 px.
+
 **Cheat sheets: QRPlog, JS8Call-ICOM, WIFILT + local-trx on a Raspberry Pi, ways to set it up — EN and CS, SVG and PDF.**
 
 * `docs/cheatsheets/`: one A4 landscape page per topic, eight sheets, each as SVG and PDF, with an

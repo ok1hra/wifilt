@@ -3074,6 +3074,107 @@ inpFreeTx.addEventListener('keydown', e => {
 });
 
 
+// ── Frequency / mode typed into Call ─────────────────────────────────────────
+//
+// Enter on a frequency, a mode, or both puts the selected TRX there instead of
+// calling anyone: 14025 or 14025.5 (kHz), 14.025 or 144.3 (MHz -- a decimal
+// point with less than 1000 in front of it), CW USB LSB SSB AM FM RTTY FSK DV,
+// and the two joined in either order, 14025CW or CW14025 (no space: Space in
+// Call arms the call search). SSB is LSB below 10 MHz except 60 m, USB above.
+//
+// Nothing a callsign can be is taken: a callsign has letters after its digits
+// (OK1HRA, CW5ABC, FM5XY), a lone mode word has no digit at all. A value of
+// that shape that is no usable frequency (59, 9999999) gets a hint and is never
+// called. Disconnected, the manual frequency/mode on the status bar take it --
+// what a QSO is logged with then.
+
+const CALL_QSY_MODES = { CW: 'CW', USB: 'USB', LSB: 'LSB', SSB: 'SSB', AM: 'AM', FM: 'FM',
+                         RTTY: 'RTTY', FSK: 'RTTY', DV: 'DV' };
+const CALL_QSY_MIN_HZ = 100000, CALL_QSY_MAX_HZ = 2000000000;
+
+// -> null (not ours: a callsign or anything else), {error}, or {hz, mode}
+// where either one may be missing (0 / '').
+function parseCallQsy(text) {
+  const s = String(text || '').toUpperCase().replace(/\s+/g, '');
+  const m = s && /^([A-Z]+)?(\d+(?:[.,]\d*)?)?([A-Z]+)?$/.exec(s);
+  if (!m) return null;
+  const pre = m[1], num = m[2], post = m[3];
+  if ((pre && !CALL_QSY_MODES[pre]) || (post && !CALL_QSY_MODES[post])) return null;
+  if (pre && post) return { error: 'one mode at a time' };
+  const mode = CALL_QSY_MODES[pre || post] || '';
+  if (!num) return { hz: 0, mode };
+  const value = parseFloat(num.replace(',', '.'));
+  const mhz = /[.,]/.test(num) && value < 1000;
+  const hz = Math.round(value * (mhz ? 1e6 : 1e3));
+  if (!(hz >= CALL_QSY_MIN_HZ && hz <= CALL_QSY_MAX_HZ)) return { error: num + ' is not a frequency' };
+  return { hz, mode };
+}
+
+// SSB is a sideband only once the frequency is known: the typed one, else the
+// radio's (or the manual one, disconnected). 60 m is USB by convention.
+function callQsySideband(mode, hz) {
+  if (mode !== 'SSB') return mode;
+  const f = hz || LogRadio.logFrequency();
+  if (f >= 5250000 && f <= 5450000) return 'USB';
+  return f && f < 10000000 ? 'LSB' : 'USB';
+}
+
+function qsyFromCall(text) {
+  const q = parseCallQsy(text);
+  if (!q) return false;
+  if (q.error) { showHint(q.error, 3000); return true; }
+  const mode = callQsySideband(q.mode, q.hz);
+  const what = [q.hz ? (q.hz / 1000) + ' kHz' : '', mode].filter(Boolean).join(' ');
+  inpCall.value = '';
+  inpCall.dispatchEvent(new Event('input'));
+  if (!app.connected) {
+    setManualQsy(q.hz, mode);
+    showHint(what + ' (manual)', 3000);
+    return true;
+  }
+  const trx = app.activeTrx;
+  const name = app.trxLabels[trx - 1] || 'TRX' + trx;
+  showHint('QSY ' + name + ' ' + what, 3000);
+  sendCallQsy(trx, q.hz, mode).then(err => {
+    if (err) showHint('QSY ' + name + ': ' + err, 5000);
+  });
+  return true;
+}
+
+function setManualQsy(hz, mode) {
+  if (hz) {
+    sbManualFreq.value = String(hz / 1000);
+    sbManualFreq.dispatchEvent(new Event('input'));
+  }
+  if (mode && Array.from(sbManualMode.options).some(o => o.value === mode)) {
+    sbManualMode.value = mode;
+    sbManualMode.dispatchEvent(new Event('change'));
+  }
+}
+
+// Frequency first, then mode, one after the other -- each answered before the
+// next goes out. TRX2/3: the frequency through /oi3/set-hz as everywhere else
+// in this file, the mode through /cmd?trx=N. Resolves to '' or what went wrong.
+async function sendCallQsy(trx, hz, mode) {
+  const why = { radio_disconnected: 'TRX not connected', unavailable: 'TRX not available',
+                invalid_mode: 'this mode is not supported', tx_failed: 'the TRX did not take it',
+                unsupported_transport: 'over TrxNet only the frequency can be set' };
+  const post = (url, body) => fetch(url, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  }).then(r => r.ok ? '' : r.json().then(j => why[j.error] || j.error || 'HTTP ' + r.status,
+                                         () => 'HTTP ' + r.status),
+          () => 'no answer');
+  if (trx !== 1 && !app.trxOi3[trx - 1]) return 'not configured';
+  if (hz) {
+    const err = trx === 1
+      ? await post('/cmd', { type: 'setFrequency', reqId: 'log-call-qsy', frequency: hz })
+      : await post('/oi3/set-hz', { trx, hz });
+    if (err) return err;
+  }
+  if (mode) return post('/cmd' + (trx === 1 ? '' : '?trx=' + trx), { type: 'setMode', mode });
+  return '';
+}
+
 // ── Enter key workflow ────────────────────────────────────────────────────────
 
 inpCall.addEventListener('keydown', handleCallEnter);
@@ -3108,6 +3209,7 @@ function handleCallEnter(e) {
   e.preventDefault();
 
   const call  = inpCall.value.trim();
+  if (qsyFromCall(call)) return;
   const state = formStateOf();
 
   if (state === 'IDLE') {

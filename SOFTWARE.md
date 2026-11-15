@@ -1398,6 +1398,26 @@ window instead — and rotating a tablet back to landscape restores the split.
 macros and RIT reset all follow the selection. `Alt+1`, `Alt+2`, `Alt+3` do the same. The
 labels are whatever you named the slots in SETUP.
 
+**Frequency and mode from the Call field.** Type a frequency, a mode or both into Call and
+press `Enter`: the selected TRX goes there instead of anyone being called, and Call is
+emptied for the next station.
+
+| Typed in Call | Means |
+|---|---|
+| `14025`, `14025.5`, `1840` | kHz — a whole number is always kHz |
+| `14.025`, `7.074`, `144.3` | MHz — a decimal point (or comma) with less than 1000 before it |
+| `CW` `USB` `LSB` `AM` `FM` `RTTY` `DV` | the mode alone; `FSK` is RTTY |
+| `SSB` | LSB below 10 MHz, USB above and on 60 m — from the typed frequency, else the radio's |
+| `14025CW`, `CW14025`, `3700SSB` | both — no space between them: Space in Call arms the call search |
+
+A callsign is never taken for one: it has letters after its digits (`OK1HRA`, `CW5ABC`,
+`FM5XY`), a mode word has no digit at all. Something of that shape that is no frequency —
+`59`, say — only gets a hint under the form and stays in Call; nothing is called or keyed.
+The radio's refusal is shown the same way — a mode a TRX reached over TrxNet cannot be set
+(it tunes only), and a mode the radio does not have. While the TRX is disconnected, the
+manual frequency and mode on the status bar take the values instead, which is what the QSO
+is then logged with. 23 cm and up: type kHz (`1296100`), `1296.1` would read as kHz too.
+
 ### 3.14 PA — the linear amplifier
 
 ![PA panel](img/qrplog-pa-panel.png)
@@ -1582,7 +1602,7 @@ opens a palette with **only the radio's display**, no controls in it:
 | In the palette | |
 |---|---|
 | drag the title bar | moves it; where you leave it is remembered, measured from the bottom of the window like the RTTY palette |
-| the corner handle | changes its width — the display scales with it |
+| the striped grip in the bottom-right corner | drag it to make the palette bigger or smaller — the display scales with it, the top-left corner stays put; the caret stays in Call |
 | **⏻** after the title | switches the radio on or off; green while it is on |
 | **AF** | plays the radio's receive audio in this browser (see below) |
 | **PTT** | transmits this browser's microphone (see below) |
@@ -1595,6 +1615,23 @@ frequency entry and a VFO step choice — has the same header. Its right-hand bu
 also be opened directly at `http://<local-trx PC>:8765/ts480/`, and the setup page links to it.
 
 The palette's buttons never take the keyboard; the caret stays in *Call*.
+
+**On the DATA pages** (JS8Call-ICOM, RTTY-ICOM, JTTY, WSPR, Mercury) a **TS480** pill sits at
+the right end of the row of modes, under the same condition: local-trx answers and its panel
+cable is open. Its dot is green while the radio is on, grey while it is off, red when the panel
+cable is silent. A click drops a small palette:
+
+| In the DATA palette | |
+|---|---|
+| **⏻ ON / OFF** | switches the radio on or off over the panel cable — CAT cannot switch a TS-480 on |
+| the readout beside it | frequency and mode from the radio's own display |
+| the frequency field | `Enter` or **SET** tunes: `14074` is kHz, `14.074` MHz (the rule of QRPlog's Call), 30 kHz – 60 MHz |
+| **LSB USB CW FSK FM AM** | sets the mode; the current one is lit (CW-R and FSK-R light CW and FSK) |
+
+Frequency and mode go through WIFILT's own CAT path to the LAN slot, the one the pages' own
+frequency menus use; nothing is changed while the radio is transmitting. A click elsewhere or
+`Esc` closes it. There is no display and no AF here — the DATA pages have their own waterfall
+and audio.
 
 **AF — the radio's audio in the browser.** Shown when `local-trx` has a capture device (setup,
 step 1). Click it and the receive audio from that sound card plays in this browser; click again
@@ -1851,6 +1888,7 @@ The **?** button opens this list.
 | `Esc` (no dialog, not transmitting) | end the call search |
 | `Home` | jump to Call, cursor at the end — not from another text field or a dialog ([section 3.4](#34-working-a-station)) |
 | `End` | jump to EXCH, the same way |
+| `Enter` on a frequency/mode in Call | tune the selected TRX — `14025`, `14.025`, `CW`, `14025CW` ([section 3.13](#313-radio-selection)) |
 | `Space` in Call | arm the call search — duplicates and partial calls, both tracking as you type |
 | `Enter` in Snt / Rcv | as if pressed in Call, or in EXCH once a callsign is entered — **it transmits**; `Tab` leaves without keying |
 

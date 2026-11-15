@@ -52,7 +52,7 @@
     const style = document.createElement("style");
     style.textContent = `
 .ltx480-pal{position:fixed;z-index:91;width:${DEFAULT_W}px;min-width:${MIN_W}px;display:flex;flex-direction:column;
-  overflow:hidden;resize:horizontal;background:#0e1b19;border:1px solid #28443e;border-radius:7px;
+  overflow:hidden;background:#0e1b19;border:1px solid #28443e;border-radius:7px;
   box-shadow:0 10px 30px rgba(0,0,0,.55);color:#e8f3ee;user-select:none}
 .ltx480-pal[hidden]{display:none}
 .ltx480-pal-head{display:flex;align-items:center;gap:6px;padding:4px 6px 4px 8px;border-bottom:1px solid #28443e;
@@ -60,6 +60,10 @@
 .ltx480-pal-title{color:#e8f3ee;flex:none}
 .ltx480-pal-body{background:#060708;padding:3px;line-height:0}
 .ltx480-pal-body svg{display:block;width:100%;height:auto}
+.ltx480-grip{position:absolute;right:0;bottom:0;width:16px;height:16px;cursor:nwse-resize;touch-action:none;
+  background:linear-gradient(135deg,transparent 0 52%,#5b8a7f 52% 60%,transparent 60% 70%,#5b8a7f 70% 78%,transparent 78% 88%,#5b8a7f 88%);
+  opacity:.75}
+.ltx480-grip:hover{opacity:1}
 #btnTs480.ts480-on{border-color:#2f7d3d}`;
     document.head.appendChild(style);
   }
@@ -122,6 +126,49 @@
     handle.addEventListener("pointercancel", end);
   }
 
+  // The corner grip. The browser's own resize handle cannot be used: it starts
+  // on mousedown, and the palette cancels mousedown so the caret never leaves
+  // Call. The top-left corner stays put while dragging (the display, and so
+  // the height, follows the width); afterwards the new bottom edge is the
+  // anchor, as after a drag.
+  let resizing = false;
+  const LCD_RATIO = 167 / 946;            // LCD_VIEWBOX height / width
+  function setWidth(w) {
+    const maxW = Math.max(MIN_W, window.innerWidth - pal.offsetLeft);
+    w = Math.round(Math.min(Math.max(w, MIN_W), maxW));
+    pal.style.width = w + "px";
+    // Not past the bottom of the window either.
+    const over = pal.offsetTop + pal.offsetHeight - window.innerHeight;
+    if (over > 0) pal.style.width = Math.max(MIN_W, w - Math.ceil(over / LCD_RATIO)) + "px";
+  }
+  function mountResize(grip) {
+    let x0 = 0, y0 = 0, w0 = 0;
+    grip.addEventListener("pointerdown", e => {
+      resizing = true;
+      x0 = e.clientX; y0 = e.clientY; w0 = pal.offsetWidth;
+      try { grip.setPointerCapture(e.pointerId); } catch (_) {}
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    grip.addEventListener("pointermove", e => {
+      if (!resizing) return;
+      // Whichever way the pointer went further, measured in width.
+      const dx = e.clientX - x0, dy = (e.clientY - y0) / LCD_RATIO;
+      setWidth(w0 + (Math.abs(dx) >= Math.abs(dy) ? dx : dy));
+    });
+    const end = e => {
+      if (!resizing) return;
+      resizing = false;
+      try { grip.releasePointerCapture(e.pointerId); } catch (_) {}
+      state.width = pal.offsetWidth;
+      state.gap = window.innerHeight - (pal.offsetTop + pal.offsetHeight);
+      placed = { y: pal.offsetTop, h: pal.offsetHeight };
+      save();
+    };
+    grip.addEventListener("pointerup", end);
+    grip.addEventListener("pointercancel", end);
+  }
+
   function build() {
     injectCss();
     pal = document.createElement("div");
@@ -142,17 +189,22 @@
     svg.setAttribute("viewBox", Ts480Lcd.LCD_VIEWBOX);
     svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
     body.appendChild(svg);
+    const grip = document.createElement("div");
+    grip.className = "ltx480-grip";
+    grip.title = "Drag to resize";
     pal.appendChild(head);
     pal.appendChild(body);
+    pal.appendChild(grip);
     // Keep QRPlog's caret in Call: nothing in the palette takes focus.
     pal.addEventListener("mousedown", e => { if (!e.target.closest("input")) e.preventDefault(); });
     document.body.appendChild(pal);
     mountDrag(head);
+    mountResize(grip);
 
-    // The corner handle changes the width; the display (and so the height)
-    // follows. Keep the bottom edge where the operator put it.
+    // A height change that is not the grip's (a window resize clamping the
+    // width) keeps the bottom edge where the operator put it.
     new ResizeObserver(() => {
-      if (pal.hidden) return;
+      if (pal.hidden || resizing) return;
       const h = pal.offsetHeight, w = pal.offsetWidth;
       if (placed && placed.h !== h) {
         pal.style.top = Math.max(0, window.innerHeight - h - state.gap) + "px";

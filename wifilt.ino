@@ -3348,6 +3348,16 @@ void handlePostCmd(){
   if (webServer.arg("radio") == "lan") {
     uint8_t lanSlot = lanRadioSlotIndex();
     if (lanSlot != 0xFF) targetSlot = lanSlot;
+  } else if (webServer.hasArg("trx")) {
+    // ?trx=1..3 is QRPlog's selected TRX (a frequency/mode typed into Call).
+    // A slot that is not configured is an error, never a quiet fall back to
+    // TRX1 -- that would retune the wrong radio.
+    long trxN = webServer.arg("trx").toInt();
+    if (trxN < 1 || trxN > 3 || (trxN > 1 && !radioSlots[trxN - 1].enabled)) {
+      webServer.send(503, "application/json", "{\"error\":\"unavailable\"}");
+      return;
+    }
+    targetSlot = (uint8_t)(trxN - 1);
   }
 
   if (radioSlots[targetSlot].transport == RADIO_TRXNET && type != "setFrequency") {
