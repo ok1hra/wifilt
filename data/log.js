@@ -84,15 +84,17 @@
   // viewer inlines as well -- one mapping, two pages. What stays here is the
   // file around them: which log, in what order, and what it is called.
 
-  function exportCsv(logId) {
-    return LogDB.getQsosForLog(logId).then(qsos => {
+  // The DXCC columns as the journal shows them (shownDxcc(): a stored country
+  // the current table disagrees with is replaced), not as stored.
+  function exportCsv(logObj) {
+    return LogDB.getQsosForLog(logObj.id).then(qsos => {
       qsos.sort((a,b) => a.qsoNumber - b.qsoNumber);
-      return LogExport.csvFromQsos(qsos);
+      return LogExport.csvFromQsos(qsos.map(q => Object.assign({}, q, { dxcc: shownDxcc(q, logObj) })));
     });
   }
 
   function downloadCsv(logObj) {
-    exportCsv(logObj.id).then(csv => {
+    exportCsv(logObj).then(csv => {
       const date = logObj.createdAtUtc.slice(0, 10);
       const name = date + '-' + logObj.contestName.replace(/[^A-Z0-9]/gi, '') + '.csv';
       _triggerDownload(csv, name, 'text/csv;charset=utf-8;');
@@ -931,7 +933,7 @@
   global.LogManager = {
     getActiveLog, onLogChanged, activateLog, restoreActiveLog,
     bumpQsoNumber, openModal, closeModal,
-    downloadCsv, downloadAdif,
+    downloadCsv, downloadAdif, exportCsv,
   };
 
 }(window));
@@ -1517,6 +1519,11 @@ function startClock() {
 // there, not as the band the radio was on before it went away. frequency()
 // keeps its connected-only meaning: the PA palette must not follow a typed
 // number.
+//
+// restoreCaret() joined them 2026-11-15: focus back to Call or Exch, whichever
+// the operator was in ("The caret's home" below). For a palette control
+// that has to take the focus to work -- the statistics select -- and for the
+// DXC pane, whose clicks never reach this document's own listener.
 window.LogRadio = {
   frequency: () => (app.connected ? app.frequency : 0),
   logFrequency: () => {
@@ -1528,6 +1535,7 @@ window.LogRadio = {
   mode:      () => app.mode,
   activeTrx: () => app.activeTrx,
   focusedField: () => focusedLogField(),
+  restoreCaret: () => restoreCaret(),
   insertWord: (word, trx, field) => insertWordIntoLog(word, trx, field),
   setRunMode: (m) => setRunMode(m),
   runMode:    () => app.runMode,
@@ -1944,7 +1952,7 @@ function setRunMode(mode) {
 
 btnRunMode.addEventListener('click', () => {
   setRunMode(app.runMode === 'RUN' ? 'SP' : 'RUN');
-  inpCall.focus();
+  restoreCaret();
 });
 
 // ── TRX switching helper ──────────────────────────────────────────────────────
@@ -2158,6 +2166,22 @@ document.addEventListener('keydown', e => {
     abortTransmission();
     return;
   }
+  // Home / End — straight to Call / Exch from anywhere on the page, the caret
+  // at the end of what is already there (2026-11-15). Inside the entry row
+  // that replaces the keys' own "start / end of the line", which is the point:
+  // the row is short and the jump is what an operator mid-QSO reaches for.
+  // Everywhere else that is typed into -- the Alt+K message, the call search,
+  // the manual frequency, a palette's settings, any dialog -- Home and End
+  // keep their ordinary meaning. Shift/Ctrl+Home/End are never taken.
+  if ((e.key === 'Home' || e.key === 'End') &&
+      !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+    const a = document.activeElement;
+    if (!anyLogDialogOpen() && (isEntryField(a) || !keepsFocusOnClick(a))) {
+      e.preventDefault();
+      jumpToField(e.key === 'Home' ? inpCall : inpExch);
+    }
+    return;
+  }
   // Alt+1/2/3 — select TRX
   for (const n of [1, 2, 3]) {
     if (altHotkey(e, ['Digit' + n, 'Numpad' + n], String(n))) {
@@ -2246,6 +2270,107 @@ document.addEventListener('keydown', e => {
   }
 });
 
+// ── The caret's home ──────────────────────────────────────────────────────────
+//
+// Asked for 2026-11-15: after ANY click on the page -- a band map setting, a
+// palette, the TRX buttons, a blank stretch of the journal -- the caret has to
+// end up where it was, Call or Exch, so the next keystroke goes into the QSO.
+// The palettes already cancel mousedown on their buttons (pa-panel.js's rule),
+// but that covers buttons the palette authors thought of, in palettes written
+// after the rule was. This is the net under all of it: one listener, run after
+// the click's own handlers have had their say.
+//
+// What a click may keep the focus in: whatever is typed into or picked from --
+// a text field, a number field, a select (its drop-down would close under the
+// hand), a textarea, the DXC pane's iframe (dxc.html hands the caret back from
+// its side, for the same clicks this one does). Buttons, checkboxes, sliders
+// and plain page give it back. Nothing is taken while a dialog is open, while
+// the click left a text selection (Ctrl+C must still work on the journal and
+// the RX logs), or after a TOUCH: on a phone the focus would pop the on-screen
+// keyboard up again on every tap meant to look at the log.
+//
+// "Where it was" is the last of Call / Exch to hold the focus, tracked on
+// focusin -- by the time a click is over, document.activeElement has long
+// forgotten it. The Alt+K message bar counts as well while it is open, since
+// the click came in the middle of typing into it.
+let _caretHome = null;         // inpCall | inpExch -- the last one focused
+let _caretInFreeTx = false;    // ...unless the Alt+K bar was focused after it
+let _lastPointerType = 'mouse';
+
+function isEntryField(el) {
+  return el === inpCall || el === inpExch || el === inpRst || el === inpRstRcvd;
+}
+
+function keepsFocusOnClick(el) {
+  if (!el || el === document.body || el === document.documentElement) return false;
+  if (el.isContentEditable) return true;
+  const tag = el.tagName;
+  if (tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'IFRAME') return true;
+  if (tag !== 'INPUT') return false;
+  return !/^(button|submit|reset|checkbox|radio|range|color|file|image)$/i.test(el.type || '');
+}
+
+function anyLogDialogOpen() {
+  return !!document.querySelector('.lm-modal:not(.lm-hidden)');
+}
+
+function caretTarget() {
+  if (_caretInFreeTx && freeTxIsOpen()) return inpFreeTx;
+  return _caretHome || focusedLogField();
+}
+
+// Back where the operator was. focus() alone keeps the caret where it stood
+// in the field -- an input remembers its selection across a blur.
+function restoreCaret() {
+  const f = caretTarget();
+  if (f && document.activeElement !== f) f.focus();
+}
+
+// Home / End: into the field, caret at the end of what it holds.
+function jumpToField(f) {
+  f.focus();
+  try { f.setSelectionRange(f.value.length, f.value.length); } catch (_) {}
+}
+
+document.addEventListener('focusin', e => {
+  const t = e.target;
+  if (t === inpCall || t === inpExch) { _caretHome = t; _caretInFreeTx = false; }
+  else if (t === inpFreeTx) _caretInFreeTx = true;
+});
+
+document.addEventListener('pointerdown', e => {
+  _lastPointerType = e.pointerType || 'mouse';
+}, true);
+
+function caretAfterClick() {
+  const a = document.activeElement;
+  if (isEntryField(a) || a === inpFreeTx || keepsFocusOnClick(a)) return;
+  if (anyLogDialogOpen()) return;
+  const sel = window.getSelection ? window.getSelection() : null;
+  if (sel && !sel.isCollapsed) return;
+  restoreCaret();
+}
+
+document.addEventListener('click', e => {
+  // detail 0 is a click no pointer made: Enter/Space on a focused button, or
+  // a script's el.click() -- selectTrx() among them. Those leave the focus
+  // where the keyboard or the script put it.
+  if (!e.detail) return;
+  if ((e.pointerType || _lastPointerType) === 'touch') return;
+  // After every handler of this click, including ones that move the focus on
+  // purpose (a clicked spot into Call, a QSO row into its edit dialog).
+  setTimeout(caretAfterClick, 0);
+}, true);
+
+// A select keeps the focus while it is open, and gives it back once a choice
+// is made. Not in a dialog: the log manager's exchange type is followed by more
+// of the same form.
+document.addEventListener('change', e => {
+  const t = e.target;
+  if (!t || t.tagName !== 'SELECT' || anyLogDialogOpen()) return;
+  setTimeout(() => { if (document.activeElement === t) restoreCaret(); }, 0);
+});
+
 // ── TRX selection ─────────────────────────────────────────────────────────────
 
 function updateTrxHeader() {
@@ -2267,7 +2392,10 @@ trxButtons.forEach(btn => {
     try { _updateDxcBand(0, app.dxcConnected); } catch (_) {}
     clearTimeout(app._pollTimer);
     pollState();
-    inpCall.focus();
+    // Back to Call or Exch, wherever the operator was -- by mouse or by
+    // Alt+1/2/3 (selectTrx() clicks this very button). Was always Call until
+    // 2026-11-15, which pulled a half-typed exchange out from under the caret.
+    restoreCaret();
   });
 });
 
@@ -3318,7 +3446,7 @@ function renderDupeView(bundle, frag) {
   close.className = 'dv-close';
   close.title = 'Hide until the next Space';
   close.textContent = '✕';
-  close.addEventListener('click', () => { _dupeViewOff = true; hideDupeView(); inpCall.focus(); });
+  close.addEventListener('click', () => { _dupeViewOff = true; hideDupeView(); restoreCaret(); });
   head.appendChild(close);
   view.appendChild(head);
 
@@ -3569,7 +3697,7 @@ const CallPalette = (function () {
     el.querySelector('#cpClose').addEventListener('click', () => {
       suppressed = true;
       hide();
-      inpCall.focus();
+      restoreCaret();
     });
     mountDrag(el.querySelector('#cpHead'));
 
@@ -3882,7 +4010,7 @@ function appendJournalRow(qso, displayNr) {
 
   const dxccText = (() => {
     if (qso.deleted) return '';
-    const d = qso.dxcc;
+    const d = shownDxcc(qso);
     if (!d) return '';
     const parts = [];
     if (d.country) parts.push(d.country);
@@ -4136,6 +4264,13 @@ function saveQsoEdit() {
   if (!call) return;
   const hz = Math.round(parseFloat(document.getElementById('qeFreq').value.replace(',', '.')) * 1000) || _qsoEditQso.frequencyHz || 0;
 
+  // The DXCC block belongs to the call: an edited call gets its own (until
+  // 2026-11-15 it kept the old one's country, zones and distance), and a save
+  // is the moment a stale stored country is put right -- the operator is
+  // writing this QSO anyway.
+  _qsoEditQso.dxcc = shownDxcc(Object.assign({}, _qsoEditQso, {
+    call, dxcc: call !== _qsoEditQso.call ? null : _qsoEditQso.dxcc }));
+
   _qsoEditQso.call             = call;
   _qsoEditQso.qsoDateUtc       = document.getElementById('qeDate').value;
   _qsoEditQso.timeOnUtc        = document.getElementById('qeTime').value;
@@ -4173,7 +4308,7 @@ function updateJournalRow(qso) {
   } else {
     row.className = 'qso-row';
     const dxccText = (() => {
-      const d = qso.dxcc;
+      const d = shownDxcc(qso);
       if (!d) return '';
       const parts = [];
       if (d.country) parts.push(d.country);
@@ -4238,14 +4373,18 @@ function setPrevExchVisible(visible) {
 const btnOpenLog = document.getElementById('btnOpenLog');
 btnOpenLog.addEventListener('click', () => LogManager.openModal());
 
+// The button reads just LOG; the active log's name is its tooltip (2026-11-15).
+// "LOG: <name>" grew with every long contest name and pushed the rest of the
+// bar off the right edge. Lit means a log is active.
 function onActiveLogChanged(log) {
   refreshExchLabel();
+  btnOpenLog.textContent = 'LOG';
   if (!log) {
-    btnOpenLog.textContent = 'LOG';
+    btnOpenLog.title = 'No log active — open / create log';
     btnOpenLog.classList.remove('btn-trx-active');
     return;
   }
-  btnOpenLog.textContent = 'LOG: ' + (log.contestName || '—');
+  btnOpenLog.title = 'Log: ' + (log.contestName || '—') + ' — open / create log';
   btnOpenLog.classList.add('btn-trx-active');
   // reload journal rows for the active log
   loadJournalFromDb(log.id);
@@ -4690,6 +4829,14 @@ function loadJournalFromDb(logId) {
   }).catch(() => {});
 }
 
+// What a QSO's DXCC column and CSV show: the stored block, unless its call
+// now resolves to another country (dxcc.js forQso() says why).
+function shownDxcc(qso, log) {
+  if (!window.DXCC || !DXCC.forQso) return qso.dxcc || null;
+  const l = log || LogManager.getActiveLog();
+  return DXCC.forQso(qso, l && l.myLocator);
+}
+
 // ── Storage persistence warning ───────────────────────────────────────────────
 
 async function checkStoragePersistence() {
@@ -4845,11 +4992,12 @@ function refuseBlockedWord(word, field) {
 // document.activeElement here is untouched) and passes nothing, letting
 // focusedLogField() answer now.
 function insertWordIntoLog(word, trx, field) {
-  // Captured BEFORE selectTrx(): clicking a TRX button focuses Call as one
-  // of its own side effects (trxButtons' own click handler, below), which
-  // would otherwise always beat focusedLogField() to the punch and make
-  // every RTTY word land in Call regardless of where the operator actually
-  // was -- found by an on-air-style test catching the exact race, not by
+  // Captured BEFORE selectTrx(): clicking a TRX button moves the focus as
+  // one of its own side effects (trxButtons' own click handler -- to Call
+  // until 2026-11-15, to restoreCaret()'s answer since), which would
+  // otherwise beat focusedLogField() to the punch and land the word wherever
+  // that handler put the caret rather than where the operator actually was
+  // -- found by an on-air-style test catching the exact race, not by
   // inspection.
   const target = field || focusedLogField();
   // Blocked DXCC is refused on the way IN, not only at Enter: before selectTrx(),

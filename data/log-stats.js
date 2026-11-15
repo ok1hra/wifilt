@@ -23,12 +23,18 @@
  *                     through one, and junk shows up in the list anyway.
  *       Zones:        a 1-2 digit word read as a number (2 = 02), 0 dropped,
  *                     no upper bound so CQ and ITU zones both work;
+ *   - WPX prefixes (added 2026-11-15) are the exception on both counts: read
+ *     from the CALL, not EXCH, and counted ONCE for the whole log, as CQ WPX
+ *     scores them. Each prefix is credited to the band it was first worked on,
+ *     so the MULT row still adds up to its Σ. The prefix rules are
+ *     wpxPrefix()'s own comment;
  *   - the choice of multiplier is remembered per log, the palette's place and
  *     whether it is open for the page.
  *
  * Like pa-panel.js it must never take the keyboard away from the log: buttons
  * cancel their own mousedown, and the one control that cannot (the select)
- * hands the caret back to Call as soon as it is used.
+ * hands the caret back as soon as it is used -- to Call or Exch, whichever
+ * the operator was in (LogRadio.restoreCaret()).
  *
  * Loaded after log.js: it reads _bandFromHz, _modeKey and inpCall from there.
  */
@@ -46,7 +52,11 @@
   var MODE_ORDER = ['CW', 'SSB', 'AM', 'FM', 'RTTY'];
   // DXCC main prefixes of the USA, Alaska, Hawaii and Canada (dxcc.js).
   var WVE = { K: 1, KL: 1, KH6: 1, VE: 1 };
-  var MULT_KINDS = { states: 1, zones: 1 };
+  var MULT_KINDS = { states: 1, zones: 1, prefixes: 1 };
+  // What may follow a call without being a place: portable, mobile, maritime
+  // and aeronautical mobile, QRP, lighthouse. Any single letter after the call
+  // is read the same way (/P, /M, /A, /E, /J ...).
+  var WPX_NOT_A_PLACE = { MM: 1, AM: 1, QRP: 1, QRPP: 1, LH: 1 };
 
   var el = null, open = false, pos = null;
   var userPos = false;   // pos is where the operator put it, not the anchor
@@ -77,7 +87,43 @@
     return d || q.dxcc || null;
   }
 
+  // The CQ WPX prefix of a callsign, or null for something that is not one.
+  //   the letters and digits up to the call's LAST digit:
+  //     OK1HRA -> OK1, WB8BJQ -> WB8, 9A2AA -> 9A2, HG19ABC -> HG19, E73A -> E73
+  //   a call without a digit gets a 0 after its first two letters: RAEM -> RA0
+  //   a place designator replaces the call's own prefix, and one without a
+  //   digit gets the same 0: PA/N8BJQ -> PA0, N8BJQ/KH9 -> KH9, VP2E/K1ABC -> VP2
+  //   a bare digit after the call moves it to that call area: W1AW/4 -> W4
+  //   /P /M /MM /AM /QRP and any single letter after the call change nothing.
+  // Which part is the call: the longest one. A designator is never longer than
+  // the call it is put in front of or behind.
+  function wpxPrefix(call) {
+    var c = String(call || '').toUpperCase().replace(/\s+/g, '');
+    if (!/^[A-Z0-9\/]+$/.test(c)) return null;
+    var parts = c.split('/').filter(Boolean);
+    if (!parts.length) return null;
+    var bi = 0;
+    parts.forEach(function (p, i) { if (p.length > parts[bi].length) bi = i; });
+    var base = parts[bi];
+    if (base.length < 3 || !/[A-Z]/.test(base)) return null;
+    var place = null, area = null;
+    parts.forEach(function (p, i) {
+      if (i === bi) return;
+      if (/^\d$/.test(p)) { area = p; return; }
+      if (WPX_NOT_A_PLACE[p] || (i > bi && /^[A-Z]$/.test(p))) return;
+      if (!place) place = p;
+    });
+    function head(s) {
+      var m = /^(.*\d)[A-Z]*$/.exec(s);
+      return m ? m[1] : s.slice(0, 2) + '0';
+    }
+    var pfx = head(place || base);
+    if (area) pfx = pfx.replace(/\d+$/, '') + area;
+    return pfx;
+  }
+
   function multOf(q, kind, lookup) {
+    if (kind === 'prefixes') return wpxPrefix(q.call);
     var words = String(q.exchangeReceived || '').toUpperCase().split(/[^A-Z0-9]+/);
     var re = kind === 'zones' ? /^\d{1,2}$/ : /^[A-Z]{2,3}$/;
     var w = null;
@@ -155,10 +201,14 @@
   function compute(qsos, kind, lookup) {
     var multBand = {}, multAll = {};
     var multOn = !!MULT_KINDS[kind];
+    // WPX counts a prefix once per contest: only its first QSO (tally() goes
+    // oldest first) puts it on a band.
+    var oncePerLog = kind === 'prefixes';
 
     var t = tally(qsos, multOn ? function (q, band) {
       var m = multOf(q, kind, lookup);
       if (!m) return;
+      if (oncePerLog && multAll[m]) return;
       (multBand[band] || (multBand[band] = {}))[m] = 1;
       multAll[m] = 1;
     } : null);
@@ -325,10 +375,11 @@
           // Built once and never redrawn: a select rewritten by innerHTML would
           // close under the operator's hand whenever a QSO got logged.
           '<tbody><tr class="st-sel-row"><td id="statsSelCell">' +
-            '<select id="statsMult" class="st-select" title="Multipliers read from EXCH">' +
+            '<select id="statsMult" class="st-select" title="Multipliers: states and zones read from EXCH, prefixes from the call">' +
               '<option value="">&mdash; multipliers &mdash;</option>' +
               '<option value="states">US/VE states</option>' +
               '<option value="zones">Zones</option>' +
+              '<option value="prefixes">Prefixes (WPX)</option>' +
             '</select></td></tr></tbody>' +
           '<tbody id="statsMultRows"></tbody>' +
         '</table>' +
@@ -377,7 +428,16 @@
     if (!e.target || e.target.id !== 'statsMult') return;
     setMultFor(lastLogId, e.target.value);
     render();
-    try { inpCall.focus(); } catch (_) {}
+    caretBack();
+  }
+
+  // Back to Call or Exch, whichever the operator was in. inpCall is only the
+  // fallback for a log.js too old to say.
+  function caretBack() {
+    try {
+      if (global.LogRadio && LogRadio.restoreCaret) LogRadio.restoreCaret();
+      else inpCall.focus();
+    } catch (_) {}
   }
 
   // ── render ────────────────────────────────────────────────────────────────
@@ -431,10 +491,12 @@
       h += '<tr class="st-mult"><th class="st-lbl">MULT</th>';
       st.bands.forEach(function (b) { h += '<td>' + cell(st.mult.perBand[b]) + '</td>'; });
       h += '<td class="st-sum">' + st.mult.sum + '</td></tr>';
-      h += '<tr><td colspan="' + cols + '" class="st-list" id="statsList">' +
+      // In a box of its own that scrolls: a WPX log collects hundreds of
+      // prefixes, and the palette must not grow off the screen with them.
+      h += '<tr><td colspan="' + cols + '" class="st-list" id="statsList"><div class="st-list-box">' +
            '<span class="st-list-n">unique ' + st.mult.unique.length + ':</span> ' +
            (st.mult.unique.length ? esc(st.mult.unique.join(' ')) : '&mdash;') +
-           '</td></tr>';
+           '</div></td></tr>';
     }
     document.getElementById('statsMultRows').innerHTML = h;
     place();
@@ -479,7 +541,7 @@
       timer = null;
       lastQsos = null;
       // Closing from inside the palette must not strand the caret there.
-      if (el && el.contains(document.activeElement)) { try { inpCall.focus(); } catch (_) {} }
+      if (el && el.contains(document.activeElement)) caretBack();
     }
     save();
   }
@@ -508,7 +570,8 @@
     isOpen:  function () { return open; },
     refresh: refresh,
     compute: compute,
-    computeAll: computeAll
+    computeAll: computeAll,
+    wpxPrefix: wpxPrefix
   };
 
 }(window));

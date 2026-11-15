@@ -36,7 +36,10 @@ const LogDB = {
   getQsosForLog: id => Promise.resolve(
     fixture.stores.qso.filter(q => q.logId === id).map(q => Object.assign({}, q))),
 };
-const ctx = { LogDB, console, window: {} };
+// shownDxcc() lives outside the export section (log.js, 2026-11-15): which
+// country a QSO shows is the DXCC table's business and dxcc-lookup-test.js's,
+// not this file's -- here the stored block goes out as it is, as it always did.
+const ctx = { LogDB, console, window: {}, shownDxcc: q => q.dxcc || null };
 ctx.global = ctx.window;
 vm.createContext(ctx);
 
@@ -53,7 +56,7 @@ vm.runInContext(
 (async () => {
   let out = "";
   for (const log of fixture.stores.logs) {
-    out += "=== CSV " + log.id + "\n" + await ctx.__exp.exportCsv(log.id) + "\n";
+    out += "=== CSV " + log.id + "\n" + await ctx.__exp.exportCsv(log) + "\n";
     out += "=== ADIF " + log.id + "\n" + await ctx.__exp.exportAdif(log) + "\n";
   }
   if (process.argv.includes("--write")) {

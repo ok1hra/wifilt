@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>QRPLog — WIFILT</title>
-  <link rel="stylesheet" href="/log.css?v=2723d87a">
+  <link rel="stylesheet" href="/log.css?v=a0f1337d">
 </head>
 <body>
   <!-- Split shell (2026-09-07). Everything the log itself is lives in the RIGHT
@@ -313,7 +313,7 @@
              this button exists. pa-panel.js unhides it. -->
         <button id="btnPa" class="btn-trx btn-pa" type="button" hidden
                 title="Linear amplifier">PA</button>
-        <button id="btnOpenLog" class="btn-trx" type="button" title="Open / create log">LOG</button>
+        <button id="btnOpenLog" class="btn-trx" type="button" title="No log active — open / create log">LOG</button>
         <button id="btnMacros" class="btn-trx" type="button" title="Edit CW/RTTY macros">MACROS</button>
         <!-- GIT LOG SYNC (log-git-sync.js) replaced BACKUP here: the left half
              syncs the log with a GitHub repository both ways, ⚙ opens its
@@ -366,7 +366,7 @@
             <tr><td><kbd>Alt+W</kbd></td><td>Clear form</td></tr>
             <tr><td><kbd>Alt+G</kbd></td><td>Toggle the <em>global</em> switch on the input row — duplicates searched across all logs, or just this one</td></tr>
             <tr><td><kbd>Alt+K</kbd></td><td>Type a message and send it — CW, or RTTY on a new line. <kbd>Enter</kbd> sends, <kbd>Esc</kbd> discards it and stops a transmission in progress</td></tr>
-            <tr><td><kbd>Alt+S</kbd></td><td>Statistics palette — QSOs per band and mode (duplicates not counted), multipliers from EXCH: US/VE states or zones</td></tr>
+            <tr><td><kbd>Alt+S</kbd></td><td>Statistics palette — QSOs per band and mode (duplicates not counted), multipliers: US/VE states or zones from EXCH, WPX prefixes from the call</td></tr>
             <tr><td><kbd>Alt+T</kbd></td><td>RTTY palette, S&amp;P only: <em>AUTOTUNE</em> — move the dial so the received signal sits on the markers (real FSK, RTTY/RTTY-R)</td></tr>
             <tr><td><kbd>Alt+Enter</kbd></td><td>Log QSO without sending memory</td></tr>
             <tr><td><kbd>Alt++</kbd></td><td>Larger text in the logged QSOs below — numpad <kbd>+</kbd> too</td></tr>
@@ -374,6 +374,8 @@
             <tr><td><kbd>Esc</kbd> <em>(dialog open)</em></td><td>Close dialog</td></tr>
             <tr><td><kbd>Esc</kbd> <em>(no dialog)</em></td><td>Abort CW / RTTY TX immediately</td></tr>
             <tr><td colspan="2" class="hk-sep"></td></tr>
+            <tr><td><kbd>Home</kbd></td><td>Jump to Call, the cursor at the end of the callsign — from anywhere on the page except another text field or a dialog</td></tr>
+            <tr><td><kbd>End</kbd></td><td>Jump to EXCH, the same way</td></tr>
             <tr><td><kbd>Space</kbd> in Call</td><td>Arm the call search — duplicates take over the journal, partial calls open the palette. Both keep tracking as you type</td></tr>
             <tr><td><kbd>Esc</kbd> <em>(search armed, not transmitting)</em></td><td>End the call search</td></tr>
             <tr><td><kbd>Enter</kbd> in Snt / Rcv</td><td>Acts as in Call, or as in EXCH once a call is entered — it transmits. <kbd>Tab</kbd> leaves without keying</td></tr>
@@ -387,18 +389,18 @@
   <script src="/port-move-banner.js?v=7e3a569f"></script>
   <script src="/mgrs.js?v=6a363b6c"></script>
   <script src="/fw-version.js?v=4a8fe10e"></script>
-  <script src="/dxcc.js?v=c56ee081"></script>
+  <script src="/dxcc.js?v=18f894b6"></script>
   <script src="/log-db.js?v=4325395d"></script>
   <script src="/station-identity.js?v=a1a20249"></script>
   <script src="/log-export.js?v=7afd3001"></script>
-  <script src="/log.js?v=7dc32d83"></script>
+  <script src="/log.js?v=cda1f139"></script>
   <!-- After log.js: it reads window.LogRadio (for setRunMode) and log.js reads
        window.LogDxcSplit only from inside a channel callback, never at load. -->
   <script src="/log-dxc-split.js?v=295ebac7"></script>
   <script src="/pa-panel.js?v=8f6cd707"></script>
-  <script src="/log-git-sync.js?v=bbf93cdb"></script>
+  <script src="/log-git-sync.js?v=dc519ef2"></script>
   <!-- After log.js: reads _bandFromHz, _modeKey and inpCall from it. -->
-  <script src="/log-stats.js?v=b3ae77e8"></script>
+  <script src="/log-stats.js?v=f9193753"></script>
 
   <!-- RTTY palette (2026-09-07). Everything above /log.js is what the log
        itself needs; everything below is the palette's, loaded after log.js

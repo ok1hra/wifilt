@@ -211,6 +211,39 @@ const PAGE_SCRIPT = `
       s.mult.perBand["20m"] === 3 && s.mult.perBand["40m"] === 2 && s.mult.sum === 5,
       JSON.stringify(s.mult.perBand) + " sum " + s.mult.sum);
 
+    // ---- 1b. WPX prefixes (2026-11-15) -------------------------------------
+    const P = LogStats.wpxPrefix;
+    const pfxCases = [
+      ["OK1HRA", "OK1"], ["WB8BJQ", "WB8"], ["N8BJQ", "N8"], ["9A2AA", "9A2"],
+      ["HG19ABC", "HG19"], ["LY1000A", "LY1000"], ["E73A", "E73"], ["2E0ABC", "2E0"],
+      ["4U1ITU", "4U1"], ["RAEM", "RA0"], ["XEFTJW", "XE0"],
+      ["PA/N8BJQ", "PA0"], ["N8BJQ/KH9", "KH9"], ["VP2E/K1ABC", "VP2"], ["F/OK1HRA", "F0"],
+      ["W1AW/4", "W4"], ["OK1HRA/2", "OK2"], ["OK1HRA/P", "OK1"], ["OK1HRA/MM", "OK1"],
+      ["OK1HRA/QRP", "OK1"], ["DL/OK1HRA/P", "DL0"], ["ok1hra", "OK1"],
+      ["", null], ["599", null], ["K", null], ["OK1-HRA", null],
+    ];
+    const pfxBad = pfxCases.filter(([c, want]) => P(c) !== want)
+      .map(([c, want]) => c + "=" + P(c) + " (want " + want + ")");
+    check("WPX prefix of each call shape", !pfxBad.length, pfxBad.join(", "));
+
+    s = LogStats.compute([
+      q(1, "OK1AA",  14025000, "CW"),
+      q(2, "OK1BB",  14026000, "CW"),               // OK1 again: nothing new
+      q(3, "OK1AA",  7025000,  "CW"),               // OK1 on 40m: still once per log
+      q(4, "DL2CC",  7026000,  "CW"),
+      q(5, "W1AW/4", 7027000,  "CW"),               // W4
+      q(6, "PA/N8BJQ", 21025000, "CW"),             // PA0
+      q(7, "SP9DD",  21026000, "CW", "", {deleted: true}),
+      q(8, "OK2EE",  14200000, "USB"),
+    ], "prefixes", L);
+    check("prefixes: unique list, once per log",
+      s.mult.unique.join(" ") === "DL2 OK1 OK2 PA0 W4", s.mult.unique.join(" "));
+    check("prefixes: each credited to the band it was first worked on",
+      s.mult.perBand["20m"] === 2 && s.mult.perBand["40m"] === 2 && s.mult.perBand["15m"] === 1,
+      JSON.stringify(s.mult.perBand));
+    check("prefixes: the sum is the unique count, not bands added up", s.mult.sum === 5,
+      String(s.mult.sum));
+
     // ---- 2. the hotkey and the caret --------------------------------------
     const logA = await LogDB.createLog({contestName: "STATSA", stationCall: "OK1HRA",
       defaultExchange: "NR", myLocator: "JO70FD", startQsoNumber: 1});
@@ -248,6 +281,19 @@ const PAGE_SCRIPT = `
     check("the MULT row appears in the band grid", rowText("#statsMultRows tr.st-mult").join(";") === "MULT|1|1|2",
       rowText("#statsMultRows tr.st-mult").join(";"));
     check("... with the unique list under it", text("statsList") === "unique 2: MA PA", text("statsList"));
+
+    $("inpExch").focus();
+    sel.focus();
+    sel.value = "prefixes";
+    sel.dispatchEvent(new Event("change", {bubbles: true}));
+    await sleep(200);
+    check("from Exch, choosing hands the caret back to Exch", document.activeElement === $("inpExch"),
+      document.activeElement && document.activeElement.id);
+    check("prefixes come from the call, not EXCH", text("statsList") === "unique 2: K3 W1", text("statsList"));
+    sel.value = "states";
+    sel.dispatchEvent(new Event("change", {bubbles: true}));
+    $("inpCall").focus();
+    await sleep(200);
 
     // ---- 4. live recounting ------------------------------------------------
     const selBefore = $("statsMult");

@@ -365,6 +365,29 @@ const PAGE_SCRIPT = `
       && frame.contentDocument.getElementById("body"), 8000, "the iframe to load");
     const fdoc = frame.contentDocument;
 
+    // ---- 3b. a click in the pane hands the caret back (2026-11-15) ---------
+    // Before the socket checks on purpose: it needs the page, not the feed.
+    // Exch this time, to tell "where it was" from "always Call". A synthetic
+    // click moves no focus, so the focus goes where the mousedown would put it.
+    const focusName = () => document.activeElement && (document.activeElement.id || document.activeElement.tagName);
+    $("inpExch").focus();
+    const barToggle = fdoc.getElementById("barToggle");
+    barToggle.focus();
+    check("(the pane's button took the focus, as a real click would)", document.activeElement === frame, focusName());
+    barToggle.dispatchEvent(new MouseEvent("click", {bubbles: true, cancelable: true, detail: 1}));
+    await sleep(150);
+    check("a click on a DXC pane button hands the caret back to Exch, where it was",
+      document.activeElement === $("inpExch"), focusName());
+    barToggle.dispatchEvent(new MouseEvent("click", {bubbles: true, cancelable: true, detail: 0}));
+    const cmd = fdoc.getElementById("cmd");
+    cmd.focus();
+    cmd.dispatchEvent(new MouseEvent("click", {bubbles: true, cancelable: true, detail: 1}));
+    await sleep(150);
+    check("a click into the cluster command line keeps the keyboard there",
+      document.activeElement === frame && fdoc.activeElement === cmd,
+      focusName() + " / " + (fdoc.activeElement && fdoc.activeElement.id));
+    $("inpCall").focus();
+
     // ---- 4. exactly one socket, and it is the pane's ----------------------
     await until(async () => (await stats()).live === 1, 8000, "the pane to connect")
       .catch(() => {});
@@ -410,6 +433,7 @@ const PAGE_SCRIPT = `
     check("a second spot with Call already filled still lands in Call",
       $("inpCall").value === "JA1ABC", $("inpCall").value);
     check("and leaves Exch alone", $("inpExch").value === "", $("inpExch").value);
+
 
     // ---- 7. the middle and right buttons still pick TRX2 / TRX3 ----------
     // Looked up again: the table re-renders while the check above waits, and

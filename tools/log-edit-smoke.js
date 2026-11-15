@@ -225,8 +225,10 @@ const PAGE_SCRIPT = `
     check("required is back on My call", $("lmMyCall").hasAttribute("required"));
 
     // ---- 4. the active log picks the change up live -----------------------
-    check("the LOG button shows the new name",
-      $("btnOpenLog").textContent.indexOf("RENAMED") >= 0, $("btnOpenLog").textContent);
+    // Since 2026-11-15 the button reads just LOG and the name is its tooltip.
+    check("the LOG button's tooltip shows the new name",
+      $("btnOpenLog").title.indexOf("RENAMED") >= 0 && $("btnOpenLog").textContent === "LOG",
+      $("btnOpenLog").textContent + " / " + $("btnOpenLog").title);
     check("the live log object was updated, not a stale copy",
       LogManager.getActiveLog().defaultExchange === "NRLOC",
       LogManager.getActiveLog().defaultExchange);
@@ -342,6 +344,47 @@ const PAGE_SCRIPT = `
     check("the form still creates logs after being used as an editor",
       logs.some(l => l.contestName === "STILLWORKS"),
       logs.map(l => l.contestName).join(","));
+    LogManager.closeModal();
+
+    // ---- 11. old stored DXCC shown corrected, not rewritten (2026-11-15) -----
+    // QSOs as the old hand-written dxcc.js left them: no country, a wrong one
+    // (YL2PJ in Sri Lanka), and one with the right country but another zone --
+    // which keeps its stored block (a received-locator QRB lives there).
+    const dx = await LogDB.createLog({contestName: "DXCCFIX", stationCall: "OK1HRA",
+      defaultExchange: "NR", myLocator: "JO70FD", startQsoNumber: 1});
+    const at = n => ({qsoDateUtc: "2026-11-14", timeOnUtc: "13:0" + n,
+      timestampUtc: "2026-11-14T13:0" + n + ":00Z", frequencyHz: 21013300, mode: "CW"});
+    const uy = await LogDB.addQso(Object.assign({logId: dx.id, qsoNumber: 1, call: "UY7LM", dxcc: null}, at(1)));
+    const yl = await LogDB.addQso(Object.assign({logId: dx.id, qsoNumber: 2, call: "YL2PJ",
+      dxcc: {country: "Sri Lanka", mainPrefix: "4S", continent: "AS", cqZone: 26, ituZone: 41, qrbKm: 7716}}, at(2)));
+    const ok = await LogDB.addQso(Object.assign({logId: dx.id, qsoNumber: 3, call: "OK1DO",
+      dxcc: {country: "Czech Republic", mainPrefix: "OK", continent: "EU", cqZone: 99, ituZone: 28, qrbKm: 152}}, at(3)));
+    const ylBefore = await LogDB.getQso(yl.id);
+    LogManager.activateLog(dx);
+    await sleep(900);
+    const rowText = id => document.querySelector('.qso-row[data-qso-id="' + id + '"]').textContent;
+    check("the journal shows the country a QSO stored without one", /Ukraine/.test(rowText(uy.id)), rowText(uy.id));
+    check("... and the right one for a wrong one, with its distance",
+      /Latvia/.test(rowText(yl.id)) && !/7716/.test(rowText(yl.id)), rowText(yl.id));
+    const ylA = await LogDB.getQso(yl.id);
+    check("the stored QSO is not rewritten (no GIT LOG SYNC change)",
+      ylA.dxcc.country === "Sri Lanka" && ylA.updatedAtUtc === ylBefore.updatedAtUtc, JSON.stringify(ylA.dxcc));
+    const csv = await LogManager.exportCsv(dx);
+    const line = c => (csv.split("\\r\\n").find(l => l.split(",")[3] === c) || "");
+    check("the CSV carries the corrected countries",
+      /,Ukraine,UT,16,29,/.test(line("UY7LM")) && /,Latvia,YL,15,29,/.test(line("YL2PJ")),
+      line("UY7LM") + " / " + line("YL2PJ"));
+    check("a right country keeps its stored block", /,Czech Republic,OK,99,28,/.test(line("OK1DO")), line("OK1DO"));
+
+    // An edited call takes its own DXCC with it.
+    document.querySelector('.qso-row[data-qso-id="' + ok.id + '"]').click();
+    await sleep(400);
+    type($("qeCall"), "VO1AW");
+    saveQsoEdit();
+    await sleep(500);
+    const okE = await LogDB.getQso(ok.id);
+    check("editing the call recomputes its DXCC", okE.call === "VO1AW" && okE.dxcc && okE.dxcc.country === "Canada",
+      JSON.stringify(okE.dxcc));
   } catch (error) {
     check("the harness ran to the end", false, String(error && error.stack || error));
   }

@@ -118,10 +118,13 @@
     return dxccCache[call];
   }
 
-  // The DXCC a QSO lacks, worked out as the interface itself does when a QSO
-  // is logged (log-db.js commitQso): the country from the call, the distance
-  // from my locator to the station's locator, or to its country's centre.
+  // The DXCC a QSO shows -- DXCC.forQso(), as the interface's own journal and
+  // CSV: the stored block, unless the call now resolves to another country or
+  // there was none (QSOs logged before the 2026-11-15 table, old ADIF imports).
+  // Then the country from the call, the distance from my locator to the
+  // station's locator, or to its country's centre, as at logging.
   function fillDxcc(q, log) {
+    if (window.DXCC && DXCC.forQso) return DXCC.forQso(q, log && log.myLocator);
     if (q.dxcc) return q.dxcc;
     var d = lookup(String(q.call || '').toUpperCase());
     if (!d) return null;
@@ -469,7 +472,7 @@
   function rowsForExport(list) {
     // The order of the log, not of the screen: by time.
     return (list || shown).slice().sort(function (a, b) { return a.when < b.when ? -1 : a.when > b.when ? 1 : 0; })
-      .map(function (r) { return Object.assign({}, r.q, { dxcc: r.q.dxcc || (Object.keys(r.d).length ? r.d : null) }); });
+      .map(function (r) { return Object.assign({}, r.q, { dxcc: Object.keys(r.d).length ? r.d : null }); });
   }
 
   function download(text, name, mime) {

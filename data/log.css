@@ -2624,6 +2624,8 @@ body {
   user-select: text;
 }
 .st-list-n { color: #8b97a8; }
+/* About ten lines, then it scrolls: a WPX log collects hundreds of prefixes. */
+.st-list-box { max-height: 14.5em; overflow-y: auto; }
 
 /* ── GIT LOG SYNC palette (log-git-sync.js) ────────────────────────────────
    The PA palette's frame and buttons (.pa-panel, .pa-head, .pa-btn), wider,

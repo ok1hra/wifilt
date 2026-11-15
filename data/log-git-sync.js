@@ -1252,8 +1252,9 @@
       render();
       place();
     } else if (was && el && el.contains(document.activeElement)) {
-      var call = document.getElementById('inpCall');
-      if (call) call.focus();
+      // Back to Call or Exch, wherever the operator was (log.js).
+      if (global.LogRadio && global.LogRadio.restoreCaret) global.LogRadio.restoreCaret();
+      else { var call = document.getElementById('inpCall'); if (call) call.focus(); }
     }
     if (!open && confirmWait) confirmWait(false);
   }

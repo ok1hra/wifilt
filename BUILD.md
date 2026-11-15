@@ -184,6 +184,23 @@ date, which is the form to put in front of a release build:
 node ./tools/stamp-asset-versions.js --check
 ```
 
+**The DXCC table** in `data/dxcc.js` is generated from AD1C's `cty.dat`
+(<https://www.country-files.com/>, the CT flavour) and is not edited by hand. To bring it up
+to a newer `cty.dat`:
+
+```bash
+node ./tools/build-dxcc.js /path/to/cty.dat        # rewrite the table in data/dxcc.js
+node ./tools/dxcc-lookup-test.js /path/to/cty.dat  # lookups + "is the table current"
+node ./tools/build-log-viewer.js                   # the log viewer inlines dxcc.js
+```
+
+then the three asset steps above. The tool keeps this interface's own country names and main
+prefixes (they are stored with every QSO and matched by the blocked-DXCC list), folds the
+WAE-only entities into their DXCC country, and keeps only the exact callsigns a prefix cannot
+place — see its header for the rules. Stored QSOs are not rewritten: QRPLog's journal and
+CSV and the log viewer show the current country wherever the stored one is missing or
+differs (`DXCC.forQso()`).
+
 ---
 
 ## 3. Flashing what you built
@@ -481,6 +498,7 @@ There are around forty more in `tools/`, covering the same ground the pages do:
 | TrxNet | `trxnet-fake-peer.js` — a pretend device that announces itself and publishes drifting topics, so the TELEMETRY source tree can be exercised without a real weather head. Use `--target HOST:PORT` rather than the broadcast default: it aims at one instance, keeps the test off the real network, and is the only way two nodes can share a host (both want the same well-known UDP port) |
 | WSPR | `wspr-audio-`, `wspr-browser-`, `wspr-encoder-`, `wspr-log-`, `wspr-schedule-`, `wspr-settings-`, `wspr-tx-pacing-` |
 | TX gain | `tx-gain-cal-`, `tx-gain-mod-level-`, `tx-gain-plan-`, `txgain-store-` |
+| QRPLog | `log-*-smoke.js` (one per feature), `dxcc-lookup-test.js` (the DXCC table) |
 | Setup and identity | `setup-radio-contract-`, `setup-spine-`, `station-identity-`, `station-profile-`, `check-identity-consistency.sh` |
 | Storage and sync | `config-backup-`, `datasync-completion-`, `fs-partition-audit.js` |
 | Pages | `data-browser-smoke.js`, `installer-page-smoke.js`, `check-page-scripts.js`, `wake-lock-` |

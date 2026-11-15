@@ -806,7 +806,8 @@ storage exception, back up regularly, or set up GIT LOG SYNC.
 
 ![Log manager](img/qrplog-open-create-activate.png)
 
-**LOG** opens the log manager.
+**LOG** opens the log manager. The button is lit while a log is active; hold the mouse over
+it to see that log's name.
 
 *Saved logs* lists every log in this browser with its QSO count, filtered by the search box;
 the **✕** at its right end clears the filter.
@@ -946,6 +947,17 @@ and when you empty the Call field, which is what abandoning a QSO looks like. Th
 matters: without it a `559` typed for a caller who faded away would be logged, silently, for
 whoever came next. The reset deliberately does *not* fire when you start typing a new call, so
 a report set before the callsign survives.
+
+**The cursor stays in the form.** `Home` jumps to Call and `End` to EXCH from anywhere on the
+page, with the cursor at the end of what the field holds; in another text field (the `Alt+K`
+message, the call search, the manual frequency) and in a dialog the two keys keep their usual
+meaning. A mouse click anywhere else — the band map and its settings, a palette, the TRX
+buttons, **RUN/S&P**, a blank part of the journal, the DX cluster beside the log — puts the
+cursor back where it was, in Call or in EXCH, so the next key you press goes into the QSO. A
+click into a text field or on a drop-down list leaves the cursor there until you have typed or
+picked; a drop-down hands it back as soon as you pick. A drag that selects text keeps the
+selection, so you can still copy it. On a touch screen a tap does not bring the cursor back,
+because that would pop the on-screen keyboard up again.
 
 The cursor skips both fields — Enter runs Call → EXCH — but they are one `Tab` away, and
 **Enter inside them is not a dead key**: it does what it would do in the field the flow is
@@ -1313,8 +1325,18 @@ Only callsign-shaped words, with at least one digit, are checked, so plain RTTY 
 The journal shows `Nr · Date · Time · Call · Freq · Mode · Snt · Rcv · Exch · TRX · DXCC`.
 It scrolls automatically as QSOs are added; `No QSO logged yet.` is shown while it is empty.
 
+The **DXCC** column, and the country, zones and distance in the CSV, are worked out from the
+callsign when the QSO is logged, from AD1C's country file `cty.dat` built into the interface,
+and stored with the QSO. Where the stored country is missing, or the callsign now resolves to
+a different one — QSOs logged before the country table was rebuilt on 2026-11-15, when
+`UY7LM` had no country and `YL2PJ` read as Sri Lanka — the journal and the CSV show the
+current country, zones and distance instead. The stored QSO itself is not rewritten, so
+nothing changes in GIT LOG SYNC until you edit it. A callsign that operates away from its own
+country without saying so (a `W6` living in Hawaii) reads as its prefix's country.
+
 **Click any row to edit it.** The editor lets you change the fields and offers **Save**,
-**Cancel** and **Delete**.
+**Cancel** and **Delete**. Saving stores the country, zones and distance as the journal
+shows them, worked out again for a changed callsign.
 
 If the database write fails, the form is *not* cleared and the serial number does *not*
 advance — the QSO is never silently lost.
@@ -1720,9 +1742,10 @@ What the page offers:
 - **Statistics in the header, computed from the rows shown**: QSOs, stations, DXCC entities,
   logs, the period covered, the longest distance (ODX), QSOs per continent, and a band ×
   mode table. Click a continent, or a number in the table, to filter by it.
-- **Countries for old QSOs.** QSOs imported from old ADIF logs carry no DXCC data. The page
-  looks the country up from the call. It works out distance and bearing only where the log
-  has its own locator set.
+- **Countries for old QSOs.** QSOs imported from old ADIF logs carry no DXCC data, and QSOs
+  logged before the country table was rebuilt on 2026-11-15 may carry a wrong one. The page
+  looks the country up from the call whenever the stored one is missing or differs, as QRPLog
+  does. It works out distance and bearing only where the log has its own locator set.
 - **The address keeps the view.** The filters, the sort order and *show deleted* are in the
   address, so a link or a bookmark opens exactly that selection. **Columns ▾** hides
   columns; that choice stays in your browser.
@@ -1768,7 +1791,7 @@ What the page offers:
 ### 3.16 Statistics
 
 `Alt+S` opens a small palette with the score so far in the active log; `Alt+S` again, or its
-**✕**, closes it. Opening it leaves the caret in Call, and `Esc` does not close it — `Esc`
+**✕**, closes it. Opening it leaves the cursor in Call or EXCH, and `Esc` does not close it — `Esc`
 stays the transmission abort. It can be dragged by its title bar; where you leave it, and
 whether it was open, are remembered, so it is back after a reload.
 
@@ -1778,20 +1801,32 @@ per band. **Duplicates are not counted**: one QSO per callsign, band and mode, t
 logged. CW-R counts as CW, RTTY-R as RTTY, USB and LSB as SSB. A log in one mode has one
 **QSO** row; a log in several has a row per mode and a **QSO** total under them.
 
-The drop-down below picks the multipliers, read from the EXCH field — each QSO gives at most
-one, the **last** matching word of its exchange:
+The drop-down below picks the multipliers. States and zones are read from the EXCH field —
+each QSO gives at most one, the **last** matching word of its exchange. Prefixes are read
+from the callsign:
 
 | Choice | A multiplier is | Counted from |
 |---|---|---|
 | US/VE states | a word of 2–3 letters (`MA`, `ON`, `ENY`) | only stations the DXCC table puts in the USA, Alaska, Hawaii or Canada |
 | Zones | a number of 1–2 digits; `2` and `02` are the same zone, `0` is none | every QSO |
+| Prefixes (WPX) | the callsign's CQ WPX prefix (see below) | every QSO, **once per log** |
 
 The **MULT** row gives the distinct multipliers on each band, and its **Σ** is those added
 up — what a contest that counts multipliers per band scores. Under it, every distinct
-multiplier in the whole log, separated by spaces. There is no list of valid states behind
-it, so a mistyped exchange shows up in that list as it is. The choice is remembered per log:
-an ARRL DX log keeps states, a CQ WW log keeps zones. The palette counts again after every
-QSO logged, edited or deleted, and when the tab comes back to the front.
+multiplier in the whole log, separated by spaces; a long list scrolls. There is no list of
+valid states behind it, so a mistyped exchange shows up in that list as it is. The choice is
+remembered per log: an ARRL DX log keeps states, a CQ WW log keeps zones, a WPX log keeps
+prefixes. The palette counts again after every QSO logged, edited or deleted, and when the
+tab comes back to the front.
+
+**Prefixes** follow the CQ WPX rules, so they count **once for the whole log**, whatever the
+band: each prefix sits in the **MULT** row under the band it was first worked on, and the
+**Σ** is the number of different prefixes. The prefix is the callsign up to its last digit —
+`OK1HRA` → `OK1`, `WB8BJQ` → `WB8`, `9A2AA` → `9A2`, `HG19ABC` → `HG19`. A callsign without a
+digit gets a `0` after its first two letters (`RAEM` → `RA0`). A portable prefix replaces the
+call's own, with the same `0` if it has no digit: `PA/N8BJQ` → `PA0`, `N8BJQ/KH9` → `KH9`. A
+digit after the call moves it to that call area: `W1AW/4` → `W4`. `/P`, `/M`, `/MM`, `/AM`,
+`/QRP` and other single letters after the call change nothing.
 
 ### 3.17 Keyboard shortcuts
 
@@ -1806,7 +1841,7 @@ The **?** button opens this list.
 | `Alt+W` | clear the form |
 | `Alt+G` | toggle the **global** switch on the input row |
 | `Alt+K` | type a message and send it — CW, or RTTY on a new line ([section 3.4](#34-working-a-station)) |
-| `Alt+S` | open / close the statistics palette ([section 3.16](#316-statistics)) |
+| `Alt+S` | open / close the statistics palette — QSOs, and states, zones or WPX prefixes ([section 3.16](#316-statistics)) |
 | `Alt+T` | S&P, RTTY palette open: **AUTOTUNE** — move the dial so the received signal sits on the markers ([section 3.6](#36-the-rtty-palette)) |
 | `Alt+Enter` | log the QSO without sending a macro |
 | `Alt++` / `Alt+-` | text size of the logged QSOs below — the numpad `+` / `-` work too |
@@ -1814,6 +1849,8 @@ The **?** button opens this list.
 | `Esc` (message palette open) | discard the message and close the palette — and abort a transmission in progress |
 | `Esc` (no dialog, transmitting) | **abort the transmission immediately** — CW, RTTY or an audio send from the RTTY palette |
 | `Esc` (no dialog, not transmitting) | end the call search |
+| `Home` | jump to Call, cursor at the end — not from another text field or a dialog ([section 3.4](#34-working-a-station)) |
+| `End` | jump to EXCH, the same way |
 | `Space` in Call | arm the call search — duplicates and partial calls, both tracking as you type |
 | `Enter` in Snt / Rcv | as if pressed in Call, or in EXCH once a callsign is entered — **it transmits**; `Tab` leaves without keying |
 

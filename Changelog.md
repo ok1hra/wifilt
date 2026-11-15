@@ -11,6 +11,58 @@ published.
 
 ## Working tree — not committed
 
+**DXCC: the country table generated from cty.dat; old QSOs show the corrected country.**
+
+* A 276-QSO contest log (OK/OM DX, 2026-11-14) had UY7LM, UZ7E, UX1VT, UY7AM, UW1G (Ukraine),
+  AR5EJ (Pakistan) and VO1AW (Canada) with no country, and YL2PJ as Sri Lanka. The hand-written
+  table in `data/dxcc.js` had drifted far from cty.dat: checked against all its prefixes, about a
+  quarter resolved to nothing and many to the wrong entity (R8/RA8/RU0 → European Russia, OI → Finland
+  instead of Aland, TA1 → Asia …), ~45 DXCC entities were missing (Cyprus, Angola,
+  Seychelles, Brunei, Sable …), Sri Lanka carried `DJ8` and `YL2` as aliases, and `!MAP[x]` let
+  any later entity take over a prefix of entry 0.
+* `tools/build-dxcc.js <cty.dat>` now writes the table (VER20260629: 340 entities, 0 cty.dat
+  prefixes unresolved). Our country names and main prefixes stay (stored in QSOs, matched by
+  the blocked-DXCC list, `K/KL/KH6/VE` in the statistics); WAE-only entities fold into their
+  DXCC country; per-prefix CQ/ITU zones and continents come along (W6 → CQ 3, VE3 → CQ 4);
+  Antarctica, South Orkney, South Shetland and Peter I stay continent `AN` (cty.dat says SA;
+  the DXC spotter filter files AN under OTHER);
+  exact calls only where a prefix cannot place them (3 034 of ~23 000 — DXpeditions, Antarctic
+  bases, TO-calls …; residents of the same administration — W6 in Hawaii, UA3 in Siberia, G in
+  Scotland — left out). `dxcc.js.gz` 7.9 → 33 kB; flash payload 2 093 280 B, 331 552 B under
+  the gate.
+* `lookupDxcc()`: `CALL/digit` moves the call area (R1BJA/0 → Asiatic Russia, EA1AK/8 → Canary
+  Is, KH6DLK/0 → USA; not A60AAP/2, whose 6 is the country's); `/LH` and `/QRPP` stripped
+  (UU9CW/LH was Norway); exact calls checked before stripping.
+* Stored QSOs are NOT rewritten (that made every old QSO a local change for GIT LOG SYNC —
+  the git-sync smoke caught it). `DXCC.forQso(q, myLocator)`: the stored block while the call
+  still resolves to the same country, else the current one with QRB/azimuth recomputed. Used by
+  the QRPLog journal, its CSV export and the log viewer (country, map, CSV/ADIF). Saving a QSO
+  in the editor stores what the journal shows, and an edited call gets its own DXCC (it kept the
+  old call's before).
+* `log-viewer/index.html` rebuilt (it inlines dxcc.js). Tests: `tools/dxcc-lookup-test.js` (56),
+  `tools/log-edit-smoke.js` § 11. BUILD.md § 2, SOFTWARE.md § 3.10 and § 3.15.
+
+**QRPlog: the cursor stays in the form — Home/End, clicks give it back; WPX prefixes in the statistics; a short LOG button.**
+
+* A mouse click anywhere on the page (band map and its width/fold buttons, palettes, TRX
+  buttons, RUN/S&P, blank journal, the DXC pane beside the log) puts the cursor back in Call or
+  EXCH, whichever it was in, caret position kept. One capture-phase listener in `log.js`
+  (`restoreCaret()`, `LogRadio.restoreCaret()`), and the same from `dxc.html?embed=1`, whose
+  clicks never reach the log's document. Text fields, selects (until a choice is made),
+  dialogs, text selections and touch taps are left alone. TRX buttons and Alt+1/2/3 no longer
+  force Call; neither do the ✕ of the DUPE view and the call palette, the statistics select or
+  closing the GIT LOG SYNC palette.
+* `Home` → Call, `End` → EXCH, caret at the end, from anywhere except another text field or a
+  dialog; both in the **?** list and SOFTWARE.md § 3.4 / § 3.17.
+* Statistics (Alt+S): **Prefixes (WPX)** among the multipliers — read from the callsign, counted
+  once per log on the band first worked (`LogStats.wpxPrefix()`: portable designators, `/digit`
+  call areas, calls without a digit → `XX0`, `/P /M /MM /QRP` ignored). The multiplier list
+  scrolls after ~10 lines. SOFTWARE.md § 3.16.
+* The bottom bar's button reads just **LOG** (lit while a log is active); the log's name is its
+  tooltip.
+* Tests: `tools/log-hotkey-smoke.js` (Home/End, click hand-back), `tools/log-stats-smoke.js`
+  (prefix rules, Exch hand-back), `tools/log-edit-smoke.js` (tooltip).
+
 **local-trx: TS-480 software panel — the radio's display in QRPlog, the whole front panel in a window.**
 
 * With CAT through hamlib to a Kenwood TS-480 (model 2028), local-trx's setup offers *TS-480

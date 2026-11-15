@@ -290,8 +290,146 @@ const PAGE_SCRIPT = `
     check("the shortcut window is twice the 340 px it used to be",
       helpBox.getBoundingClientRect().width > 660,
       String(helpBox.getBoundingClientRect().width));
+    check("the help list names Home and End",
+      /Home\\s*Jump to Call/.test(helpText) && /End\\s*Jump to EXCH/.test(helpText), helpText.slice(-700));
     $("helpModalClose").click();
     await sleep(120);
+
+    // ---- Home / End (2026-11-15) -------------------------------------------
+    const plain = {altKey: false};
+    call.value = "OK1ABC";
+    exch.value = "123";
+    exch.focus();
+    exch.setSelectionRange(0, 0);
+    press("Home", "Home", plain);
+    check("Home jumps from Exch to Call", document.activeElement === call,
+      document.activeElement && document.activeElement.id);
+    check("... the caret at the end of the call", call.selectionStart === 6 && call.selectionEnd === 6,
+      call.selectionStart + "-" + call.selectionEnd);
+    call.setSelectionRange(1, 1);
+    press("End", "End", plain);
+    check("End jumps from Call to Exch, caret at the end",
+      document.activeElement === exch && exch.selectionStart === 3, document.activeElement.id + " " + exch.selectionStart);
+    document.activeElement.blur();
+    press("Home", "Home", plain);
+    check("Home from nowhere in particular lands in Call", document.activeElement === call);
+    exch.focus();
+    press("Home", "Home", {altKey: false, shiftKey: true});
+    check("Shift+Home is left alone", document.activeElement === exch);
+
+    const other = document.createElement("input");
+    other.type = "text"; other.value = "some text";
+    document.body.appendChild(other);
+    other.focus();
+    let ev = new KeyboardEvent("keydown", {key: "Home", code: "Home", bubbles: true, cancelable: true});
+    other.dispatchEvent(ev);
+    check("in another text field Home keeps its own meaning",
+      document.activeElement === other && !ev.defaultPrevented);
+
+    $("btnHelp").click();
+    await sleep(100);
+    $("helpModalClose").focus();
+    press("End", "End", plain);
+    check("not while a dialog is open", document.activeElement !== exch);
+    $("helpModalClose").click();
+    await sleep(100);
+
+    // ---- a click anywhere hands the caret back (2026-11-15) ----------------
+    // A real click moves the focus on mousedown; these synthetic ones do not,
+    // so each test first puts the focus where the mousedown would have.
+    const mouseClick = el => el.dispatchEvent(new MouseEvent("click", {bubbles: true, cancelable: true, detail: 1}));
+    const focusName = () => document.activeElement && (document.activeElement.id || document.activeElement.tagName);
+    // The band map shows only with DXC running; shown by hand for the test.
+    $("dxcBandBox").classList.add("dxc-active");
+    exch.focus();
+    exch.setSelectionRange(1, 1);
+    const bw = $("dxcBwBtn");
+    bw.focus();
+    check("(the band map button can take the focus, as a real click gives it)", document.activeElement === bw, focusName());
+    mouseClick(bw);              // its handler stops propagation: the net must still catch it
+    await sleep(60);
+    check("a click on the band map's width button hands the caret back to Exch",
+      document.activeElement === exch && $("dxcBwPalette").classList.contains("dxc-bw-open"), focusName());
+    check("... where it stood in the field", exch.selectionStart === 1, String(exch.selectionStart));
+    const opt = document.querySelector('#dxcBwPalette .dxc-bw-opt[data-bw="200"]');
+    opt.focus();
+    mouseClick(opt);
+    await sleep(60);
+    check("... and so does picking a width in its palette", document.activeElement === exch, focusName());
+    document.querySelector('#dxcBwPalette .dxc-bw-opt[data-bw="100"]').click();
+    const tog = $("dxcBandToggle");
+    tog.focus();
+    mouseClick(tog);
+    await sleep(60);
+    check("... and folding the band map", document.activeElement === exch, focusName());
+    tog.click();
+    await sleep(60);
+
+    call.focus();
+    document.activeElement.blur();
+    mouseClick($("logJournalBody"));
+    await sleep(60);
+    check("a click on blank journal hands it back to Call", document.activeElement === call,
+      document.activeElement && (document.activeElement.id || document.activeElement.tagName));
+
+    exch.focus();
+    $("btnTrx2").click();
+    await sleep(60);
+    check("TRX buttons keep the caret where it was (Exch)", document.activeElement === exch && app.activeTrx === 2,
+      (document.activeElement && document.activeElement.id) + " TRX" + app.activeTrx);
+    press("1", "Digit1");
+    await sleep(60);
+    check("... and so does Alt+1", document.activeElement === exch && app.activeTrx === 1,
+      (document.activeElement && document.activeElement.id) + " TRX" + app.activeTrx);
+
+    call.focus();
+    tog.focus();
+    tog.dispatchEvent(new MouseEvent("click", {bubbles: true, detail: 0}));
+    await sleep(60);
+    check("a keyboard-made click (detail 0) leaves the focus alone", document.activeElement === tog, focusName());
+    tog.click();
+    $("dxcBandBox").classList.remove("dxc-active");
+
+    call.focus();
+    other.focus();
+    mouseClick(other);
+    await sleep(60);
+    check("a click into another text field keeps it there", document.activeElement === other);
+
+    const sel = document.createElement("select");
+    sel.innerHTML = "<option>a</option><option>b</option>";
+    document.body.appendChild(sel);
+    sel.focus();
+    mouseClick(sel);
+    await sleep(60);
+    check("a click on a select leaves it focused (its list would close)", document.activeElement === sel);
+    sel.value = "b";
+    sel.dispatchEvent(new Event("change", {bubbles: true}));
+    await sleep(60);
+    check("... and choosing hands the caret back to Call", document.activeElement === call,
+      document.activeElement && (document.activeElement.id || document.activeElement.tagName));
+
+    document.activeElement.blur();
+    document.dispatchEvent(new PointerEvent("pointerdown", {bubbles: true, pointerType: "touch"}));
+    mouseClick($("logJournalBody"));
+    await sleep(60);
+    check("not after a touch (it would pop the phone keyboard up)", document.activeElement !== call);
+    document.dispatchEvent(new PointerEvent("pointerdown", {bubbles: true, pointerType: "mouse"}));
+
+    const hdr2 = $("logJournalHeader");
+    const range = document.createRange();
+    range.selectNodeContents(hdr2);
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+    mouseClick(hdr2);
+    await sleep(60);
+    check("not over a text selection (Ctrl+C must work)", document.activeElement !== call && !getSelection().isCollapsed);
+    getSelection().removeAllRanges();
+    other.remove(); sel.remove();
+
+    check("the LOG button reads just LOG, the name in its tooltip",
+      $("btnOpenLog").textContent === "LOG" && /HOTKEY/.test($("btnOpenLog").title),
+      $("btnOpenLog").textContent + " / " + $("btnOpenLog").title);
 
     // ---- Alt+Enter still logs without keying -------------------------------
     call.value = "OK5XYZ";
