@@ -11,6 +11,22 @@ published.
 
 ## Working tree — not committed
 
+**Cheat sheets: QRPlog, JS8Call-ICOM, WIFILT + local-trx on a Raspberry Pi, ways to set it up — EN and CS, SVG and PDF.**
+
+* `docs/cheatsheets/`: one A4 landscape page per topic, eight sheets, each as SVG and PDF, with an
+  index (`README.md`) in both languages.
+* **Ways to set it up** (`setups-*`), drawn devices and wiring: phone hotspot + ESP32 + IC-705
+  (with the Android client-isolation warning of § 5.19), Windows / Linux PC + ICOM + EXPERT 1K-FA
+  on its TrxNet daemon, tablet + Raspberry Pi access point + local-trx + TS-480 on the software
+  panel (its own panel unplugged), the home 24/7 box, any radio through local-trx, several radios. Drawn diagrams: the QRPlog page with numbered parts,
+  the RUN/S&P Enter flow, the JS8 waterfall, RX level and relay route, the Pi station wiring,
+  the Wi-Fi fallback / setup access point flow and the OI3 RPI display.
+* `tools/build-cheatsheets.py` generates them: the text of both languages side by side, words
+  measured with the DejaVu fonts (Pillow) and wrapped by the script, PDF through Inkscape with
+  the fonts embedded. It refuses a sheet whose text overflows a card, a card title or the page.
+* Facts taken from SOFTWARE.md § 1.6–1.8, 2, 3, 5 and 9.3, the Pi's `wifi-fallback` defaults
+  (`native/pi/files/`) and the JS8 dial presets (`data/js8-presets.js`).
+
 **DXCC: the country table generated from cty.dat; old QSOs show the corrected country.**
 
 * A 276-QSO contest log (OK/OM DX, 2026-11-14) had UY7LM, UZ7E, UX1VT, UY7AM, UW1G (Ukraine),
