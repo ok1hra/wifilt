@@ -213,8 +213,9 @@
       $('vpnInstallText').textContent = s.locked
         ? 'n2n 3.1.1 is not installed, and this system is locked (power-loss protection), so nothing can be ' +
           'installed now. Unlock it and run the Raspberry Pi installer (wifilt-pi-setup) with its vpn step.'
-        : 'n2n 3.1.1 is not installed on this computer yet. INSTALL builds it from source (github.com/ntop/n2n, ' +
-          'tag 3.1.1, checked) -- it needs the internet and takes a few minutes on a Raspberry Pi.';
+        : 'n2n 3.1.1 is not installed on this computer yet. INSTALL puts in the copy built for this release of ' +
+          'WIFILT, or, where that does not run, builds it from source (github.com/ntop/n2n, tag 3.1.1, checked) -- ' +
+          'that needs the internet and takes a few minutes on a Raspberry Pi.';
       $('vpnInstallBtn').hidden = !!s.locked;
     }
 

@@ -2,8 +2,10 @@
 #
 # pi-setup step 5: remote access over the internet (SETUP -> Remote access).
 #
-# Builds n2n 3.1.1 from source (wifilt-vpn-build, i.e. native/vpn/build-n2n.sh:
-# pinned tag, checked commit, --enable-pthread, /usr/local) and pairs this
+# Installs n2n 3.1.1 (wifilt-vpn-build, i.e. native/vpn/build-n2n.sh: the copy
+# built for this release when it runs here -- the wifilt step has usually put it
+# in place already -- otherwise from source: pinned tag, checked commit,
+# --enable-pthread, /usr/local) and pairs this
 # station with the VPN through the supernode on remoteqth.com: a new network
 # (this is the first device) or one joined with the code from another device.
 # The edge itself is wifilt-vpn.service, installed and enabled by install.sh in
@@ -45,7 +47,7 @@ ask_vpn() {
   else
     current "not paired; n2n: ${edge_banner:+installed}${edge_banner:-not installed}"
   fi
-  plan_line "build n2n 3.1.1 from github.com/ntop/n2n and pair this station with the VPN via remoteqth.com"
+  plan_line "install n2n 3.1.1 (the copy in this release, or built from github.com/ntop/n2n) and pair this station with the VPN via remoteqth.com"
   DO_VPN=0
   ANS_VPN_MODE="" ANS_VPN_CODE=""
 
@@ -67,7 +69,7 @@ ask_vpn() {
     local r
     while :; do
       ask_str r "  Choice" 1
-      case $r in 1) ANS_VPN_MODE=new; break ;; 2) ANS_VPN_MODE=join; break ;; *) say "  1 or 2." ;; esac
+      case $r in 1) ANS_VPN_MODE="new"; break ;; 2) ANS_VPN_MODE="join"; break ;; *) say "  1 or 2." ;; esac
     done
     if [[ $ANS_VPN_MODE == join ]]; then
       interactive || die "joining a VPN needs the code: run interactively or set PI_SETUP_VPN_CODE"
@@ -81,7 +83,7 @@ run_vpn() {
   local build=$PREFIX/wifilt-vpn-build
   [[ -x $build ]] || build=$PKG/build-n2n.sh
   [[ -x $build ]] || die "the n2n build script is missing (wifilt step not run?)"
-  info "n2n 3.1.1 (a few minutes the first time)"
+  info "n2n 3.1.1 (a build from source takes a few minutes)"
   "$build"
 
   local code=""

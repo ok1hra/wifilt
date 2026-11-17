@@ -11,6 +11,39 @@ published.
 
 ## Working tree — not committed
 
+**Remote access: the n2n edge comes with WIFILT; the station keeps its name over the VPN.**
+
+* `native/vpn/build-n2n-dist.sh` builds n2n 3.1.1 for x86_64 and arm64. It uses the same pinned
+  tag and checked commit, built from its `git archive` with CMake, `N2N_OPTION_USE_PTHREAD=ON`,
+  stripped, about 260 kB each. A binary that needs more than `GLIBC_2.34` is refused, so it runs
+  on Debian 12, Ubuntu 22.04, Raspberry Pi OS bookworm and later. `tools/release.sh` runs it
+  before `make`, keeps the result while the tag, commit and build stay the same, and carries on
+  without it when it fails.
+* `native/Makefile` puts the edge into the Linux archives as `n2n/` (edge, LICENSE, SOURCE.txt).
+  It also places the stand-alone `n2n-edge-3.1.1-linux-{x86_64,arm64}.tar.gz` and
+  `n2n-3.1.1-source.tar.gz` next to the archives. `tools/gh-pages.sh` publishes the three only
+  together (GPL: the source from the same place) in a new *Remote access client (n2n)* panel. A
+  link to a panel (`#n2n`, `#raspberrypi`) now opens it.
+* `build-n2n.sh` installs the bundled copy when it runs on the machine (seconds instead of
+  minutes, no compiler) and builds from source only otherwise. `--force` always builds.
+  `--bundled-only` is for `install.sh`, so for `pi-setup` and the web update too: it fills a
+  missing edge or replaces a 3.1.1 without the resolver thread. It never replaces an n2n of
+  another version and never builds. The new file is renamed over the old one, so a running edge
+  keeps its file. "Already installed" now means 3.1.1 *with* the resolver thread.
+* SOFTWARE.md § 1.9 covers the bundled edge, the downloads for a laptop without WIFILT and *A
+  name instead of the address*. `.local` names do not cross the VPN (n2n drops multicast, and
+  WIFILT's responder answers on the LAN only), so the manual suggests a line in `/etc/hosts`
+  with the station's home name: the same origin then gives the same QSO log at home and away.
+  § 1.7 and § 9.12 and the texts in SETUP and `pi-setup` say "installs", not "builds".
+* Tested:
+  * `tools/vpn-n2n-install-check.sh`: 27 checks.
+  * The real `install.sh` from a built archive, in a namespace sandbox: edge missing, good,
+    another version, an archive without `n2n/`.
+  * The arm64 edge on the Raspberry Pi 4: registered with remoteqth.com:82 by name, dropped to
+    `nobody`, ping 6/6 and the web page from the x86_64 edge on a PC, `--bundled-only` and
+    default mode there.
+  * `tools/vpn-native-check.sh` 31/31 with the x86_64 edge that ships.
+
 **Remote access over the internet: an n2n 3 VPN through the supernode on remoteqth.com:82
 (Linux builds — Raspberry Pi and PC).**
 

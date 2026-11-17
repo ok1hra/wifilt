@@ -209,6 +209,12 @@ ASSETS  := $(DIST)/assets
 # flashes the OI3 of a Pi set up with one (wifilt-update.sh, phase "oi3").
 # Absent: the archives simply have no oi3/ and the updater leaves the OI3 alone.
 OI3_HEX ?= dist-oi3
+# The n2n edge for remote access (vpn/build-n2n-dist.sh, run by tools/release.sh).
+# When present it rides along in the Linux archives as n2n/ (install.sh puts it
+# into /usr/local/sbin unless a good n2n 3.1.1 is there), and its stand-alone
+# downloads and source archive go beside the archives for tools/gh-pages.sh.
+# Absent: the archives carry no n2n/, and SETUP -> INSTALL n2n builds it.
+N2N_DIST ?= dist-n2n
 
 .PHONY: dist dist-assets dist-linux dist-windows dist-arm64
 
@@ -240,6 +246,10 @@ dist-linux: all dist-assets
 	cp update/wifilt-update.sh update/update-channel.conf $(DIST)/wifilt-linux-x86_64/
 	cp vpn/wifilt-vpn.sh vpn/build-n2n.sh $(DIST)/wifilt-linux-x86_64/
 	@if [ -f $(OI3_HEX)/VERSION ]; then cp -r $(OI3_HEX) $(DIST)/wifilt-linux-x86_64/oi3; fi
+	@if [ -x $(N2N_DIST)/x86_64/edge ]; then \
+	  mkdir -p $(DIST)/wifilt-linux-x86_64/n2n && \
+	  cp $(N2N_DIST)/x86_64/edge $(N2N_DIST)/LICENSE $(N2N_DIST)/SOURCE.txt $(DIST)/wifilt-linux-x86_64/n2n/ && \
+	  cp $(N2N_DIST)/n2n-edge-*-linux-x86_64.tar.gz $(N2N_DIST)/n2n-*-source.tar.gz $(DIST)/; fi
 	@cd $(DIST) && tar czf wifilt-$(VERSION)-linux-x86_64.tar.gz wifilt-linux-x86_64
 	@rm -rf $(DIST)/wifilt-linux-x86_64
 
@@ -265,6 +275,10 @@ dist-arm64: arm64 dist-assets
 	cp update/wifilt-update.sh update/update-channel.conf $(DIST)/wifilt-linux-arm64/
 	@# remote access: the root helper and the n2n build (vpn/, SOFTWARE.md)
 	cp vpn/wifilt-vpn.sh vpn/build-n2n.sh $(DIST)/wifilt-linux-arm64/
+	@if [ -x $(N2N_DIST)/arm64/edge ]; then \
+	  mkdir -p $(DIST)/wifilt-linux-arm64/n2n && \
+	  cp $(N2N_DIST)/arm64/edge $(N2N_DIST)/LICENSE $(N2N_DIST)/SOURCE.txt $(DIST)/wifilt-linux-arm64/n2n/ && \
+	  cp $(N2N_DIST)/n2n-edge-*-linux-arm64.tar.gz $(N2N_DIST)/n2n-*-source.tar.gz $(DIST)/; fi
 	@# the guided Raspberry Pi installer (pi/pi-setup.sh, SOFTWARE.md section 1.7)
 	cp pi/pi-setup.sh      $(DIST)/wifilt-linux-arm64/
 	mkdir -p               $(DIST)/wifilt-linux-arm64/pi

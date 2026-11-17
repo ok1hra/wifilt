@@ -14,6 +14,9 @@
 /native/dist/
 /native/dist-oi3/
 /native/dist-oi3.log
+/native/dist-n2n/
+/native/dist-n2n.new/
+/native/dist-n2n.log
 /native/_run/
 
 # local-trx build output -- same reasoning as /native/build/ above.

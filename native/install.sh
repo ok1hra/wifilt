@@ -111,6 +111,27 @@ if [[ -f "$HERE/wifilt-vpn.sh" ]]; then
   HAVE_VPN=1
 fi
 
+# The n2n edge built for this release (native/vpn/build-n2n-dist.sh), kept in
+# $PREFIX/n2n with its licence and source note -- wifilt-vpn-build installs it
+# from there. Here only --bundled-only: it fills a missing /usr/local/sbin/edge
+# or replaces a 3.1.1 without the resolver thread, never an n2n of another
+# version (it may be the operator's own), never builds, never touches a running
+# edge (a new file is renamed over the old one; the edge takes it at its next
+# start, which this script never causes).
+rm -rf "$PREFIX/n2n"
+if [[ -f "$HERE/n2n/edge" ]]; then
+  install -d -m 0755 "$PREFIX/n2n"
+  install -m 0755 "$HERE/n2n/edge" "$PREFIX/n2n/edge"
+  for f in LICENSE SOURCE.txt; do
+    [[ -f "$HERE/n2n/$f" ]] && install -m 0644 "$HERE/n2n/$f" "$PREFIX/n2n/$f"
+  done
+  if [[ -x "$PREFIX/wifilt-vpn-build" ]]; then
+    n2n_out="$("$PREFIX/wifilt-vpn-build" --bundled-only 2>&1)" \
+      || n2n_out+=$'\n'"WARNING: the n2n of this release could not be installed"
+    sed 's/^PHASE [a-z]* /n2n: /' <<<"$n2n_out"
+  fi
+fi
+
 # The one privileged step. It is a property of the file, so it has to be redone
 # after every upgrade -- which is why upgrading means re-running this script.
 setcap cap_net_bind_service=+ep "$PREFIX/wifilt"

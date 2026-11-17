@@ -464,7 +464,7 @@ build alone takes several minutes. What it offers, in this order:
 | WIFILT + local-trx | yes | installs both to `/opt/wifilt` with the port 80 permission and asks whether the services start **at every boot** — on a headless Pi the answer is normally yes |
 | Serial port aliases | yes | lists the USB serial adapters and lets you name them `/dev/ttyUSB.cat` (CAT to the radio), `/dev/ttyUSB.cw` (Open Interface III) and `/dev/ttyUSB.panel`, matched by the adapter's serial number, so the names survive reboots and replugging. Use these names in local-trx's setup |
 | Network | yes | **Ethernet:** DHCP client; when nothing answers within 20 s the Pi becomes the DHCP server itself (`192.168.50.1/24` by default), so TrxNet devices on a bare cable still get addresses; optional fixed addresses by MAC. **Wi-Fi:** when no known network is in range, the Pi opens a setup access point `WIFILT-setup-xxxx` with a password you choose; a phone that joins it gets a page where Wi-Fi networks can be added, and WIFILT itself stays reachable at `http://192.168.4.1/`. Wi-Fi set in Raspberry Pi Imager is moved from netplan to an ordinary NetworkManager profile |
-| Remote access (VPN) | **no** | builds n2n 3.1.1 from source and pairs this station with the VPN through remoteqth.com: a new network (the first device) or one joined with the pairing code of another device — see [section 1.9](#19-remote-access-over-the-internet-pc-and-raspberry-pi) |
+| Remote access (VPN) | **no** | installs n2n 3.1.1 (the copy in the download, built from source only where that does not run) and pairs this station with the VPN through remoteqth.com: a new network (the first device) or one joined with the pairing code of another device — see [section 1.9](#19-remote-access-over-the-internet-pc-and-raspberry-pi) |
 | Open Interface III firmware | **no** | builds the firmware from the `ok1hra/oi3` sources (and the TrxNet library) and uploads it over the board's USB; only when the sources changed since the last upload from this Pi |
 | Power-loss protection (fslock) | no | makes the SD card read-only, so pulling the plug cannot damage it — see below |
 
@@ -616,11 +616,13 @@ WIFILT restarts, crashes or updates itself — remote access is exactly what is 
 
 **Setting it up**
 
-1. **n2n 3** on every Linux device. A Raspberry Pi gets it from `pi-setup`, step *Remote access
-   (VPN)* ([section 1.7](#17-a-raspberry-pi-station)). On a PC installed with `sudo ./install.sh`,
-   SETUP → Remote access offers **INSTALL n2n**, which builds it from source (a few minutes, needs
-   the internet). It can also be built by hand — see *Building n2n 3 for WIFILT* below. Debian's
-   own `n2n` package is version 1 and does not work.
+1. **n2n 3** on every Linux device. The Linux and Raspberry Pi downloads of WIFILT carry an n2n
+   3.1.1 built for it, and `install.sh` — so also `pi-setup` and the update from the web — puts it
+   into `/usr/local/sbin` unless a good one is there already. An n2n of another version, perhaps
+   your own for another network, is left alone. Where none got installed, SETUP → Remote access
+   offers **INSTALL n2n**: the same copy, or a build from source where that does not run (a few
+   minutes, needs the internet). It can also be built by hand — see *Building n2n 3 for WIFILT*
+   below. Debian's own `n2n` package is version 1 and does not work.
 2. **The first device:** SETUP → Remote access → **CREATE NEW NETWORK**. It is in the VPN within a
    few seconds and shows its **pairing code**, `WL-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-X`.
 3. **Every other device:** type or paste that code under **Pairing code** and press **JOIN**.
@@ -644,9 +646,12 @@ and SETUP says so. An update from the web never stops the VPN.
 network; a station at home and a laptop elsewhere must not merge into one TrxNet. The **QSO
 log** lives in the browser and belongs to the address the page was opened from
 ([section 3.15](#git-log-sync)): the station opened by its VPN address is a different origin
-from `wifilt.local`, with its own, empty log. Use **GIT LOG SYNC** to keep both the same.
+from `wifilt.local`, with its own, empty log. Use **GIT LOG SYNC** to keep both the same, or
+give the laptop the station's home name (*A name instead of the address*, below).
 
-**Building n2n 3 for WIFILT.** This is what INSTALL n2n and the `pi-setup` step do; by hand:
+**Building n2n 3 for WIFILT.** Needed only where the bundled copy does not run (glibc older than
+2.34, another processor) or for a computer that should not take a binary on trust. This is what
+INSTALL n2n falls back to; by hand:
 
 ```sh
 sudo apt install build-essential autoconf automake libtool git
@@ -673,15 +678,44 @@ Three things make it work with WIFILT, and each was found the hard way:
   to `/usr/sbin`, over the files of Debian's n2n package, which `apt` would later put back to
   version 1.
 
-The same build as a script: `sudo /opt/wifilt/wifilt-vpn-build` (`--force` rebuilds).
+The same as a script: `sudo /opt/wifilt/wifilt-vpn-build` installs the bundled copy when it runs
+here and builds otherwise; `--force` always builds from source. The release builds its copy from
+the same commit, with CMake (`N2N_OPTION_USE_PTHREAD=ON` is `--enable-pthread`), for x86-64 and
+ARM64; it needs glibc 2.34 or newer (Debian 12, Ubuntu 22.04, Raspberry Pi OS bookworm and
+later). It sits in `/opt/wifilt/n2n/` with its licence (GPL-3.0) and where its source is.
 
-**Another client by hand** — an edge on a computer without WIFILT, or *hin2n* on Android: SETUP →
-Remote access → **Advanced** shows the supernode, the community, the key and the encryption once
-the code is shown. The address comes from the supernode. On Linux:
+**Another client by hand** — an edge on a computer without WIFILT, or *hin2n* on Android. For a
+Linux computer the edge built for WIFILT is a download of its own, on the
+[download page](https://ok1hra.github.io/wifilt/#n2n):
+[x86-64](https://ok1hra.github.io/wifilt/n2n-edge-3.1.1-linux-x86_64.tar.gz),
+[ARM64](https://ok1hra.github.io/wifilt/n2n-edge-3.1.1-linux-arm64.tar.gz), with
+[its source](https://ok1hra.github.io/wifilt/n2n-3.1.1-source.tar.gz) and `SHA256SUMS` — or
+build it as above. SETUP → Remote access → **Advanced** shows the supernode, the community, the
+key and the encryption once the code is shown. The address comes from the supernode. On Linux:
 
 ```sh
+tar xzf n2n-edge-3.1.1-linux-x86_64.tar.gz
+sudo install -m 0755 n2n-edge-3.1.1-linux-x86_64/edge /usr/local/sbin/edge
 sudo N2N_KEY=<key> /usr/local/sbin/edge -d wlvpn0 -c <community> -l remoteqth.com:82 -A4 -I LAPTOP -f
 ```
+
+The station is then at its VPN address; on a laptop with WIFILT, SETUP → Remote access lists it.
+
+**A name instead of the address.** `wifilt-pi.local` and `wifilt.local` do not reach across the
+VPN: such names are multicast DNS, which an n2n edge drops (it passes multicast only with `-E`),
+and WIFILT's own responder for `wifilt.local` answers on the local network only. The VPN address
+is stable — it comes from the device's name and changes only when the device is renamed — so one
+line in `/etc/hosts` on the laptop gives the station its name back:
+
+```
+10.x.y.z   wifilt-pi.local
+```
+
+Take the very name you use at home and the browser sees the same origin: the laptop then shows
+the same QSO log at home and away, no GIT LOG SYNC needed. While the line is there the name goes
+through the VPN at home too — that works as long as the laptop's edge runs (n2n finds the direct
+way over the home network by itself); with the edge stopped the name does not resolve, so comment
+the line out then.
 
 **From the command line.** `wifilt --vpn-pair new` (or `--vpn-pair <code>`) with `--vpn-enable`
 and optionally `--vpn-desc NAME` pairs a station without the web page and prints the code; run
@@ -4694,7 +4728,7 @@ The section title carries the state: **NOT INSTALLED**, **NOT PAIRED**, **OFF**,
 
 | Control | Action |
 |---|---|
-| **INSTALL n2n** | builds n2n 3.1.1 from source and installs it (shown while it is missing); the progress and the build log appear under it. Not offered on a locked Raspberry Pi — the `pi-setup` step does it there |
+| **INSTALL n2n** | installs n2n 3.1.1 — the copy built for this release, or a build from source where that does not run (shown while it is missing); the progress and the build log appear under it. Not offered on a locked Raspberry Pi — the `pi-setup` step does it there |
 | **CREATE NEW NETWORK** | the first device: a new network with a new pairing code; this device joins it at once |
 | **Pairing code** + **JOIN** | every other device: the code of a device already in the network |
 | **Connected to the VPN** | on/off without forgetting the code |

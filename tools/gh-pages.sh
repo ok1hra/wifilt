@@ -563,6 +563,23 @@ if [[ -f "$DESKTOP_ARM64" ]]; then
   if archive_has_local_trx "$DESKTOP_ARM64" "wifilt-linux-arm64" tar; then DESKTOP_ARM64_LTX=1; fi
   echo "==> Desktop archive: ${DESKTOP_ARM64_NAME} (${DESKTOP_ARM64_SIZE}$([[ $DESKTOP_ARM64_LTX -eq 1 ]] && echo ", with local-trx"))"
 fi
+# The n2n edge of remote access, stand-alone (native/vpn/build-n2n-dist.sh via
+# native/Makefile), for a computer without WIFILT -- SOFTWARE.md section 1.9
+# links these names. Published only all three together: a binary under the
+# GPL goes out with its source, from the same place.
+N2N_X64_NAME="" N2N_ARM64_NAME="" N2N_SRC_NAME=""
+_n2n_x64="$(ls "${ROOT_DIR}"/native/dist/n2n-edge-*-linux-x86_64.tar.gz 2>/dev/null | tail -n1 || true)"
+_n2n_arm64="$(ls "${ROOT_DIR}"/native/dist/n2n-edge-*-linux-arm64.tar.gz 2>/dev/null | tail -n1 || true)"
+_n2n_src="$(ls "${ROOT_DIR}"/native/dist/n2n-*-source.tar.gz 2>/dev/null | tail -n1 || true)"
+if [[ -n "$_n2n_x64" && -n "$_n2n_arm64" && -n "$_n2n_src" ]]; then
+  for _f in "$_n2n_x64" "$_n2n_arm64" "$_n2n_src"; do cp "$_f" "${OUTPUT_DIR}/"; done
+  N2N_X64_NAME="$(basename "$_n2n_x64")"
+  N2N_ARM64_NAME="$(basename "$_n2n_arm64")"
+  N2N_SRC_NAME="$(basename "$_n2n_src")"
+  echo "==> n2n edge: ${N2N_X64_NAME}, ${N2N_ARM64_NAME}, ${N2N_SRC_NAME}"
+elif [[ -n "$_n2n_x64$_n2n_arm64$_n2n_src" ]]; then
+  echo "WARNING: native/dist has only part of the n2n downloads -- none published" >&2
+fi
 # The guided Raspberry Pi installer (native/pi/, docs/pi-setup-implementace.md):
 # `curl -fsSL .../pi-setup | bash` downloads the newest arm64 archive from this
 # very page, checks it against SHA256SUMS and runs the pi-setup.sh inside it.
@@ -1440,6 +1457,37 @@ $(if [[ -n "$DESKTOP_WIN_NAME" ]]; then cat <<WINDOWS
       </details>
 WINDOWS
 fi)
+$(if [[ -n "$N2N_SRC_NAME" ]]; then cat <<N2NPANEL
+      <details class="platform" id="n2n">
+        <summary>
+          <span class="platform-name">Remote access client (n2n)</span>
+          <span class="platform-sub">a laptop without WIFILT &bull; Linux &bull; tar.gz</span>
+        </summary>
+        <div class="platform-body">
+          <p class="dl-line">
+            <a href="${N2N_X64_NAME}"><strong>${N2N_X64_NAME}</strong></a> &nbsp;&bull;&nbsp; Linux x86-64<br>
+            <a href="${N2N_ARM64_NAME}"><strong>${N2N_ARM64_NAME}</strong></a> &nbsp;&bull;&nbsp; Linux ARM64<br>
+            <a href="${N2N_SRC_NAME}">${N2N_SRC_NAME}</a> &nbsp;&bull;&nbsp; its source (GPL-3.0)$(if [[ -n "$DESKTOP_SUMS_NAME" ]]; then echo "
+            &nbsp;&bull;&nbsp; <a href=\"${DESKTOP_SUMS_NAME}\">SHA256SUMS</a>"; fi)
+          </p>
+          <p class="muted">
+            The n2n&nbsp;3 edge that WIFILT's remote access runs, for a computer that should reach the
+            station over the internet without running WIFILT itself. The Linux and Raspberry&nbsp;Pi
+            downloads above already carry it. Needs glibc&nbsp;2.34 or newer (Debian&nbsp;12,
+            Ubuntu&nbsp;22.04 and later).
+          </p>
+          <pre><code>tar xzf ${N2N_X64_NAME}
+sudo install -m 0755 ${N2N_X64_NAME%.tar.gz}/edge /usr/local/sbin/edge
+sudo N2N_KEY=&lt;key&gt; /usr/local/sbin/edge -d wlvpn0 -c &lt;community&gt; -l remoteqth.com:82 -A4 -I LAPTOP -f</code></pre>
+          <p class="muted">
+            The community and the key are in the station's SETUP &rarr; Remote access &rarr;
+            <em>Advanced</em>. The station is then at its VPN address &mdash; see
+            <a href="https://github.com/ok1hra/wifilt/blob/main/SOFTWARE.md#19-remote-access-over-the-internet-pc-and-raspberry-pi" target="_blank" rel="noopener">SOFTWARE.md&nbsp;&sect;&nbsp;1.9</a>.
+          </p>
+        </div>
+      </details>
+N2NPANEL
+fi)
 
       <hr class="divider">
 
@@ -1595,6 +1643,15 @@ fi)
       Array.prototype.forEach.call(document.querySelectorAll('[id^="choiceNew-"]'), function (el) {
         wireFlashGate(el.id.slice("choiceNew-".length));
       });
+
+      // A link to one platform (.../#n2n from SOFTWARE.md, #raspberrypi) opens
+      // its panel; otherwise it would only scroll to a folded heading.
+      function openFromHash() {
+        var el = location.hash ? document.getElementById(location.hash.slice(1)) : null;
+        if (el && el.tagName === "DETAILS") { el.open = true; el.scrollIntoView(); }
+      }
+      window.addEventListener("hashchange", openFromHash);
+      openFromHash();
     }());
   </script>
 </body>
@@ -1669,7 +1726,7 @@ done
 # in it never reaches the branch -- which is how the download links 404'd while
 # the files sat happily in build/gh-pages.
 for optional_file in "$DESKTOP_LINUX_NAME" "$DESKTOP_WIN_NAME" "$DESKTOP_ARM64_NAME" "$DESKTOP_SUMS_NAME" \
-                     "$DESKTOP_LATEST_NAME"; do
+                     "$DESKTOP_LATEST_NAME" "$N2N_X64_NAME" "$N2N_ARM64_NAME" "$N2N_SRC_NAME"; do
   [[ -n "$optional_file" ]] || continue
   require_file "${OUTPUT_DIR}/${optional_file}" "desktop artifact ${optional_file}"
   cp "${OUTPUT_DIR}/${optional_file}" "$TMP_DIR/${optional_file}"

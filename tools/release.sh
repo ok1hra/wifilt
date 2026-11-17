@@ -766,11 +766,32 @@ build_oi3_hex() {
   return 0
 }
 
+# build_n2n_dist  -- native/dist-n2n for the Linux archives (once per run): the
+# n2n edge of remote access, x86_64 + arm64 (native/vpn/build-n2n-dist.sh,
+# kept while the tag/commit/build stays the same). Not fatal: the archives
+# then carry no n2n/ -- a station keeps the n2n it has, and SETUP -> INSTALL
+# n2n builds one from source.
+N2N_DIST_DONE=false
+build_n2n_dist() {
+  $N2N_DIST_DONE && return 0
+  N2N_DIST_DONE=true
+  local out="${ROOT_DIR}/native/dist-n2n" log="${ROOT_DIR}/native/dist-n2n.log"
+  if "${ROOT_DIR}/native/vpn/build-n2n-dist.sh" "$out" >"$log" 2>&1; then
+    info "  $(tail -n1 "$log" | sed "s#${ROOT_DIR}/##") -> n2n/ v linuxových balíčcích"
+    rm -f "$log"
+  else
+    rm -rf "$out"
+    warn "  build n2n selhal (viz $log) -- linuxové balíčky bez n2n"
+  fi
+  return 0
+}
+
 # dist_build DIR [MAKE-VARIABLE...]  -- the archives of REV into DIR: stale
 # revisions out, make, local-trx in (when wanted), SHA256SUMS last.
 dist_build() {
   local dir="$1"; shift
   build_oi3_hex
+  build_n2n_dist
   # Archives of other revisions go before make runs: SHA256SUMS would otherwise
   # describe releases that are not published. native/dist* is in .gitignore.
   if [[ -d "$dir" ]]; then
