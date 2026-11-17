@@ -35,6 +35,9 @@ published.
   WIFILT's responder answers on the LAN only), so the manual suggests a line in `/etc/hosts`
   with the station's home name: the same origin then gives the same QSO log at home and away.
   § 1.7 and § 9.12 and the texts in SETUP and `pi-setup` say "installs", not "builds".
+* SETUP → Remote access links its first paragraph, *How to connect, step by step ↗*, to
+  SOFTWARE.md § 1.9. Under **Advanced** it links the n2n edge on the download page (`#n2n`) and
+  the manual.
 * Tested:
   * `tools/vpn-n2n-install-check.sh`: 27 checks.
   * The real `install.sh` from a built archive, in a namespace sandbox: edge missing, good,

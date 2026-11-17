@@ -17,6 +17,8 @@
   var POLL_CLOSED_MS = 15000;
 
   var st = null;            // last /vpn/status
+  // The manual on GitHub follows main, i.e. describes the newest version.
+  var MANUAL = 'https://github.com/ok1hra/wifilt/blob/main/SOFTWARE.md#19-remote-access-over-the-internet-pc-and-raspberry-pi';
   var codeInfo = null;      // /vpn/code once revealed
   var pollTimer = null;
   var actionBusy = false;
@@ -32,7 +34,8 @@
       '<p class="setup-hint">Reach this station from anywhere over the internet, even when it has no public IP ' +
         'address: an encrypted n2n VPN through the supernode on remoteqth.com. Another computer running wifilt ' +
         '(Linux) joins with the same pairing code and opens this station by its VPN address. The supernode only ' +
-        'passes the traffic on; the key that encrypts it is known only to your devices.</p>' +
+        'passes the traffic on; the key that encrypts it is known only to your devices. ' +
+        '<a href="' + MANUAL + '" target="_blank" rel="noopener">How to connect, step by step &#8599;</a></p>' +
       '<p class="setup-note" id="vpnManual" hidden></p>' +
       '<div id="vpnInstall" hidden>' +
         '<p class="setup-note" id="vpnInstallText"></p>' +
@@ -90,7 +93,10 @@
                 'Empty = remoteqth.com:82.">?</span>' +
             '</div>' +
           '</label>' +
-          '<p class="setup-hint">For another n2n 3 client (hin2n on Android, an edge on any computer) -- shown with the code:</p>' +
+          '<p class="setup-hint">For another n2n 3 client (hin2n on Android, an edge on any computer) -- shown with the code. ' +
+            'The edge for a Linux computer without wifilt is on the ' +
+            '<a href="https://ok1hra.github.io/wifilt/#n2n" target="_blank" rel="noopener">download page &#8599;</a>, ' +
+            'the steps in the <a href="' + MANUAL + '" target="_blank" rel="noopener">manual &#8599;</a>.</p>' +
           '<dl class="unattended-grid" id="vpnClientGrid"></dl>' +
         '</details>' +
         '<div class="unattended-actions"><button type="button" id="vpnLeaveBtn">LEAVE NETWORK</button></div>' +

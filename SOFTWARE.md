@@ -4725,6 +4725,8 @@ browsers never disagree.
 
 The section title carries the state: **NOT INSTALLED**, **NOT PAIRED**, **OFF**, **n2n MISSING**,
 **STARTING**, **CONNECTING**, **CONNECTED · 2 devices**, **SUPERNODE LOST** or **ERROR**.
+The first paragraph links *How to connect, step by step* to section 1.9 of this manual; under
+**Advanced** a link leads to the n2n edge for a computer without WIFILT on the download page.
 
 | Control | Action |
 |---|---|
