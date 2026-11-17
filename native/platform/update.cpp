@@ -125,9 +125,20 @@ std::string writeAtomic(const std::string &path, const std::string &body) {
   return "";
 }
 
-// The state word and timestamp of status.json, for the double-start guard.
-void statusStateTs(std::string *state, long *ts) {
-  std::string s = readFile(std::string(kStateDir) + "/status.json");
+// When this machine booted, in Unix seconds (0 if unknown): now minus uptime,
+// so it follows the clock when NTP corrects it after a boot.
+long long bootTime() {
+#ifdef _WIN32
+  return 0;
+#else
+  std::string up = readFile("/proc/uptime", 256);
+  if (up.empty()) return 0;
+  return (long long)time(nullptr) - (long long)atof(up.c_str());
+#endif
+}
+
+// The state word and timestamp of a status.json body.
+void parseStateTs(const std::string &s, std::string *state, long *ts) {
   *state = ""; *ts = 0;
   size_t k = s.find("\"state\":\"");
   if (k != std::string::npos) {
@@ -136,6 +147,11 @@ void statusStateTs(std::string *state, long *ts) {
   }
   size_t t = s.find("\"ts\":");
   if (t != std::string::npos) *ts = atol(s.c_str() + t + 5);
+}
+
+// The same for the status the page sees, for the double-start guard.
+void statusStateTs(std::string *state, long *ts) {
+  parseStateTs(nativeUpdateStatusJson(), state, ts);
 }
 
 std::string makeId() {
@@ -181,16 +197,36 @@ std::string nativeUpdateStatusJson() {
   std::string s = readFile(std::string(kStateDir) + "/status.json");
   if (!looksLikeObject(s)) return "{\"state\":\"idle\"}";
   s = trim(s);
-  // Locked Pi: the updater's last word before "fslock lock" reboots the machine
-  // is phase "relock", state "offline". Back up and locked again, that run is
-  // over -- finished, or failed with the old version restored (error set).
-  if (s.find("\"phase\":\"relock\"") != std::string::npos && rootIsOverlay()) {
-    const std::string from = "\"state\":\"offline\"";
+  std::string state; long ts = 0;
+  parseStateTs(s, &state, &ts);
+  if (state != "running" && state != "offline") return s;
+  auto setState = [&s, &state](const char *to, const char *why) {
+    const std::string from = "\"state\":\"" + state + "\"";
     size_t k = s.find(from);
-    if (k != std::string::npos) {
+    if (k != std::string::npos) s.replace(k, from.size(), std::string("\"state\":\"") + to + "\"");
+    const std::string noErr = "\"error\":\"\"";
+    k = s.find(noErr);
+    if (why && k != std::string::npos) s.replace(k, noErr.size(), std::string("\"error\":\"") + why + "\"");
+  };
+  long long boot = bootTime();
+  bool rebooted = boot > 0 && ts > 0 && ts < boot;
+  if (s.find("\"phase\":\"relock\"") != std::string::npos) {
+    // The updater's last word before "fslock lock" reboots the machine. Back
+    // up -- locked again, or unlocked later by hand (2026-11-17: the topbar
+    // said "UPDATING 85 %" for days) -- that run is over: finished, or failed
+    // with the old version restored (error set).
+    if (rootIsOverlay() || rebooted) {
       bool failed = s.find("\"error\":\"\"") == std::string::npos;
-      s.replace(k, from.size(), failed ? "\"state\":\"failed\"" : "\"state\":\"done\"");
+      setState(failed ? "failed" : "done", nullptr);
     }
+  } else if (rebooted && (long long)time(nullptr) - boot > 900) {
+    // No other run outlives a reboot; after "unlock" wifilt-update-resume
+    // takes over within a minute. Not sooner than 15 min after the boot: a Pi
+    // without RTC writes status with its stale clock until NTP moves it hours
+    // ahead (2026-11-13), which would make a live run look older than the boot.
+    bool unlock = s.find("\"phase\":\"unlock\"") != std::string::npos;
+    setState("failed", unlock ? "the update did not continue after the reboot"
+                              : "the machine restarted during the update");
   }
   return s;
 }
