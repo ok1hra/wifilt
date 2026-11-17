@@ -353,4 +353,67 @@ bool HamlibRigBackend::prepareDataInput() {
   return true;
 }
 
+bool parseKenwoodExReply(const std::string &reply, int number, int *valueOut) {
+  if (number < 0 || number > 999) return false;
+  char prefix[16];
+  std::snprintf(prefix, sizeof(prefix), "EX%03d0000", number);
+  const size_t at = std::strlen(prefix);
+  if (reply.size() <= at || reply.compare(0, at, prefix) != 0) return false;
+  size_t end = reply.size();
+  if (reply[end - 1] == ';') end--;
+  if (end == at || end - at > 4) return false;
+  int value = 0;
+  for (size_t i = at; i < end; i++) {
+    if (reply[i] < '0' || reply[i] > '9') return false;
+    value = value * 10 + (reply[i] - '0');
+  }
+  *valueOut = value;
+  return true;
+}
+
+// hamlib exposes no TS-480 FSK menu item (its ts480_ext_levels stop at the
+// DSP/data-audio ones), so the menu is read with the rig's own EX command,
+// the exact request hamlib's private ts480_get_ex_menu() sends. rig_send_raw()
+// goes through hamlib's port, so it cannot collide with a transaction of its
+// own -- and only CachedRigBackend's worker ever calls this.
+bool HamlibRigBackend::readKenwoodExMenu(int number, int *valueOut) {
+  char request[16];
+  const int length = std::snprintf(request, sizeof(request), "EX%03d0000;", number);
+  unsigned char reply[64] = {0};
+  unsigned char terminator = ';';
+  const int got = rig_send_raw(rig_, reinterpret_cast<const unsigned char *>(request), length,
+                               reply, (int)sizeof(reply), &terminator);
+  if (got < 0) {
+    lastError_ = std::string("menu ") + std::to_string(number) + " read: " + rigerror2(got);
+    return false;
+  }
+  const std::string text(reinterpret_cast<const char *>(reply), (size_t)got);
+  if (!parseKenwoodExReply(text, number, valueOut)) {
+    lastError_ = "menu " + std::to_string(number) + " read: unexpected reply \"" + text + "\"";
+    return false;
+  }
+  return true;
+}
+
+// Per rig, because every Kenwood numbers its menu differently. TS-480 menu 43
+// "FSK TONE FREQUENCY": 0 = 1275 Hz, 1 = 2125 Hz (the menu table the panel
+// firmware draws, local-trx/webui/ts480/lcd.js, whose index is the EX number:
+// hamlib's own menu 17/18/19/34/45/60 reads line up with it). A rig not
+// listed here answers None, and wifilt keeps its stored "FSK mark frequency".
+MenuRead HamlibRigBackend::getFskMarkHz(uint16_t *hzOut) {
+  // Cleared first: an unlisted rig's None is not a failure, and must not be
+  // logged as whatever the last frequency read happened to complain about.
+  lastError_.clear();
+  if (!rig_ || rigModel_ != RIG_MODEL_TS480) return MenuRead::None;
+  int value = -1;
+  if (!readKenwoodExMenu(43, &value)) return MenuRead::None;
+  if (value == 0) *hzOut = 1275;
+  else if (value == 1) *hzOut = 2125;
+  else {
+    lastError_ = "menu 43 read: FSK tone index " + std::to_string(value) + " is not 1275/2125";
+    return MenuRead::None;
+  }
+  return MenuRead::Ok;
+}
+
 }  // namespace LocalTrx

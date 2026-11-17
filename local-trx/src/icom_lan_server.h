@@ -124,6 +124,8 @@ class CivChannel : public Channel {
   void handle(const uint8_t *data, size_t len) override;
   void sendCiv(const std::vector<uint8_t> &frame);
   void onCivFrame(const std::vector<uint8_t> &frame);
+  void sendReply(uint8_t to, const std::vector<uint8_t> &payload);
+  void retryPendingRead(uint32_t nowMs);
 
   uint8_t civAddr_;
   RigBackend &rig_;
@@ -131,6 +133,16 @@ class CivChannel : public Channel {
   ModLevelBackend *modLevel_ = nullptr;
   uint16_t seqB_ = 0;
   bool opened_ = false;
+
+  // One read the backend is still fetching (CivResult::pending), dispatched
+  // again every tick until it answers or kPendingReadMaxMs runs out. One
+  // slot, newest wins: wifilt has a single civ.read slot of its own, so an
+  // older question nobody is waiting for any more is not worth keeping.
+  bool pendingRead_ = false;
+  bool pendingClockStarted_ = false;
+  std::vector<uint8_t> pendingCmd_;
+  uint8_t pendingSender_ = 0;
+  uint32_t pendingSinceMs_ = 0;
 
   uint32_t nextBroadcastPollMs_ = 0;
   bool haveLastBroadcast_ = false;

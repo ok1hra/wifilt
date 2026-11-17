@@ -273,9 +273,34 @@ CivResult dispatchCiv(const std::vector<uint8_t> &frame, RigBackend &rig, Keying
       r.payload.push_back(keying->getAudioPtt() ? 0x01 : 0x00);
       return r;
     }
-    case 0x1A: {   // settings: ONLY 05 99 99, local-trx's own MOD level (tx_level.h)
-      // A subaddress no ICOM has -- data/icom-models.js LOCAL_TRX_MOD_CMD is
+    case 0x1A: {   // settings: ONLY local-trx's own 05 99 xx subaddresses
+      // Subaddresses no ICOM has -- data/icom-models.js LOCAL_TRX_*_CMD is
       // the other end. Every real 1A 05 setting stays unanswered (category c).
+      if (bodyLen >= 3 && body[0] == 0x05 && body[1] == 0x99 && body[2] == 0x98) {
+        // 05 99 98: the rig's FSK mark tone. Read only -- a body with a value
+        // would be a write to the rig's menu, which local-trx never does.
+        if (bodyLen != 3) return noReply();
+        uint16_t hz = 0;
+        switch (rig.getFskMarkHz(&hz)) {
+          case MenuRead::Pending: {
+            CivResult r;
+            r.pending = true;
+            return r;
+          }
+          case MenuRead::None: return noReply();
+          case MenuRead::Ok: break;
+        }
+        uint8_t code;
+        if (hz == 1275) code = 0x00;
+        else if (hz == 1615) code = 0x01;
+        else if (hz == 2125) code = 0x02;
+        else return noReply();   // a tone Icom's byte cannot name: no guess
+        CivResult r;
+        r.answered = true;
+        r.payload = {0x1A, 0x05, 0x99, 0x98, code};
+        return r;
+      }
+      // 05 99 99: local-trx's own MOD level (tx_level.h).
       if (!modLevel || bodyLen < 3 || body[0] != 0x05 || body[1] != 0x99 || body[2] != 0x99)
         return noReply();
       if (bodyLen >= 5) {   // write: 2-byte BCD 0000-0255, the 14 0A encoding

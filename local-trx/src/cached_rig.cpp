@@ -69,7 +69,7 @@ void CachedRigBackend::workerMain() {
     step();
     std::unique_lock<std::mutex> lock(mutex_);
     wake_.wait_for(lock, std::chrono::milliseconds(10), [this] {
-      if (stopRequested_ || pendingPtt_ || pendingFreq_ || pendingMode_) return true;
+      if (stopRequested_ || pendingPtt_ || pendingFreq_ || pendingMode_ || fskMarkAsked_) return true;
       for (const SlowItem &s : slow_) {
         if (s.pendingWrite) return true;
       }
@@ -85,6 +85,7 @@ void CachedRigBackend::step() {
   maybeReopen(now);
   flushPtt(now);
   flushWrites();
+  flushMenuRead();
   if (innerOpen_) {
     pollFast(now);
     pollSlow(now);
@@ -194,6 +195,30 @@ void CachedRigBackend::flushWrites() {
     }
     if (!ok) logLimited("set_level", "CAT: level write failed: " + inner_.lastError(), now);
   }
+}
+
+void CachedRigBackend::flushMenuRead() {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!fskMarkAsked_) return;
+  }
+  // A closed rig is an answer too ("none"), and an immediate one: the asker
+  // gives up after a couple of seconds anyway, and would otherwise spend
+  // them waiting on a read that is never going to be tried. A backend whose
+  // rig has no such menu item answers None with an empty lastError(), which
+  // is not worth a log line.
+  uint16_t hz = 0;
+  const bool ok = innerOpen_ && inner_.getFskMarkHz(&hz) == MenuRead::Ok;
+  if (!ok && innerOpen_) {
+    const std::string why = inner_.lastError();
+    if (!why.empty()) logLimited("fsk_mark", "CAT: FSK tone not read from the rig's menu: " + why, clock_());
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  fskMarkAsked_ = false;
+  fskMarkDone_ = true;
+  fskMarkOk_ = ok;
+  fskMarkHz_ = hz;
+  fskMarkAtMs_ = clock_();   // fresh from when it landed, not from when it was asked
 }
 
 bool CachedRigBackend::acceptFreqRead(double hz, double *discardedOut) {
@@ -479,6 +504,22 @@ bool CachedRigBackend::setPtt(bool on, bool dataInput) {
   }
   wake_.notify_one();
   return true;
+}
+
+MenuRead CachedRigBackend::getFskMarkHz(uint16_t *hzOut) {
+  const uint32_t now = clock_();
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (fskMarkDone_ && now - fskMarkAtMs_ < kMenuFreshMs) {
+      if (!fskMarkOk_) return MenuRead::None;
+      *hzOut = fskMarkHz_;
+      return MenuRead::Ok;
+    }
+    if (fskMarkAsked_) return MenuRead::Pending;   // already queued, still on its way
+    fskMarkAsked_ = true;
+  }
+  wake_.notify_one();
+  return MenuRead::Pending;
 }
 
 bool CachedRigBackend::getAttenuatorOn(bool *onOut) {

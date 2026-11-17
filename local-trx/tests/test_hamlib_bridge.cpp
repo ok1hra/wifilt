@@ -39,6 +39,37 @@ TEST_CASE("DATA modes: hamlib's PKT* modes are ICOM's mode byte + DATA flag, bot
   }
 }
 
+TEST_CASE("parseKenwoodExReply: the TS-480 EX menu reply, the layout hamlib's own reader uses") {
+  int v = -1;
+  CHECK(parseKenwoodExReply("EX04300001;", 43, &v));
+  CHECK(v == 1);
+  CHECK(parseKenwoodExReply("EX04300000;", 43, &v));
+  CHECK(v == 0);
+  CHECK(parseKenwoodExReply("EX04300001", 43, &v));    // terminator already stripped
+  CHECK(v == 1);
+  CHECK(parseKenwoodExReply("EX034000005;", 34, &v));  // two-digit value (CW pitch)
+  CHECK(v == 5);
+}
+
+TEST_CASE("parseKenwoodExReply refuses anything that is not this menu item's value") {
+  int v = 7;
+  CHECK_FALSE(parseKenwoodExReply("EX04200001;", 43, &v));   // another menu item's answer
+  CHECK_FALSE(parseKenwoodExReply("?;", 43, &v));            // rig busy / rejected
+  CHECK_FALSE(parseKenwoodExReply("EX0430000;", 43, &v));    // the request echoed back, no value
+  CHECK_FALSE(parseKenwoodExReply("EX0430000X;", 43, &v));   // garbled
+  CHECK_FALSE(parseKenwoodExReply("", 43, &v));
+  CHECK(v == 7);   // untouched on every refusal
+}
+
+TEST_CASE("HamlibRigBackend::getFskMarkHz: a rig with no known FSK menu item answers none, no CAT") {
+  HamlibRigBackend rig(RIG_MODEL_DUMMY, "", 0);
+  std::string error;
+  REQUIRE(rig.open(&error));
+  uint16_t hz = 0;
+  CHECK(rig.getFskMarkHz(&hz) == MenuRead::None);
+  CHECK(rig.lastError().empty());   // not a failure, nothing for the log
+}
+
 TEST_CASE("civModeToHamlib on an unmapped byte returns RIG_MODE_NONE, never a guess") {
   CHECK(civModeToHamlib(0xFF) == RIG_MODE_NONE);
   CHECK(civModeToHamlib(0x03, true) == RIG_MODE_NONE);   // there is no CW-D

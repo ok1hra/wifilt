@@ -21,7 +21,9 @@
 //     re-enumerated) or that was absent at startup is reopened periodically,
 //   - PTT (keying.pttBackend "cat") jumps the queue, and a failed release is
 //     retried until the rig takes it -- through a reopen if need be -- since
-//     a CAT transmit, unlike a DTR/RTS line, does not end by itself.
+//     a CAT transmit, unlike a DTR/RTS line, does not end by itself,
+//   - menu items (the FSK mark tone) are not polled at all: an ask answers
+//     Pending and queues one read, which the asker picks up on a retry.
 //
 // Only the worker thread ever touches `inner` after start().
 #pragma once
@@ -59,6 +61,11 @@ class CachedRigBackend : public RigBackend {
   static constexpr int      kNotLiveAfterFailures = 3;   // live() turns false
   static constexpr uint32_t kReopenRetryMs = 5000;
   static constexpr uint32_t kPttOffRetryMs = 200;
+  // A menu read (getFskMarkHz) is reused for this long after it completed --
+  // long enough for the CI-V retry that asked for it to pick it up, short
+  // enough that the next ask (a mode change into FSK, a palette opening)
+  // reads the rig afresh rather than whatever the menu said minutes ago.
+  static constexpr uint32_t kMenuFreshMs = 1000;
 
   // innerOpen: whether `inner` is usable right now. false (rig absent at
   // startup) makes the worker keep calling inner.reopen() every
@@ -98,6 +105,9 @@ class CachedRigBackend : public RigBackend {
   // Queued like every write, but flushed first. true = queued, not keyed:
   // a refusal shows up in the log, as with any other write.
   bool setPtt(bool on, bool dataInput) override;
+  // Never polled: the first ask answers Pending and queues one read on the
+  // worker; asks within kMenuFreshMs of its completion get its outcome.
+  MenuRead getFskMarkHz(uint16_t *hzOut) override;
 
  private:
   enum Slow { kAf, kRf, kRfPower, kRit, kPowerMeter, kSwr, kSupply, kAlc, kAtt, kVox, kSlowCount };
@@ -128,6 +138,7 @@ class CachedRigBackend : public RigBackend {
   void pollSlow(uint32_t now);
   void flushPtt(uint32_t now);
   void flushWrites();
+  void flushMenuRead();
   void maybeReopen(uint32_t now);
   bool acceptFreqRead(double hz, double *discardedOut);
   void logLimited(const std::string &key, const std::string &message, uint32_t now);
@@ -162,6 +173,12 @@ class CachedRigBackend : public RigBackend {
   bool pendingPtt_ = false;
   bool pendingPttOn_ = false;
   bool pendingPttData_ = false;
+
+  bool fskMarkAsked_ = false;      // a caller waits for a fresh menu read
+  bool fskMarkDone_ = false;       // a read completed; the three below describe it
+  bool fskMarkOk_ = false;
+  uint16_t fskMarkHz_ = 0;
+  uint32_t fskMarkAtMs_ = 0;
   // ---- end guarded ----
 
   // Worker-thread-only state.

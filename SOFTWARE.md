@@ -1378,8 +1378,8 @@ set for `USB-D` audio is not used there and does not need to be. The title bar s
 it settled on — `RTTY 2125`. A **`?`** after that number means it could not be read from the
 radio and the **FSK mark frequency** setting on the full RTTY-ICOM page was used instead: that
 happens on models whose address is not verified (everything except the IC-705 and IC-7610
-today) and when the radio does not answer in time. Nothing is ever written to the radio's menu
-— the reading is one-way.
+today, plus a Kenwood TS-480 behind local-trx) and when the radio does not answer in time.
+Nothing is ever written to the radio's menu — the reading is one-way.
 
 **Squelch is always off in the palette**, whatever the full page is set to, so a level dialled
 in there can never quietly swallow a weak caller here. A pause long enough to leave a whole
@@ -3672,6 +3672,14 @@ modem does not, and the two disagree. Confirmed on the air on both 80 m and 20 m
 answering *Reverse* is that finding inverted, so REVERSE stays off; the tones themselves never
 move either way. It is re-derived only when the radio enters or leaves real FSK, so a manual
 override you set for one contact survives a link blip.
+
+**Behind local-trx** (SETUP → **LOCAL-TRX** ticked on the LAN connection) the model name says
+nothing about the radio's menu, so the page asks local-trx instead, and local-trx reads the
+mark from the radio's own menu. Today it can do that for the **Kenwood TS-480**: menu 43
+*FSK TONE FREQUENCY* (1275 / 2125 Hz). Polarity is not read on that route. The TS-480's
+*FSK KEY-DOWN POLARITY* only changes how the radio keys its own transmitter, not which
+received tone is mark, so REVERSE stays on as above. The decoder works with a 170 Hz shift
+only, so leave the TS-480's menu 41 *FSK SHIFT* on 170.
 
 Every step of this fails silently: an unverified model, a read that times out, an answer that
 makes no sense — the sync is simply skipped and the settings stand as they are.

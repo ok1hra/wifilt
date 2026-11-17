@@ -82,6 +82,15 @@ class FakeRig : public RigBackend {
     *onOut = voxOn_;
     return true;
   }
+  MenuRead getFskMarkHz(uint16_t *hzOut) override {
+    fskMarkAsks++;
+    if (fskMarkState == MenuRead::Ok) *hzOut = fskMarkHz_;
+    return fskMarkState;
+  }
+
+  MenuRead fskMarkState = MenuRead::Ok;
+  uint16_t fskMarkHz_ = 2125;
+  int fskMarkAsks = 0;
 
   bool readsOk = true;   // false = every CAT read fails (timeout / garbled reply)
   double freqHz_ = 7035920;
@@ -382,6 +391,50 @@ TEST_CASE("dispatchCiv never answers unmapped commands (category c, no blanket a
   CHECK_FALSE(dispatchCiv({0x27, 0x00}, rig).answered);  // waterfall/scope
   CHECK_FALSE(dispatchCiv({0x1A, 0x05}, rig).answered);  // MOD-level calibration
   CHECK_FALSE(dispatchCiv({}, rig).answered);            // empty frame
+}
+
+TEST_CASE("dispatchCiv 1A 05 99 98: the rig's FSK mark tone as Icom's RTTY Mark Frequency byte") {
+  FakeRig rig;
+  const std::vector<uint8_t> ask = {0x1A, 0x05, 0x99, 0x98};
+  rig.fskMarkHz_ = 2125;
+  CivResult r = dispatchCiv(ask, rig);
+  REQUIRE(r.answered);
+  CHECK_FALSE(r.pending);
+  CHECK(r.payload == std::vector<uint8_t>{0x1A, 0x05, 0x99, 0x98, 0x02});
+  rig.fskMarkHz_ = 1275;
+  CHECK(dispatchCiv(ask, rig).payload == std::vector<uint8_t>{0x1A, 0x05, 0x99, 0x98, 0x00});
+  rig.fskMarkHz_ = 1615;
+  CHECK(dispatchCiv(ask, rig).payload == std::vector<uint8_t>{0x1A, 0x05, 0x99, 0x98, 0x01});
+}
+
+TEST_CASE("dispatchCiv 1A 05 99 98: pending while the backend fetches it, silent when it cannot") {
+  FakeRig rig;
+  const std::vector<uint8_t> ask = {0x1A, 0x05, 0x99, 0x98};
+  rig.fskMarkState = MenuRead::Pending;
+  CivResult r = dispatchCiv(ask, rig);
+  CHECK(r.pending);
+  CHECK_FALSE(r.answered);
+  rig.fskMarkState = MenuRead::None;
+  r = dispatchCiv(ask, rig);
+  CHECK_FALSE(r.pending);
+  CHECK_FALSE(r.answered);
+  // A tone Icom's byte has no code for is not rounded to the nearest one.
+  rig.fskMarkState = MenuRead::Ok;
+  rig.fskMarkHz_ = 1700;
+  CHECK_FALSE(dispatchCiv(ask, rig).answered);
+}
+
+TEST_CASE("dispatchCiv 1A 05 99 98 is read-only: a value byte never reaches the rig") {
+  FakeRig rig;
+  CivResult r = dispatchCiv({0x1A, 0x05, 0x99, 0x98, 0x00}, rig);
+  CHECK_FALSE(r.answered);
+  CHECK_FALSE(r.pending);
+  CHECK(rig.fskMarkAsks == 0);
+  // And the real Icom RTTY addresses stay unanswered: a real radio's menu is
+  // not local-trx's to impersonate.
+  CHECK_FALSE(dispatchCiv({0x1A, 0x05, 0x00, 0x50}, rig).answered);
+  CHECK_FALSE(dispatchCiv({0x1A, 0x05, 0x00, 0x41}, rig).answered);
+  CHECK(rig.fskMarkAsks == 0);
 }
 
 TEST_CASE("dispatchCiv 0x17 CW message routes to the keying backend, never hamlib") {

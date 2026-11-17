@@ -355,15 +355,25 @@ void CivChannel::onCivFrame(const std::vector<uint8_t> &frame) {
   // civ_router.h's convention: cmd byte + body, no FE FE/addr, no trailing FD.
   std::vector<uint8_t> cmdAndBody(frame.begin() + 4, frame.end() - 1);
   CivResult result = dispatchCiv(cmdAndBody, rig_, keying_, modLevel_);
+  if (result.pending) {
+    pendingRead_ = true;
+    pendingClockStarted_ = false;   // the next tick() starts its clock
+    pendingCmd_ = std::move(cmdAndBody);
+    pendingSender_ = sender;
+    return;
+  }
   if (!result.answered) return;   // category (c): no reply, not a blanket ack
+  sendReply(sender, result.payload);
+}
 
+void CivChannel::sendReply(uint8_t to, const std::vector<uint8_t> &payload) {
   std::vector<uint8_t> replyFrame;
-  replyFrame.reserve(5 + result.payload.size());
+  replyFrame.reserve(5 + payload.size());
   replyFrame.push_back(0xFE);
   replyFrame.push_back(0xFE);
-  replyFrame.push_back(sender);
+  replyFrame.push_back(to);
   replyFrame.push_back(civAddr_);
-  replyFrame.insert(replyFrame.end(), result.payload.begin(), result.payload.end());
+  replyFrame.insert(replyFrame.end(), payload.begin(), payload.end());
   replyFrame.push_back(0xFD);
   sendCiv(replyFrame);
 }
@@ -373,10 +383,34 @@ constexpr uint32_t kCivBroadcastPollMs = 300;   // bod 11(d)'s own suggested 200
 constexpr uint8_t kCivBroadcastAddress = 0x00;  // BROADCAST_ADDRESS, wifilt.ino:221 --
                                                  // an unsolicited push has no specific
                                                  // sender to echo back to like a reply does
+// Inside wifilt's civ.read window (2.5 s, data/tx-gain-mod-level.js
+// READ_TIMEOUT_MS) with room for the trip back: a reply sent later than that
+// lands on nobody.
+constexpr uint32_t kPendingReadMaxMs = 2000;
 }  // namespace
+
+void CivChannel::retryPendingRead(uint32_t nowMs) {
+  if (!pendingRead_) return;
+  if (!pendingClockStarted_) {
+    pendingClockStarted_ = true;
+    pendingSinceMs_ = nowMs;
+  }
+  if (nowMs - pendingSinceMs_ >= kPendingReadMaxMs) {
+    pendingRead_ = false;
+    vlog("-> no reply: the rig did not answer a pending read in time");
+    return;
+  }
+  // Cheap while still pending: CachedRigBackend answers it with a mutex and a
+  // flag check, the CAT read itself runs on its worker.
+  CivResult result = dispatchCiv(pendingCmd_, rig_, keying_, modLevel_);
+  if (result.pending) return;
+  pendingRead_ = false;
+  if (result.answered) sendReply(pendingSender_, result.payload);
+}
 
 void CivChannel::tick(uint32_t nowMs) {
   if (!opened_) return;   // no CI-V stream up yet -- nothing to push to
+  retryPendingRead(nowMs);
   if (nowMs < nextBroadcastPollMs_) return;
   nextBroadcastPollMs_ = nowMs + kCivBroadcastPollMs;
 

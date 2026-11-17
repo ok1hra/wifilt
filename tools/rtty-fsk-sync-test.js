@@ -47,8 +47,9 @@ function makeSync(radio, options) {
                  changes: 0, saved: []};
   state.sync = RttyFskSync.create({
     read: radio.read,
-    model: () => "IC-705",
+    model: () => opts.model || "IC-705",
     findModel: () => (opts.row === undefined ? IC705 : opts.row),
+    localTrx: () => Boolean(opts.localTrx),
     fallbackMarkHz: () => state.stored.fskMarkHz,
     onMarkRead: hz => { state.saved.push(hz); state.stored.fskMarkHz = hz; },
     onChange: () => { state.changes++; },
@@ -243,6 +244,49 @@ async function run() {
     s.sync.setReverse(false);
     check("and a real change does produce a new one",
       s.effective() !== before && s.effective().reverse === false);
+  }
+
+  // ---- local-trx: the rig's own menu, through local-trx's own subaddress --
+  // Found at a TS-480 behind local-trx 2026-11-17: its model name matches no
+  // Icom row, so nothing was read and the palette sat on the stored 2125 Hz
+  // with the rig's FSK TONE FREQUENCY on 1275.
+  {
+    const LT = require(path.join(__dirname, "..", "data", "icom-models.js")).LOCAL_TRX_RTTY_MARK_CMD;
+    check("icom-models.js exports local-trx's RTTY mark subaddress",
+      LT === "1A059998", String(LT));
+
+    const radio = fakeRadio({[LT]: "00"});
+    // Model row deliberately null and the name unmappable, like local-trx's.
+    const s = makeSync(radio, {localTrx: true, row: null, model: "local-trx"});
+    s.sync.observe("RTTY", true);
+    await sleep(20);
+    check("LOCAL-TRX reads the mark from local-trx's own subaddress",
+      radio.asked.length === 1 && radio.asked[0] === LT, JSON.stringify(radio.asked));
+    check("and the TS-480's 1275 Hz moves the decoder there",
+      s.effective().toneHz === 1275 + 85 && s.sync.fromRadio() === true,
+      `${s.effective().toneHz} / ${s.sync.fromRadio()}`);
+    check("polarity is not read, reverse stays on the RTTY default",
+      s.effective().reverse === true, String(s.effective().reverse));
+    check("the answer is persisted as the fallback, as for an Icom",
+      s.saved.length === 1 && s.saved[0] === 1275, JSON.stringify(s.saved));
+
+    // An Icom row behind local-trx must NOT steer the read to the Icom's real
+    // address: local-trx does not answer a real radio's menu.
+    const behind = fakeRadio({[LT]: "02", "1A050050": "00"});
+    const b = makeSync(behind, {localTrx: true, row: IC705});
+    b.sync.observe("RTTY", true);
+    await sleep(20);
+    check("LOCAL-TRX wins over a model row that happens to match",
+      behind.asked.length === 1 && behind.asked[0] === LT && b.sync.markHz() === 2125,
+      `${JSON.stringify(behind.asked)} / ${b.sync.markHz()}`);
+
+    // A rig local-trx has no menu entry for gets no answer: fallback, flagged.
+    const silent = makeSync(fakeRadio({}), {localTrx: true, row: null, fallbackMarkHz: 1275});
+    silent.sync.observe("RTTY", true);
+    await sleep(20);
+    check("no answer from local-trx leaves the stored fallback, marked not-from-radio",
+      silent.sync.markHz() === 1275 && silent.sync.fromRadio() === false,
+      `${silent.sync.markHz()} / ${silent.sync.fromRadio()}`);
   }
 
   let failed = 0;

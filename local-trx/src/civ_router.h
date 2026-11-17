@@ -41,6 +41,12 @@ namespace LocalTrx {
 struct CivResult {
   bool answered = false;
   std::vector<uint8_t> payload;   // starts with the (echoed) command byte
+  // Not answered YET: the backend is fetching the value (MenuRead::Pending).
+  // The transport keeps the frame and dispatches it again shortly
+  // (CivChannel::retryPendingRead()) -- wifilt's civ.read captures a matching
+  // reply whenever it arrives within its 2.5 s window, so a late answer is a
+  // perfectly good one.
+  bool pending = false;
 };
 
 // frame is cmd byte followed by its body (no FE FE/addr/FD -- see above).
@@ -52,6 +58,11 @@ struct CivResult {
 //
 // `modLevel` is nullable the same way: 1A 05 99 99 (the sound card mixer as
 // the radio's MOD level, tx_level.h) gets no reply without one.
+//
+// 1A 05 99 98 (read only) answers the rig's FSK mark tone from its own menu
+// (RigBackend::getFskMarkHz) in Icom's RTTY Mark Frequency byte, 00=1275 /
+// 01=1615 / 02=2125 -- data/icom-models.js LOCAL_TRX_RTTY_MARK_CMD is the
+// other end. It is the one read here that can come back `pending`.
 CivResult dispatchCiv(const std::vector<uint8_t> &frame, RigBackend &rig,
                       KeyingBackend *keying = nullptr, ModLevelBackend *modLevel = nullptr);
 

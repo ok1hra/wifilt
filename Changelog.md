@@ -11,6 +11,20 @@ published.
 
 ## Working tree — not committed
 
+**RTTY behind local-trx: the decoder takes the mark tone from the radio's own menu (TS-480).**
+
+* With a TS-480 behind local-trx, switching the radio to FSK left the QRPlog RTTY palette (and
+  the full RTTY page) on the stored 2125 Hz whatever menu 43 *FSK TONE FREQUENCY* said. The
+  radio's menu was read only on an IC-705 or IC-7610, and local-trx reports no Icom model.
+* local-trx answers a CI-V address of its own, `1A 05 99 98`, read only. On a TS-480 it reads
+  menu 43 through hamlib (`EX043`) and replies with the IC-705's RTTY Mark Frequency byte. With
+  LOCAL-TRX ticked, both RTTY surfaces ask that address instead of a model's. The read is not
+  polled: the first ask queues it on the CAT worker, and the CI-V reply goes out once it lands,
+  within wifilt's 2.5 s window.
+* Polarity is not read on this route (it only changes how the radio keys its own transmitter),
+  and the shift is still 170 Hz only. Any other rig behind local-trx keeps the stored FSK mark
+  frequency, as before. Not yet verified on a real TS-480.
+
 **Raspberry Pi installer: what a clean SD card showed — Wi-Fi country, access point password,
 tmux status bar; the update from the web refreshes the installer's helpers.**
 

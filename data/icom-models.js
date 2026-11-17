@@ -168,6 +168,14 @@
   // 0000..0255 as every MOD level above.
   const LOCAL_TRX_MOD_CMD = "1A059999";
 
+  // local-trx's RTTY Mark Frequency: the tone the rig's OWN menu puts mark on
+  // in FSK (a TS-480's menu 43 "FSK TONE FREQUENCY"), read through hamlib
+  // and answered in the IC-705 0050 byte (00=1275/01=1615/02=2125) by
+  // local-trx/src/civ_router.cpp. Read only -- local-trx never writes a
+  // rig's menu -- and a rig local-trx has no menu entry for gives no answer,
+  // which rtty-fsk-sync.js already treats as "use the stored fskMarkHz".
+  const LOCAL_TRX_RTTY_MARK_CMD = "1A059998";
+
   // Radios that speak CI-V but have no network control of their own. They can
   // still turn up over LAN behind a wfview or RS-BA1 server, which reports the
   // radio's real model while the network settings live on the PC -- so their
@@ -222,5 +230,6 @@
   }
 
   return {MODELS, BRIDGED_ONLY_WATTS, modelNumber, findModel, fullPowerWatts, models,
-          FORBIDDEN_WRITE_SUBADDRESSES, writableSubaddress, liveRadioModel, LOCAL_TRX_MOD_CMD};
+          FORBIDDEN_WRITE_SUBADDRESSES, writableSubaddress, liveRadioModel, LOCAL_TRX_MOD_CMD,
+          LOCAL_TRX_RTTY_MARK_CMD};
 });

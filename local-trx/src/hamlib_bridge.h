@@ -42,6 +42,7 @@ class HamlibRigBackend : public RigBackend {
   bool getAttenuatorOn(bool *onOut) override;
   bool getVoxOn(bool *onOut) override;
   bool setPtt(bool on, bool dataInput) override;
+  MenuRead getFskMarkHz(uint16_t *hzOut) override;
   bool reopen(std::string *error) override;
   std::string lastError() const override { return lastError_; }
 
@@ -49,6 +50,7 @@ class HamlibRigBackend : public RigBackend {
   void close();
   bool check(int rc, const char *what);
   bool inRigRange(double hz) const;
+  bool readKenwoodExMenu(int number, int *valueOut);
 
   rig_model_t rigModel_;
   std::string port_;
@@ -77,5 +79,11 @@ bool hamlibModeToCiv(rmode_t mode, uint8_t *civModeOut, bool *dataOut);
 // "clean". x48 makes a TS-480 (hamlib reports its RM3 meter dots / 4) read
 // dots x 12, so ten dots land on 120 -- the top of an ICOM's ALC zone.
 uint8_t alcLevelToRaw(float level);
+
+// A Kenwood TS-480 menu read's reply ("EX<nnn>0000<value>;", the layout
+// hamlib's own ts480_get_ex_menu() reads: value from offset 9) -> the value.
+// false for a reply to any other menu item, a "?;" or anything garbled.
+// Exposed for doctest.
+bool parseKenwoodExReply(const std::string &reply, int number, int *valueOut);
 
 }  // namespace LocalTrx

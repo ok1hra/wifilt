@@ -29,6 +29,15 @@ enum class GainKind { Af, Rf, RfPower };
 // grows with the drive are the whole contract. See alcLevelToRaw().
 enum class MeterKind { PowerMeter, Swr, SupplyVoltage, Alc };
 
+// The outcome of a read of the rig's own SET MENU. Unlike freq/mode/levels,
+// nothing polls these: they are read on request, one CAT round trip each, and
+// CachedRigBackend cannot block its caller for that -- it answers Pending
+// and fetches the value on its worker (civ_router.cpp then retries the CI-V
+// read, icom_lan_server.cpp CivChannel::retryPendingRead()). None = no
+// trustworthy answer: the backend has no such menu item, or the rig did not
+// answer it.
+enum class MenuRead { Ok, Pending, None };
+
 class RigBackend {
  public:
   virtual ~RigBackend() = default;
@@ -68,6 +77,17 @@ class RigBackend {
   // unsupported, same no-reply convention as getMeter().
   virtual bool getAttenuatorOn(bool *onOut) = 0;
   virtual bool getVoxOn(bool *onOut) = 0;
+
+  // The audio tone, in Hz, the rig's own menu puts MARK on in its FSK (RTTY)
+  // mode -- the TS-480's menu 43 "FSK TONE FREQUENCY" (1275/2125), the same
+  // fact an Icom keeps as "RTTY Mark Frequency". wifilt's RTTY decoder
+  // centres itself on it (data/rtty-fsk-sync.js); asked through the
+  // synthetic CI-V 1A 05 99 98 (civ_router.cpp). Read only: local-trx never
+  // writes the rig's menu. Backends with no such item keep the default.
+  virtual MenuRead getFskMarkHz(uint16_t *hzOut) {
+    (void)hzOut;
+    return MenuRead::None;
+  }
 
   // PTT as a CAT command -- keying.pttBackend "cat" only (cat_ptt.h), never
   // the default path: unlike a DTR/RTS line, which drops with the port when

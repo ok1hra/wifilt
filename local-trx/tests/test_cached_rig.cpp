@@ -80,6 +80,12 @@ class ScriptedRig : public RigBackend {
     if (!pttOk) { error = "set_ptt: Communication timed out"; return false; }
     return true;
   }
+  MenuRead getFskMarkHz(uint16_t *hz) override {
+    fskMarkReads++;
+    if (!fskMarkOk) return MenuRead::None;
+    *hz = fskMarkHz;
+    return MenuRead::Ok;
+  }
   bool reopen(std::string *err) override {
     reopens++;
     if (!reopenOk && err) *err = "port not found";
@@ -107,6 +113,9 @@ class ScriptedRig : public RigBackend {
   bool reopenOk = true;
   std::vector<std::string> pttWrites;
   bool pttOk = true;
+  bool fskMarkOk = true;
+  uint16_t fskMarkHz = 1275;
+  int fskMarkReads = 0;
   std::string error;
 };
 
@@ -473,6 +482,53 @@ TEST_CASE("CachedRig: a release queued right before stop() still reaches the rig
   cache.stop();
   REQUIRE_FALSE(inner.pttWrites.empty());
   CHECK(inner.pttWrites.back() == "off");
+}
+
+TEST_CASE("CachedRig: the FSK mark tone is read on request -- pending first, then the answer") {
+  Harness h;
+  uint16_t hz = 0;
+  CHECK(h.cache.getFskMarkHz(&hz) == MenuRead::Pending);
+  CHECK(h.cache.getFskMarkHz(&hz) == MenuRead::Pending);   // asked twice, still one read queued
+  CHECK(h.inner.fskMarkReads == 0);                         // never on the caller's thread
+  h.cache.step();
+  CHECK(h.inner.fskMarkReads == 1);
+  REQUIRE(h.cache.getFskMarkHz(&hz) == MenuRead::Ok);
+  CHECK(hz == 1275);
+  h.cache.step();
+  CHECK(h.inner.fskMarkReads == 1);                         // not polled: nobody asked again
+}
+
+TEST_CASE("CachedRig: an FSK tone answer is reused only briefly, the next ask reads the rig again") {
+  Harness h;
+  uint16_t hz = 0;
+  h.cache.getFskMarkHz(&hz);
+  h.cache.step();
+  h.inner.fskMarkHz = 2125;   // the operator changes the menu
+  h.now += CachedRigBackend::kMenuFreshMs - 1;
+  REQUIRE(h.cache.getFskMarkHz(&hz) == MenuRead::Ok);
+  CHECK(hz == 1275);          // still the read that was just made
+  h.now += 1;
+  CHECK(h.cache.getFskMarkHz(&hz) == MenuRead::Pending);
+  h.cache.step();
+  REQUIRE(h.cache.getFskMarkHz(&hz) == MenuRead::Ok);
+  CHECK(hz == 2125);
+  CHECK(h.inner.fskMarkReads == 2);
+}
+
+TEST_CASE("CachedRig: a rig with no FSK tone answers none, and a closed rig is not even asked") {
+  Harness h;
+  uint16_t hz = 0;
+  h.inner.fskMarkOk = false;
+  CHECK(h.cache.getFskMarkHz(&hz) == MenuRead::Pending);
+  h.cache.step();
+  CHECK(h.cache.getFskMarkHz(&hz) == MenuRead::None);
+
+  Harness closed(false);
+  closed.inner.reopenOk = false;
+  CHECK(closed.cache.getFskMarkHz(&hz) == MenuRead::Pending);
+  closed.cache.step();
+  CHECK(closed.cache.getFskMarkHz(&hz) == MenuRead::None);
+  CHECK(closed.inner.fskMarkReads == 0);
 }
 
 TEST_CASE("CatPttKeyLine: PTT becomes a CAT command with the configured input, the key stays on its line") {

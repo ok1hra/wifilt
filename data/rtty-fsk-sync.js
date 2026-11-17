@@ -51,8 +51,10 @@
 // radio (onMarkRead below -> settings.fskMarkHz): a successful read writes it
 // back, so the fallback used when the radio cannot be asked is the last
 // answer this operator's own radio gave rather than a guess. Only IC-705 and
-// IC-7610 carry a verified rttyMarkFreqCmd today; on every other model the
-// stored value is all there is, which is why it is an operator-facing setting.
+// IC-7610 carry a verified rttyMarkFreqCmd today, plus a rig behind local-trx
+// whose menu local-trx knows how to read (TS-480; LOCAL_TRX_RTTY_MARK_CMD);
+// on every other model the stored value is all there is, which is why it is
+// an operator-facing setting.
 // icom-models.js is resolved LAZILY, at the first read rather than at load:
 // captured eagerly, a script tag that happens to sit above it would bind
 // undefined for the life of the page and this module would answer "unknown
@@ -107,6 +109,29 @@
       const models = icomModels();
       return models && models.findModel ? models.findModel(name) : null;
     });
+    // SETUP's LOCAL-TRX checkbox on the LAN slot (lan-gate.js): the "radio" is
+    // the local-trx bridge in front of whatever rig hamlib drives, so the
+    // model name it reports says nothing about the rig's menu. local-trx
+    // answers the mark tone on a subaddress of its own instead
+    // (IcomModels.LOCAL_TRX_RTTY_MARK_CMD), read from the rig's menu --
+    // found at a TS-480 2026-11-17, whose palette sat on the stored 2125 Hz
+    // whatever its FSK TONE FREQUENCY said. No polarity: the TS-480's FSK
+    // KEY-DOWN POLARITY only decides how the rig keys its OWN transmitter
+    // from the FSK line, not which received tone is mark (FSK receives like
+    // an Icom's RTTY, mark the lower audio tone, FSR swaps it), so `reverse`
+    // stays on the RTTY default below.
+    const localTrx = opts.localTrx || (() => {
+      const gate = typeof globalThis !== "undefined" ? globalThis.LanGate : null;
+      return Boolean(gate && gate.localTrx && gate.localTrx());
+    });
+    function rowFor(name) {
+      if (localTrx()) {
+        const models = icomModels();
+        const command = models && models.LOCAL_TRX_RTTY_MARK_CMD;
+        return command ? {label: "LOCAL-TRX", rttyMarkFreqCmd: command} : null;
+      }
+      return findModel(name);
+    }
 
     // The edge this fires on. NOT the mode alone (which is all the older
     // version in rtty.js keyed on): the sync belongs to whichever surface is
@@ -146,7 +171,7 @@
     function changed() { cache = null; cacheFor = null; onChange(); }
 
     async function sync(gen) {
-      const row = findModel(modelOf());
+      const row = rowFor(modelOf());
       if (!row || !read) return;
       // Polarity first: it is the half that decides whether a decoded
       // character comes out as itself or as its inverse, and on a radio whose
