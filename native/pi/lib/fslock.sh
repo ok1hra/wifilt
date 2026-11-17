@@ -113,9 +113,12 @@ ask_finish() {
     fi
   elif [[ ${DO_FSLOCK:-0} == 1 && $MODE == fresh ]]; then
     echo
-    say "Lock the system right at the end? Better first reboot once and check"
-    say "that everything starts (data card, Wi-Fi), then run: sudo fslock lock"
-    ask_yn "Lock at the end of the installation?" n && ANS_LOCK_AT_END=1
+    # A new installation needs a reboot anyway; locking does it. What is set up
+    # afterwards (WIFILT, local-trx, Wi-Fi from the portal) lives on the data card.
+    say "Lock the system at the end of the installation? It then reboots locked."
+    say "What you set later in WIFILT, local-trx and the Wi-Fi portal is kept on the"
+    say "data card; any other change to the system needs 'sudo fslock unlock' first."
+    ask_yn "Lock at the end of the installation?" y && ANS_LOCK_AT_END=1
   fi
   return 0
 }
@@ -259,7 +262,9 @@ run_fslock() {
   } | put_text /etc/fslock.conf 644 || true
   put_file "$FILES/fslock-profile.sh" /etc/profile.d/fslock.sh 644 || true
 
-  if [[ ! -s $RUN_DIR/reboot ]]; then
+  if [[ ${ANS_LOCK_AT_END:-0} == 1 ]]; then
+    note "fslock: the system locks itself at the end and reboots; then 'sudo fslock status' should show the data card and everything 'on card'"
+  elif [[ ! -s $RUN_DIR/reboot ]]; then
     note "fslock is ready: reboot once, check 'sudo fslock status' (data card, everything 'on card'), then lock: sudo fslock lock"
   else
     note "fslock is ready: after the reboot check 'sudo fslock status', then lock: sudo fslock lock"

@@ -452,6 +452,15 @@ run over SSH, as your own user (it asks for `sudo` itself):
 curl -fsSL https://ok1hra.github.io/wifilt/pi-setup | bash
 ```
 
+**Network for the installation.** The installer downloads everything it installs, so the Pi
+needs the internet while it runs: either the Wi-Fi set in Raspberry Pi Imager, or **an
+Ethernet cable to your router** — the only way when Imager got no Wi-Fi. Find the Pi as
+`<host name>.local` (e.g. `ssh you@wifilt-pi.local`) or in the router's list of devices. Wi-Fi
+can be added afterwards without a cable: once the installation is done, the Pi opens its
+setup access point `WIFILT-setup-xxxx` (password `remoteqth` unless you chose another)
+whenever no known Wi-Fi is in range — after a reboot as well — and a phone that joins it gets
+the page where networks are added.
+
 It downloads the newest Raspberry Pi archive from the
 [web installer page](https://ok1hra.github.io/wifilt/), checks it against `SHA256SUMS` and
 starts the `pi-setup.sh` inside it. **Every question comes first**; then it shows the plan
@@ -492,9 +501,13 @@ sudo fslock list        # backups of the settings, newest first
 sudo fslock restore 2   # put backup number 2 back
 ```
 
-The first lock is yours to do — reboot once after the installation, check that `fslock
-status` shows the data card and every path *on card*, then `sudo fslock lock`. Each login
-says in colour whether the system is locked.
+At the end of a new installation the installer offers to lock the system (default yes) and
+reboots it locked — the installation needs that reboot anyway. What you set up afterwards in
+WIFILT, local-trx and the Wi-Fi portal is on the data card and stays; any other change to the
+system (packages, an SSH key, files outside those settings) needs `sudo fslock unlock` first.
+After the reboot, `sudo fslock status` should show the data card and every path *on card*.
+Answer no to keep it unlocked and lock it later with `sudo fslock lock`. Each login, and the
+tmux status bar, says whether the system is locked.
 
 **Updating a locked Pi** needs no extra steps: `wifilt-pi-setup` asks its questions, unlocks,
 reboots, finishes the update by itself after the reboot and then **locks again** after a delay

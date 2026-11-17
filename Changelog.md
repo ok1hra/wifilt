@@ -56,6 +56,11 @@ tmux status bar; the update from the web refreshes the installer's helpers.**
   checked once more before the build.
 * fslock starts WIFILT and local-trx again after moving their settings to the data card; they
   used to stay stopped until the reboot.
+* A new installation with fslock ends locked by default: the closing question is now
+  answered yes by Enter, and the lock does the reboot the installation needs anyway. What is set
+  up afterwards in WIFILT, local-trx and the Wi-Fi portal is on the data card. SOFTWARE.md 1.7
+  says so, and that the installation needs Ethernet unless Wi-Fi was set in Raspberry Pi Imager;
+  Wi-Fi can then be added through the setup access point.
 * The data card is confirmed with `FORMAT` (the disk is shown in red right above). The VPN step
   says it only pairs: n2n comes with WIFILT whatever is answered.
 * `install.sh`, and with it the update from the web, refreshes pi-setup's helpers that are
