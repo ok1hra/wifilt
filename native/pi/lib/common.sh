@@ -79,12 +79,21 @@ ask_str() {
   done
 }
 
-# ask_secret VAR "prompt" validator_fn  -- typed twice, never echoed or logged
+# ask_secret VAR "prompt" validator_fn [default]  -- typed twice, never echoed or
+# logged. The optional default is a published one (shown in the prompt): an
+# empty entry takes it, and so does a run without a terminal.
 ask_secret() {
-  local __var=$1 q=$2 check=$3 a b why
-  interactive || die "$q: needs an interactive terminal (no saved value to use)"
+  local __var=$1 q=$2 check=$3 def=${4:-} a b why
+  if ! interactive; then
+    [[ -n $def ]] || die "$q: needs an interactive terminal (no saved value to use)"
+    printf -v "$__var" '%s' "$def"
+    printf '  %s: %s %s(default)%s\n' "$q" "$def" "$C_DIM" "$C_0"
+    return
+  fi
   while :; do
-    printf '  %s: ' "$q"; read -rs a </dev/tty || a=""; echo
+    if [[ -n $def ]]; then printf '  %s [%s]: ' "$q" "$def"; else printf '  %s: ' "$q"; fi
+    read -rs a </dev/tty || a=""; echo
+    if [[ -z $a && -n $def ]]; then a=$def; break; fi
     if ! why=$("$check" "$a"); then say "  $why"; continue; fi
     printf '  Again: '; read -rs b </dev/tty || b=""; echo
     [[ $a == "$b" ]] && break

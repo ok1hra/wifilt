@@ -3,6 +3,8 @@
 # pi-setup step 1: system packages and group membership.
 
 BASE_PKGS=(curl ca-certificates tar rsync libcap2-bin python3 nftables dnsmasq-base iw ethtool psmisc)
+# for working on the Pi over SSH; WIFILT itself does not need them
+ADMIN_PKGS=(tmux htop mc vim)
 
 missing_pkgs() {
   local p
@@ -14,9 +16,10 @@ missing_pkgs() {
 ask_packages() {
   header "System packages"
   local miss
-  miss=$(missing_pkgs "${BASE_PKGS[@]}" | tr '\n' ' ')
+  miss=$(missing_pkgs "${BASE_PKGS[@]}" "${ADMIN_PKGS[@]}" | tr '\n' ' ')
   if [[ -n $miss ]]; then current "missing: $miss"; else current "all needed packages present"; fi
-  plan_line "install what is missing, add $RUN_USER to the groups audio and dialout"
+  plan_line "install what is missing (also ${ADMIN_PKGS[*]}), add $RUN_USER to the groups audio and dialout"
+  plan_line "tmux status bar with the fslock state, Wi-Fi signal or AP and eth/Wi-Fi traffic (/etc/tmux.conf)"
   DO_PACKAGES=1          # not optional: every later step relies on these tools
   local def=n
   [[ $MODE == fresh ]] && def=y
@@ -39,7 +42,7 @@ run_packages() {
       need_reboot "new kernel / system libraries from the upgrade"
     fi
   fi
-  mapfile -t miss < <(missing_pkgs "${BASE_PKGS[@]}")
+  mapfile -t miss < <(missing_pkgs "${BASE_PKGS[@]}" "${ADMIN_PKGS[@]}")
   if [[ ${#miss[@]} -gt 0 ]]; then
     info "installing: ${miss[*]}"
     apt-get "${apt_opts[@]}" install "${miss[@]}"
@@ -58,6 +61,11 @@ run_packages() {
   else
     ok "$RUN_USER is in audio and dialout"
   fi
+
+  # tmux status bar: fslock state, Wi-Fi signal or AP, eth/Wi-Fi traffic.
+  # A block in /etc/tmux.conf, so a user's own ~/.tmux.conf still wins.
+  put_file "$FILES/wifilt-tmux-status" /usr/local/bin/wifilt-tmux-status 755 || true
+  replace_block /etc/tmux.conf "wifilt-pi-setup tmux" < "$FILES/tmux.conf" || true
 
   # the bootstrap stays installed: future updates are just "wifilt-pi-setup"
   if [[ -f $PI_DIR/pi-bootstrap.sh ]]; then

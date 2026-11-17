@@ -16,13 +16,13 @@
 #   ./pi-setup.sh --keep-unlocked cancel a pending automatic re-lock (fslock)
 #
 # Steps:
-#   1 System packages        always (missing tools, groups audio + dialout)
+#   1 System packages        always (missing tools, tmux status bar, groups audio + dialout)
 #   2 WIFILT + local-trx     the programs from this package, systemd services
 #   3 Serial port aliases    /dev/ttyUSB.cat, .cw, .panel by USB serial number
 #   4 Network                Ethernet: DHCP client, else own DHCP server;
 #                            Wi-Fi: setup access point with a captive portal
-#   5 Remote access (VPN)    n2n 3.1.1 built from source, station paired with the
-#                            VPN via remoteqth.com (default: no)
+#   5 Remote access (VPN)    station paired with the VPN via remoteqth.com; n2n
+#                            itself comes with WIFILT (default: no)
 #   6 Open Interface III     firmware built from source and flashed (default: no)
 #   7 Power-loss protection  read-only root (fslock) + USB data card for settings
 #

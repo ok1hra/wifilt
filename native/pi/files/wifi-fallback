@@ -45,6 +45,8 @@ DEFAULTS = {
 AP_CON = "wifi-fallback-ap"
 RUN_DIR = "/run/wifi-fallback"
 NFT_TABLE = "wifi_fallback"
+NM_DIR = "/etc/NetworkManager/system-connections"   # where nmcli saves the networks
+FSLOCK = "/usr/local/sbin/fslock"
 
 STOP = threading.Event()    # SIGTERM
 APPLY = threading.Event()   # portal: saved, try the known networks
@@ -346,6 +348,36 @@ def fallback_cycle(conf):
 
 # --- portal ----------------------------------------------------------------
 
+def storage_state():
+    """Where a network saved now ends up, for the portal: (css class, text) or None.
+
+    With fslock the profiles live on the data card (bind-mounted over NM_DIR),
+    which stays writable while the system is locked -- so saving never needs an
+    unlock. Only a missing card matters: locked, the profile then lands in the
+    RAM overlay and is gone at the next restart."""
+    if not os.path.exists(FSLOCK):
+        return None
+    mounts = {}
+    try:
+        with open("/proc/mounts") as f:
+            for line in f:
+                p = line.split()
+                if len(p) >= 3:
+                    mounts[p[1].replace("\\040", " ")] = p[2]
+    except OSError:
+        return None
+    locked = mounts.get("/") == "overlay"
+    if NM_DIR in mounts:
+        state = "locked" if locked else "unlocked"
+        return ("ok", f"The system is {state}; saved networks are kept on the data card "
+                      "and survive a restart.")
+    if locked:
+        return ("msg", "The data card is missing: the system is locked, so a network saved "
+                       "now is lost at the next restart. Insert the data card and restart the Pi first.")
+    return ("warn", "The data card is not mounted: a network saved now stays on the SD card "
+                    "only and is hidden once the card is back.")
+
+
 PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -362,10 +394,13 @@ button.del{{background:#dc2626;padding:4px 10px}}
 button.big{{width:100%;padding:12px;background:#16a34a}}
 .scan{{cursor:pointer}} .scan:hover{{background:#eef}}
 .msg{{padding:10px;border-radius:6px;background:#fee2e2;margin-bottom:12px}}
+.warn{{padding:10px;border-radius:6px;background:#fef3c7;margin-bottom:12px}}
+.ok{{padding:10px;border-radius:6px;background:#dcfce7;margin-bottom:12px;font-size:.9em}}
 .muted{{color:#777;font-size:.9em}}
 </style></head><body><main>
 <h1>Wi-Fi setup - {host}</h1>
 {msg}
+{store}
 <h2>Saved networks <span class="muted">(higher priority wins)</span></h2>
 <div class="card"><table>{known}</table></div>
 <h2>Add / change a network</h2>
@@ -438,9 +473,11 @@ def make_handler(conf):
                 f"<tr class=scan data-ssid='{e(s)}'><td>{e(s)}</td>"
                 f"<td class=muted>{sig} %</td><td class=muted>{e(sec or 'open')}</td></tr>"
                 for s, sig, sec in SCAN)
+            st = storage_state()
             self.send(200, PAGE.format(
                 host=e(host), ap=e(conf["AP_SSID"]), ap_addr=conf["AP_ADDR"],
                 msg=f"<div class=msg>{e(msg)}</div>" if msg else "",
+                store=f"<div class={st[0]}>{e(st[1])}</div>" if st else "",
                 known=rows or "<tr><td class=muted>none</td></tr>",
                 scan=scan_rows or "<tr><td class=muted>nothing found</td></tr>"))
 

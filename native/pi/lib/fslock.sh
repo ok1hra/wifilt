@@ -85,8 +85,8 @@ ask_fslock() {
     IFS='|' read -r d sz md lb <<<"${disks[$((n - 1))]}"
     printf '  %sEVERYTHING on %s (%s %s) will be erased.%s\n' "$C_RED" "$d" "$sz" "$md" "$C_0"
     local confirm
-    ask_str confirm "  Type 'FORMAT $d' to confirm" ""
-    [[ $confirm == "FORMAT $d" ]] || { say "  Not confirmed, fslock skipped."; return 0; }
+    ask_str confirm "  Type FORMAT to confirm" ""
+    [[ $confirm == "FORMAT" ]] || { say "  Not confirmed, fslock skipped."; return 0; }
     ANS_FORMAT_DEV=$d
   fi
 
@@ -181,7 +181,7 @@ run_fslock() {
   systemctl daemon-reload
   install -d "$DATA_MNT"
   mountpoint -q "$DATA_MNT" || mount "$DATA_MNT" || die "cannot mount the data card on $DATA_MNT"
-  local moved=0
+  local moved=0 restart=()
   while IFS=: read -r name target; do
     if mountpoint -q "$target"; then
       say "  on card    $target"
@@ -194,7 +194,10 @@ run_fslock() {
       install -d -o "$RUN_USER" -g "$(id -gn "$RUN_USER")" -m 700 "$target"
     fi
     if [[ -z $(ls -A "$DATA_MNT/$name" 2>/dev/null) ]]; then
-      if [[ $moved == 0 ]]; then systemctl stop wifilt local-trx 2>/dev/null || true; moved=1; fi
+      if [[ $moved == 0 ]]; then
+        for unit in wifilt local-trx; do systemctl is-active --quiet "$unit" && restart+=("$unit"); done
+        systemctl stop wifilt local-trx 2>/dev/null || true; moved=1
+      fi
       rsync -aHAX "$target/" "$DATA_MNT/$name/"
       say "  copied     $target -> $DATA_MNT/$name"
     else
@@ -218,6 +221,11 @@ run_fslock() {
       | put_text "/etc/systemd/system/$unit.service.d/fslock-data.conf" 644 || true
   done
   systemctl daemon-reload
+  # stopped above only for the copy: back up, now on the settings on the card
+  if [[ ${#restart[@]} -gt 0 ]]; then
+    if systemctl start "${restart[@]}"; then ok "started again: ${restart[*]}"
+    else warn "could not start again: ${restart[*]} (they start at the reboot)"; fi
+  fi
 
   # --- netplan Wi-Fi must become a profile on the card
   [[ ${ANS_NETPLAN:-0} == 1 && $NO_NM == 0 ]] && convert_netplan

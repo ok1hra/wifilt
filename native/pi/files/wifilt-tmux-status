@@ -1,0 +1,98 @@
+#!/bin/bash
+# Right side of the tmux status bar (installed by pi-setup, used by /etc/tmux.conf):
+#
+#   fs unlocked | eth on 1.2kB/s | wifi -45dBm 3.4kB/s
+#
+# fs     fslock state, only when fslock is installed. LOCKED has a red
+#        background; "-> locks/unlocks at reboot" when the next boot differs,
+#        "no /data" when the data card is not mounted.
+# eth    link and traffic (received + sent).
+# wifi   signal (green from -60 dBm, orange from -70, red below) and traffic;
+#        "wifi AP 2 clients" while the setup access point is up.
+#
+# tmux runs it every status-interval seconds; traffic is the byte difference
+# against the previous run, kept in a small state file.
+#
+# Usage: wifilt-tmux-status [wifi_interface] [eth_interface]
+
+WIFI=${1:-wlan0}
+ETH=${2:-eth0}
+IW=/usr/sbin/iw
+CMDLINE=/boot/firmware/cmdline.txt
+STATE=${XDG_RUNTIME_DIR:-/tmp}/wifilt-tmux-status.$(id -u)
+
+# text colours; the bar background stays
+OK="#[fg=#1e6b1e]" WARN="#[fg=#c05000]" BAD="#[fg=#9a3020]" OFF="#[fg=#606060]" RESET="#[default]"
+LOCKED="#[bg=#b02020,fg=white,bold]"
+
+# received + sent bytes of an interface
+bytes() {
+    local d=/sys/class/net/$1/statistics
+    echo $(( $(cat "$d/rx_bytes" 2>/dev/null || echo 0) + $(cat "$d/tx_bytes" 2>/dev/null || echo 0) ))
+}
+
+# B/s -> readable rate (e.g. 2.4kB/s)
+rate() {
+    awk -v b="$1" 'BEGIN {
+        if (b < 0) b = 0
+        if      (b < 1000)    printf "%dB/s\n", b
+        else if (b < 1000000) printf "%.1fkB/s\n", b / 1000
+        else                  printf "%.1fMB/s\n", b / 1000000
+    }'
+}
+
+# --- fslock
+fs=""
+if [[ -x /usr/local/sbin/fslock ]]; then
+    [[ $(findmnt -no FSTYPE / 2>/dev/null) == overlay ]] && now=1 || now=0
+    grep 'overlayroot=tmpfs' "$CMDLINE" >/dev/null 2>&1 && conf=1 || conf=0
+    if (( now )); then fs="${LOCKED} fs LOCKED ${RESET}"; else fs="fs unlocked"; fi
+    if (( now != conf )); then
+        if (( conf )); then fs+=" -> locks at reboot"; else fs+=" -> unlocks at reboot"; fi
+    fi
+    mountpoint -q /data 2>/dev/null || fs+=" ${BAD}no /data${RESET}"
+    fs+=" | "
+fi
+
+# --- traffic since the previous run
+now_ns=$(date +%s%N)
+cur_eth=$(bytes "$ETH")
+cur_wifi=$(bytes "$WIFI")
+read -r prev_t prev_eth prev_wifi 2>/dev/null < "$STATE"
+echo "$now_ns $cur_eth $cur_wifi" > "$STATE" 2>/dev/null
+
+ms=$(( (now_ns - ${prev_t:-$now_ns}) / 1000000 ))
+if (( ms > 0 )); then
+    eth_rate=$(rate $(( (cur_eth - ${prev_eth:-$cur_eth}) * 1000 / ms )))
+    wifi_rate=$(rate $(( (cur_wifi - ${prev_wifi:-$cur_wifi}) * 1000 / ms )))
+else
+    eth_rate=$(rate 0) wifi_rate=$(rate 0)
+fi
+
+# --- ethernet
+if [[ $(cat "/sys/class/net/$ETH/carrier" 2>/dev/null) == 1 ]]; then
+    eth="${OK}eth on${RESET} $eth_rate"
+else
+    eth="${OFF}eth off${RESET}"
+fi
+
+# --- wifi
+mode=$($IW dev "$WIFI" info 2>/dev/null | awk '$1 == "type" {print $2}')
+if [[ $mode == AP ]]; then
+    clients=$($IW dev "$WIFI" station dump 2>/dev/null | grep -c '^Station')
+    if (( clients == 1 )); then cl="1 client"; else cl="$clients clients"; fi
+    wifi="${OK}wifi AP${RESET} $cl $wifi_rate"
+else
+    signal=$($IW dev "$WIFI" link 2>/dev/null | awk '$1 == "signal:" {print $2}')
+    if [[ -z $signal ]]; then
+        wifi="${OFF}wifi off${RESET}"
+    else
+        if   (( signal >= -60 )); then col=$OK
+        elif (( signal >= -70 )); then col=$WARN
+        else                           col=$BAD
+        fi
+        wifi="${OK}wifi${RESET} ${col}${signal}dBm${RESET} $wifi_rate"
+    fi
+fi
+
+echo "$fs$eth | $wifi"

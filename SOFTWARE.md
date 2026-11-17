@@ -460,12 +460,12 @@ build alone takes several minutes. What it offers, in this order:
 
 | Step | Default | What it does |
 |---|---|---|
-| System packages | always | installs the missing tools, puts your user into the `audio` and `dialout` groups; optionally `apt full-upgrade` (default yes on a new installation) |
+| System packages | always | installs the missing tools (including `tmux`, `htop`, `mc` and `vim` for working over SSH) and a tmux status bar showing `fs LOCKED`/`fs unlocked`, `eth on` with its traffic and the Wi-Fi signal in dBm (or `wifi AP` with the number of clients) with its traffic; puts your user into the `audio` and `dialout` groups; optionally `apt full-upgrade` (default yes on a new installation) |
 | WIFILT + local-trx | yes | installs both to `/opt/wifilt` with the port 80 permission and asks whether the services start **at every boot** — on a headless Pi the answer is normally yes |
 | Serial port aliases | yes | lists the USB serial adapters and lets you name them `/dev/ttyUSB.cat` (CAT to the radio), `/dev/ttyUSB.cw` (Open Interface III) and `/dev/ttyUSB.panel`, matched by the adapter's serial number, so the names survive reboots and replugging. Use these names in local-trx's setup |
-| Network | yes | **Ethernet:** DHCP client; when nothing answers within 20 s the Pi becomes the DHCP server itself (`192.168.50.1/24` by default), so TrxNet devices on a bare cable still get addresses; optional fixed addresses by MAC. **Wi-Fi:** when no known network is in range, the Pi opens a setup access point `WIFILT-setup-xxxx` with a password you choose; a phone that joins it gets a page where Wi-Fi networks can be added, and WIFILT itself stays reachable at `http://192.168.4.1/`. Wi-Fi set in Raspberry Pi Imager is moved from netplan to an ordinary NetworkManager profile |
-| Remote access (VPN) | **no** | installs n2n 3.1.1 (the copy in the download, built from source only where that does not run) and pairs this station with the VPN through remoteqth.com: a new network (the first device) or one joined with the pairing code of another device — see [section 1.9](#19-remote-access-over-the-internet-pc-and-raspberry-pi) |
-| Open Interface III firmware | **no** | builds the firmware from the `ok1hra/oi3` sources (and the TrxNet library) and uploads it over the board's USB; only when the sources changed since the last upload from this Pi |
+| Network | yes | **Ethernet:** DHCP client; when nothing answers within 20 s the Pi becomes the DHCP server itself (`192.168.50.1/24` by default), so TrxNet devices on a bare cable still get addresses; optional fixed addresses by MAC. **Wi-Fi:** sets the Wi-Fi country when the card has none (Raspberry Pi OS keeps Wi-Fi switched off until it is set; the default comes from the time zone); when no known network is in range, the Pi opens a setup access point `WIFILT-setup-xxxx`, password **`remoteqth`** (the same as the ESP32 hotspot) unless you enter another during installation; a phone that joins it gets a page where Wi-Fi networks can be added (with fslock they are saved on the data card, so neither unlocking nor locking is needed; the page warns when the card is missing and a network would be lost at the next restart), and WIFILT itself stays reachable at `http://192.168.4.1/`. Wi-Fi set in Raspberry Pi Imager is moved from netplan to an ordinary NetworkManager profile |
+| Remote access (VPN) | **no** | pairs this station with the VPN through remoteqth.com. n2n 3.1.1 itself is installed with WIFILT whatever you answer here (the copy in the download, built from source only where that does not run) and runs only once paired; answering no leaves it idle, and SETUP → Remote access can pair later. Pairing either creates a new network (the first device) or joins one with the pairing code of another device — see [section 1.9](#19-remote-access-over-the-internet-pc-and-raspberry-pi) |
+| Open Interface III firmware | **no** | builds the firmware from the `ok1hra/oi3` sources (and the TrxNet library) and uploads it over the board's USB; only when the sources changed since the last upload from this Pi. The board's port (`/dev/ttyUSB.cw` from *Serial port aliases*) is checked when you answer, not after the build |
 | Power-loss protection (fslock) | no | makes the SD card read-only, so pulling the plug cannot damage it — see below |
 
 The answers are remembered in `/etc/wifilt-pi/setup.conf` and offered as defaults next time,
@@ -480,9 +480,9 @@ before the installer existed is recognised from what is on it, and nothing gets 
 fslock the root file system is an overlay in RAM — changes vanish at reboot — and the
 settings that must survive (WIFILT, local-trx and the network profiles) live on a **second
 card in a USB reader**, mounted on `/data` and written synchronously. The installer formats
-that card only after you type `FORMAT /dev/sdX`; a card already labelled `RPIDATA` is used as
-it is. A copy of the settings also stays on the SD card, so the station still starts without
-the data card. Day to day:
+that card only after it shows which disk it is and you type `FORMAT`; a card already
+labelled `RPIDATA` is used as it is. A copy of the settings also stays on the SD card, so
+the station still starts without the data card. Day to day:
 
 ```sh
 sudo fslock status      # locked or not, data card, last backup
@@ -581,6 +581,14 @@ What can update itself:
 | Windows, unpacked to a folder you can write to | yes — PowerShell does the work |
 | started by hand (`start-wifilt.sh`), run from an unpacked archive or a checkout, Windows under Program Files | no — the page links to the download page |
 | an installation older than this feature | once by hand (`sudo ./install.sh` or `wifilt-pi-setup`), then from the web |
+
+On a Raspberry Pi set up by `pi-setup`, the update from the web also refreshes the installer's
+own helpers that are already there: the Wi-Fi setup portal (`wifi-fallback`), `fslock` and its
+login message, the tmux status bar and `wifilt-pi-setup` itself. The portal restarts at once
+only when its access point is not up, so whoever updates through the access point is not cut
+off; otherwise the new one starts at the next boot. It installs nothing new and asks nothing:
+a new installer step, the network profiles or the Wi-Fi country still need
+`sudo wifilt-pi-setup`.
 
 How it works, for those who want to check: WIFILT runs as an ordinary user and installs
 nothing itself. On Linux it leaves a request in `/var/lib/wifilt-update/req/`, and

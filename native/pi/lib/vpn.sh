@@ -47,7 +47,8 @@ ask_vpn() {
   else
     current "not paired; n2n: ${edge_banner:+installed}${edge_banner:-not installed}"
   fi
-  plan_line "install n2n 3.1.1 (the copy in this release, or built from github.com/ntop/n2n) and pair this station with the VPN via remoteqth.com"
+  # n2n itself arrives with WIFILT (install.sh, step 2) whatever is answered here
+  plan_line "pair this station with the VPN via remoteqth.com (n2n comes with WIFILT and runs only once paired)"
   DO_VPN=0
   ANS_VPN_MODE="" ANS_VPN_CODE=""
 

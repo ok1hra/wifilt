@@ -20,6 +20,28 @@ gh_head() {
 
 short() { if [[ -n $1 && $1 != - ]]; then echo "${1:0:12}"; else echo "$2"; fi; }
 
+tty_ports() {
+  local p out=()
+  for p in /dev/ttyUSB* /dev/ttyACM*; do [[ -e $p ]] && out+=("$p"); done
+  echo "${out[*]:-none}"
+}
+
+# v_oi3_port PORT -- the port exists by the time step 6 runs: an alias
+# /dev/ttyUSB.<role> that step 3 creates, or any other port that exists now
+v_oi3_port() {
+  local role=""
+  [[ -n $1 ]] || { echo "Must not be empty."; return 1; }
+  [[ $1 =~ ^/dev/ttyUSB\.([a-z]+)$ ]] && role=${BASH_REMATCH[1]}
+  if [[ -n $role && " ${SERIAL_ROLES[*]} " == *" $role "* ]]; then
+    alias_planned "$role" && return 0
+    echo "$1 will not exist: step 'Serial port aliases' gives ttyUSB.$role no adapter. Run pi-setup again and assign it there, or type a port that exists now: $(tty_ports)"
+    return 1
+  fi
+  [[ -e $1 ]] && return 0
+  echo "$1 does not exist. Serial ports now: $(tty_ports)"
+  return 1
+}
+
 ask_oi3() {
   header "Open Interface III firmware"
   local inst_oi3="" inst_trx="" inst_rev="" inst_fw=""
@@ -42,9 +64,27 @@ ask_oi3() {
     ask_str r "  Choice" "$def"
     case $r in 1) ANS_OI3_REV=3_1415; break ;; 2) ANS_OI3_REV=3_141; break ;; *) say "  1 or 2." ;; esac
   done
-  local defport=${OI3_PORT:-/dev/ttyUSB.cw}
-  [[ -n ${ANS_SERIAL_CW:-${SERIAL_CW:-}} ]] && defport=/dev/ttyUSB.cw
-  ask_str ANS_OI3_PORT "  Serial port of the board" "$defport" v_nonempty
+  # checked now, not after minutes of building: a missing ttyUSB.cw alias
+  # used to surface only at the upload and stop the steps after this one
+  local defport="" why
+  if v_oi3_port /dev/ttyUSB.cw >/dev/null; then defport=/dev/ttyUSB.cw
+  elif [[ -n ${OI3_PORT:-} ]] && v_oi3_port "$OI3_PORT" >/dev/null; then defport=$OI3_PORT
+  fi
+  if [[ -z $defport ]]; then
+    say "  /dev/ttyUSB.cw will not exist: step 'Serial port aliases' gives ttyUSB.cw no adapter."
+    say "  Serial ports now: $(tty_ports)"
+    interactive || { say "  (no port for the board -- firmware skipped)"; return 0; }
+  fi
+  while :; do
+    if [[ -n $defport ]]; then
+      ask_str ANS_OI3_PORT "  Serial port of the board" "$defport"
+    else
+      ask_str ANS_OI3_PORT "  Serial port of the board, empty = skip the firmware" ""
+      [[ -z $ANS_OI3_PORT ]] && { say "  Firmware skipped."; return 0; }
+    fi
+    why=$(v_oi3_port "$ANS_OI3_PORT") && break
+    say "  $why"
+  done
 
   local oc tc
   oc=$(gh_head "$OI3_REPO"); tc=$(gh_head "$TRXNET_REPO")
@@ -61,6 +101,8 @@ ask_oi3() {
 run_oi3() {
   local port=$ANS_OI3_PORT rev=$ANS_OI3_REV
   local oc tc cli_arch cli_ver work src hex fw dev stopped=() svc
+  # step 3 has made its aliases by now: no port, no point in building
+  [[ -e $port ]] || die "$port does not exist (is the board connected? see step 'Serial port aliases')"
   oc=$(gh_head "$OI3_REPO"); tc=$(gh_head "$TRXNET_REPO")
 
   # --- arduino-cli (not in apt: the official build from GitHub)

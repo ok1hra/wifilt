@@ -42,6 +42,19 @@ aliases_of() {
   echo "${out[*]}"
 }
 
+# alias_planned ROLE -- /dev/ttyUSB.ROLE exists once step 3 has run (its adapter
+# may be unplugged right now). Answered in step 3: its plan decides, because it
+# rewrites our rules and disables hand-made ones. Not answered: what is there now.
+alias_planned() {
+  local var
+  if [[ ${DO_SERIAL:-0} == 1 ]]; then
+    var="ANS_SERIAL_${1^^}"; [[ -n ${!var:-} ]]; return
+  fi
+  [[ -e /dev/ttyUSB.$1 ]] && return 0
+  var="SERIAL_${1^^}"; [[ -n ${!var:-} ]] && return 0
+  grep "SYMLINK+=\"ttyUSB\.$1\"" /etc/udev/rules.d/*.rules >/dev/null 2>&1
+}
+
 foreign_serial_rules() {
   grep -l 'SYMLINK+="ttyUSB\.' /etc/udev/rules.d/*.rules 2>/dev/null | grep -vx "$SERIAL_RULES" || true
 }

@@ -11,6 +11,38 @@ published.
 
 ## Working tree — not committed
 
+**Raspberry Pi installer: what a clean SD card showed — Wi-Fi country, access point password,
+tmux status bar; the update from the web refreshes the installer's helpers.**
+
+* `pi-setup` sets the Wi-Fi country when the card has none. Raspberry Pi Imager sets it only
+  together with a Wi-Fi network, so an Ethernet-only card booted with Wi-Fi soft-blocked (rfkill)
+  and the fallback access point never came up. The default comes from the time zone
+  (Europe/Prague → CZ); `raspi-config nonint do_wifi_country` does the work.
+* The access point password offers `remoteqth`, the same as the ESP32 hotspot. Without a
+  terminal (`--yes`) it is taken instead of leaving the access point out.
+* The Wi-Fi portal says where a saved network goes: with fslock onto the data card, so neither
+  unlocking nor locking is needed. It turns red when the system is locked and the card is
+  missing, because the network would be gone at the next restart.
+* Step 1 also installs `tmux htop mc vim` and a tmux status bar (`/usr/local/bin/wifilt-tmux-status`
+  and a block in `/etc/tmux.conf`, a user's `~/.tmux.conf` still wins): fslock state, Ethernet
+  traffic, the Wi-Fi signal in dBm or the access point with its clients.
+* The OI3 port is checked when it is asked. A `/dev/ttyUSB.cw` that step 3 does not create used
+  to fail only at the upload, after minutes of building, and stopped fslock with it. It is
+  checked once more before the build.
+* fslock starts WIFILT and local-trx again after moving their settings to the data card; they
+  used to stay stopped until the reboot.
+* The data card is confirmed with `FORMAT` (the disk is shown in red right above). The VPN step
+  says it only pairs: n2n comes with WIFILT whatever is answered.
+* `install.sh`, and with it the update from the web, refreshes pi-setup's helpers that are
+  already on the Pi: `wifi-fallback` (restarted only while its access point is down, so nobody
+  updating through it is cut off), `fslock` and its login message, the tmux bar and
+  `wifilt-pi-setup`. A new file is renamed over the old one. Network profiles, the Wi-Fi country
+  and new steps still need `sudo wifilt-pi-setup`.
+* Checked on a Raspberry Pi 4 with a clean Raspberry Pi OS Lite (64-bit) trixie card: all seven
+  steps, the OI3 flashed, fslock prepared, the tmux bar; the Wi-Fi country fix brought the
+  access point up. Not yet on the Pi: the portal's storage line, the fslock restart, the refresh
+  through a real web update, locking.
+
 **Remote access: the n2n edge comes with WIFILT; the station keeps its name over the VPN.**
 
 * `native/vpn/build-n2n-dist.sh` builds n2n 3.1.1 for x86_64 and arm64. It uses the same pinned

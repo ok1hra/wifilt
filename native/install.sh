@@ -337,7 +337,61 @@ TimeoutStartSec=30min
 EOF
 fi
 
+# A Raspberry Pi set up by pi-setup (native/pi/, only in the arm64 package):
+# refresh pi-setup's own helpers that are already installed, so their fixes
+# arrive with a web update too. Only files that are there are replaced --
+# nothing new is installed and nothing is asked; network profiles, the Wi-Fi
+# country and fslock's settings stay with pi-setup (sudo wifilt-pi-setup).
+PI_REFRESHED=()
+WF_RESTART=0
+# refresh_pi SRC DEST MODE -- replace an existing DEST that differs. A new file
+# is renamed over the old one, so a running copy of a script keeps reading the
+# old file instead of a half-rewritten one.
+refresh_pi() {
+  [[ -f "$1" && -e "$2" ]] || return 1
+  cmp -s "$1" "$2" && return 1
+  install -m "$3" "$1" "$2.wifilt-new" && mv -f "$2.wifilt-new" "$2" || return 1
+  PI_REFRESHED+=("$2")
+}
+PI_FILES="$HERE/pi/files"
+if [[ -d "$PI_FILES" ]]; then
+  refresh_pi "$PI_FILES/fslock"             /usr/local/sbin/fslock             755 || true
+  refresh_pi "$PI_FILES/fslock-profile.sh"  /etc/profile.d/fslock.sh           644 || true
+  refresh_pi "$PI_FILES/wifilt-tmux-status" /usr/local/bin/wifilt-tmux-status  755 || true
+  refresh_pi "$HERE/pi/pi-bootstrap.sh"     /usr/local/sbin/wifilt-pi-setup    755 || true
+  refresh_pi "$PI_FILES/wifi-fallback.service" /etc/systemd/system/wifi-fallback.service 644 && WF_RESTART=1
+  refresh_pi "$PI_FILES/wifi-fallback"      /usr/local/sbin/wifi-fallback      755 && WF_RESTART=1
+  # the tmux block pi-setup put into /etc/tmux.conf (lib/packages.sh)
+  TMUX_MARK="wifilt-pi-setup tmux"
+  if [[ -f "$PI_FILES/tmux.conf" && -f /etc/tmux.conf ]] \
+     && grep -xF "# >>> $TMUX_MARK >>>" /etc/tmux.conf >/dev/null; then
+    tmux_tmp="$(mktemp)"
+    awk -v b="# >>> $TMUX_MARK >>>" -v e="# <<< $TMUX_MARK <<<" -v f="$PI_FILES/tmux.conf" '
+      $0 == b { print; while ((getline l < f) > 0) print l; skip = 1; next }
+      $0 == e { skip = 0 }
+      !skip   { print }' /etc/tmux.conf > "$tmux_tmp"
+    if ! cmp -s "$tmux_tmp" /etc/tmux.conf; then
+      cat "$tmux_tmp" > /etc/tmux.conf
+      PI_REFRESHED+=(/etc/tmux.conf)
+    fi
+    rm -f "$tmux_tmp"
+  fi
+  if [[ ${#PI_REFRESHED[@]} -gt 0 ]]; then
+    echo "pi-setup helpers refreshed: ${PI_REFRESHED[*]}"
+  fi
+fi
+
 systemctl daemon-reload
+if [[ $WF_RESTART -eq 1 ]] && systemctl is-active --quiet wifi-fallback; then
+  # Restarting takes the access point down for a minute or more: whoever runs
+  # this update through it would be cut off. Up -> the new copy waits for the
+  # next boot (a locked Pi reboots at the end of its update anyway).
+  if nmcli -t -f NAME connection show --active 2>/dev/null | grep -xF wifi-fallback-ap >/dev/null; then
+    echo "wifi-fallback: updated; its access point is up, the new version starts at the next boot"
+  else
+    systemctl restart wifi-fallback || echo "WARNING: could not restart wifi-fallback" >&2
+  fi
+fi
 if [[ $HAVE_UPDATER -eq 1 ]]; then
   systemctl enable --now wifilt-update.path wifilt-update-check.timer >/dev/null 2>&1 \
     || echo "WARNING: could not enable the web updater units" >&2

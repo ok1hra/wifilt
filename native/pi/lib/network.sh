@@ -14,6 +14,9 @@
 ETH_IF=${PI_SETUP_ETH:-eth0}
 WIFI_IF=${PI_SETUP_WIFI:-wlan0}
 AP_CONF=/etc/default/wifi-fallback
+# offered as the access point password: the same as the WIFILT-AP hotspot of
+# the ESP32 (README, SOFTWARE.md), so the manual has one password to give
+AP_DEFAULT_PSK=remoteqth
 STATIC_HOSTS=/etc/NetworkManager/dnsmasq-shared.d/static-hosts.conf
 
 nm_has() { nmcli -t -f NAME connection show 2>/dev/null | grep -xF -- "$1" >/dev/null; }
@@ -31,6 +34,38 @@ netplan_wifi() {
 ap_conf_get() {
   [[ -r $AP_CONF ]] || return 0
   sed -n "s/^$1=//p" "$AP_CONF" | tail -n1 | sed "s/^[\"']//; s/[\"']\$//"
+}
+
+# Wi-Fi country (regulatory domain). Raspberry Pi OS keeps Wi-Fi soft-blocked
+# (rfkill) until one is set; Raspberry Pi Imager sets it only together with a
+# Wi-Fi network, so an Ethernet-only card boots with Wi-Fi off -- and with it
+# the fallback access point.
+wifi_country() {
+  local c=""
+  if command -v raspi-config >/dev/null 2>&1; then
+    c=$(raspi-config nonint get_wifi_country 2>/dev/null) || c=""
+  else
+    c=$(iw reg get 2>/dev/null | sed -n 's/^country \([A-Z0-9]\{2\}\):.*/\1/p' | head -n1)
+  fi
+  [[ $c == 00 ]] && c=""
+  echo "$c"
+}
+
+# the country of the system time zone (Europe/Prague -> CZ), empty if unknown
+tz_country() {
+  local tz
+  tz=$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null)
+  [[ -n $tz ]] || return 0
+  awk -v tz="$tz" '$3 == tz { print $1; exit }' /usr/share/zoneinfo/zone.tab 2>/dev/null
+}
+
+v_country() {
+  [[ -z $1 ]] && return 0
+  if [[ ${1^^} =~ ^[A-Z]{2}$ ]] && grep "^${1^^}"$'\t' /usr/share/zoneinfo/iso3166.tab >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "Two letters of an ISO 3166 country code, e.g. CZ, SK, DE, US."
+  return 1
 }
 
 v_mac_ip() {
@@ -70,9 +105,27 @@ ask_network() {
     current "no $ETH_IF interface"
   fi
 
-  # --- Wi-Fi access point
+  # --- Wi-Fi country, then the access point (which needs Wi-Fi switched on)
+  ANS_WIFI_COUNTRY=""
   if [[ -d /sys/class/net/$WIFI_IF ]]; then
     echo
+    local wc
+    wc=$(wifi_country)
+    if [[ -n $wc ]]; then
+      current "Wi-Fi country: $wc"
+    else
+      current "Wi-Fi country: not set -- Raspberry Pi OS keeps Wi-Fi switched off until it is"
+      plan_line "set the Wi-Fi country (the radio rules of that country), which switches Wi-Fi on"
+      local defc
+      defc=$(tz_country)
+      if [[ -n $defc ]]; then
+        ask_str ANS_WIFI_COUNTRY "  Wi-Fi country, two letters (default from the time zone)" "$defc" v_country
+      else
+        ask_str ANS_WIFI_COUNTRY "  Wi-Fi country, two letters, empty = leave Wi-Fi off" "" v_country
+      fi
+      ANS_WIFI_COUNTRY=${ANS_WIFI_COUNTRY^^}
+      [[ -z $ANS_WIFI_COUNTRY ]] && say "  Wi-Fi stays off, and with it the access point below."
+    fi
     current "Wi-Fi fallback access point: $([[ ${HAVE_AP:-0} == 1 ]] && echo installed || echo 'not installed')"
     plan_line "no known Wi-Fi in range -> access point with a page to add networks"
     if ask_yn "Install the Wi-Fi fallback access point?" y; then
@@ -91,13 +144,10 @@ ask_network() {
       ANS_AP_PSK=""
       if [[ -n $old_psk ]] && ask_yn "  Keep the current access point password?" y; then
         :
-      elif interactive; then
-        say "  Anyone who knows it can change the Wi-Fi settings of this Pi."
-        ask_secret ANS_AP_PSK "  Access point password (8-63 characters)" v_psk
       else
-        say "  No password set and no terminal to ask -- access point skipped."
-        ANS_AP_SSID=""
-        ANS_AP=0
+        say "  Anyone who knows it can change the Wi-Fi settings of this Pi."
+        say "  Enter = $AP_DEFAULT_PSK, the published default (as on the ESP32 hotspot)."
+        ask_secret ANS_AP_PSK "  Access point password (8-63 characters)" v_psk "$AP_DEFAULT_PSK"
       fi
       [[ -n $old_psk || -n $ANS_AP_PSK ]] && ANS_AP=1
     fi
@@ -113,7 +163,7 @@ ask_network() {
     ask_yn "Convert it?" y && ANS_NETPLAN=1
   fi
 
-  [[ $ANS_ETH == 1 || $ANS_AP == 1 || $ANS_NETPLAN == 1 ]] && DO_NETWORK=1
+  [[ $ANS_ETH == 1 || $ANS_AP == 1 || $ANS_NETPLAN == 1 || -n $ANS_WIFI_COUNTRY ]] && DO_NETWORK=1
   return 0
 }
 
@@ -178,6 +228,21 @@ run_eth() {
       && ok "Ethernet: DHCP client, $(ip -4 -br addr show "$ETH_IF" | awk '{print $3}')" \
       || ok "Ethernet: no DHCP answer, the DHCP server profile takes over"
   fi
+}
+
+# --- Wi-Fi country -----------------------------------------------------------------
+run_wifi_country() {
+  local c=$ANS_WIFI_COUNTRY
+  if command -v raspi-config >/dev/null 2>&1; then
+    # cmdline.txt cfg80211.ieee80211_regdom=, iw reg set, radio on, saved rfkill state
+    raspi-config nonint do_wifi_country "$c" || die "raspi-config could not set the Wi-Fi country $c"
+  else
+    iw reg set "$c" || true
+    warn "no raspi-config: the Wi-Fi country $c holds until the next reboot only"
+  fi
+  rfkill unblock wifi 2>/dev/null || true
+  nmcli radio wifi on 2>/dev/null || true
+  ok "Wi-Fi country $c, Wi-Fi switched on"
 }
 
 # --- Wi-Fi fallback ----------------------------------------------------------------
@@ -263,6 +328,7 @@ convert_netplan() {
 
 run_network() {
   [[ ${ANS_ETH:-0} == 1 ]] && run_eth
+  [[ -n ${ANS_WIFI_COUNTRY:-} ]] && run_wifi_country
   [[ ${ANS_AP:-0} == 1 ]] && run_ap
   [[ ${ANS_NETPLAN:-0} == 1 ]] && convert_netplan
   return 0
