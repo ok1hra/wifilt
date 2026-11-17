@@ -90,7 +90,8 @@ main() {
   if [[ $EUID -eq 0 || " ${pass[*]:-} " == *" --dry-run "* ]]; then
     bash "$setup" --from-bootstrap "${pass[@]}" || rc=$?
   else
-    sudo env PI_SETUP_SSH="${SSH_CONNECTION:-}" bash "$setup" --from-bootstrap "${pass[@]}" || rc=$?
+    sudo env PI_SETUP_SSH="${SSH_CONNECTION:-}" PI_SETUP_VPN_CODE="${PI_SETUP_VPN_CODE:-}" \
+      bash "$setup" --from-bootstrap "${pass[@]}" || rc=$?
   fi
   return "$rc"
 }

@@ -241,7 +241,7 @@
     <div class="card">
       <h1>WIFILT<span class="tagline">Web interface for Icom LAN Transceivers</span></h1>
       <p class="subtitle">
-        Firmware installer &mdash; version <code>20261115.1</code> &nbsp;&bull;&nbsp;
+        Firmware installer &mdash; version <code>20261117</code> &nbsp;&bull;&nbsp;
         <a href="https://github.com/ok1hra/wifilt" target="_blank">GitHub</a>
       </p>
 
@@ -279,7 +279,7 @@
           <strong>A radio already on your network</strong> &mdash; an IC-705, IC-7610 or
           IC-7300&nbsp;MK2 with <strong>Network&nbsp;Control</strong> switched on &mdash; needs no
           hardware at all. The program on your computer reaches it over IP, and it is the same
-          software as the firmware, version <code>20261115.1</code>.
+          software as the firmware, version <code>20261117</code>.
         </p>
         <p>
           <strong>The interface board adds what a computer cannot do</strong>: the CI-V serial
@@ -394,7 +394,7 @@
         </ul>
 
         <div class="cta gate" id="flashGate-esp32" data-locked="1">
-          <esp-web-install-button manifest="manifest.json?v=20261115.1" baudrate="9600"></esp-web-install-button>
+          <esp-web-install-button manifest="manifest.json?v=20261117" baudrate="9600"></esp-web-install-button>
         </div>
         <p class="gate-note" id="gateNote-esp32">Answer the question above to continue.</p>
 
@@ -445,7 +445,7 @@
           lets your settings survive an update.
         </p>
         <p class="muted">
-          For manual flashing there is <code>wifilt-20261115.1-full.bin</code> at offset <code>0x0</code>
+          For manual flashing there is <code>wifilt-20261117-full.bin</code> at offset <code>0x0</code>
           with <code>esptool.py</code>. <strong>That one erases everything</strong> &mdash; it is a whole-chip
           image, so it overwrites the WiFi credentials in NVS and the configuration partition
           as well. Use it to recover a board that will not boot, not to update a working one.
@@ -562,7 +562,7 @@
         </ul>
 
         <div class="cta gate" id="flashGate-m5atom" data-locked="1">
-          <esp-web-install-button manifest="manifest-m5atom.json?v=20261115.1" baudrate="9600"></esp-web-install-button>
+          <esp-web-install-button manifest="manifest-m5atom.json?v=20261117" baudrate="9600"></esp-web-install-button>
         </div>
         <p class="gate-note" id="gateNote-m5atom">Answer the question above to continue.</p>
 
@@ -609,7 +609,7 @@
           lets your settings survive an update.
         </p>
         <p class="muted">
-          For manual flashing there is <code>wifilt-20261115.1-m5atom-full.bin</code> at offset <code>0x0</code>
+          For manual flashing there is <code>wifilt-20261117-m5atom-full.bin</code> at offset <code>0x0</code>
           with <code>esptool.py</code>. <strong>That one erases everything</strong> &mdash; it is a whole-chip
           image, so it overwrites the WiFi credentials in NVS and the configuration partition
           as well. Use it to recover a board that will not boot, not to update a working one.
@@ -620,15 +620,15 @@
       <details class="platform" id="linux">
         <summary>
           <span class="platform-name">Linux PC</span>
-          <span class="platform-sub">radio on the network &bull; no hardware &bull; tar.gz, 4.1 MB</span>
+          <span class="platform-sub">radio on the network &bull; no hardware &bull; tar.gz, 4.3 MB</span>
         </summary>
         <div class="platform-body">
           <p class="dl-line">
-            <a href="wifilt-20261115.1-linux-x86_64.tar.gz"><strong>wifilt-20261115.1-linux-x86_64.tar.gz</strong></a>
-            &nbsp;&bull;&nbsp; Linux x86-64, 4.1 MB
+            <a href="wifilt-20261117-linux-x86_64.tar.gz"><strong>wifilt-20261117-linux-x86_64.tar.gz</strong></a>
+            &nbsp;&bull;&nbsp; Linux x86-64, 4.3 MB
             &nbsp;&bull;&nbsp; <a href="SHA256SUMS">SHA256SUMS</a>
           </p>
-          <pre><code>tar xzf wifilt-20261115.1-linux-x86_64.tar.gz
+          <pre><code>tar xzf wifilt-20261117-linux-x86_64.tar.gz
 cd wifilt-linux-x86_64
 sudo ./install.sh</code></pre>
           <p class="muted">
@@ -658,12 +658,12 @@ sudo ./install.sh</code></pre>
       <details class="platform" id="raspberrypi">
         <summary>
           <span class="platform-name">Raspberry Pi (64-bit)</span>
-          <span class="platform-sub">radio on the network &bull; no hardware &bull; tar.gz, 10.0 MB</span>
+          <span class="platform-sub">radio on the network &bull; no hardware &bull; tar.gz, 10.2 MB</span>
         </summary>
         <div class="platform-body">
           <p class="dl-line">
-            <a href="wifilt-20261115.1-linux-arm64.tar.gz"><strong>wifilt-20261115.1-linux-arm64.tar.gz</strong></a>
-            &nbsp;&bull;&nbsp; Linux ARM64 (aarch64), 10.0 MB
+            <a href="wifilt-20261117-linux-arm64.tar.gz"><strong>wifilt-20261117-linux-arm64.tar.gz</strong></a>
+            &nbsp;&bull;&nbsp; Linux ARM64 (aarch64), 10.2 MB
             &nbsp;&bull;&nbsp; <a href="SHA256SUMS">SHA256SUMS</a>
           </p>
           <p class="muted">
@@ -682,7 +682,7 @@ sudo ./install.sh</code></pre>
             locked system it unlocks, updates and locks again by itself.
           </p>
           <p>Or by hand:</p>
-          <pre><code>tar xzf wifilt-20261115.1-linux-arm64.tar.gz
+          <pre><code>tar xzf wifilt-20261117-linux-arm64.tar.gz
 cd wifilt-linux-arm64
 sudo ./install.sh</code></pre>
           <p class="muted">
@@ -716,7 +716,7 @@ sudo ./install.sh</code></pre>
         </summary>
         <div class="platform-body">
           <p class="dl-line">
-            <a href="wifilt-20261115.1-windows-x64.zip"><strong>wifilt-20261115.1-windows-x64.zip</strong></a>
+            <a href="wifilt-20261117-windows-x64.zip"><strong>wifilt-20261117-windows-x64.zip</strong></a>
             &nbsp;&bull;&nbsp; Windows x64, 11.1 MB
             &nbsp;&bull;&nbsp; <a href="SHA256SUMS">SHA256SUMS</a>
           </p>
@@ -735,6 +735,34 @@ sudo ./install.sh</code></pre>
             Icom) from this computer's sound card and two USB serial adapters. It is installed
             alongside and starts switched off, doing nothing at all until its own setup page is used.
             See <a href="#anyrig">Not a networked Icom?</a> below.
+          </p>
+        </div>
+      </details>
+      <details class="platform" id="n2n">
+        <summary>
+          <span class="platform-name">Remote access client (n2n)</span>
+          <span class="platform-sub">a laptop without WIFILT &bull; Linux &bull; tar.gz</span>
+        </summary>
+        <div class="platform-body">
+          <p class="dl-line">
+            <a href="n2n-edge-3.1.1-linux-x86_64.tar.gz"><strong>n2n-edge-3.1.1-linux-x86_64.tar.gz</strong></a> &nbsp;&bull;&nbsp; Linux x86-64<br>
+            <a href="n2n-edge-3.1.1-linux-arm64.tar.gz"><strong>n2n-edge-3.1.1-linux-arm64.tar.gz</strong></a> &nbsp;&bull;&nbsp; Linux ARM64<br>
+            <a href="n2n-3.1.1-source.tar.gz">n2n-3.1.1-source.tar.gz</a> &nbsp;&bull;&nbsp; its source (GPL-3.0)
+            &nbsp;&bull;&nbsp; <a href="SHA256SUMS">SHA256SUMS</a>
+          </p>
+          <p class="muted">
+            The n2n&nbsp;3 edge that WIFILT's remote access runs, for a computer that should reach the
+            station over the internet without running WIFILT itself. The Linux and Raspberry&nbsp;Pi
+            downloads above already carry it. Needs glibc&nbsp;2.34 or newer (Debian&nbsp;12,
+            Ubuntu&nbsp;22.04 and later).
+          </p>
+          <pre><code>tar xzf n2n-edge-3.1.1-linux-x86_64.tar.gz
+sudo install -m 0755 n2n-edge-3.1.1-linux-x86_64/edge /usr/local/sbin/edge
+sudo N2N_KEY=&lt;key&gt; /usr/local/sbin/edge -d wlvpn0 -c &lt;community&gt; -l remoteqth.com:82 -A4 -I LAPTOP -f</code></pre>
+          <p class="muted">
+            The community and the key are in the station's SETUP &rarr; Remote access &rarr;
+            <em>Advanced</em>. The station is then at its VPN address &mdash; see
+            <a href="https://github.com/ok1hra/wifilt/blob/main/SOFTWARE.md#19-remote-access-over-the-internet-pc-and-raspberry-pi" target="_blank" rel="noopener">SOFTWARE.md&nbsp;&sect;&nbsp;1.9</a>.
           </p>
         </div>
       </details>
@@ -890,6 +918,15 @@ sudo ./install.sh</code></pre>
       Array.prototype.forEach.call(document.querySelectorAll('[id^="choiceNew-"]'), function (el) {
         wireFlashGate(el.id.slice("choiceNew-".length));
       });
+
+      // A link to one platform (.../#n2n from SOFTWARE.md, #raspberrypi) opens
+      // its panel; otherwise it would only scroll to a folded heading.
+      function openFromHash() {
+        var el = location.hash ? document.getElementById(location.hash.slice(1)) : null;
+        if (el && el.tagName === "DETAILS") { el.open = true; el.scrollIntoView(); }
+      }
+      window.addEventListener("hashchange", openFromHash);
+      openFromHash();
     }());
   </script>
 </body>
