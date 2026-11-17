@@ -273,6 +273,9 @@ void Ts480WsServer::handleText(Client &c, const std::string &text, int64_t now) 
       link_.setPot(m.value("which", ""), m.value("value", 0));
     } else if (op == "freq") {
       link_.directFreq(m.value("khz", 0.0));
+    } else if (op == "tune") {
+      const long long hz = m.value("hz", 0LL);
+      if (hz >= Ts480Link::kMinHz && hz <= Ts480Link::kMaxHz && !(catTune_ && catTune_(hz))) link_.tuneHz(hz);
     } else if (op == "reconnect") {
       link_.reconnect();
     } else if (op == "af") {

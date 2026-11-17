@@ -9,7 +9,7 @@
 #   ./pi-setup.sh                 install or update, asking questions
 #   ./pi-setup.sh --yes           no questions: saved answers / defaults
 #   ./pi-setup.sh --only LIST     only these steps, comma separated:
-#                                 packages,wifilt,serial,network,oi3,fslock
+#                                 packages,wifilt,serial,network,vpn,oi3,fslock
 #   ./pi-setup.sh --force         reinstall WIFILT / reflash OI3 even when
 #                                 they are already up to date
 #   ./pi-setup.sh --dry-run       ask the questions, print the plan, change nothing
@@ -21,8 +21,10 @@
 #   3 Serial port aliases    /dev/ttyUSB.cat, .cw, .panel by USB serial number
 #   4 Network                Ethernet: DHCP client, else own DHCP server;
 #                            Wi-Fi: setup access point with a captive portal
-#   5 Open Interface III     firmware built from source and flashed (default: no)
-#   6 Power-loss protection  read-only root (fslock) + USB data card for settings
+#   5 Remote access (VPN)    n2n 3.1.1 built from source, station paired with the
+#                            VPN via remoteqth.com (default: no)
+#   6 Open Interface III     firmware built from source and flashed (default: no)
+#   7 Power-loss protection  read-only root (fslock) + USB data card for settings
 #
 # On a locked system (fslock) it unlocks, reboots, finishes the update by
 # itself and locks again, so the system ends in the state it started in.
@@ -84,13 +86,14 @@ if [[ $EUID -ne 0 && $DRY_RUN -eq 1 ]]; then
   trap 'rm -rf "$RUN_DIR"' EXIT
 elif [[ $EUID -ne 0 ]]; then
   command -v sudo >/dev/null || { echo "pi-setup needs root and sudo is missing" >&2; exit 1; }
-  exec sudo env PI_SETUP_SSH="${SSH_CONNECTION:-}" bash "$SELF" "${ORIG_ARGS[@]}"
+  exec sudo env PI_SETUP_SSH="${SSH_CONNECTION:-}" PI_SETUP_VPN_CODE="${PI_SETUP_VPN_CODE:-}" \
+    bash "$SELF" "${ORIG_ARGS[@]}"
 else
   mkdir -p "$RUN_DIR" "$STATE_DIR"
 fi
 : > "$RUN_DIR/notes"; : > "$RUN_DIR/reboot"
 
-for f in common preflight packages wifilt serial network oi3 fslock resume; do
+for f in common preflight packages wifilt serial network vpn oi3 fslock resume; do
   # shellcheck disable=SC1090
   . "$LIB/$f.sh"
 done
@@ -105,7 +108,7 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 echo
 echo "----- pi-setup $(date -Iseconds) ${ORIG_ARGS[*]:-} -----"
 
-STEPS=(packages wifilt serial network oi3 fslock)
+STEPS=(packages wifilt serial network vpn oi3 fslock)
 STEP_TOTAL=${#STEPS[@]}
 step_selected() { [[ -z $ONLY ]] || [[ ",$ONLY," == *",$1,"* ]]; }
 
@@ -140,6 +143,7 @@ step_title() {
     wifilt)   echo "WIFILT + local-trx" ;;
     serial)   echo "Serial port aliases" ;;
     network)  echo "Network" ;;
+    vpn)      echo "Remote access (VPN)" ;;
     oi3)      echo "Open Interface III firmware" ;;
     fslock)   echo "Power-loss protection (fslock)" ;;
   esac

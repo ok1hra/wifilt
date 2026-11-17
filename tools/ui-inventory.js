@@ -35,7 +35,7 @@ const PAGES = {
   "jtty.html":     {title: "DATA — JTTY",    scripts: [/^jtty/, /^tx-/, /^lan-gate\.js$/]},
   "wspr.html":     {title: "DATA — WSPR",    scripts: [/^wspr/, /^tx-/, /^lan-gate\.js$/]},
   "mercury.html":  {title: "DATA — Mercury",  scripts: [/^mercury/, /^tx-/, /^spectrum\.js$/, /^lan-gate\.js$/, /^icom-models\.js$/, /^js8-presets\.js$/, /^wspr-core\.js$/]},
-  "setup.html":    {title: "SETUP",   scripts: [/^setup-spine\.js$/, /^icom-/, /^station-/]},
+  "setup.html":    {title: "SETUP",   scripts: [/^setup-spine\.js$/, /^icom-/, /^station-/, /^vpn-setup\.js$/]},
   "datasync.html": {title: "LOGSYNC", scripts: [/^datasync\.js$/]},
   "bd.html":       {title: "BD",      scripts: [/^bd\.js$/]},
 };

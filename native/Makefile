@@ -61,6 +61,7 @@ CXX_SOURCES := \
   arduino/Arduino.cpp arduino/WString.cpp arduino/Print.cpp \
   arduino/Stream.cpp arduino/IPAddress.cpp \
   platform/paths.cpp platform/process_args.cpp platform/update.cpp \
+  platform/vpn.cpp platform/vpn_code.cpp \
   platform/esp_compat.cpp platform/freertos_compat.cpp \
   fs/EEPROM.cpp fs/FS.cpp \
   net/WiFi.cpp net/WiFiUdp.cpp net/WebServer.cpp net/ESPmDNS.cpp \
@@ -237,6 +238,7 @@ dist-linux: all dist-assets
 	echo $(REV_DATE)         > $(DIST)/wifilt-linux-x86_64/VERSION
 	echo $(or $(REV_BUILD),0)         > $(DIST)/wifilt-linux-x86_64/BUILD
 	cp update/wifilt-update.sh update/update-channel.conf $(DIST)/wifilt-linux-x86_64/
+	cp vpn/wifilt-vpn.sh vpn/build-n2n.sh $(DIST)/wifilt-linux-x86_64/
 	@if [ -f $(OI3_HEX)/VERSION ]; then cp -r $(OI3_HEX) $(DIST)/wifilt-linux-x86_64/oi3; fi
 	@cd $(DIST) && tar czf wifilt-$(VERSION)-linux-x86_64.tar.gz wifilt-linux-x86_64
 	@rm -rf $(DIST)/wifilt-linux-x86_64
@@ -261,6 +263,8 @@ dist-arm64: arm64 dist-assets
 	echo $(REV_DATE)      > $(DIST)/wifilt-linux-arm64/VERSION
 	echo $(or $(REV_BUILD),0)      > $(DIST)/wifilt-linux-arm64/BUILD
 	cp update/wifilt-update.sh update/update-channel.conf $(DIST)/wifilt-linux-arm64/
+	@# remote access: the root helper and the n2n build (vpn/, SOFTWARE.md)
+	cp vpn/wifilt-vpn.sh vpn/build-n2n.sh $(DIST)/wifilt-linux-arm64/
 	@# the guided Raspberry Pi installer (pi/pi-setup.sh, SOFTWARE.md section 1.7)
 	cp pi/pi-setup.sh      $(DIST)/wifilt-linux-arm64/
 	mkdir -p               $(DIST)/wifilt-linux-arm64/pi

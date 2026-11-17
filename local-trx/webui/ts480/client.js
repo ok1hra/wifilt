@@ -7,6 +7,7 @@
 //   const client = new Ts480Client("ws://host:8766/ts480");
 //   client.on("state", m => lcd.render(m));
 //   header.appendChild(client.headerControls({ end: { icon, title, onClick } }));
+//   client.attachWheelTune(svg, lcd);   // optional: wheel over the digits tunes
 //   client.connect();
 (function () {
   "use strict";
@@ -64,6 +65,7 @@
       this.closed = false;
       this.audio = window.Ts480Audio ? new window.Ts480Audio(b => this.sendBinary(b)) : null;
       this.controls = [];
+      this.tunePending = null;   // {hz, at}: sent by the wheel, not on the display yet
     }
 
     on(type, fn) { (this.handlers[type] = this.handlers[type] || []).push(fn); return this; }
@@ -194,6 +196,71 @@
       this.setMessage(reason, true);
     }
 
+    // What the LCD should draw for state message m: the wheel's frequency
+    // while the radio has not reported it yet (CAT ~0.2 s, the keypad ~1.5 s
+    // with "--.---.--" in between), so a notch shows at once.
+    view(m) {
+      const p = this.tunePending;
+      if (!p) return m;
+      const s = m && m.connected && m.state;
+      if (!s || s.power !== true || s.freq_hz === p.hz || performance.now() - p.at > Ts480Client.TUNE_HOLD_MS) {
+        this.tunePending = null;
+        return m;
+      }
+      return window.Ts480Lcd.withFreq(m, p.hz);
+    }
+
+    // Mouse wheel over one of the display's frequency digits tunes the radio
+    // by that digit -- 100 kHz down to 10 Hz; the two MHz digits stay with the
+    // band keys. Wheel up = higher. The server sets it through CAT, or the
+    // panel keypad when CAT does not answer (ts480_ws.h "tune").
+    attachWheelTune(svg, lcd) {
+      const MIN_HZ = 30000, MAX_HZ = 60000000;
+      let under = -1, acc = 0, redraw = null;
+      // Judged on what the LCD shows: during a keypad entry the radio draws
+      // "--.---.--", but the display still shows the wheel's frequency.
+      const canTune = () => this.powerOn && window.Ts480Lcd.canTune(this.view(this.last).state);
+      const mark = () => {
+        const on = under >= 2 && canTune();
+        lcd.markDigit(on ? under : -1);
+        svg.style.cursor = on ? "ns-resize" : "";
+      };
+      svg.addEventListener("pointermove", e => { under = lcd.freqDigitAt(e.clientX, e.clientY); mark(); });
+      svg.addEventListener("pointerleave", () => { under = -1; mark(); });
+      this.on("state", mark);   // the menu opened, TX, power off...
+      svg.addEventListener("wheel", e => {
+        const i = lcd.freqDigitAt(e.clientX, e.clientY);
+        if (i < 2 || !canTune()) return;
+        e.preventDefault();
+        // A mouse notch is one event of 100 px (Chrome) or ~50 px (Firefox);
+        // a busy page coalesces several into one. A touchpad sends a stream
+        // of small ones: count every 40 px of it as a notch.
+        const px = e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 800 : 1);
+        let n;
+        if (Math.abs(px) >= 40) {
+          n = -Math.sign(px) * Math.max(1, Math.round(Math.abs(px) / 100));
+          acc = 0;
+        } else {
+          acc += px;
+          if (Math.abs(acc) < 40) return;
+          n = -Math.sign(acc);
+          acc = 0;
+        }
+        // From the frequency the last notch asked for (view() keeps it while
+        // fresh), not from the radio's display: that lags behind a fast wheel.
+        const base = this.view(this.last).state.freq_hz;
+        const hz = Math.min(MAX_HZ, Math.max(MIN_HZ, base + n * 10 ** (7 - i)));
+        if (hz === base) return;
+        this.tunePending = { hz, at: performance.now() };
+        this.send({ op: "tune", hz });
+        lcd.render(this.view(this.last));
+        // Nothing heard by then (CAT and keypad both failed): back to what
+        // the radio shows.
+        clearTimeout(redraw);
+        redraw = setTimeout(() => lcd.render(this.view(this.last)), Ts480Client.TUNE_HOLD_MS + 50);
+      }, { passive: false });
+    }
+
     // The header's buttons; `end` is the right-hand button (expand/collapse).
     headerControls({ end } = {}) {
       injectCss();
@@ -256,5 +323,6 @@
   }
 
   Ts480Client.ICONS = ICONS;
+  Ts480Client.TUNE_HOLD_MS = 3000;   // a wheel frequency the radio never reported stops showing
   window.Ts480Client = Ts480Client;
 })();

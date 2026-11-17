@@ -707,7 +707,8 @@ def sheet_qrplog():
                  "**WPX prefixes** (call)",
                  "[[Alt]]+[[S]]: QSO po pásmech a módech bez dupe; násobiče: US/VE státy, zóny (z EXCH) nebo "
                  "**WPX prefixy** (ze značky)"), 13),
-            KV("**TS480**", L("local-trx with a TS-480: the radio's own display", "local-trx s TS-480: displej rádia"), 13),
+            KV("**TS480**", L("local-trx with a TS-480: the radio's own display; wheel over a digit tunes",
+                              "local-trx s TS-480: displej rádia; kolečko nad číslicí ladí"), 13),
             P(L("Drag by the title bar — the place is remembered.", "Táhni za titulek — místo se pamatuje."),
               color=MUTED),
         ]),

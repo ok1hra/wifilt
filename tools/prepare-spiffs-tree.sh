@@ -56,7 +56,8 @@ while IFS= read -r -d '' file; do
   # build has; on the box it would only cost flash. native/Makefile asks for it.
   # Same for the update wizard: the box has no OTA (native/update/).
   case "$(basename "$file")" in
-    watch.html*|watch.js*|watch.css*|update.html*|update.js*|update.css*)
+    # Remote access (vpn-setup.js) is native Linux only as well (CAP_VPN).
+    watch.html*|watch.js*|watch.css*|update.html*|update.js*|update.css*|vpn-setup.js*)
       [[ "${WIFILT_NATIVE_ASSETS:-0}" == 1 ]] || continue ;;
   esac
   case "$file" in

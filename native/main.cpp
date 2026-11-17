@@ -44,6 +44,7 @@
 #include "radio_transport.h"
 #include "process_args.h"
 #include "socket_compat.h"
+#include "vpn.h"
 
 #ifdef _WIN32
   // windows.h already came in via Arduino.h; timeapi.h is where
@@ -127,6 +128,11 @@ void printUsage(const char *program) {
       "                    different radios would otherwise both bind local\n"
       "                    port 50001 and silently steal each other's\n"
       "                    control/audio packets\n"
+      "  --vpn-pair new|CODE  pair this station with the remote access VPN\n"
+      "                    (SETUP -> Remote access) and exit: writes vpn.json\n"
+      "                    into the config directory and prints the code;\n"
+      "                    with --vpn-enable it is also switched on, with\n"
+      "                    --vpn-desc NAME the device name is set (Linux only)\n"
       "  --help            this text\n"
       "\n"
       "The operator's QSO log lives in the browser and is scoped to the origin,\n"
@@ -249,6 +255,9 @@ void checkAssets() {
 }
 
 static bool dataDirGiven = false;
+static std::string vpnPairArg;      // --vpn-pair: pair and exit (pi-setup)
+static bool vpnEnable = false;
+static std::string vpnDesc;
 static std::vector<std::string> extraDataDirs;   // --data-dir after the first
 
 bool parseArguments(int argc, char **argv, uint16_t *port) {
@@ -278,6 +287,12 @@ bool parseArguments(int argc, char **argv, uint16_t *port) {
       nativeSetBindAddress(argv[++i]);
     } else if (flag == "--lan-port-base" && hasValue) {
       g_lanLocalPortBaseOverride = (uint16_t)atoi(argv[++i]);
+    } else if (flag == "--vpn-pair" && hasValue) {
+      vpnPairArg = argv[++i];
+    } else if (flag == "--vpn-enable") {
+      vpnEnable = true;
+    } else if (flag == "--vpn-desc" && hasValue) {
+      vpnDesc = argv[++i];
     } else {
       fprintf(stderr, "WIFILT | unknown option: %s\n", flag.c_str());
       printUsage(argv[0]);
@@ -325,6 +340,10 @@ int main(int argc, char **argv) {
             nativeConfigDir().c_str());
     return 1;
   }
+
+  // Pairing from the command line (pi-setup's "vpn" step) touches nothing
+  // but vpn.json -- no sockets, no radio, no web server.
+  if (!vpnPairArg.empty()) return nativeVpnCli(vpnPairArg, vpnEnable, vpnDesc);
 
   // The box's two partitions become two directories. cfgFS is separate from the
   // assets for the same reason it is a separate partition there: reinstalling

@@ -500,6 +500,11 @@ oi3_cmd() {
 PREV="$PREFIX.prev"
 UNIT_DIR="${WIFILT_UPDATE_UNIT_DIR:-/etc/systemd/system}"   # override: tests only
 WAS_ACTIVE=()
+# Units a rollback puts back as they were. The remote access ones are saved
+# too but never stopped: the update must not drop the operator doing it over
+# the VPN (wifilt-vpn.service keeps running through stop/install/start).
+VPN_SAVED_UNITS=(wifilt-vpn.service wifilt-vpn-apply.path wifilt-vpn-apply.service)
+SAVED_UNITS=(wifilt.service local-trx.service "${VPN_SAVED_UNITS[@]}")
 
 svc_active() { systemctl is-active --quiet "$1" 2>/dev/null; }
 
@@ -509,12 +514,21 @@ restore_previous() {
   systemctl stop wifilt local-trx 2>/dev/null || true
   rm -rf "$PREFIX" && mv "$PREV" "$PREFIX" || return 1
   local u
-  for u in wifilt.service local-trx.service; do
+  for u in "${SAVED_UNITS[@]}"; do
     [[ -f "$STATE_DIR/units/$u" ]] && cp -f "$STATE_DIR/units/$u" "$UNIT_DIR/$u"
+  done
+  # Remote access units the failed package added: the version coming back has
+  # no helper for them to run. The edge itself is not stopped here -- it was
+  # not running before this update either, the unit did not exist.
+  for u in "${VPN_SAVED_UNITS[@]}"; do
+    if [[ -f "$STATE_DIR/units/$u.absent" ]]; then
+      systemctl disable "$u" >/dev/null 2>&1 || true
+      rm -f "$UNIT_DIR/$u"
+    fi
   done
   setcap cap_net_bind_service=+ep "$PREFIX/wifilt" 2>/dev/null || true
   systemctl daemon-reload
-  for u in wifilt.service local-trx.service; do
+  for u in "${SAVED_UNITS[@]}"; do
     if [[ -f "$STATE_DIR/units/$u.enabled" ]]; then
       systemctl enable "$u" >/dev/null 2>&1 || log "cannot enable $u again"
     elif [[ -f "$STATE_DIR/units/$u" ]]; then
@@ -667,8 +681,9 @@ install_package() {
     if [[ -d "$PREFIX" ]]; then cp -a "$PREFIX" "$PREV" || { fail "backup failed"; return 1; }; fi
     mkdir -p "$STATE_DIR/units"
     local u
-    for u in wifilt.service local-trx.service; do
-      rm -f "$STATE_DIR/units/$u" "$STATE_DIR/units/$u.enabled"
+    for u in "${SAVED_UNITS[@]}"; do
+      rm -f "$STATE_DIR/units/$u" "$STATE_DIR/units/$u.enabled" "$STATE_DIR/units/$u.absent"
+      [[ -f "$UNIT_DIR/$u" ]] || : > "$STATE_DIR/units/$u.absent"
       [[ -f "$UNIT_DIR/$u" ]] && cp -f "$UNIT_DIR/$u" "$STATE_DIR/units/$u"
       # install.sh may disable a unit (local-trx when the archive lacks it);
       # a rollback has to switch it back on, not just put the file back.

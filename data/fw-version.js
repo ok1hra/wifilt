@@ -26,6 +26,14 @@
   var updState  = 'idle';  // 'running' | 'offline' while an update is under way
   var updPct    = 0;
 
+  // Remote access (native Linux only, /vpn/status): "VPN · 2" while this
+  // station is in its VPN with two other devices, "VPN ✕" while it should be
+  // and the supernode does not answer. Nothing when it is not paired or off.
+  var vpnAvail = null;     // null = not asked yet, false = no /vpn/status here
+  var vpnText  = '';
+  var vpnBad   = false;
+  var vpnTitle = '';
+
   var localRev  = null;
   var remoteRev = null;
   var wifiRssi  = null;
@@ -93,6 +101,9 @@
       '.upd-banner a{color:#fbbf24;font-weight:700;}' +
       '.upd-banner button{font:inherit;padding:3px 10px;border-radius:5px;cursor:pointer;' +
         'border:1px solid #6b7280;background:transparent;color:#d1d5db;}' +
+      '.topbar-vpn{color:inherit;text-decoration:none;margin-left:6px;}' +
+      'a.topbar-vpn:hover{text-decoration:underline;}' +
+      '.topbar-vpn-bad{color:#dc2626;font-weight:700;}' +
       '.topbar-wifi-rssi{color:inherit;}' +
       '.topbar-wifi-rssi-bad{color:#dc2626;font-weight:700;}' +
       '.topbar-gps{color:inherit;}' +
@@ -675,6 +686,15 @@
       }
     }
     if (rssiShown) el.appendChild(rssi);
+    if (vpnText && !offline) {
+      var vpn = document.createElement('a');
+      vpn.href = '/setup#vpnSection';
+      vpn.className = 'topbar-vpn' + (vpnBad ? ' topbar-vpn-bad' : '');
+      vpn.textContent = vpnText;
+      vpn.title = vpnTitle;
+      el.appendChild(vpn);
+      rssiShown = true;   // the separator below follows it
+    }
 
     if (localRev === null) return;
 
@@ -773,6 +793,39 @@
       });
   }
 
+  // Native Linux only: once a minute. A 404 (Windows, or an older build)
+  // switches it off for this page.
+  var vpnTimer = null;
+  function fetchVpnInfo() {
+    window.clearTimeout(vpnTimer);
+    fetch('/vpn/status', { cache: 'no-store' })
+      .then(function (r) {
+        if (r.status === 404) { vpnAvail = false; throw new Error('none'); }
+        if (!r.ok) throw new Error('http ' + r.status);
+        return r.json();
+      })
+      .then(function (v) {
+        vpnAvail = true;
+        // at == 0: wifilt has not asked the edge yet (it just started) --
+        // unknown, not lost; ask again shortly instead of showing red.
+        if (v && !v.at) { vpnText = ''; window.clearTimeout(vpnTimer); vpnTimer = window.setTimeout(fetchVpnInfo, 5000); return; }
+        var on = v && v.paired && v.enabled && v.mode !== 'manual';
+        var lost = on && (!v.sn || Number(v.sn.age) > 60);
+        var peers = on && Array.isArray(v.peers) ? v.peers.length : 0;
+        vpnText = on ? (lost ? 'VPN ✕' : 'VPN · ' + peers) : '';
+        vpnBad = !!lost;
+        vpnTitle = !on ? '' : lost
+          ? 'Remote access: the supernode does not answer -- open SETUP → Remote access'
+          : 'Remote access: in the VPN as ' + (v.ip || '?') + ', ' + peers + ' other device' +
+            (peers === 1 ? '' : 's') + ' -- open SETUP → Remote access';
+        render();
+      })
+      .catch(function () {})
+      .finally(function () {
+        if (vpnAvail !== false) vpnTimer = window.setTimeout(fetchVpnInfo, 60000);
+      });
+  }
+
   // log-manager.js calls this instead of writing el.textContent directly
   window.setFwRev = function (rev) {
     localRev = String(rev);
@@ -806,6 +859,7 @@
         }
         if (d && typeof d.hostName === 'string') {
           if (hostName === null && updMode === null) fetchUpdateInfo();
+          if (hostName === null && vpnAvail === null) fetchVpnInfo();
           hostName = d.hostName;
           var h = Number(d.hostRssi);
           hostRssi = Number.isFinite(h) ? h : null;

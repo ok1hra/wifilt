@@ -54,6 +54,7 @@ void CachedRigBackend::start() {
     nextFastPollMs_ = clock_();
     pollFast(nextFastPollMs_);
   }
+  live_ = innerOpen_ && consecutiveFastFailures_ < kNotLiveAfterFailures;
   worker_ = std::thread(&CachedRigBackend::workerMain, this);
 }
 
@@ -84,9 +85,11 @@ void CachedRigBackend::step() {
   maybeReopen(now);
   flushPtt(now);
   flushWrites();
-  if (!innerOpen_) return;
-  pollFast(now);
-  pollSlow(now);
+  if (innerOpen_) {
+    pollFast(now);
+    pollSlow(now);
+  }
+  live_ = innerOpen_ && consecutiveFastFailures_ < kNotLiveAfterFailures;
 }
 
 // ---- worker side -------------------------------------------------------

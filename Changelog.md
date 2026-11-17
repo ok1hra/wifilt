@@ -11,6 +11,72 @@ published.
 
 ## Working tree — not committed
 
+**Remote access over the internet: an n2n 3 VPN through the supernode on remoteqth.com:82
+(Linux builds — Raspberry Pi and PC).**
+
+* SETUP → Remote access (`data/vpn-setup.js`, loaded only when `/setup-data.json` reports the new
+  `caps.vpn`; never on the box): CREATE NEW NETWORK / JOIN with a pairing code
+  `WL-XXXX-…-X` (28 Crockford symbols = community + 100-bit key, Luhn mod 32 check), on/off,
+  device name, the code with SHOW/COPY/QR, the devices in the VPN with direct / via supernode and
+  *open ↗*, another supernode and the parameters for hin2n, LEAVE NETWORK, INSTALL n2n. Topbar
+  `VPN · N` / red `VPN ✕` (`fw-version.js`, its own `/vpn/status` fetch; `/state` unchanged).
+* Native: `native/platform/vpn_code.*` (one implementation of the code), `vpn.*` (settings in
+  `vpn.json`, mode 0600, in the config directory — on a locked Pi on the data card; a background
+  thread reads the edge's management port 127.0.0.1:5644; routes `/vpn/status|code|pair|set|leave|install`;
+  CLI `--vpn-pair new|CODE --vpn-enable --vpn-desc NAME`). `CAP_VPN` (Linux only). The pairing
+  code is part of Download/Upload config (key `vpn`, validated, community and key recomputed).
+  `wlvpn*` is kept out of TrxNet broadcasts, the primary address and the ICOM scan.
+* Root side, the update pattern: `native/vpn/wifilt-vpn.sh` (ExecCondition / exec the edge with
+  `N2N_KEY`, never in argv / requests via `wifilt-vpn-apply.path`, taking only an action and an
+  IPv4 address / a change made through the VPN is undone when the requester does not answer
+  through the new settings within 120 s) and `native/vpn/build-n2n.sh` (n2n 3.1.1, commit
+  checked, `--enable-pthread`, `PREFIX=/usr/local`). `install.sh` writes `wifilt-vpn.service`
+  (always enabled, inert until paired, never restarted by an install) and the apply units; the
+  web updater never stops the VPN and puts its units back on a rollback. `pi-setup` step 5
+  *Remote access (VPN)* (default no; `PI_SETUP_VPN_CODE` for an unattended join).
+* Found on the way: n2n 3.1.1 built without pthread re-resolves a supernode **name** before
+  every registration and drops the answers ("wrong or old cookie") — hence `--enable-pthread`,
+  and the helper hands such an edge the address instead. `edge -h` prints its banner on the
+  second line. The supernode's community regex must be `wl-\w×8`: eight `[0-9a-z]` classes
+  overflow n2n's 40-byte class buffer and reject everything.
+* `server/supernode/README.md`: setting up the n2n 3 supernode (in Czech). SOFTWARE.md § 1.9 (new,
+  with the build instructions for an n2n 3 that works with WIFILT), § 1.7, § 2.4, § 9.10, § 9.12.
+* Tests: `tools/vpn-code-smoke.cpp`, `tools/vpn-helper-check.sh` (48), `tools/vpn-native-check.sh`
+  (31, real n2n 3.1.1 in namespaces: pairing, VPN access, settings, backup round trip, TrxNet
+  off the VPN). End to end against remoteqth.com:82 from two NATed namespaces (pasta): both
+  registered, ping 6/6, direct path, `/vpn/status` of one station read by the other through the
+  VPN. Not checked on a real Raspberry Pi (build there, `-u/-g` under systemd, locked Pi) nor
+  with hin2n.
+
+**Configuration backup carries the GIT LOG SYNC settings, token included.**
+
+* *Download config* now writes `/git-backup.json` (repository, branch, file, token, last sync)
+  under the key `gitSync`. *Upload config* writes it back, within the file's 1536 B limit and
+  with the same oversize and storage refusals as the other sections. A backup without the key
+  leaves the current settings alone. Before this the sync had to be set up again after every
+  restore. The token in the file can write to the log repository, and SOFTWARE.md § 9.10 and
+  § 3.15 now say so. `tools/config-backup-smoke.js` checks the key both ways. Add-on passwords
+  are still left out.
+
+**QRPlog TS480 palette: the mouse wheel over a frequency digit tunes the radio.**
+
+* Over the display's 100 kHz … 10 Hz digits (not the two MHz digits) each notch moves the
+  frequency by that digit, carrying into the next; wheel up = higher. A bar under the digit
+  shows which one; the display shows the new frequency at once and keeps it until the radio
+  reports it (3 s at most). A fast wheel counts from the last frequency asked for, not from
+  the lagging display; a touchpad's small deltas add up, 40 px a notch. Not in the menu, on a
+  memory channel, while transmitting or with the radio off. `webui/ts480/lcd.js`
+  (`freqDigitAt`, `markDigit`, `canTune`, `withFreq`), `client.js` (`attachWheelTune`, `view`).
+* local-trx: new WebSocket op `{"op":"tune","hz"}`. Set over CAT (`CachedRigBackend`, new
+  `live()`: open and fewer than 3 failed polls) — the same TS-480, the panel requires hamlib
+  model TS-480; otherwise, and always against `--ts480-sim`, `Ts480Link::tuneHz()` types it on
+  the panel keypad, only the latest frequency, after the wheel rested 0.3 s and never into an
+  entry still being typed.
+* Unit tests 144/144 (new: keypad coalescing, waiting for a running entry, `live()`).
+  End to end against `--ts480-sim` in headless Chrome with real wheel events, 26/26. Not
+  checked on a real TS-480 (the CAT path in particular). SOFTWARE.md § 3.14b, QRPlog cheat
+  sheet.
+
 **QRPlog: a frequency and mode typed into Call tune the selected TRX; the TS480 palette resizes by mouse; a TS480 pill on the DATA pages.**
 
 * `Enter` on `14025` (kHz), `14.025` / `144.3` (MHz), a mode (`CW USB LSB SSB AM FM RTTY FSK DV`)

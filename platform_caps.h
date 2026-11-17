@@ -50,6 +50,16 @@
   // the box does not.
   #define CAP_WATCH 1
 
+  // Remote access (native/platform/vpn.cpp): the n2n edge to the supernode on
+  // remoteqth.com, run by its own systemd service and configured from SETUP.
+  // Linux only -- the helper and the units are systemd's; Windows was decided
+  // against (no n2n package, a TAP driver and a service to install).
+  #if defined(__linux__)
+    #define CAP_VPN 1
+  #else
+    #define CAP_VPN 0
+  #endif
+
   // Where the listeners the sketch names 80/82/83 really are. Ports below 1024
   // need a capability on a PC, so native/net/WiFi.cpp may have moved one to
   // +8000 (or the operator moved it with --port/--dxc-port/--audio-port).
@@ -86,6 +96,7 @@
   #define CAP_GPIO          1
   #define CAP_BAND_DECODER  1
   #define CAP_WATCH         0
+  #define CAP_VPN           0
 
   // The box owns its ports: a listener is always where the sketch put it.
   #define PLATFORM_PORT(requested)           ((uint16_t)(requested))

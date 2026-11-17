@@ -77,6 +77,10 @@ class Ts480Link {
   static constexpr int kReconnectMs = 3000;
   static constexpr int kEncoderFlushMs = 60;
   static constexpr int kLongPressMs = 1000;
+  // tuneHz(): how long the wheel has to rest before the keypad entry starts
+  // -- one entry for a whole wheel gesture, not one per notch.
+  static constexpr int kTuneSettleMs = 300;
+  static constexpr long long kMinHz = 30000, kMaxHz = 60000000;   // TS-480 VFO range
   static constexpr int kPersistAfterMs = 2000;
   static constexpr int kRestoreFirstMs = 2500;
   static constexpr int kRestoreRetryMs = 4000;
@@ -94,6 +98,10 @@ class Ts480Link {
   void encoder(const std::string &which, int delta);   // "vfo" | "multi" | "rit"
   void setPot(const std::string &which, int value);    // "af" | "sql" | "ifshift"
   void directFreq(double khz);                         // ENT, digits, ENT
+  // The same keypad entry for a frequency that keeps changing (QRPlog's
+  // wheel over the display's digits): only the latest one is entered, once
+  // the wheel has rested kTuneSettleMs and any entry still being typed is done.
+  void tuneHz(long long hz);
   void reconnect();
 
   // True once since the last call when the display (or the link state)
@@ -119,6 +127,7 @@ class Ts480Link {
   void onFrame(const std::string &frame, Clock::time_point now);
   void timers(Clock::time_point now);
   void tap(const Ts480::KeyDef &key, Clock::time_point &at);
+  void queueDirectLocked(long long hz10, Clock::time_point now);   // mutex_ held
 
   std::unique_ptr<Ts480Transport> transport_;
   Ts480LinkOptions options_;
@@ -142,6 +151,8 @@ class Ts480Link {
   std::map<std::string, Held> held_;
   int acc_[3] = {0, 0, 0};   // vfo, multi, rit
   std::deque<std::pair<Clock::time_point, std::string>> macro_;   // timed frames (direct freq)
+  long long tuneHz_ = 0;     // tuneHz() target not entered yet, 0 = none
+  Clock::time_point tuneAt_{};
 
   std::atomic<int64_t> lastRxMs_{-100000};
   Clock::time_point lastKeepalive_{};

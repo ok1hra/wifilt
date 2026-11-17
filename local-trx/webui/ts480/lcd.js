@@ -6,6 +6,8 @@
 //
 //   const lcd = Ts480Lcd.mount(svgElement);   // svg must be in the document and visible
 //   lcd.render(stateMessage);                 // {"type":"state",...} from the WebSocket
+//   lcd.freqDigitAt(clientX, clientY);        // 0..6 frequency digit under the pointer, -1
+//   lcd.markDigit(i);                         // bar under digit i (-1 = none)
 //
 // Coordinates are the panel photo's; the LCD window is LCD_VIEWBOX. All CSS
 // is scoped under .ltx480-lcd so it can live inside another page.
@@ -47,7 +49,9 @@
 .ltx480-lcd.off .s,.ltx480-lcd.off .f,.ltx480-lcd.off .fs,.ltx480-lcd.off .bar,.ltx480-lcd.off .inv{opacity:0}
 .ltx480-lcd.unlit{--ghost:rgba(40,40,30,.06);--seg:#1d1c18}
 .ltx480-lcd.unlit .invt.on{fill:#9c998f}
-.ltx480-lcd .offtxt{fill:var(--lcd-lo)}`;
+.ltx480-lcd .offtxt{fill:var(--lcd-lo)}
+.ltx480-lcd .tunemark{fill:var(--seg);opacity:0;pointer-events:none}
+.ltx480-lcd .tunemark.on{opacity:.6}`;
     document.head.appendChild(style);
   }
 
@@ -327,7 +331,8 @@
         });
       };
     }
-    const setFreq = segDisplay({ x: 753, y: 343, n: 7, w: 37, h: 57, pitch: 49, stroke: 7.4, type: 7, gap: 1.1 });
+    const FQ = { x: 753, y: 343, n: 7, w: 37, h: 57, pitch: 49 };
+    const setFreq = segDisplay({ ...FQ, stroke: 7.4, type: 7, gap: 1.1 });
     const setChan = segDisplay({ x: 662, y: 357, n: 2, w: 20, h: 32, pitch: 27, stroke: 4.2, type: 7, gap: 0.7 });
     const setMode = segDisplay({ x: 677, y: 430, n: 3, w: 25, h: 29, pitch: 30, stroke: 3.4, type: 14, dots: false });
     const setSub = segDisplay({ x: 817, y: 414, n: 8, w: 27, h: 42, pitch: 35, stroke: 3.8, type: 14 });
@@ -383,11 +388,50 @@
       for (const [k, e] of Object.entries(subInd)) e.classList.toggle("on", live && (k === sel || (k === "PWR" && s.lamp === "tx")));
     }
 
-    return { render, group: L };
+    // Which frequency digit is under the pointer: the digits lean like the
+    // real ones (skewX -7), so the pointer is unskewed into a cell first. The
+    // area reaches a little below the digits, over the tuning bar.
+    const SKEW = Math.tan(7 * Math.PI / 180);
+    function freqDigitAt(clientX, clientY) {
+      const ctm = svg.getScreenCTM();
+      if (!ctm) return -1;
+      const p = new DOMPoint(clientX, clientY).matrixTransform(ctm.inverse());
+      const dy = p.y - FQ.y;
+      if (dy < -6 || dy > FQ.h + 11) return -1;
+      const u = p.x - FQ.x + dy * SKEW + (FQ.pitch - FQ.w) / 2;
+      const i = Math.floor(u / FQ.pitch);
+      return i >= 0 && i < FQ.n ? i : -1;
+    }
+    const markG = el("g", {}, L);
+    const mark = el("rect", { class: "tunemark", x: 0, y: FQ.h + 4, width: FQ.w, height: 4, rx: 1 }, markG);
+    function markDigit(i) {
+      mark.classList.toggle("on", i >= 0);
+      if (i >= 0) markG.setAttribute("transform", `translate(${FQ.x + i * FQ.pitch},${FQ.y}) skewX(-7)`);
+    }
+
+    return { render, group: L, freqDigitAt, markDigit };
+  }
+
+  // The display shows a VFO frequency the wheel may change: on, not in the
+  // menu, not a memory channel (CAT would move the VFO behind it), not
+  // transmitting, and digits only (not the "--.---.--" of a keypad entry).
+  const inMenu = flag("@", 4), memCh = flag("@", 5);
+  function canTune(s) {
+    return !!s && s.power === true && typeof s.freq_hz === "number" && s.freq_hz >= 30000
+      && /^[ 0-9]{7}$/.test(s.freq_raw || "") && !inMenu(s) && !memCh(s) && s.lamp !== "tx";
+  }
+
+  // A copy of state message m showing hz instead: the radio's own dot layout,
+  // its digits replaced (blank leading zeros, as the radio draws them).
+  function withFreq(m, hz) {
+    const s = m.state, raw = String(Math.round(hz / 10)).padStart(7, " ").slice(-7);
+    let k = 0, freq = "";
+    for (const ch of s.freq || "") freq += ch === "." ? ch : raw[k++] ?? " ";
+    return { ...m, state: { ...s, freq, freq_raw: raw, freq_hz: Math.round(hz / 10) * 10 } };
   }
 
   // SSB/AM/FM by CAT MD code: the modes the browser microphone may key.
   const isVoiceMode = code => code === 1 || code === 2 || code === 4 || code === 5;
 
-  window.Ts480Lcd = { mount, LCD_VIEWBOX, isVoiceMode };
+  window.Ts480Lcd = { mount, LCD_VIEWBOX, isVoiceMode, canTune, withFreq };
 })();

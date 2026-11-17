@@ -10,6 +10,7 @@
 //   * a palette with nothing but the radio's display: drag it by the header,
 //     resize it with the corner (the display scales), header = TS-480, ⏻, AF,
 //     PTT, and expand at the right end,
+//   * mouse wheel over a frequency digit (100 kHz ... 10 Hz) tunes the radio,
 //   * expand: closes the palette and opens the full panel (panel.html) in its
 //     own window; that window's collapse closes it and brings the palette back
 //     (postMessage -- the two pages are on different origins).
@@ -221,8 +222,10 @@
     if (open) {
       // The LCD lays text out by its rendered width: mount it once visible.
       if (!lcd) {
-        lcd = Ts480Lcd.mount(pal.querySelector(".ltx480-pal-body svg"));
-        lcd.render(client.last);
+        const svg = pal.querySelector(".ltx480-pal-body svg");
+        lcd = Ts480Lcd.mount(svg);
+        client.attachWheelTune(svg, lcd);
+        lcd.render(client.view(client.last));
       }
       place();
       if (state.af && !client.af) client.wantAf();
@@ -298,7 +301,7 @@
       client = new Ts480Client(`ws://${host}:${CFG.wsPort}/ts480`);
       buildButton();
       build();
-      client.on("state", m => { if (lcd && !pal.hidden) lcd.render(m); });
+      client.on("state", m => { if (lcd && !pal.hidden) lcd.render(client.view(m)); });
       client.on("refresh", updateButton);
       client.connect();
       updateButton();

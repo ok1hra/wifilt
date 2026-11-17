@@ -44,16 +44,21 @@ LOCAL_TRX_UNIT=/etc/systemd/system/local-trx.service
 UPD_UNITS=(wifilt-update.path wifilt-update.service wifilt-update-check.timer wifilt-update-check.service)
 UPD_STATE=/var/lib/wifilt-update
 UPD_CONF=/etc/wifilt-update.conf
+VPN_UNITS=(wifilt-vpn.service wifilt-vpn-apply.path wifilt-vpn-apply.service)
+VPN_STATE=/var/lib/wifilt-vpn
+VPN_CONF=/etc/wifilt-vpn.conf
 
 if [[ $UNINSTALL -eq 1 ]]; then
-  systemctl disable --now wifilt local-trx wifilt-update.path wifilt-update-check.timer 2>/dev/null || true
-  rm -f "$UNIT" "$LOCAL_TRX_UNIT" "$UPD_CONF"
-  for u in "${UPD_UNITS[@]}"; do rm -f "/etc/systemd/system/$u"; done
-  rm -rf "$UPD_STATE" "$PREFIX.prev"
+  systemctl disable --now wifilt local-trx wifilt-update.path wifilt-update-check.timer \
+    wifilt-vpn wifilt-vpn-apply.path 2>/dev/null || true
+  rm -f "$UNIT" "$LOCAL_TRX_UNIT" "$UPD_CONF" "$VPN_CONF"
+  for u in "${UPD_UNITS[@]}" "${VPN_UNITS[@]}"; do rm -f "/etc/systemd/system/$u"; done
+  rm -rf "$UPD_STATE" "$VPN_STATE" "$PREFIX.prev"
   systemctl daemon-reload 2>/dev/null || true
   rm -rf "$PREFIX"
-  echo "removed $PREFIX and the service."
+  echo "removed $PREFIX and the services."
   echo "your configuration in ~/.config/wifilt was left alone."
+  [[ -x /usr/local/sbin/edge ]] && echo "n2n in /usr/local/sbin was left alone too."
   exit 0
 fi
 
@@ -95,6 +100,15 @@ if [[ -f "$HERE/wifilt-update.sh" ]]; then
   install -m 0755 "$HERE/wifilt-update.sh" "$PREFIX/wifilt-update"
   [[ -f "$HERE/update-channel.conf" ]] && install -m 0644 "$HERE/update-channel.conf" "$PREFIX/update-channel.conf"
   HAVE_UPDATER=1
+fi
+
+# Remote access (native/vpn/, SETUP -> Remote access): the root helper and the
+# n2n build script. Their units are written further down.
+HAVE_VPN=0
+if [[ -f "$HERE/wifilt-vpn.sh" ]]; then
+  install -m 0755 "$HERE/wifilt-vpn.sh" "$PREFIX/wifilt-vpn"
+  [[ -f "$HERE/build-n2n.sh" ]] && install -m 0755 "$HERE/build-n2n.sh" "$PREFIX/wifilt-vpn-build"
+  HAVE_VPN=1
 fi
 
 # The one privileged step. It is a property of the file, so it has to be redone
@@ -244,10 +258,74 @@ WantedBy=timers.target
 EOF
 fi
 
+# Remote access: the n2n edge as its own service, so the station stays
+# reachable while wifilt restarts, crashes or is being updated. Unlike
+# wifilt.service it is ENABLED for good, because it is inert until the operator
+# pairs the station: ExecCondition reads vpn.json from the user's config
+# directory and skips the start while there is none or the VPN is off. Enabling
+# it here, where the system is always unlocked, is what makes it work on a
+# locked Raspberry Pi as well, where nothing written to /etc later survives a
+# reboot. Settings changes come back the update way: wifilt drops
+# req/apply.json, the path unit runs the helper as root.
+# This script never restarts the edge -- "start" below is a no-op for a running
+# unit -- so an update over the VPN does not drop the operator doing it.
+if [[ $HAVE_VPN -eq 1 ]]; then
+  RUN_HOME="$(getent passwd "$RUN_USER" | cut -d: -f6)"
+  install -d -m 0755 "$VPN_STATE"
+  install -d -m 0755 -o "$RUN_USER" "$VPN_STATE/req"
+  printf 'PREFIX=%q\nRUN_USER=%q\nCONF_DIR=%q\n' "$PREFIX" "$RUN_USER" "$RUN_HOME/.config/wifilt" > "$VPN_CONF"
+  chmod 0644 "$VPN_CONF"
+  cat > /etc/systemd/system/wifilt-vpn.service <<EOF
+[Unit]
+Description=WIFILT remote access - n2n edge to the supernode (SETUP -> Remote access)
+After=network-online.target
+Wants=network-online.target
+# On a locked Raspberry Pi the settings live on the data card.
+RequiresMountsFor=$RUN_HOME/.config/wifilt
+
+[Service]
+Type=simple
+ExecCondition=$PREFIX/wifilt-vpn condition
+ExecStart=$PREFIX/wifilt-vpn run
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  cat > /etc/systemd/system/wifilt-vpn-apply.path <<EOF
+[Unit]
+Description=WIFILT remote access - settings watch
+
+[Path]
+PathExists=$VPN_STATE/req/apply.json
+Unit=wifilt-vpn-apply.service
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  cat > /etc/systemd/system/wifilt-vpn-apply.service <<EOF
+[Unit]
+Description=WIFILT remote access - apply settings
+
+[Service]
+Type=oneshot
+ExecStart=$PREFIX/wifilt-vpn --from-request
+# Building n2n on a Raspberry Pi takes a few minutes.
+TimeoutStartSec=30min
+EOF
+fi
+
 systemctl daemon-reload
 if [[ $HAVE_UPDATER -eq 1 ]]; then
   systemctl enable --now wifilt-update.path wifilt-update-check.timer >/dev/null 2>&1 \
     || echo "WARNING: could not enable the web updater units" >&2
+fi
+if [[ $HAVE_VPN -eq 1 ]]; then
+  { systemctl enable wifilt-vpn.service >/dev/null 2>&1 &&
+    systemctl enable --now wifilt-vpn-apply.path >/dev/null 2>&1 &&
+    systemctl start wifilt-vpn.service >/dev/null 2>&1; } \
+    || echo "WARNING: could not enable the remote access units" >&2
 fi
 
 # start-wifilt.sh (copied above, if this archive has it) starts wifilt AND
@@ -274,6 +352,14 @@ then open            http://wifilt.local
 The service is installed but NOT enabled -- starting a transmitter's control
 interface at boot should be a decision, not a side effect of installing.
 EOF
+
+if [[ $HAVE_VPN -eq 1 ]]; then
+  cat <<EOF
+
+Remote access over the internet (n2n VPN via remoteqth.com) is set up in
+SETUP -> Remote access. It stays off until this station is paired.
+EOF
+fi
 
 if [[ $INSTALLED_LOCAL_TRX -eq 1 ]]; then
   cat <<EOF

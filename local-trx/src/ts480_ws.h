@@ -15,6 +15,8 @@
 //   browser -> server  {"op":"down"|"up","key":NAME}  {"op":"enc","which","delta"}
 //                      {"op":"pot","which","value"}  {"op":"freq","khz"}
 //                      {"op":"reconnect"}  {"op":"af","on":bool}  {"op":"ptt","on":bool}
+//                      {"op":"tune","hz"}  (QRPlog's wheel over the display's
+//                      digits: CAT when the rig answers, else the keypad)
 // Binary frames: 8 kHz mono G.711 µ-law. Server -> browser = RX audio while
 // "af" is on; browser -> server = microphone, used only while that browser
 // holds PTT.
@@ -26,6 +28,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <set>
 #include <string>
@@ -63,6 +66,11 @@ class Ts480WsServer {
   bool afAvailable() const { return capture_ != nullptr; }
   bool txAvailable() const { return playback_ != nullptr && ptt_ != nullptr; }
 
+  // "tune" sets the frequency through this when it returns true (CAT to the
+  // same radio: instant, no key beeps); false or unset = the panel keypad
+  // (Ts480Link::tuneHz). Called on the main loop; must not block.
+  void setCatTune(std::function<bool(long long hz)> fn) { catTune_ = std::move(fn); }
+
  private:
   struct Client;
   void accept();
@@ -83,6 +91,7 @@ class Ts480WsServer {
   AudioCapture *capture_;
   AudioPlayback *playback_;
   PttArbiter *ptt_;
+  std::function<bool(long long hz)> catTune_;
   std::unique_ptr<WiFiServer> server_;
   std::vector<std::unique_ptr<Client>> clients_;
   int64_t lastBroadcastMs_ = 0;

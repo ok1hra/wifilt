@@ -707,6 +707,14 @@
           </div>
         </details>
 
+        <!-- Remote access (n2n VPN through remoteqth.com), native Linux only. Filled
+             by /vpn-setup.js, which applySetupData() loads when caps.vpn is true;
+             the box never has it (prepare-spiffs-tree.sh). The <template> keeps
+             the tag inert -- nothing is fetched from it -- while
+             stamp-asset-versions.js still versions it like any other script tag. -->
+        <details class="setup-section" id="vpnSection" hidden></details>
+        <template id="vpnSetupScript"><script src="/vpn-setup.js?v=9ba0246e"></script></template>
+
         <details class="setup-section" id="unattendedSection">
           <summary class="setup-section-title">Remote management of JS8 unattended operation <span class="setup-local-badge" title="Not stored at all — this is the firmware's running state, and it resets on restart.">live</span></summary>
           <div class="setup-section-body">
@@ -820,6 +828,18 @@
         // the case that predates the flag.
         platformCaps = data.caps || {};
         localTrxIsNative = data.platform !== 'esp32';
+        if (platformCaps.vpn === true && !window.vpnSetupRequested) {
+          // Remote access lives in its own script, served only by the native
+          // Linux build; the URL (and its ?v=) comes from the inert template.
+          window.vpnSetupRequested = true;
+          var vpnTpl = document.getElementById('vpnSetupScript');
+          var vpnTag = vpnTpl && vpnTpl.content && vpnTpl.content.querySelector('script');
+          if (vpnTag) {
+            var vpnJs = document.createElement('script');
+            vpnJs.src = vpnTag.getAttribute('src');
+            document.head.appendChild(vpnJs);
+          }
+        }
         document.querySelectorAll('[data-localtrx]').forEach(function (checkbox) {
           var tip = checkbox.parentElement && checkbox.parentElement.querySelector('.help-tip');
           if (tip) tip.dataset.tip = localTrxIsNative ? LOCAL_TRX_HELP_NATIVE : LOCAL_TRX_HELP_ESP32;
@@ -2381,7 +2401,7 @@
     });
   </script>
   <script src="/mgrs.js?v=6a363b6c"></script>
-  <script src="/fw-version.js?v=4a8fe10e"></script>
+  <script src="/fw-version.js?v=f4016fb2"></script>
   <script>
     (function () {
       var form = document.querySelector('form[action="/setup"]');

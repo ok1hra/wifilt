@@ -100,7 +100,7 @@ ask_secret() {
 SETUP_CONF=/etc/wifilt-pi/setup.conf
 SAVED_VARS=(RUN_USER HAVE_SERIAL HAVE_ETH HAVE_AP HAVE_OI3 HAVE_FSLOCK
             SERIAL_CAT SERIAL_CW SERIAL_PANEL ETH_SERVER_ADDR OI3_REV OI3_PORT
-            DATA_UUID WIFILT_ENABLE)
+            DATA_UUID WIFILT_ENABLE HAVE_VPN)
 
 load_setup_conf() {
   # shellcheck disable=SC1090

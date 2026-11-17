@@ -123,7 +123,7 @@ final_checks() {
   local s
   echo
   echo "Status:"
-  for s in wifilt local-trx wifi-fallback NetworkManager; do
+  for s in wifilt local-trx wifilt-vpn wifi-fallback NetworkManager; do
     systemctl cat "$s" >/dev/null 2>&1 || continue
     printf '  %-16s %-10s %s\n' "$s" "$(systemctl is-active "$s" 2>/dev/null || true)" \
       "$(systemctl is-enabled "$s" 2>/dev/null || true)"

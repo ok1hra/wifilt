@@ -252,6 +252,13 @@ void Ts480Link::timers(Clock::time_point now) {
       }
     }
 
+    // The wheel's latest frequency, once it rested and nothing is being typed
+    // (an ENT in the middle of another entry would end that one early).
+    if (tuneHz_ && now >= tuneAt_ && macro_.empty()) {
+      queueDirectLocked(std::llround(tuneHz_ / 10.0), now);
+      tuneHz_ = 0;
+    }
+
     while (!macro_.empty() && macro_.front().first <= now) {
       out.push_back(macro_.front().second);
       macro_.pop_front();
@@ -355,9 +362,20 @@ void Ts480Link::tap(const Ts480::KeyDef &key, Clock::time_point &at) {
 
 void Ts480Link::directFreq(double khz) {
   if (!(khz > 0) || khz > 60000) return;
+  std::lock_guard<std::mutex> lock(mutex_);
+  queueDirectLocked(std::llround(khz * 100), Clock::now());
+}
+
+void Ts480Link::tuneHz(long long hz) {
+  if (hz < kMinHz || hz > kMaxHz) return;
+  std::lock_guard<std::mutex> lock(mutex_);
+  tuneHz_ = hz;
+  tuneAt_ = Clock::now() + ms(kTuneSettleMs);
+}
+
+void Ts480Link::queueDirectLocked(long long hz10, Clock::time_point now) {
   // link.py: 10 Hz units, 7 digits, trailing zeros dropped, at least two
   // digits; the first digit is the 10 MHz digit (7 MHz -> 0,7...).
-  long long hz10 = std::llround(khz * 100);
   char digits[32];
   std::snprintf(digits, sizeof(digits), "%07lld", hz10);
   std::string d(digits);
@@ -365,8 +383,7 @@ void Ts480Link::directFreq(double khz) {
   if (d == "0" || d.empty()) d = "0";
   if (d.size() < 2) d.append(2 - d.size(), '0');
 
-  std::lock_guard<std::mutex> lock(mutex_);
-  Clock::time_point at = Clock::now();
+  Clock::time_point at = now;
   if (!macro_.empty() && macro_.back().first + ms(50) > at) at = macro_.back().first + ms(50);
   const Ts480::KeyDef *ent = Ts480::findKey("ENT");
   tap(*ent, at);

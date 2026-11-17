@@ -31,6 +31,13 @@
 
 WiFiClass WiFi;
 
+// The remote access VPN's TAP (native/platform/vpn.cpp names it wlvpn0). Kept
+// out of broadcasts and out of the "primary" address; local-trx compiles this
+// file too, and for it the rule is the same.
+__attribute__((unused)) static bool isVpnInterface(const char *name) {
+  return name && strncmp(name, "wlvpn", 5) == 0;
+}
+
 // ---------------------------------------------------------------------------
 // socket_compat
 // ---------------------------------------------------------------------------
@@ -219,6 +226,11 @@ void refreshOwnInterfacesLocked() {
     uint32_t broadcast = 0;
     if ((entry->ifa_flags & IFF_BROADCAST) && entry->ifa_broadaddr)
       broadcast = ((struct sockaddr_in *)entry->ifa_broadaddr)->sin_addr.s_addr;
+    // The remote access VPN (wlvpn0, native/platform/vpn.cpp) is an own
+    // address -- its echoes must still be recognised -- but no broadcast goes
+    // out of it: TrxNet discovery across the internet would merge the home
+    // station's net with the laptop's and set off NET_ID conflicts.
+    if (isVpnInterface(entry->ifa_name)) broadcast = 0;
     g_own.push_back({own, broadcast, if_nametoindex(entry->ifa_name)});
   }
   freeifaddrs(interfaces);
@@ -837,6 +849,9 @@ bool primaryInterface(IPAddress *address, uint8_t mac[6]) {
     if (entry->ifa_flags & IFF_LOOPBACK) continue;
     if (!(entry->ifa_flags & IFF_UP)) continue;
     if (entry->ifa_addr->sa_family != AF_INET) continue;
+    // Not the remote access VPN: SETUP shows the LAN address, and the ICOM
+    // scan sweeps the /24 around this one.
+    if (isVpnInterface(entry->ifa_name)) continue;
 
     struct sockaddr_in *in = (struct sockaddr_in *)entry->ifa_addr;
     if (address) *address = IPAddress((uint32_t)in->sin_addr.s_addr);

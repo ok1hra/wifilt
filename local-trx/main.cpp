@@ -661,6 +661,13 @@ int main(int argc, char **argv) {
     if (wsPort > 0) {
       ts480Ws = std::make_unique<LocalTrx::Ts480WsServer>((uint16_t)wsPort, *ts480Link, audioCapturePtr,
                                                            audioPlaybackPtr, pttArbiter.get());
+      // The wheel over the display's digits tunes through CAT -- the same
+      // radio (the panel needs hamlib TS-480) -- while the rig answers; the
+      // simulator is another radio than CAT's, so it always gets the keypad.
+      if (!ts480Sim && cachedRig) {
+        LocalTrx::CachedRigBackend *cat = cachedRig.get();
+        ts480Ws->setCatTune([cat](long long hz) { return cat->live() && cat->setFreqHz((double)hz); });
+      }
       if (ts480Ws->begin(&error)) {
         std::printf("local-trx: TS-480 software panel on %s, WebSocket port %d%s%s\n",
                     ts480Link->describe().c_str(), wsPort, ts480Ws->afAvailable() ? ", AF" : "",

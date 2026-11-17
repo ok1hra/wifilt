@@ -347,6 +347,50 @@ TEST_CASE("ts480 link: direct frequency macro") {
   CHECK(downs == "?>:>:7?");
 }
 
+namespace {
+// Key-down codes the link wrote, in order ("?" = ENT, digits ">0" ... ";9").
+std::string keyDowns(const FakeTransport &fake) {
+  std::string downs;
+  for (const std::string &w : fake.written)
+    if (w.size() == 3 && w[1] == '1') downs += w[0];
+  return downs;
+}
+}  // namespace
+
+TEST_CASE("ts480 link: tuneHz enters only the latest frequency, once the wheel rests") {
+  using std::chrono::milliseconds;
+  auto *fake = new FakeTransport;
+  Ts480Link link(std::unique_ptr<Ts480Transport>(fake), {});
+  const auto t0 = Ts480Link::Clock::now();
+  link.pumpForTest(t0);
+  fake->written.clear();
+  link.tuneHz(7074000);
+  link.tuneHz(7075000);
+  link.tuneHz(7076000);    // 0707600 -> "07076"
+  link.tuneHz(10);         // out of range: ignored
+  link.pumpForTest(Ts480Link::Clock::now());
+  CHECK(keyDowns(*fake).empty());   // still within kTuneSettleMs
+  const auto t1 = Ts480Link::Clock::now();
+  for (int t = 0; t < 3000; t += 20) link.pumpForTest(t1 + milliseconds(t));
+  // ENT '?', 0 '>', 7 ':', 0 '>', 7 ':', 6 '9', ENT '?'
+  CHECK(keyDowns(*fake) == "?>:>:9?");
+}
+
+TEST_CASE("ts480 link: tuneHz waits for an entry still being typed") {
+  using std::chrono::milliseconds;
+  auto *fake = new FakeTransport;
+  Ts480Link link(std::unique_ptr<Ts480Transport>(fake), {});
+  const auto t0 = Ts480Link::Clock::now();
+  link.pumpForTest(t0);
+  fake->written.clear();
+  link.directFreq(14074.0);   // "1407400" -> "14074", 7 taps ~0.9 s
+  link.tuneHz(14075000);      // its ENT must not land in the middle
+  const auto t1 = Ts480Link::Clock::now();
+  for (int t = 0; t < 5000; t += 20) link.pumpForTest(t1 + milliseconds(t));
+  // 1 '4', 4 '7', 0 '>', 7 ':', 5 '8'
+  CHECK(keyDowns(*fake) == "?47>:7?" "?47>:8?");
+}
+
 TEST_CASE("ts480 sim: power on, redraw, keys through the real link thread") {
   auto *sim = new SimTs480Transport(200);
   Ts480Link link(std::unique_ptr<Ts480Transport>(sim), {});

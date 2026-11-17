@@ -56,6 +56,7 @@ class CachedRigBackend : public RigBackend {
   static constexpr uint32_t kWantedForMs = 5000;      // slow items: polled only while asked for
   static constexpr double   kFreqJumpHz = 50000.0;    // larger moves need a second matching read
   static constexpr int      kReopenAfterFailures = 10;
+  static constexpr int      kNotLiveAfterFailures = 3;   // live() turns false
   static constexpr uint32_t kReopenRetryMs = 5000;
   static constexpr uint32_t kPttOffRetryMs = 200;
 
@@ -76,6 +77,12 @@ class CachedRigBackend : public RigBackend {
   // One worker iteration: reopen if due, flush queued writes, poll what is
   // due. Public so tests can drive it deterministically without the thread.
   void step();
+
+  // The rig is open and answering its freq/mode polls right now (any
+  // thread). A caller with another way to the radio (the TS-480 panel's
+  // keypad) uses that instead while this is false: a write queued here would
+  // otherwise sit until the rig comes back.
+  bool live() const { return live_.load(); }
 
   bool getFreqHz(double *hzOut) override;
   bool setFreqHz(double hz) override;
@@ -167,6 +174,7 @@ class CachedRigBackend : public RigBackend {
   struct LogSlot { std::string key; uint32_t lastMs = 0; int suppressed = 0; bool used = false; };
   LogSlot logSlots_[8];
 
+  std::atomic<bool> live_{false};
   std::atomic<bool> stopRequested_{false};
   std::thread worker_;
 };

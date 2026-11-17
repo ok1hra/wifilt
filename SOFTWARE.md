@@ -20,6 +20,7 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
  · [1.6 local-trx — any radio, on a PC](#16-local-trx--any-radio-on-a-pc)
  · [1.7 A Raspberry Pi station](#17-a-raspberry-pi-station)
  · [1.8 Updating from the web (PC and Raspberry Pi)](#18-updating-from-the-web-pc-and-raspberry-pi)
+ · [1.9 Remote access over the internet (PC and Raspberry Pi)](#19-remote-access-over-the-internet-pc-and-raspberry-pi)
 
 **[2. First run](#2-first-run)**
  · [2.1 AP mode](#21-ap-mode)
@@ -128,6 +129,7 @@ how to get firmware onto it, see [HARDWARE.md](HARDWARE.md); for building from s
  · [9.9 Remote management of JS8 unattended operation](#99-remote-management-of-js8-unattended-operation)
  · [9.10 Save, download and upload the configuration](#910-save-download-and-upload-the-configuration)
  · [9.11 Web server](#911-web-server)
+ · [9.12 Remote access](#912-remote-access)
 
 **[10. LOGSYNC](#10-logsync)**
  · [10.1 Where your QSOs live](#101-where-your-qsos-live)
@@ -462,6 +464,7 @@ build alone takes several minutes. What it offers, in this order:
 | WIFILT + local-trx | yes | installs both to `/opt/wifilt` with the port 80 permission and asks whether the services start **at every boot** — on a headless Pi the answer is normally yes |
 | Serial port aliases | yes | lists the USB serial adapters and lets you name them `/dev/ttyUSB.cat` (CAT to the radio), `/dev/ttyUSB.cw` (Open Interface III) and `/dev/ttyUSB.panel`, matched by the adapter's serial number, so the names survive reboots and replugging. Use these names in local-trx's setup |
 | Network | yes | **Ethernet:** DHCP client; when nothing answers within 20 s the Pi becomes the DHCP server itself (`192.168.50.1/24` by default), so TrxNet devices on a bare cable still get addresses; optional fixed addresses by MAC. **Wi-Fi:** when no known network is in range, the Pi opens a setup access point `WIFILT-setup-xxxx` with a password you choose; a phone that joins it gets a page where Wi-Fi networks can be added, and WIFILT itself stays reachable at `http://192.168.4.1/`. Wi-Fi set in Raspberry Pi Imager is moved from netplan to an ordinary NetworkManager profile |
+| Remote access (VPN) | **no** | builds n2n 3.1.1 from source and pairs this station with the VPN through remoteqth.com: a new network (the first device) or one joined with the pairing code of another device — see [section 1.9](#19-remote-access-over-the-internet-pc-and-raspberry-pi) |
 | Open Interface III firmware | **no** | builds the firmware from the `ok1hra/oi3` sources (and the TrxNet library) and uploads it over the board's USB; only when the sources changed since the last upload from this Pi |
 | Power-loss protection (fslock) | no | makes the SD card read-only, so pulling the plug cannot damage it — see below |
 
@@ -588,6 +591,124 @@ other than the newest official build of the same edition. Progress goes to
 `/var/lib/wifilt-update/status.json` (Windows: `%APPDATA%\wifilt\update\`), and the log of the
 last run to `update.log` next to it. To run it by hand: `sudo /opt/wifilt/wifilt-update check`
 or `… update`. `… update --dry-run` goes through every step without changing anything.
+
+### 1.9 Remote access over the internet (PC and Raspberry Pi)
+
+A station at home usually sits behind a router, often behind the provider's NAT as well, with
+no public IP address to reach it from outside. **Remote access** puts the station and your
+other computers into one private network across the internet — an
+[n2n](https://github.com/ntop/n2n) VPN through the **supernode on remoteqth.com** — so a
+laptop anywhere opens the station's web interface (and SSH) by its VPN address, exactly as at
+home. Nothing has to be set up on the router.
+
+It is for the Linux builds: a Raspberry Pi station and a Linux PC (Debian, Ubuntu and their
+relatives). The Windows build has no remote access. An Android phone can join with the n2n
+app *hin2n* using the parameters SETUP shows (below).
+
+**How it works.** Every device runs an n2n *edge*, which creates a network interface
+`wlvpn0`. The edges of one network register with the supernode, which gives each one its VPN
+address (`10.x.y.z`, derived from the device's name) and tells it where the others are. The
+devices then talk **directly** when their routers allow it; otherwise the supernode passes the
+traffic on. Everything between the devices is encrypted (ChaCha20) with a key only your devices
+know: the supernode sees the network's name, the devices' public addresses and their names,
+never the content. The edge runs as its own service, `wifilt-vpn`, so the VPN stays up while
+WIFILT restarts, crashes or updates itself — remote access is exactly what is needed then.
+
+**Setting it up**
+
+1. **n2n 3** on every Linux device. A Raspberry Pi gets it from `pi-setup`, step *Remote access
+   (VPN)* ([section 1.7](#17-a-raspberry-pi-station)). On a PC installed with `sudo ./install.sh`,
+   SETUP → Remote access offers **INSTALL n2n**, which builds it from source (a few minutes, needs
+   the internet). It can also be built by hand — see *Building n2n 3 for WIFILT* below. Debian's
+   own `n2n` package is version 1 and does not work.
+2. **The first device:** SETUP → Remote access → **CREATE NEW NETWORK**. It is in the VPN within a
+   few seconds and shows its **pairing code**, `WL-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-X`.
+3. **Every other device:** type or paste that code under **Pairing code** and press **JOIN**.
+   Lower case, spaces and a missing `WL-` do not matter; a typo is caught by the last symbol.
+4. **Devices in this VPN** on each device then lists the others with their addresses; **open ↗**
+   opens one in a new tab.
+
+The pairing code **is** the network: whoever has it can reach the station, whose web interface
+has no password. Keep it like a password. It is part of **Download config**
+([section 9.10](#910-save-download-and-upload-the-configuration)), so a restore brings the
+station back into its VPN; keep that file just as private. To change the key, **LEAVE NETWORK**
+on every device and create a new network.
+
+**Safety nets for a station you cannot walk to.** A change made from a page that is itself
+connected through the VPN — switching it off, leaving, renaming the device, another supernode —
+asks first. A new supernode or device name is tried for two minutes: when the device you made the
+change from does not answer through the new settings, the previous ones come back by themselves
+and SETUP says so. An update from the web never stops the VPN.
+
+**What does not cross the VPN.** TrxNet discovery and the ICOM radio scan stay on the local
+network; a station at home and a laptop elsewhere must not merge into one TrxNet. The **QSO
+log** lives in the browser and belongs to the address the page was opened from
+([section 3.15](#git-log-sync)): the station opened by its VPN address is a different origin
+from `wifilt.local`, with its own, empty log. Use **GIT LOG SYNC** to keep both the same.
+
+**Building n2n 3 for WIFILT.** This is what INSTALL n2n and the `pi-setup` step do; by hand:
+
+```sh
+sudo apt install build-essential autoconf automake libtool git
+git clone --depth 1 --branch 3.1.1 https://github.com/ntop/n2n.git
+cd n2n
+git rev-parse HEAD        # must print ce998b986c633bc563835d8a3cc8f72a017b53d1
+./autogen.sh
+./configure --enable-pthread
+make
+sudo make PREFIX=/usr/local install
+/usr/local/sbin/edge -h | head -3    # an empty line, then "Welcome to n2n v.3.1.1"
+```
+
+Three things make it work with WIFILT, and each was found the hard way:
+
+- **Version 3.** WIFILT reads the edge's management interface of n2n 3 and the supernode speaks
+  n2n 3; tag 3.1.1 is the tested one. n2n 1 (Debian's package) and 2 do not talk to it.
+- **`--enable-pthread`.** Without it, edge 3.1.1 looks the supernode's *name* up again before every
+  registration and then throws the supernode's answers away (`Rx REGISTER_SUPER_ACK with wrong or
+  old cookie`, then `supernode not responding`) — the VPN never comes up with `remoteqth.com:82`.
+  WIFILT then hands such an edge the address instead of the name, which works until the server
+  moves.
+- **`PREFIX=/usr/local`.** WIFILT looks for `/usr/local/sbin/edge`. A plain `make install` writes
+  to `/usr/sbin`, over the files of Debian's n2n package, which `apt` would later put back to
+  version 1.
+
+The same build as a script: `sudo /opt/wifilt/wifilt-vpn-build` (`--force` rebuilds).
+
+**Another client by hand** — an edge on a computer without WIFILT, or *hin2n* on Android: SETUP →
+Remote access → **Advanced** shows the supernode, the community, the key and the encryption once
+the code is shown. The address comes from the supernode. On Linux:
+
+```sh
+sudo N2N_KEY=<key> /usr/local/sbin/edge -d wlvpn0 -c <community> -l remoteqth.com:82 -A4 -I LAPTOP -f
+```
+
+**From the command line.** `wifilt --vpn-pair new` (or `--vpn-pair <code>`) with `--vpn-enable`
+and optionally `--vpn-desc NAME` pairs a station without the web page and prints the code; run
+it as the user WIFILT runs as. `pi-setup` takes the code from `PI_SETUP_VPN_CODE` for an
+unattended installation:
+`curl -fsSL https://ok1hra.github.io/wifilt/pi-setup | PI_SETUP_VPN_CODE=WL-... bash`.
+
+**When it does not connect**
+
+| SETUP says | What it means |
+|---|---|
+| NOT INSTALLED | WIFILT was not installed with `install.sh` (or `pi-setup`), or it runs with another configuration directory than the VPN service reads; the line under it says which |
+| n2n MISSING | `/usr/local/sbin/edge` is not there — INSTALL n2n, the `pi-setup` step, or build it by hand |
+| CONNECTING | the edge runs but the supernode has not answered yet; it must be able to send UDP to port 82 of remoteqth.com |
+| SUPERNODE LOST | no answer from the supernode for over a minute; the devices cannot reach each other until it is back |
+| ERROR | the edge did not start; the reason follows (for example an n2n that is not version 3) |
+| a device *via supernode* | no direct path between the two routers; it works, only slower |
+| a device *(no name yet)* | the edge knows it only from its first packets; the name follows |
+
+For those who want to check: the settings are `~/.config/wifilt/vpn.json` (mode 0600; on a
+locked Pi on the data card), the edge is `wifilt-vpn.service` (always enabled; it starts only
+while the station is paired and the VPN is on — `journalctl -u wifilt-vpn` shows its log), a
+change goes to `/var/lib/wifilt-vpn/req/` and `wifilt-vpn-apply.path` runs
+`/opt/wifilt/wifilt-vpn` as root, which takes only an action and an address from the request.
+WIFILT reads the edge's state from `127.0.0.1:5644`. The supernode itself is a plain n2n 3
+supernode; how remoteqth.com runs it is described (in Czech) in
+[server/supernode/README.md](server/supernode/README.md).
 
 ---
 
@@ -778,6 +899,7 @@ erased.
 |---|---|---|---|
 | **NVS** on the interface (`eeprom` badge) | WiFi networks, callsign, locator, radio login, cluster host, TrxNet, baud rate | ✅ | ✅ |
 | **`cfg` partition** on the interface (`config` badge) | radio slots and the detected model, LOG settings, TX gain calibrations, CW and frequency memories, MSG BOX, the JS8 operating profile — heartbeat, groups, band schedule, power **and the APRS-IS gate login**, the GIT LOG SYNC repository and token | ✅ | ✅ |
+| **`vpn.json`** in the PC's configuration directory (Linux build, SETUP → Remote access) | the remote access pairing code, device name and supernode | ✅ | ✅ |
 | **The browser's database** | **your QSO log** | ✅ (it was never on the device) | ❌ **gone permanently** |
 | Nothing (`live` badge) | the unattended-operation arming window — running state only | ❌ resets on restart | — |
 
@@ -1597,12 +1719,14 @@ is usually short enough that the radio does not go off at all.
 
 **In QRPLog** a **TS480** button appears in the bottom bar, next to PA, while `local-trx`
 answers and its panel cable is open — also with the radio off, so it can be switched on. It
-opens a palette with **only the radio's display**, no controls in it:
+opens a palette with **only the radio's display** — no knobs or keys, but the mouse wheel tunes
+over its frequency digits:
 
 | In the palette | |
 |---|---|
 | drag the title bar | moves it; where you leave it is remembered, measured from the bottom of the window like the RTTY palette |
 | the striped grip in the bottom-right corner | drag it to make the palette bigger or smaller — the display scales with it, the top-left corner stays put; the caret stays in Call |
+| **mouse wheel** over a frequency digit | tunes the radio by that digit, **100 kHz down to 10 Hz**; wheel up = higher, carries over into the next digit. A bar under the digit shows which one the wheel moves. The two MHz digits do nothing (band keys, or a frequency typed into Call). Not in the menu, on a memory channel or while transmitting |
 | **⏻** after the title | switches the radio on or off; green while it is on |
 | **AF** | plays the radio's receive audio in this browser (see below) |
 | **PTT** | transmits this browser's microphone (see below) |
@@ -1615,6 +1739,12 @@ frequency entry and a VFO step choice — has the same header. Its right-hand bu
 also be opened directly at `http://<local-trx PC>:8765/ts480/`, and the setup page links to it.
 
 The palette's buttons never take the keyboard; the caret stays in *Call*.
+
+**How the wheel gets to the radio.** The display shows the new frequency at the first notch.
+`local-trx` sets it over **CAT** (hamlib, the same TS-480) — at once, no beeps. While CAT does
+not answer it types the frequency on the panel's keypad instead (ENT, digits, ENT, as the full
+panel's direct entry): only after the wheel has rested for 0.3 s, one entry for the whole turn,
+about 1.5 s with a beep per key if the radio's beep is on.
 
 **On the DATA pages** (JS8Call-ICOM, RTTY-ICOM, JTTY, WSPR, Mercury) a **TS480** pill sits at
 the right end of the row of modes, under the same condition: local-trx answers and its panel
@@ -1741,7 +1871,10 @@ The settings are stored on the interface, not in the browser, so every browser t
 this interface syncs to the same repository without being set up again. The token is never
 shown back after saving; **remove** deletes it. Anyone on your network can read the token
 back from the interface, which is why it should be limited to this one repository and
-nothing else. It is not part of *Download config* ([section 9.10](#910-save-download-and-upload-the-configuration)).
+nothing else. *Download config* ([section 9.10](#910-save-download-and-upload-the-configuration))
+includes the repository and the token, so after restoring a backup the sync works without
+setting it up again. Anyone holding that file can write to the repository until you revoke
+the token on GitHub.
 
 The browser needs an internet connection to sync. The interface itself does not.
 
@@ -4502,12 +4635,20 @@ The file holds the whole station: WiFi, the radios and their saved presets, iden
 CW and frequency memories, the remote CW key with its shared key, the log settings and QRPlog
 macros, every TX audio calibration,
 the JS8, WSPR, RTTY and Mercury settings (including their band schedules), the Mercury
-tuning, the band decoder and the web server's pacing switch. Not in it:
+tuning, the GIT LOG SYNC repository **and its token**, the band decoder, the web
+server's pacing switch and, on the Linux build, the remote access **pairing code**
+([section 9.12](#912-remote-access)).
+
+The file holds passwords and keys in plain text: the WiFi and radio LAN passwords, the
+remote CW key's shared key, a GitHub token that can write to your log repository and the
+VPN pairing code, which is access to the station from the internet. Keep it as private as
+those. If a copy gets out, revoke the token on GitHub
+([section 3.15](#git-log-sync)).
+
+Not in it:
 
 - the **QSO log** — it lives in the browser; back it up in LOGSYNC ([chapter 10](#10-logsync));
 - the **MSG BOX** — stored messages cannot be exported;
-- the **GIT LOG SYNC** repository and token — kept out on purpose, because a configuration
-  file is something people mail around ([section 3.15](#git-log-sync));
 - what belongs to one computer rather than the station: its clock correction, the tone the
   RTTY decoder is listening on, the DXC filters and which panels are open. A firmware
   update does not touch these — they stay in that browser.
@@ -4537,6 +4678,42 @@ file that had to be slowed leaves one line in the serial log, e.g.
 `HTTP| paced /js8-jsc.bin.br 863511 B in 14210 ms, 6 cuts 2 holds, now 48 kB/s`.
 
 Turn it off if pages load too slowly and the radio link has never suffered.
+
+### 9.12 Remote access
+
+`config` · Linux build only — the section is not there on the interface box or on Windows.
+
+The station in a private VPN across the internet, through the supernode on remoteqth.com: what
+it is, how to set it up and what to do when it does not connect is
+[section 1.9](#19-remote-access-over-the-internet-pc-and-raspberry-pi). Nothing here waits for
+**Save & Restart** — each control acts at once, and the state shown is the computer's own, so two
+browsers never disagree.
+
+The section title carries the state: **NOT INSTALLED**, **NOT PAIRED**, **OFF**, **n2n MISSING**,
+**STARTING**, **CONNECTING**, **CONNECTED · 2 devices**, **SUPERNODE LOST** or **ERROR**.
+
+| Control | Action |
+|---|---|
+| **INSTALL n2n** | builds n2n 3.1.1 from source and installs it (shown while it is missing); the progress and the build log appear under it. Not offered on a locked Raspberry Pi — the `pi-setup` step does it there |
+| **CREATE NEW NETWORK** | the first device: a new network with a new pairing code; this device joins it at once |
+| **Pairing code** + **JOIN** | every other device: the code of a device already in the network |
+| **Connected to the VPN** | on/off without forgetting the code |
+| **Device name** + **SAVE** | how this computer appears on the others, up to 15 of `A-Z 0-9 / . _ -`; by default the callsign and `RPI` or `PC`. The VPN address is derived from it, so a new name means a new address |
+| **Pairing code** — **SHOW** / **HIDE**, **COPY**, **QR** | the code of this network: shown, copied (the button says **COPIED**), or as a QR code for a phone |
+| **Devices in this VPN** | the other devices: name, VPN address, *direct* or *via supernode*, when last heard, and **open ↗** to open its web interface |
+| **Advanced** → **Supernode** + **SAVE** | another n2n 3 supernode, `host:port`; every device of the network must use the same one. Empty = `remoteqth.com:82` |
+| **Advanced** → for another n2n 3 client | supernode, community, key and encryption, for *hin2n* or an edge by hand — filled once the code is shown |
+| **LEAVE NETWORK** | this device forgets the code and leaves; the others keep it |
+
+The state block above the switch shows this device's name and VPN address, the supernode and
+when it last answered, and *This page is connected through this VPN* when it is. A line under
+the controls reports the last action: *Working: …* while it runs, and for a while afterwards
+what happened — including *Your last change was undone and the previous settings are back*
+when a change made through the VPN cut you off.
+
+In the navigation bar, next to the computer's own WiFi signal, **VPN · 2** says the station is in
+its VPN with two other devices, and a red **VPN ✕** that it should be but the supernode does not
+answer. Both lead here.
 
 ---
 

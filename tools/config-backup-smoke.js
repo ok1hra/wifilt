@@ -96,15 +96,16 @@ check("every key the backup writes is read back by the restore",
 // These blobs carry the operator's real work, so they get
 // named individually rather than trusted to the sweep above.
 for (const blob of ["radioConfig", "logConfig", "txGain", "txGainPlan", "mercuryTxGain",
-                    "logMacros", "mercuryTuning"]) {
+                    "logMacros", "mercuryTuning", "gitSync"]) {
   check("the backup carries " + blob, mentions(download, blob));
   check("the restore writes " + blob + " back", mentions(upload, blob));
 }
 
-// The GIT LOG SYNC file holds a token that can write to the operator's repo,
-// and a backup is a file people mail around -- so it stays out on purpose.
-check("the GIT LOG SYNC token is not in the backup",
-  !/GIT_SYNC_PATH/.test(download) && !mentions(download, "gitSync"));
+// The GIT LOG SYNC file (repo + token) travels with the backup at the
+// operator's request; it must land back in the same file it came from.
+check("the GIT LOG SYNC file goes out and comes back as one file",
+  /configDownloadBlob\("gitSync", GIT_SYNC_PATH\)/.test(download)
+  && /cfgFS\.open\(GIT_SYNC_PATH, "w"\)/.test(upload));
 
 // ---- nothing is dropped in silence ----------------------------------------
 // The failure this file exists for: a section present but too large used to be
@@ -114,7 +115,8 @@ check("an oversized section refuses the restore instead of skipping it",
   && /rejectOversize\("txGainPlan"/.test(upload)
   && /rejectOversize\("mercuryTxGain"/.test(upload)
   && /rejectOversize\("logMacros"/.test(upload)
-  && /rejectOversize\("mercuryTuning"/.test(upload));
+  && /rejectOversize\("mercuryTuning"/.test(upload)
+  && /rejectOversize\("gitSync"/.test(upload));
 check("the refusal names the section and both sizes",
   /\\"section\\":\\"/.test(upload) && /\\"bytes\\":/.test(upload) && /\\"limit\\":/.test(upload));
 check("the refusal returns early rather than carrying on",
@@ -124,7 +126,8 @@ check("a failed write of the calibrations is reported, not swallowed",
   && /\\"error\\":\\"storage\\",\\"section\\":\\"txGainPlan\\"/.test(upload)
   && /\\"error\\":\\"storage\\",\\"section\\":\\"mercuryTxGain\\"/.test(upload)
   && /\\"error\\":\\"storage\\",\\"section\\":\\"logMacros\\"/.test(upload)
-  && /\\"error\\":\\"storage\\",\\"section\\":\\"mercuryTuning\\"/.test(upload));
+  && /\\"error\\":\\"storage\\",\\"section\\":\\"mercuryTuning\\"/.test(upload)
+  && /\\"error\\":\\"storage\\",\\"section\\":\\"gitSync\\"/.test(upload));
 // A bare 2048 in three places was how the cap and the check drifted apart.
 check("the log-config cap is a named constant",
   /LOG_CONFIG_MAX_BYTES/.test(sketch) && !/length\(\) > 2048/.test(sketch));

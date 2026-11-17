@@ -484,6 +484,10 @@ char CwMsg[37] = "";
 #include "update.h"             // native: update from the web (native/update/, SOFTWARE.md)
 #include "host_status.h"        // native: the Pi's state on the OI3 LCD (/wl-host)
 #endif
+#if CAP_VPN
+#include "vpn.h"                // native Linux: remote access over the n2n VPN (SETUP)
+#include "vpn_code.h"
+#endif
 // See radio_transport.h's own comment on radioLanLocalControlPort(): 0 means
 // "use the real default (50001)", exactly today's behavior on the real
 // device and on native/ unless --lan-port-base overrides it.
@@ -1106,8 +1110,10 @@ int incomingByte = 0;   // for incoming serial data
   // One copy here rather than one per browser, so every browser pointed at
   // this station syncs to the same place -- at the price that anyone on the LAN
   // can GET the token back. The operator is told to use a fine-grained token
-  // limited to that one repo for exactly that reason. Deliberately NOT part of
-  // /config/download: a config backup is a file people mail around.
+  // limited to that one repo for exactly that reason. Part of /config/download
+  // (key gitSync), token included, at the operator's request: a restore brings
+  // the sync back without retyping it, and the manual warns that the backup
+  // file can then write to the repo.
   static const char* GIT_SYNC_PATH = "/git-backup.json";
   static const size_t GIT_SYNC_MAX_BYTES = 1536;
 
@@ -2274,6 +2280,7 @@ void handleSetupData(){
   j +=   ",\"bandDecoder\":";j += CAP_BAND_DECODER ? "true" : "false";
   j +=   ",\"cwKeying\":";   j += CAP_GPIO ? "true" : "false";
   j +=   ",\"watch\":";      j += CAP_WATCH ? "true" : "false";
+  j +=   ",\"vpn\":";        j += CAP_VPN ? "true" : "false";
   j += "}";
   j += ",\"apMode\":"; j += APmode ? "true" : "false";
   // The first segment of SETUP's status line. One segment with several states
@@ -4124,11 +4131,17 @@ void handleConfigDownload() {
   configDownloadBlob("js8Config", JS8_CONFIG_PATH);
   // The QRPlog CW/RTTY macro wording and the Mercury ARQ tuning are station
   // settings kept on the configuration partition like the blobs above, so
-  // they travel with them. The GIT LOG SYNC file next to them does not: it
-  // holds a token that can write to the operator's repo (git-backup.json);
-  // an add-on blob without a backupKey stays out for the same kind of reason.
+  // they travel with them. So does the GIT LOG SYNC file, token and all (see
+  // GIT_SYNC_PATH). An add-on blob without a backupKey stays out.
   configDownloadBlob("logMacros", LOG_MACROS_PATH);
   configDownloadBlob("mercuryTuning", MERCURY_TUNING_CONFIG_PATH);
+  configDownloadBlob("gitSync", GIT_SYNC_PATH);
+#if CAP_VPN
+  // The remote access pairing code, key included, at the operator's request:
+  // a restore brings the station back into its VPN without re-pairing every
+  // device. The manual warns that the backup file then IS access to the station.
+  configDownloadBlob("vpn", nativeVpnConfigFile());
+#endif
   for (size_t i = 0; i < addonBlobCount(); i++) {
     const AddonBlob& b = addonBlobAt(i);
     if (b.backupKey) configDownloadBlob(b.backupKey, b.path);
@@ -4435,6 +4448,48 @@ void handleConfigUpload() {
       f.close();
     }
   }
+
+  {
+    // GIT LOG SYNC repo, branch, file and token. A backup without the key
+    // (older firmware, or sync never set up) leaves the current file alone.
+    String gitCfg = extractJsonObject(body, "gitSync");
+    if (gitCfg.length() > GIT_SYNC_MAX_BYTES) {
+      rejectOversize("gitSync", gitCfg.length(), GIT_SYNC_MAX_BYTES);
+      return;
+    }
+    if (gitCfg.length() > 0) {
+      File f = cfgFS.open(GIT_SYNC_PATH, "w");
+      if (!f || f.print(gitCfg) != gitCfg.length()) {
+        if (f) f.close();
+        webServer.send(500, "application/json",
+          "{\"ok\":false,\"error\":\"storage\",\"section\":\"gitSync\"}");
+        return;
+      }
+      f.close();
+    }
+  }
+
+#if CAP_VPN
+  {
+    // Remote access: pairing code, device name, supernode. Checked and applied
+    // by native/platform/vpn.cpp (community and key are always recomputed from
+    // the code). A backup without the key leaves the VPN as it is.
+    String vpnCfg = extractJsonObject(body, "vpn");
+    if (vpnCfg.length() > 1024) {
+      rejectOversize("vpn", vpnCfg.length(), 1024);
+      return;
+    }
+    if (vpnCfg.length() > 0) {
+      std::string err = nativeVpnImport(vpnCfg.c_str(), (uint32_t)webServer.client().remoteIP());
+      if (!err.empty()) {
+        String e = err.c_str(); e.replace("\"", "'");
+        webServer.send(400, "application/json",
+          "{\"ok\":false,\"error\":\"" + e + "\",\"section\":\"vpn\"}");
+        return;
+      }
+    }
+  }
+#endif
 
   for (size_t i = 0; i < addonBlobCount(); i++) {
     const AddonBlob& b = addonBlobAt(i);
@@ -6281,6 +6336,70 @@ void setupWebServer(void){
     if (!err.empty()) {
       String e = err.c_str(); e.replace("\"", "'");
       webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"" + e + "\"}");
+      return;
+    }
+    webServer.send(200, "application/json", "{\"ok\":true}");
+  });
+#endif
+#if CAP_VPN
+  // Remote access (native/platform/vpn.cpp, SETUP -> Remote access). wifilt
+  // only keeps the settings and relays them: the n2n edge is its own service,
+  // the root helper applies a change from a request file, the state comes from
+  // the edge's management port in a background thread. Nothing here blocks.
+  nativeVpnStart();
+  webServer.on("/vpn/status", HTTP_GET, [](){
+    webServer.sendHeader("Cache-Control", "no-store");
+    webServer.send(200, "application/json",
+                   nativeVpnStatusJson((uint32_t)webServer.client().remoteIP()).c_str());
+  });
+  webServer.on("/vpn/code", HTTP_GET, [](){
+    webServer.sendHeader("Cache-Control", "no-store");
+    webServer.send(200, "application/json", nativeVpnCodeJson().c_str());
+  });
+  webServer.on("/vpn/pair", HTTP_POST, [](){
+    String body = webServer.arg("plain");
+    std::string code;
+    std::string def = vpncode::defaultDescription(DxcCallsign.c_str(), nativeHostLabel());
+    std::string err = nativeVpnPair(extractJsonString(body, "action").c_str(),
+                                    extractJsonString(body, "code").c_str(), def,
+                                    (uint32_t)webServer.client().remoteIP(), &code);
+    if (!err.empty()) {
+      String e = err.c_str(); e.replace("\"", "'");
+      webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"" + e + "\"}");
+      return;
+    }
+    webServer.send(200, "application/json", String("{\"ok\":true,\"code\":\"") + code.c_str() + "\"}");
+  });
+  webServer.on("/vpn/set", HTTP_POST, [](){
+    String body = webServer.arg("plain");
+    bool enabled = extractJsonBool(body, "enabled", false);
+    std::string desc = extractJsonString(body, "desc").c_str();
+    std::string sn = extractJsonString(body, "supernode").c_str();
+    std::string err = nativeVpnSet(body.indexOf("\"enabled\"") >= 0 ? &enabled : nullptr,
+                                   body.indexOf("\"desc\"") >= 0 ? &desc : nullptr,
+                                   body.indexOf("\"supernode\"") >= 0 ? &sn : nullptr,
+                                   (uint32_t)webServer.client().remoteIP());
+    if (!err.empty()) {
+      String e = err.c_str(); e.replace("\"", "'");
+      webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"" + e + "\"}");
+      return;
+    }
+    webServer.send(200, "application/json", "{\"ok\":true}");
+  });
+  webServer.on("/vpn/leave", HTTP_POST, [](){
+    std::string err = nativeVpnLeave();
+    if (!err.empty()) {
+      String e = err.c_str(); e.replace("\"", "'");
+      webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"" + e + "\"}");
+      return;
+    }
+    webServer.send(200, "application/json", "{\"ok\":true}");
+  });
+  webServer.on("/vpn/install", HTTP_POST, [](){
+    std::string err = nativeVpnInstall();
+    if (!err.empty()) {
+      String e = err.c_str(); e.replace("\"", "'");
+      webServer.send(409, "application/json", "{\"ok\":false,\"error\":\"" + e + "\"}");
       return;
     }
     webServer.send(200, "application/json", "{\"ok\":true}");

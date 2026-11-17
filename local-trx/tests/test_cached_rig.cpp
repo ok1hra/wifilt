@@ -337,6 +337,30 @@ TEST_CASE("CachedRig: a rig that stops answering is reopened") {
   CHECK(h.freq() == 14074000);   // kept the last good value throughout
 }
 
+TEST_CASE("CachedRig: live() -- open and answering; false after a few failed polls or while absent") {
+  Harness h;
+  h.poll();
+  CHECK(h.cache.live());
+  h.inner.script.assign(CachedRigBackend::kNotLiveAfterFailures, kFail);
+  h.inner.modeFails = true;
+  for (int i = 0; i < CachedRigBackend::kNotLiveAfterFailures - 1; i++) h.poll();
+  CHECK(h.cache.live());   // one glitch does not send the TS-480 wheel to the keypad
+  h.poll();
+  CHECK_FALSE(h.cache.live());
+  h.inner.modeFails = false;
+  h.poll();
+  CHECK(h.cache.live());
+
+  Harness absent(/*open=*/false);
+  absent.inner.reopenOk = false;
+  absent.cache.step();
+  CHECK_FALSE(absent.cache.live());
+  absent.inner.reopenOk = true;
+  absent.now += CachedRigBackend::kReopenRetryMs;
+  absent.cache.step();
+  CHECK(absent.cache.live());
+}
+
 TEST_CASE("CachedRig: a rig absent at startup is retried every kReopenRetryMs until it appears") {
   Harness h(/*open=*/false);
   h.inner.reopenOk = false;
