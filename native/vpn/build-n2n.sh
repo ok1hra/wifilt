@@ -36,7 +36,8 @@ FORCE=0
 say() { echo "PHASE $1 ${2:-}"; }
 die() { echo "ERROR: $*" >&2; exit "${CODE:-1}"; }
 
-# "Welcome to n2n v.3.1.1 for Linux" -- on the SECOND line, edge -h starts with
+# "Welcome to n2n v.3.1.1 for <distribution>" ("Debian 13.7" on a Raspberry Pi,
+# "Linux" elsewhere) -- on the SECOND line, edge -h starts with
 # an empty one. Never `| grep -q` at the end of a pipe under pipefail (SIGPIPE
 # turns a match into a failure).
 installed_banner() { "$PREFIX/sbin/edge" -h 2>&1 | head -n3 | tr '\n' ' ' || true; }
@@ -59,14 +60,20 @@ fi
 
 say deps "installing the build tools"
 if [[ -z "${WIFILT_N2N_SKIP_APT:-}" ]]; then
-  export DEBIAN_FRONTEND=noninteractive
+  # NEEDRESTART_MODE=l: list, never restart. This runs from SETUP too (the root
+  # helper), and needrestart's automatic mode (Ubuntu's default) would restart
+  # wifilt -- the very service that asked for the install -- mid-request.
+  export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l
   apt-get update -qq || echo "apt-get update failed, trying the cached package lists" >&2
-  apt-get install -y -qq build-essential autoconf automake libtool git
+  apt-get install -y -qq -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
+    build-essential autoconf automake libtool git
 fi
 
 say clone "downloading n2n $N2N_TAG"
 rm -rf "$SRC"
-git clone --quiet --depth 1 --branch "$N2N_TAG" "$REPO" "$SRC"
+# A tag checkout is a detached HEAD; git explains that at length even with
+# --quiet, which only clutters the helper's log in SETUP.
+git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$N2N_TAG" "$REPO" "$SRC"
 
 say verify "checking the source"
 got="$(git -C "$SRC" rev-parse HEAD)"

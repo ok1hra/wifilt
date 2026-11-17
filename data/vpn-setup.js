@@ -164,8 +164,11 @@
     if (s.mode === 'no-n2n') return { text: 'n2n MISSING', cls: 'bad' };
     if (s.edgeError) return { text: 'ERROR', cls: 'bad' };
     if (!s.at) return { text: 'STARTING', cls: '' };
-    if (!s.edge) return { text: 'STARTING', cls: '' };
-    if (!s.sn) return { text: 'CONNECTING', cls: '' };
+    // No answer from the edge's management port: with supernode-assigned
+    // addresses the edge serves it only once a supernode has answered (until
+    // then it waits in its bootstrap loop, without wlvpn0) -- so this is the
+    // state of a supernode out of reach (UDP to port 82 blocked), not a start.
+    if (!s.edge || !s.sn) return { text: 'CONNECTING', cls: '' };
     if (Number(s.sn.age) > 60) return { text: 'SUPERNODE LOST', cls: 'bad' };
     var n = Array.isArray(s.peers) ? s.peers.length : 0;
     return { text: 'CONNECTED · ' + n + (n === 1 ? ' device' : ' devices'), cls: 'on' };
@@ -224,7 +227,8 @@
       gridRow(grid, 'State', state.text + (s.edgeError ? ' -- ' + s.edgeError : ''), state.cls === 'bad');
       gridRow(grid, 'This device', s.desc || '?');
       gridRow(grid, 'VPN address', s.ip ? s.ip.replace(/\/\d+$/, '') : '(none yet)');
-      gridRow(grid, 'Supernode', s.supernode + (s.sn ? ' -- answered ' + ago(s.sn.age) : ''),
+      gridRow(grid, 'Supernode', s.supernode + (s.sn ? ' -- answered ' + ago(s.sn.age)
+                                                      : s.enabled && s.at ? ' -- no answer yet' : ''),
               s.enabled && s.sn && Number(s.sn.age) > 60);
       if (s.viaVpn) gridRow(grid, 'This page', 'is connected through this VPN', false);
 

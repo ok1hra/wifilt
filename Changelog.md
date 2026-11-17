@@ -45,8 +45,19 @@ published.
   (31, real n2n 3.1.1 in namespaces: pairing, VPN access, settings, backup round trip, TrxNet
   off the VPN). End to end against remoteqth.com:82 from two NATed namespaces (pasta): both
   registered, ping 6/6, direct path, `/vpn/status` of one station read by the other through the
-  VPN. Not checked on a real Raspberry Pi (build there, `-u/-g` under systemd, locked Pi) nor
-  with hin2n.
+  VPN.
+* On a Raspberry Pi 4 (Debian 13, arm64, unlocked): `build-n2n.sh` installed n2n 3.1.1 with the
+  resolver thread in about three minutes, apt included, and a second run returns at once. The
+  edge registered with the supernode by name, dropped to `nobody` and was reached from a PC
+  through the VPN (ping 8/8, 31 ms average, direct path; the station's web page over its VPN
+  address). `wifilt-vpn` ran as a transient systemd unit: ExecCondition, the edge as `nobody`,
+  the MAC from machine-id, `wlvpn0` up and registered. Fixed after that run: `build-n2n.sh` sets
+  `NEEDRESTART_MODE=l` (needrestart's automatic mode, Ubuntu's default, would restart wifilt —
+  the service that asked for the install from SETUP) and keeps git's detached-HEAD notice out of
+  the log; SETUP says CONNECTING, not STARTING, while the edge waits for a supernode it cannot
+  reach (n2n serves its management port only after the first answer), with *no answer yet* on
+  the Supernode row. The banner says `for Debian 13.7` there, not `for Linux`; only `n2n v.3.` is
+  matched. Still not checked: the units from the web update, a locked Pi, the revert, hin2n.
 
 **Configuration backup carries the GIT LOG SYNC settings, token included.**
 

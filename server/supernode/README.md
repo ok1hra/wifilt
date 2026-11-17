@@ -50,7 +50,7 @@ make PREFIX=/usr/local install
 /usr/local/sbin/supernode -h | head -3
 ```
 
-Poslední příkaz má vypsat prázdný řádek a pod ním `Welcome to n2n v.3.1.1 for Linux`.
+Poslední příkaz má vypsat prázdný řádek a pod ním `Welcome to n2n v.3.1.1 for …` (za „for“ je jméno distribuce, např. `Debian 13.7`).
 
 `--enable-pthread` je stejný build jako na stanicích (SOFTWARE.md § 1.9). Supernode ho nutně nepotřebuje, edge bez něj se se jménem `remoteqth.com` nezaregistruje.
 
