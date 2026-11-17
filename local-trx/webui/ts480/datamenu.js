@@ -8,7 +8,11 @@
 //   * ⏻ -- the radio on/off, through the panel cable (CAT cannot switch a
 //     TS-480 on),
 //   * a frequency field -- 14074 is kHz, 14.074 MHz (QRPlog's Call rule),
-//   * the modes -- LSB USB CW FSK FM AM.
+//   * the modes -- LSB USB CW FSK FM AM,
+//   * expand at the right end of the first row: closes the palette and opens
+//     the full panel (panel.html) in its own window, as QRPlog's TS480 palette
+//     does; that window's collapse closes it and drops this palette again
+//     (postMessage -- the two pages are on different origins).
 // Frequency and mode go through wifilt's own CAT path, /cmd?radio=lan -- the
 // slot local-trx is on, exactly what the DATA pages' own frequency menus use;
 // the panel's display shows them back.
@@ -22,6 +26,7 @@
 
   const script = document.currentScript;
   const base = new URL(".", script ? script.src : location.href);   // http://host:8765/ts480/
+  const ORIGIN = base.origin;
   const REV = encodeURIComponent(CFG.rev || 0);
 
   // CAT MD codes (the panel's mode_code) -> the mode buttons, and what
@@ -87,6 +92,8 @@
 .ltx480-dm-pal button:disabled{opacity:.4;cursor:not-allowed}
 .ltx480-dm-pwr{display:inline-flex;align-items:center;gap:5px}
 .ltx480-dm-pwr svg{width:13px;height:13px}
+.ltx480-dm-pal .ltx480-dm-ext{display:inline-flex;align-items:center;padding:3px 6px}
+.ltx480-dm-ext svg{width:13px;height:13px}
 .ltx480-dm-pwr.on{color:#4cd964 !important;border-color:#2f7d3d !important;background:#12301b !important}
 .ltx480-dm-now{flex:1;text-align:right;font:700 13px/1.2 ui-monospace,Consolas,monospace;color:var(--cyan,#66f2d5);white-space:nowrap}
 .ltx480-dm-now small{color:var(--muted,#9aa7b4);font-weight:700;margin-left:6px}
@@ -101,6 +108,7 @@
   }
 
   let client = null, wrap = null, pill = null, pal = null;
+  let popup = null;
   let pwrBtn = null, nowEl = null, freqIn = null, setBtn = null, modeBtns = [], msgEl = null;
   let msg = "", msgErr = false, busy = false;
 
@@ -170,7 +178,14 @@
     });
     nowEl = document.createElement("span");
     nowEl.className = "ltx480-dm-now";
-    row1.append(pwrBtn, nowEl);
+    const extBtn = document.createElement("button");
+    extBtn.type = "button";
+    extBtn.className = "ltx480-dm-ext";
+    extBtn.innerHTML = window.Ts480Client.ICONS.expand;
+    extBtn.title = "Open the full panel in its own window";
+    extBtn.setAttribute("aria-label", extBtn.title);
+    extBtn.addEventListener("click", expand);
+    row1.append(pwrBtn, nowEl, extBtn);
 
     const row2 = document.createElement("div");
     row2.className = "ltx480-dm-row";
@@ -217,6 +232,27 @@
       if (e.key === "Escape" && !pal.hidden) setOpen(false);
     });
   }
+
+  // The window QRPlog's palette opens too: same name, so there is one panel
+  // window whichever page asked for it. Already open from this page: brought
+  // to the front rather than reloaded (a reload would drop its AF).
+  function expand() {
+    setOpen(false);
+    if (popup && !popup.closed) { popup.focus(); return; }
+    const url = new URL("panel.html", base);
+    url.searchParams.set("from", "data");
+    popup = window.open(url.href, "TS480", "width=1100,height=600,menubar=no,location=no,status=no");
+    if (!popup) {   // pop-up blocked: stay in the palette and say so
+      setOpen(true);
+      setMsg("the browser blocked the pop-up window", true);
+    }
+  }
+
+  window.addEventListener("message", e => {
+    if (e.origin !== ORIGIN || !e.data || e.data.src !== "ltx-ts480") return;
+    if (e.data.op === "collapse" || e.data.op === "closed") popup = null;
+    if (e.data.op === "collapse" && wrap && !wrap.hidden) setOpen(true);
+  });
 
   function setOpen(open) {
     pal.hidden = !open;

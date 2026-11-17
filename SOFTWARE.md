@@ -1799,11 +1799,12 @@ cable is silent. A click drops a small palette:
 | the readout beside it | frequency and mode from the radio's own display |
 | the frequency field | `Enter` or **SET** tunes: `14074` is kHz, `14.074` MHz (the rule of QRPlog's Call), 30 kHz – 60 MHz |
 | **LSB USB CW FSK FM AM** | sets the mode; the current one is lit (CW-R and FSK-R light CW and FSK) |
+| **expand** (right end of the first row) | closes the palette and opens the full panel in its own window, as expand does in QRPlog; the window's collapse closes it and drops the palette again. Already open: brought to the front |
 
 Frequency and mode go through WIFILT's own CAT path to the LAN slot, the one the pages' own
 frequency menus use; nothing is changed while the radio is transmitting. A click elsewhere or
 `Esc` closes it. There is no display and no AF here — the DATA pages have their own waterfall
-and audio.
+and audio; the full panel window has both.
 
 **AF — the radio's audio in the browser.** Shown when `local-trx` has a capture device (setup,
 step 1). Click it and the receive audio from that sound card plays in this browser; click again

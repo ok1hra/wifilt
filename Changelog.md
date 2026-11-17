@@ -11,6 +11,17 @@ published.
 
 ## Working tree — not committed
 
+**DATA pages' TS480 palette: expand opens the full panel in its own window, as in QRPlog.**
+
+* The expand pictogram sits at the right end of the palette's first row, beside the readout. It
+  closes the palette and opens `panel.html` in the same window QRPlog's expand uses (one panel
+  window whichever page asked). The window's collapse ("Back into the DATA page's TS480
+  palette") closes it and drops the palette again. A second expand while the window is open
+  brings it to the front instead of reloading it. A blocked pop-up leaves the palette open with
+  a message.
+* `tools/ts480-datamenu-expand-smoke.js` (local-trx `--ts480-sim` + headless Chrome, real
+  mouse clicks): 11/11.
+
 **RTTY behind local-trx: the decoder takes the mark tone from the radio's own menu (TS-480).**
 
 * With a TS-480 behind local-trx, switching the radio to FSK left the QRPlog RTTY palette (and

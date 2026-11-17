@@ -130,14 +130,16 @@ const params = new URLSearchParams(location.search);
 const client = new Ts480Client(`ws://${location.hostname}:${CFG.wsPort || (Number(location.port || 80) + 1)}/ts480`);
 function send(o) { client.send(o); }
 
-// ---- header: title, ⏻ AF PTT, collapse back into QRPlog's palette -------
+// ---- header: title, ⏻ AF PTT, collapse back into the palette it came from -
 let collapsing = false;
 const hasOpener = (() => { try { return !!(window.opener && !window.opener.closed); } catch (_) { return false; } })();
 function tellOpener(op) {
   try { if (window.opener && !window.opener.closed) window.opener.postMessage({ src: "ltx-ts480", op, af: client.af || client.afWanted }, "*"); } catch (_) {}
 }
 document.getElementById("head").appendChild(client.headerControls({
-  end: hasOpener ? { icon: "collapse", title: "Back into the QRPlog palette", onClick: () => {
+  // ?from=data: opened from a DATA page's TS480 pill (datamenu.js), not QRPlog.
+  end: hasOpener ? { icon: "collapse", title: params.get("from") === "data"
+    ? "Back into the DATA page's TS480 palette" : "Back into the QRPlog palette", onClick: () => {
     collapsing = true;
     tellOpener("collapse");
     client.close();
