@@ -142,13 +142,13 @@ volatile bool cwIpSendPending = false;
 #ifndef LOOP_WARN_MS
   #define LOOP_WARN_MS 200
 #endif
-#define REV 20261117
+#define REV 20261124
 // A second (third, ...) release on the same day: REV stays the date, REV_BUILD
 // counts up (tools/release.sh does both), and the version reads "20261113.1".
 // REV alone stays an 8-digit date wherever an older updater reads it (/health.json
 // "rev", the package's VERSION, latest.json "rev"): those updaters take exactly
 // eight digits, and a same-day build is then simply not offered to them.
-#define REV_BUILD 1
+#define REV_BUILD 0
 #define REV_STR2(x) #x
 #define REV_STR1(x) REV_STR2(x)
 #if REV_BUILD > 0
@@ -3374,14 +3374,19 @@ void handlePostCmd(){
   }
 
   if (type == "abortCw") {
-    #if defined(FSK_KEYING)
+    // The reverse modes stop like their upright twins, since sendCW() keys in
+    // them too: until 2026-11-24 only CW and RTTY were matched here, so a
+    // message keyed in CW-R or RTTY-R could not be stopped with Esc.
     char modesSnapshot[sizeof(modes)];
     copyModesText(modesSnapshot, sizeof(modesSnapshot));
-    if (strcmp(modesSnapshot, "CW") == 0 && radioLinkUp() && radio_address != 0x00) {
+    const bool cwMode   = strcmp(modesSnapshot, "CW") == 0 || strcmp(modesSnapshot, "CW-R") == 0;
+    #if defined(FSK_KEYING)
+    const bool rttyMode = strcmp(modesSnapshot, "RTTY") == 0 || strcmp(modesSnapshot, "RTTY-R") == 0;
+    if (cwMode && radioLinkUp() && radio_address != 0x00) {
       uint8_t frame[] = {START_BYTE, START_BYTE, radio_address, CONTROLLER_ADDRESS,
                          CMD_SEND_CW_MSG, 0xFF, STOP_BYTE};
       catWriteFrame(frame, sizeof(frame), true);
-    } else if (strcmp(modesSnapshot, "RTTY") == 0) {
+    } else if (rttyMode) {
       if (g_lcFskOutputMode == "trxnet") {
         // External FSK has nothing local to interrupt -- the bit-bang loop
         // that abortFskTransmission stops runs on whichever device holds
@@ -3398,14 +3403,10 @@ void handlePostCmd(){
       }
     }
     #else
-    if (radioLinkUp() && radio_address != 0x00) {
-      char modesSnapshot[sizeof(modes)];
-      copyModesText(modesSnapshot, sizeof(modesSnapshot));
-      if (strcmp(modesSnapshot, "CW") == 0) {
-        uint8_t frame[] = {START_BYTE, START_BYTE, radio_address, CONTROLLER_ADDRESS,
-                           CMD_SEND_CW_MSG, 0xFF, STOP_BYTE};
-        catWriteFrame(frame, sizeof(frame), true);
-      }
+    if (cwMode && radioLinkUp() && radio_address != 0x00) {
+      uint8_t frame[] = {START_BYTE, START_BYTE, radio_address, CONTROLLER_ADDRESS,
+                         CMD_SEND_CW_MSG, 0xFF, STOP_BYTE};
+      catWriteFrame(frame, sizeof(frame), true);
     }
     #endif
     webServer.send(200, "application/json", "{\"ok\":true}");

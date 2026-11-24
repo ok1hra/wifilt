@@ -118,6 +118,36 @@ TEST_CASE("KeyRunner::abort stops keying early and drops PTT without a tail dela
   CHECK(line.snapshotKey().back() == false);   // key left in the released state
 }
 
+TEST_CASE("KeyRunner::abortCw (CI-V 17 FF, QRPlog's Esc) stops a message mid-keying") {
+  RecordingKeyLine line;
+  KeyRunner kr(line, 5);
+  KeyingBackend &backend = kr;
+  auto start = std::chrono::steady_clock::now();
+  REQUIRE(backend.sendCwText("SOS SOS SOS SOS SOS"));
+  std::this_thread::sleep_for(std::chrono::milliseconds(450));
+  backend.abortCw();
+  REQUIRE(waitUntilIdle(kr, 2000));
+  auto elapsed = std::chrono::steady_clock::now() - start;
+  CHECK(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() < 1500);
+  CHECK(line.snapshotPtt().back() == false);
+  // The runner is usable again straight away.
+  CHECK(backend.sendCwText("E"));
+  REQUIRE(waitUntilIdle(kr, 3000));
+}
+
+TEST_CASE("KeyRunner::abort during the PTT lead still stops the message") {
+  RecordingKeyLine line;
+  KeyRunner kr(line, 5);
+  REQUIRE(kr.sendCwText("SOS SOS SOS SOS SOS"));
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));   // job taken, lead running
+  auto start = std::chrono::steady_clock::now();
+  kr.abort();
+  REQUIRE(waitUntilIdle(kr, 2000));
+  auto elapsed = std::chrono::steady_clock::now() - start;
+  CHECK(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() < 800);
+  CHECK(line.snapshotKey().back() == false);
+}
+
 TEST_CASE("KeyRunner's CW speed round-trips through the KeyingBackend interface") {
   RecordingKeyLine line;
   KeyRunner kr(line);

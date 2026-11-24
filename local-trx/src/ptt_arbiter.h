@@ -21,6 +21,8 @@ class PttArbiter : public KeyingBackend {
     if (owner_ == Owner::Browser) return false;
     return inner_.sendCwText(text);
   }
+  // Stopping is never refused, whoever holds the transmitter.
+  void abortCw() override { inner_.abortCw(); }
   uint8_t getCwSpeedRaw() override { return inner_.getCwSpeedRaw(); }
   bool setCwSpeedRaw(uint8_t raw) override { return inner_.setCwSpeedRaw(raw); }
 

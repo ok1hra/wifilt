@@ -2592,6 +2592,10 @@
     if (radio) return radio;
     if (!fullPower().watts) return "the radio model is unknown, so its power reading cannot be converted to watts";
     const power = radioPower();
+    // null is "not read yet", not zero: until 14 0A is answered there is no
+    // reading at all, and calling that zero power sent the operator to a knob
+    // that was fine.
+    if (power.watts === null) return "the radio has not reported its RF power setting yet";
     if (!(power.watts > 0.001)) return "the radio is set to zero power";
     // The ceiling is the operator's rule, not the radio's. Refuse rather than
     // turning the power down: the automation only ever writes a level from the
@@ -2604,8 +2608,8 @@
       WsprCore.validate({callsign: sharedCall(), locator: sharedGrid(),
                          powerDbm: power.dbm});
     } catch (error) { return error.message; }
-    if (!scheduledSlots()) return "the schedule is empty";
-    if (!txScheduledSlots()) return "the schedule has no TX band";
+    if (!scheduledSlots()) return "the schedule is empty — add a TX band under TIMETABLE";
+    if (!txScheduledSlots()) return "the schedule has no TX band — every band in it is RX only";
     return "";
   }
 
@@ -2882,6 +2886,14 @@
     const message = state.lastError || (state.beacon === "stopped" ? problem : "");
     dom.beaconError.hidden = !message;
     dom.beaconError.textContent = message;
+    // The reason has to be readable without opening anything. beaconError sits
+    // inside TX SESSION, and foldTxSession() rolls that section up whenever RX
+    // is on -- so with the receiver running, a refused START was a grey button
+    // and nothing else (field report 2026-11-24). The section header and the
+    // buttons' own tooltips carry it as well.
+    dom.startStop.title = !beaconRunning && !tuning && problem ? `Cannot start: ${problem}` : "";
+    const tuneProblem = tuning || beaconRunning ? "" : radioBlockingReason();
+    dom.tuneButton.title = tuneProblem ? `Cannot tune: ${tuneProblem}` : "";
 
     const next = state.pendingSlotUtcMs ? {slotUtcMs: state.pendingSlotUtcMs} : nextTransmission();
     const countdown = next
@@ -2924,14 +2936,21 @@
       dom.packetCount.textContent = String(snapshot.sentPackets);
       dom.txSessionSummary.textContent =
         `transmitting ${Math.round(100 * radiatedMs / (WsprCore.DURATION_S * 1000))} %`;
+      dom.txSessionSummary.classList.remove("blocked");
     } else {
       // Emptied on the way out, so the bar can never reappear part-full at the
       // start of the next transmission.
       dom.sessionProgress.value = 0;
+      const showReason = !tuning && Boolean(message);
       dom.txSessionSummary.textContent = tuning ? "tune carrier"
+        : showReason ? message
         : next ? `next slot ${new Date(next.slotUtcMs).toISOString().slice(11, 19)} UTC`
                : "no slot scheduled";
+      dom.txSessionSummary.classList.toggle("blocked", showReason);
     }
+    // Narrow screens cut the header short with an ellipsis: the whole text is
+    // in the tooltip, and a tap on the header opens beaconError below it.
+    dom.txSessionSummary.title = dom.txSessionSummary.textContent;
 
     renderSlotTimer(next, countdown);
 

@@ -459,6 +459,8 @@ class FakeKeying : public KeyingBackend {
   bool ptt = false;
   bool busy = false;
   bool sendCwText(const std::string &) override { return !busy; }
+  void abortCw() override { aborts++; }
+  int aborts = 0;
   uint8_t getCwSpeedRaw() override { return 0; }
   bool setCwSpeedRaw(uint8_t) override { return true; }
   bool setAudioPtt(bool on) override {
@@ -469,6 +471,14 @@ class FakeKeying : public KeyingBackend {
   bool getAudioPtt() const override { return ptt; }
 };
 }  // namespace
+
+TEST_CASE("ptt arbiter: a CW stop always reaches the keyer") {
+  FakeKeying inner;
+  PttArbiter arbiter(inner);
+  inner.busy = true;
+  arbiter.abortCw();
+  CHECK(inner.aborts == 1);
+}
 
 TEST_CASE("ptt arbiter: first owner wins, the other is refused") {
   FakeKeying inner;

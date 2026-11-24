@@ -48,11 +48,12 @@ class KeyRunner : public KeyingBackend {
   // FSK-over-TrxNet (bod 15) -- same mode-exclusive gate as sendCwText().
   bool sendFskText(const std::string &text);
 
-  // wifilt.ino's own abort convention on the "/s-cw" TrxNet path: a single
-  // 0xFF byte means "stop now", not text to key [wifilt.ino:4043-4045].
-  // Not wired to CI-V 0x17 -- wifilt.ino has no equivalent CW-abort message
-  // on that path (CW abort there is a real radio's own front-panel concern).
+  // Stop now: the job being keyed ends without its PTT tail, and one queued
+  // but not yet started is dropped. Reached from both of wifilt's stop
+  // messages -- a single 0xFF byte on the "/s-cw" TrxNet path, and CI-V
+  // 0x17 0xFF (abortCw() below) when the CW came over ICOM-LAN.
   void abort();
+  void abortCw() override { abort(); }
 
   // CI-V 0x1C 0x00 (bod: fáze 3) -- see keying_backend.h's own comment.
   bool setAudioPtt(bool on) override;

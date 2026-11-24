@@ -25,6 +25,11 @@ class KeyingBackend {
   // bod 7 -- they share one physical "key" line).
   virtual bool sendCwText(const std::string &text) = 0;
 
+  // CI-V 0x17 0xFF -- a real Icom's "stop sending", which is what wifilt's
+  // /cmd abortCw (QRPlog's Esc) puts on the wire. Until 2026-11-24 the 0xFF
+  // went to sendCwText() as one more character to key, so Esc did nothing.
+  virtual void abortCw() = 0;
+
   // CI-V 0x14 0x0C, ICOM's own 0-255 CW-speed scale (6-48 WPM linear -- no
   // existing wifilt.ino convention to match: it only ever READS this
   // subcommand for display [wifilt.ino:6704], never writes it, so there was

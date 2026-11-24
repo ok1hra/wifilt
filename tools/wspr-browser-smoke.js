@@ -1359,6 +1359,13 @@ addEventListener("unhandledrejection", event => {
           $("trxFrequency").classList.contains("off-dial") &&
           $("beaconError").textContent.includes("WSPR dial frequency"),
           $("trxFrequency").className + " · " + $("beaconError").textContent);
+    // beaconError lives inside TX SESSION, which RX folds away; the header and
+    // the button's tooltip carry the reason too (field report 2026-11-24).
+    check("and in the TX SESSION header and START tooltip, readable with the section folded",
+          $("txSessionSummary").textContent.includes("WSPR dial frequency") &&
+          $("txSessionSummary").classList.contains("blocked") &&
+          $("startStop").title.includes("WSPR dial frequency"),
+          $("txSessionSummary").textContent + " · " + $("startStop").title);
     check("TUNE stays available off dial", !$("tuneButton").disabled);
     $("trxFrequency").click();
     check("the dial menu explains the refusal",
@@ -1370,6 +1377,10 @@ addEventListener("unhandledrejection", event => {
           await wait(() => !$("startStop").disabled &&
                            !$("trxFrequency").classList.contains("off-dial"), 4000),
           "disabled=" + $("startStop").disabled);
+    check("and the header and tooltip drop the reason",
+          await wait(() => !$("txSessionSummary").classList.contains("blocked") &&
+                           $("startStop").title === "", 2000),
+          $("txSessionSummary").textContent + " · " + $("startStop").title);
 
     const next = globalThis.__wspr.nextTransmission();
     check("next transmission is planned", Boolean(next));

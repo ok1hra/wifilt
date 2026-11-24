@@ -48,6 +48,8 @@ class TrxnetCwKeying : public KeyingBackend {
                  text.c_str(), link_.peer().empty() ? "(no device picked)" : link_.peer().c_str());
     return false;
   }
+  // The device's own stop byte, as for FSK (TrxnetLink::abortText()).
+  void abortCw() override { link_.abortText(); }
   uint8_t getCwSpeedRaw() override { return speedRaw_.load(); }
   bool setCwSpeedRaw(uint8_t raw) override {
     speedRaw_ = raw;

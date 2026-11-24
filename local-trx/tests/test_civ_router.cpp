@@ -123,6 +123,7 @@ class FakeKeying : public KeyingBackend {
     sendCount++;
     return true;
   }
+  void abortCw() override { abortCount++; }
   uint8_t getCwSpeedRaw() override { return speedRaw; }
   bool setCwSpeedRaw(uint8_t raw) override { speedRaw = raw; return true; }
   bool setAudioPtt(bool on) override {
@@ -134,6 +135,7 @@ class FakeKeying : public KeyingBackend {
 
   std::string lastText;
   int sendCount = 0;
+  int abortCount = 0;
   uint8_t speedRaw = 128;
   bool busy = false;
   bool audioPtt = false;
@@ -450,6 +452,16 @@ TEST_CASE("dispatchCiv 0x17 with no keying backend wired up: no reply, not a cra
   FakeRig rig;
   CHECK_FALSE(dispatchCiv({0x17, 'C', 'Q'}, rig, nullptr).answered);
   CHECK_FALSE(dispatchCiv({0x17, 'C', 'Q'}, rig).answered);   // default argument
+}
+
+TEST_CASE("dispatchCiv 0x17 0xFF stops the keying instead of keying the byte") {
+  FakeRig rig;
+  FakeKeying keying;
+  keying.busy = true;   // a message is going out: exactly when Esc is pressed
+  CivResult r = dispatchCiv({0x17, 0xFF}, rig, &keying);
+  CHECK(r.answered);
+  CHECK(keying.abortCount == 1);
+  CHECK(keying.sendCount == 0);
 }
 
 TEST_CASE("dispatchCiv 0x17 with an empty message is not sent") {

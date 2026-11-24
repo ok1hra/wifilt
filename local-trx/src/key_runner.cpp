@@ -43,7 +43,15 @@ bool KeyRunner::sendFskText(const std::string &text) {
   return true;
 }
 
-void KeyRunner::abort() { abortRequested_ = true; }
+// Under mutex_, like threadMain()'s pick-up of a job: an abort landing between
+// "job taken" and "abort flag reset" used to be wiped by that reset, and one
+// landing before the pick-up let the queued job start anyway.
+void KeyRunner::abort() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  hasPending_ = false;
+  pendingText_.clear();
+  abortRequested_ = true;
+}
 
 bool KeyRunner::setAudioPtt(bool on) {
   if (busy_.load()) return false;   // CW/FSK job actively keying -- real conflict, refuse
@@ -89,9 +97,9 @@ void KeyRunner::threadMain() {
       // ...setPtt(false) sequence ran, and the job's end-of-run PTT drop then
       // silently stomped that audio-PTT session's line state.
       busy_ = true;
+      // Reset in the same locked step that takes the job (see abort()).
+      abortRequested_ = false;
     }
-
-    abortRequested_ = false;
 
     // wpm_ is only snapshotted here, not shared with a persistent CwEngine --
     // see key_runner.h's member comment for why that avoids a data race.

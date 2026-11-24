@@ -254,6 +254,29 @@ for _ in $(seq 1 15); do
 done
 CW_PTT_COUNT=$(grep -c '^\[ptt\] off$' "$WORK/local-trx.log")
 
+# QRPlog's Esc: /cmd abortCw puts CI-V 17 FF on the wire, which local-trx used
+# to key as one more character (field report 2026-11-24). The message below
+# takes ~15 s at 20 WPM; stopped, its PTT drops within about a second.
+echo "== CW-over-CI-V: Esc (abortCw = CI-V 17 FF) stops a long message =="
+PRE_ABORT_PTT_COUNT=$CW_PTT_COUNT
+curl -s -m 3 -X POST "http://127.0.0.1:$HTTP_PORT/cmd" -H "Content-Type: application/json" \
+  -d '{"type":"sendCw","text":"CQ CQ CQ DE TEST TEST TEST K"}' >/dev/null
+sleep 1.5
+curl -s -m 3 -X POST "http://127.0.0.1:$HTTP_PORT/cmd" -H "Content-Type: application/json" \
+  -d '{"type":"abortCw"}' >/dev/null
+ABORT_OK=0
+for _ in $(seq 1 8); do
+  sleep 0.5
+  [[ $(grep -c '^\[ptt\] off$' "$WORK/local-trx.log") -gt $PRE_ABORT_PTT_COUNT ]] && { ABORT_OK=1; break; }
+done
+# Let a message that was NOT stopped finish, so its PTT pair cannot be counted
+# as the FSK step's below.
+[[ $ABORT_OK -eq 1 ]] || for _ in $(seq 1 20); do
+  sleep 1
+  [[ $(grep -c '^\[ptt\] off$' "$WORK/local-trx.log") -gt $PRE_ABORT_PTT_COUNT ]] && break
+done
+CW_PTT_COUNT=$(grep -c '^\[ptt\] off$' "$WORK/local-trx.log")
+
 # FSK-over-TrxNet (bod 15): wifilt's sendCw only reaches trxNetSendCwText()'s
 # net.publishTo() once wifilt's OWN TrxNet has this process ("OI3.10") in its
 # peer table -- learned from local-trx's one-shot startup broadcast probe
@@ -310,6 +333,7 @@ check "wifilt logged LAN CONNECTED"  "$(grep -q 'LAN | CONNECTED' "$WORK/app.log
 check "CW 0x17 reached the keying subsystem (PTT ON)"  "$(grep -q '^\[ptt\] ON$' "$WORK/local-trx.log" && echo 1 || echo 0)"
 check "CW keyed at least one dit/dah (KEY DOWN)"       "$(grep -q '^\[key\] DOWN$' "$WORK/local-trx.log" && echo 1 || echo 0)"
 check "CW released PTT afterward"                      "$([[ $CW_PTT_COUNT -gt $PRE_CW_PTT_COUNT ]] && echo 1 || echo 0)"
+check "Esc (abortCw, CI-V 17 FF) stopped a long CW message" "$ABORT_OK"
 check "wifilt's TrxNet discovered local-trx as OI3.10" "$([[ $FSK_SENT -eq 1 ]] && echo 1 || echo 0)"
 check "FSK-over-TrxNet reached the /s-cw subscription" "$(grep -q '\[oi3\] <- /s-cw' "$WORK/local-trx.log" && echo 1 || echo 0)"
 check "FSK keyed and released PTT"                     "$([[ $(grep -c '^\[ptt\] off$' "$WORK/local-trx.log") -gt $CW_PTT_COUNT ]] && echo 1 || echo 0)"

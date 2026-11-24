@@ -218,6 +218,8 @@
 /* The section opens collapsed, so an amber row nobody can see is not a warning.
    The header carries the same colour until the target is written. */
 .compact-section .summary-status.mismatch { color: var(--amber); }
+/* Why the beacon will not start / what the last slot failed on (wspr.js render()). */
+.compact-section .summary-status.blocked { color: var(--red); }
 
 /* ---- activity ----------------------------------------------------------- */
 

@@ -94,6 +94,11 @@ CivResult dispatchCiv(const std::vector<uint8_t> &frame, RigBackend &rig, Keying
   switch (cmd) {
     case 0x17: {   // CW message, ASCII payload, never through hamlib (bod 7/8)
       if (!keying || bodyLen == 0) return noReply();
+      // 17 FF is a real Icom's "stop sending" -- wifilt's abortCw, i.e. Esc.
+      if (body[0] == 0xFF) {
+        keying->abortCw();
+        return ack();
+      }
       keying->sendCwText(std::string(reinterpret_cast<const char *>(body), bodyLen));
       // Fire-and-forget on wifilt's own side too -- see keying_backend.h's
       // header comment on catWriteFrame()'s dead broadcastTx parameter.
